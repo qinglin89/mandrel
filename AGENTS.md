@@ -131,4 +131,12 @@ Use `.ai/tasks/` for task-specific historical notes.
 - One line per fact. No redundant narrative.
 - If one line suffices, do not write three.
 
+Only cache project-specific knowledge that cannot be inferred from:
+
+- standard language/framework conventions (Go, Cosmos SDK, Protobuf)
+- a single file read (go.mod, go.sum, directory listing)
+- the agent's built-in training knowledge
+
+If in doubt, don't write it.
+
 `docs/` is for human readers. `.ai/` is for agent readers. Do not mix the styles.
