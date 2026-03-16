@@ -113,7 +113,10 @@ Do not casually convert test types or remove coverage without justification.
 
 Default mode: manual-batch.
 
-Update `.ai/` only when the user explicitly asks, typically after a completed block of work.
+Update `.ai/` only when:
+
+1. the user explicitly asks, typically after a completed block of work.
+2. agent-specific triggers (defined in agent entry files like CLAUDE.md)
 
 When updating:
 
