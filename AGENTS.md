@@ -111,18 +111,35 @@ Do not casually convert test types or remove coverage without justification.
 
 ## 10. Documentation Update Policy
 
-Default mode: manual-batch.
+### Triggers
 
-Update `.ai/` only when:
+Two triggers for updating `.ai/`:
 
-1. the user explicitly asks, typically after a completed block of work.
-2. agent-specific triggers (defined in agent entry files like CLAUDE.md)
+1. **User requests** — explicit ask to review/update docs.
+2. **End-of-conversation auto-check** — at the end of each conversation, review what changed in this session and determine if any `.ai/` docs need updating.
 
-When updating:
+### Auto-check scope
 
-1. update only affected files
-2. update `last-updated` in each modified document
-3. update `index.md` and `map.md` if routing changed
+Review what changed in this conversation (already in context, zero cost), then determine if any of these 6 areas are affected: `conventions`, `modules`, `architecture`, `design`, `apis`, `features`. Only read and update the specific file(s) that are affected — do NOT read all 6 every time.
+
+Do NOT independently check: `overview` (rarely changes), `tasks`/`index`/`map` (metadata — update only when the above 6 change).
+
+### Granularity
+
+`.ai/` records module/feature-level summaries, not implementation details.
+
+**Update criterion:** if the change only makes an existing description "work more correctly" (bug fix, detail iteration), do NOT update. Only update when the description itself needs to change.
+
+Examples:
+
+- New feature added, new convention established → update.
+- Bug fix in existing feature, refactor internals → skip.
+
+### When updating
+
+1. Update only affected files.
+2. Update `last-updated` in each modified document.
+3. Update `index.md` and `map.md` if routing changed.
 
 Use `.ai/tasks/` for task-specific historical notes.
 
