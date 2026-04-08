@@ -1,7 +1,9 @@
-# Agent Initialization
+# .ai/ Initialization
 
-This file is used only when `.ai/index.md` does not exist.
-After bootstrapping, this file is not loaded again during normal work.
+Used only when `.ai/index.md` does not exist.
+After bootstrapping, this file is not loaded during normal work.
+
+For ongoing `.ai/` usage and maintenance rules, see `ai-coding.md`.
 
 ---
 
@@ -349,6 +351,7 @@ Related files: <!-- key files affected -->
 ```
 
 Create a task file when:
+
 - A non-trivial design decision was made
 - A tricky bug was diagnosed
 - An architectural tradeoff was evaluated
@@ -359,11 +362,11 @@ Do not create task files for routine changes.
 
 ## Scaling Rules
 
-If any `.ai/` document exceeds ~300 lines, split into topic-specific files:
+Size limits are defined in `ai-coding.md` §9.
+When a `.ai/` document exceeds its limit, split within the same scope:
 
 ```
-.ai/modules/execution.md
-.ai/features/backtesting.md
+.ai/modules.md → .ai/modules/index.md + .ai/modules/{topic}.md
 ```
 
 When adding files, update `index.md` and `map.md`.
