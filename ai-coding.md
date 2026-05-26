@@ -78,7 +78,7 @@ Enhancement layer — does not constrain normal agent capabilities.
 
 For initial setup of `.ai/`, see `ai-coding-init.md`.
 
-@docs/ai/ai-coding-memory.md
+@ai-coding-memory.md
 
 @.ai/overview.md
 @.ai/index.md
