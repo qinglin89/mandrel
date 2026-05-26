@@ -1,3 +1,3 @@
 # Coding rules
 
-@ai-coding.md
+@ai-coding-v2.md
