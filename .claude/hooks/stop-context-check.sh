@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 # Stop hook for ai-coding-v2 workflow.
 #
+# Invariant enforced: a task's "advancement" signals — a session-log entry and
+# status=completed — must never run ahead of a clean working tree. §10 End
+# orders it "step1 make the tree clean → then write the log / set completed".
+# The hook computes working-tree cleanliness ONCE on entry (STRICT: includes
+# untracked files) and gates the advancement branches on it.
+#
+# Why strict (untracked counts): an untracked file is unhandled work that must
+# be resolved before end — real work committed, an unwanted scratch removed, or
+# a run-time artifact covered by a gitignore rule for its category. Run-time
+# artifact classes are already gitignored (bin/ .logs/ .pids/ .captures/ gen/
+# .claude/*.lock), and .ai-tasks/ is gitignored too, so writing the session-log
+# / setting status never dirties the tree → wt_clean is an exact proxy for
+# "all real work committed".
+#
 # Logic:
-#   Case 1: active task status == completed
-#           → instruct model to invoke /ai-sync-v2 for absorption + archive.
-#   Case 2a: active task status != completed
-#            AND no session-log entry written for this session yet
-#            AND transcript token count > THRESHOLD
-#           → instruct model to wrap up: write session-log entry and prepare handoff.
-#   Case 2b: active task status != completed AND session-log entry exists
-#           → allow stop (handoff already done).
-#   Else (no active task, or under threshold without log)
-#           → allow stop.
+#   Entry: compute wt_clean (git status --porcelain, incl. untracked).
+#   Case 1: status == completed
+#           clean → block: invoke /ai-sync-v2 (absorption + archive).
+#           dirty → block: protocol violation — clean the tree first, keep
+#                   status=completed.
+#   Case 2a: status != completed AND no session-log entry for this session
+#            AND transcript > THRESHOLD → block: wrap up.
+#   Case 2b: status != completed AND session-log entry exists
+#            clean → allow (handoff done).
+#            dirty → block: false handoff (log written, tree not clean).
+#   Case 2c: status != completed, no entry, under threshold → allow.
+#   Else (no active task, missing inputs, non-repo) → allow (fail-open).
 #
 # Logging: every decision appended to ~/.claude/stop-hook.log
 #          (file write only; never stdout — won't pollute hook JSON output).
@@ -32,6 +48,19 @@ transcript_path=$(echo "$input" | jq -r '.transcript_path // empty')
 # Fail-open on missing inputs.
 [ -z "$session_id" ] && { log "no-input session_id → allow"; exit 0; }
 [ -z "$transcript_path" ] && { log "no-input transcript → allow"; exit 0; }
+
+# Working-tree cleanliness, computed once (STRICT — includes untracked files).
+# Fail-open: non-repo or git error → treat as clean (allow), matching the
+# missing-input guards above.
+wt_clean=1
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  porcelain=$(git status --porcelain 2>/dev/null || true)
+  [ -n "$porcelain" ] && wt_clean=0
+fi
+
+# Shared definition of "make the tree clean", stated as a classification frame
+# (not an imperative action list) so the model judges each file by its nature.
+CLEAN_HOWTO="make the working tree clean (\`git status --porcelain\` empty) — each modified file committed, and each untracked file handled by its nature: real work committed; an unwanted scratch file removed; a run-time artifact covered by a gitignore rule for its category (not ignored file-by-file)."
 
 # Locate the active task: a file in .ai-tasks/ whose claimed-by matches.
 shopt -s nullglob
@@ -63,9 +92,19 @@ status=$(awk '
   }
 ' "$task_file")
 
-# Case 1: completed → invoke /ai-sync-v2.
+# Case 1: completed → close-out, but only if the tree is clean.
 if [ "$status" = "completed" ]; then
-  log "case1 task=$task_file status=completed → block (invoke /ai-sync-v2)"
+  if [ "$wt_clean" -eq 0 ]; then
+    log "case1-dirty task=$task_file status=completed wt=dirty → block (clean first)"
+    cat <<EOF
+{
+  "decision": "block",
+  "reason": "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per §10 End, ${CLEAN_HOWTO} Then end."
+}
+EOF
+    exit 0
+  fi
+  log "case1 task=$task_file status=completed wt=clean → block (invoke /ai-sync-v2)"
   cat <<EOF
 {
   "decision": "block",
@@ -83,8 +122,20 @@ session_log_section=$(awk '
 ' "$task_file")
 
 if echo "$session_log_section" | grep -q -F "$session_id"; then
-  # Case 2b: handoff already written → allow stop.
-  log "case2b task=$task_file status=$status log-entry-present → allow"
+  # Case 2b: a session-log entry exists.
+  if [ "$wt_clean" -eq 0 ]; then
+    # False handoff: log written but tree not clean.
+    log "case2b-dirty task=$task_file status=$status log-entry-present wt=dirty → block"
+    cat <<EOF
+{
+  "decision": "block",
+  "reason": "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. The session-log is an end-of-session record (§10 End: clean tree first, then write the log). Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
+}
+EOF
+    exit 0
+  fi
+  # Handoff complete: clean + entry present.
+  log "case2b task=$task_file status=$status log-entry-present wt=clean → allow"
   exit 0
 fi
 
@@ -96,16 +147,16 @@ approx_tokens=$((char_count / 4))
 THRESHOLD=200000
 
 if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
-  log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD → block (wrap up)"
+  log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD wt=$wt_clean → block (wrap up)"
   cat <<EOF
 {
   "decision": "block",
-  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session: (1) append a '## Session log' entry to '${task_file}' (Done / Next / Open) describing what's been done and what the next session should pick up. (2) Raise session-est total upward to reflect the actual scope (e.g., if currently 1/1, change to 1/2 or higher) — this wrap-up means the original estimate undershot. (3) Keep status as in_progress. The user will resume in a fresh session."
+  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session, in this order: (1) ${CLEAN_HOWTO} The session-log must not be written ahead of a clean tree. (2) Append a '## Session log' entry to '${task_file}' (Done / Next / Open) describing what's been done and what the next session should pick up. (3) Re-estimate the session cost and update the session-est total accordingly — wrapping up early means the original estimate was inaccurate. (4) Keep status as in_progress. The user will resume in a fresh session."
 }
 EOF
   exit 0
 fi
 
 # Below threshold without log: allow stop (session may be ending naturally early).
-log "case2c task=$task_file status=$status tokens=$approx_tokens ≤ $THRESHOLD → allow"
+log "case2c task=$task_file status=$status tokens=$approx_tokens wt=$wt_clean ≤ $THRESHOLD → allow"
 exit 0
