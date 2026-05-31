@@ -7,7 +7,7 @@ Agent-facing memory for `.ai/` snapshot: pay re-derivation cost once at admissio
 - `.ai/` is for agents (compressed, machine-parsable). `docs/` is for humans. Never mix styles.
 - Code is truth. When `.ai/` conflicts with code, update `.ai/`.
 - Snapshot (`.ai/`) describes current state — timeless.
-- Close-out operations (snapshot writes via §3/§4, task archive, removing the task's row from `.ai-tasks/index.md`) are `/ai-sync-v2`'s exclusive domain. LLM session work stops at the End procedure (`ai-coding-v2.md` §10 End steps 1-5); do not pre-absorb, pre-edit `.ai/`, pre-archive the task, or pre-remove the task's row from the active index. Observed update needs go into the task's session-log `Open` list — the skill processes them at close-out.
+- Close-out operations (snapshot writes via §3/§4, task archive, removing the task's row from `.ai-tasks/index.md`) are `/ai-sync-v2`'s exclusive domain. LLM session work stops at the End procedure (`ai-coding-v2.md` §10 End steps 1-5); do not pre-absorb, pre-edit `.ai/`, pre-archive the task, or pre-remove the task's row from the active index.
 - All `.ai/` content in English.
 - Prefer fewer mechanisms over more contracts. When adding a step or data structure, first check whether an existing one already carries the same semantics. Layered mechanisms degrade execution fidelity multiplicatively.
 

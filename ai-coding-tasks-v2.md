@@ -33,6 +33,16 @@ Must include a `## Session log` section, appended one entry per session-end:
 - Open: ...
 ```
 
+Field semantics (split by time-direction):
+
+- **Done** — what LANDED this session: committed changes + decisions made (incl.
+  rejected alternatives + rationale). Past/history. This is the source
+  `/ai-sync-v2` absorbs from at close-out — write to enough fidelity that
+  absorption needs no re-derivation.
+- **Next** — the immediate forward work the next session resumes (handoff).
+- **Open** — forward-looking unresolved items: open questions, deferred
+  decisions, blockers to revisit.
+
 The session log is the single source for cross-session handoff and the input for close-out absorption review.
 
 ## 4. Tasks index

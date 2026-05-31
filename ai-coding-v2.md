@@ -95,7 +95,7 @@ Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle clo
 **Work**:
 
 - Consult `.ai/` content docs only via routing in `.ai/index.md` and `.ai/map.md` — do not grep across `.ai/`.
-- Do not edit `.ai/` mid-task. Snapshot writes go only through `/ai-sync-v2` at close-out. Observed update needs → record in session-log `Open`.
+- Do not edit `.ai/` mid-task. Snapshot writes go only through `/ai-sync-v2` at close-out. Observed update needs should be recorded in task's session-log at the end of the session after working tree is clean.
 - Modify code per the authority tiers (§7).
 - New work discovered mid-task: if it doesn't block current scope, spawn a pending task via `/intake-task`. If it blocks current scope, adjust the current task body / plan instead — do not spawn.
 - Adjust the active task's body / scope / `session-est` as understanding sharpens. Record the adjustment in the next session-log entry.
@@ -104,7 +104,7 @@ Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle clo
 **End**:
 
 1. Commit all uncommitted changes so the working tree is clean (`git status --porcelain` empty).
-2. Append a `## Session log` entry (Done / Next / Open).
+2. Append `## Session log` entries (Done / Next / Open).
 3. Update task `status` (one of `in_progress` / `blocked` / `completed`).
 4. Backfill `prefetch:` with what was actually consulted.
 5. Update any **other** pending tasks whose scope or blockers shifted due to this session. (Current task's row is `/ai-sync-v2`'s domain — see memory §1.)
