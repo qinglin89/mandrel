@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+# Local managed-repo inventory. Canonical source code is versioned; machine
+# inventory is not.
+.registry/repos.local.json

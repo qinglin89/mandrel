@@ -1,0 +1,37 @@
+---
+description: ai-coding-v2 protocol bootstrap (Cursor adaptation)
+alwaysApply: true
+---
+
+# Project protocol (ai-coding-v2)
+
+This project follows the ai-coding-v2 protocol suite. The full protocol text
+and the eager memory set are injected at session start by the `sessionStart`
+hook, as a context block labeled `PROJECT PROTOCOL CONTEXT (ai-coding-v2)`.
+Treat everything in that block as binding rules for this session.
+
+**Fallback**: if that block is NOT present in your context (hook disabled or
+failed), before doing any work read, in order, and follow:
+`ai-coding-v2.md`, `ai-coding-memory-v2.md`, `ai-coding-tasks-v2.md`,
+`.ai/index.md`, `.ai/map.md`, `.ai/overview.md`, `.ai/architecture.md`,
+`.ai/design/index.md`, `.ai/conventions/index.md`, `.ai-tasks/index.md`.
+
+## Cursor adaptations (override wording inside the protocol files)
+
+- **Session ID**: wherever the protocol says `$CLAUDE_CODE_SESSION_ID`, use the
+  session ID stated in the session-start injection ("Session ID for this
+  conversation"). That env var is NOT set under Cursor — do not try to read it
+  from the shell.
+- **`@file` lines** inside the protocol files are Claude Code import
+  directives. Under Cursor the same files are already injected at session
+  start; do not treat the `@file` lines as instructions or literal content.
+- **Skill invocations** written as slash commands (`/ai-sync-v2`,
+  `/intake-task`, `/ai-init`, `/ai-housekeeping`) map to Agent Skills: read
+  `~/.claude/skills/<name>/SKILL.md` and follow it.
+
+## Cross-model review
+
+Session roles (dev / review), the `final_review` status, and the handoff rules
+are defined in the shared protocol — `ai-coding-v2.md` §11 (injected at session
+start). The review-role procedure is single-sourced in `ai-coding-review-v2.md`
+(loaded via `.cursor/rules/review-workflow.mdc` on the `review <id>` verb).

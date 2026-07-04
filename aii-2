@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROG_NAME=${0##*/}
+
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
+else
+  export PYTHONPATH="$SCRIPT_DIR"
+fi
+
+export AI_NATIVE_DEPLOYMENT_PROG="${AI_NATIVE_DEPLOYMENT_PROG:-$PROG_NAME}"
+exec python -m ai_native_deployment.cli "$@"

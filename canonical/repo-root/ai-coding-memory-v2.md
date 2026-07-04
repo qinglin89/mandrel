@@ -15,7 +15,7 @@ Agent-facing memory for `.ai/` snapshot: pay re-derivation cost once at admissio
 
 | Tier | Mode | Files |
 |---|---|---|
-| Eager | Always in system prompt | `.ai/index.md`, `.ai/map.md`, `.ai-tasks/index.md`, `.ai/overview.md`, `.ai/architecture.md`, `.ai/design.md`, `.ai/conventions.md` |
+| Eager | Always in system prompt | `.ai/index.md`, `.ai/map.md`, `.ai-tasks/index.md`, `.ai/overview.md`, `.ai/architecture.md`, `.ai/design/index.md`, `.ai/conventions/index.md` |
 | Lazy | `Read` on demand, via routing | all other files in `.ai/` |
 
 Eager set carries routing (`index`, `map`, `tasks/index`), project invariants (`overview`, `architecture`, `design`), and writing rules (`conventions`) — every decision and every code write needs them. Lazy set is inventory (`modules`, `apis`, `features`, etc.) — loaded per task via routing.

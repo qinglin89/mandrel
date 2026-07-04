@@ -1,0 +1,31 @@
+# Codex CLI project-layer config for the ai-coding-v2 workflow (quantx).
+#
+# This file is discovered when Codex is run from within this repo and the
+# project .codex/ layer is trusted (`/hooks` in the TUI, or
+# --dangerously-bypass-hook-trust for automation such as `codex exec`).
+#
+# IMPORTANT — absolute paths are required. On codex-cli 0.142.5 the documented
+# `command = '... "$(git rev-parse --show-toplevel)/..."'` form is NOT
+# shell-evaluated (the string is exec'd as argv, so $(...) stays literal and the
+# hook silently never runs). Absolute paths are verified to fire under
+# `codex exec`. If you clone this repo to a different path, update these two
+# paths (or promote the hooks to ~/.codex/hooks.json per .codex/README.md).
+#
+# Hooks are enabled by default (features.hooks = stable/on).
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "{{REPO_ROOT}}/.codex/hooks/session-start.sh"
+timeout = 15
+statusMessage = "Loading ai-coding-v2 protocol"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "{{REPO_ROOT}}/.codex/hooks/stop-context-check.sh"
+timeout = 30
+statusMessage = "Checking ai-coding-v2 session-end discipline"

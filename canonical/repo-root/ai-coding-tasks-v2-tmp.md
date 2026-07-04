@@ -36,14 +36,19 @@ Must include a `## Session log` section, appended one entry per session-end:
 Field semantics (split by time-direction):
 
 - **Done** — what LANDED this session: committed changes + decisions made (incl.
-  rejected alternatives + rationale). Past/history. This is the source
-  `/ai-sync-v2` absorbs from at close-out — write to enough fidelity that
-  absorption needs no re-derivation.
-- **Next** — the immediate forward work the next session resumes (handoff).
-- **Open** — forward-looking unresolved items: open questions, deferred
-  decisions, blockers to revisit.
+  rejected alternatives + rationale). Past/history; record *fact, not
+  instruction* — what is true now, not what to do about it. Write to full
+  fidelity; when a change supersedes prior behavior, note what it replaced
+  ("previously X"), not only the new state.
+- **Next** — the immediate forward work the next session resumes (handoff);
+  `none` when `status_after == completed` (no next session reads it).
+- **Open** — unresolved items carried forward *within this task*: open questions,
+  deferred decisions, blockers to revisit. What outlives the task becomes its own
+  task (spawned or cross-referenced).
 
-The session log is the single source for cross-session handoff and the input for close-out absorption review.
+The session log records what happened — the cross-session handoff, and part of
+what `/ai-sync-v2` reads at close-out (§5), where what to absorb (and where) is
+decided.
 
 ## 4. Tasks index
 
@@ -51,7 +56,11 @@ The session log is the single source for cross-session handoff and the input for
 
 ## 5. Lifecycle close-out
 
-Close-out (admission → absorb → archive) is executed by `/ai-sync-v2` at the Stop hook trigger.
+Close-out (admission → absorb → archive) is executed by `/ai-sync-v2` at the Stop
+hook trigger. Its basis is the whole task — definition, background, and session
+log — plus the closing session's full context, cross-checked against the commits
+that landed; it then applies the memory §3 admission tests and routes each
+admitted finding into `.ai/` (memory §4 propagation).
 
 Absorption may be **retroactive**: multiple archived tasks may collectively warrant a Snapshot update that no single task did alone.
 

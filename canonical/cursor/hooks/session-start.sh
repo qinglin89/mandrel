@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Cursor sessionStart hook for the ai-coding-v2 workflow.
+#
+# Replicates Claude Code's eager-load semantics (CLAUDE.md @imports) plus the
+# SessionStart housekeeping hint, and additionally injects this conversation's
+# session ID (Cursor has no $CLAUDE_CODE_SESSION_ID equivalent in the agent
+# shell, so the ID must be handed to the model here).
+#
+# Injected via additional_context:
+#   1. Session ID line (used for claimed-by / session-log headings).
+#   2. Protocol files: ai-coding-v2.md, ai-coding-memory-v2.md,
+#      ai-coding-tasks-v2.md.
+#   3. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
+#      .ai/architecture.md .ai/design/index.md .ai/conventions/index.md
+#      .ai-tasks/index.md.
+#   4. Housekeeping reminder when .ai/.housekeeping-pending exists.
+#
+# Fail-open: missing files are skipped; jq failure exits 0 with no output.
+
+set -euo pipefail
+
+# Orchestrator guard: SDK-driven sessions (.cursor/orchestrator/) inject the
+# protocol context themselves and own the lifecycle. AI_ORCH=1 is exported
+# only by the orchestrator's process tree — never set interactively.
+if [ "${AI_ORCH:-}" = "1" ]; then exit 0; fi
+
+# Project hooks run from the project root; cd defensively anyway.
+cd "${CURSOR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
+
+LOG="${HOME}/.cursor/ai-hooks.log"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') session-start conv=${conversation_id:-?} $*" >> "$LOG" 2>/dev/null || true; }
+
+input=$(cat)
+conversation_id=$(echo "$input" | jq -r '.conversation_id // empty' 2>/dev/null || true)
+
+EAGER_FILES=(
+  ai-coding-v2.md
+  ai-coding-memory-v2.md
+  ai-coding-tasks-v2.md
+  .ai/index.md
+  .ai/map.md
+  .ai/overview.md
+  .ai/architecture.md
+  .ai/design/index.md
+  .ai/conventions/index.md
+  .ai-tasks/index.md
+)
+
+ctx="PROJECT PROTOCOL CONTEXT (ai-coding-v2) — injected by the sessionStart hook.
+
+Session ID for this conversation: ${conversation_id:-unknown}
+Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the
+\`claimed-by\` frontmatter field and \`## Session log\` entry headings).
+
+The protocol files and the eager memory set follow. Treat them as binding
+rules. \`@file\` lines inside them are Claude Code import directives — the
+referenced files are already included below; ignore the \`@file\` lines.
+"
+
+loaded=0
+for f in "${EAGER_FILES[@]}"; do
+  if [ -f "$f" ]; then
+    ctx+=$'\n'"===== BEGIN ${f} ====="$'\n'
+    ctx+="$(cat "$f")"
+    ctx+=$'\n'"===== END ${f} ====="$'\n'
+    loaded=$((loaded + 1))
+  fi
+done
+
+# Housekeeping hint (ported from session-start-housekeeping-check.sh).
+FLAG=".ai/.housekeeping-pending"
+hk="absent"
+if [ -f "$FLAG" ]; then
+  hk="present"
+  count=$(wc -l < "$FLAG" 2>/dev/null | tr -d ' ')
+  issues=$(cat "$FLAG" 2>/dev/null)
+  ctx+="
+HOUSEKEEPING REMINDER: .ai/.housekeeping-pending exists with ${count} line(s).
+
+Details:
+${issues}
+
+INSTRUCTION TO ASSISTANT: Before responding to the user's first request this session, prepend a one-line notice exactly: '⚠️  .ai/ housekeeping pending — run /ai-housekeeping when convenient.' Do not block the user's task; surface the reminder once and then proceed normally.
+"
+fi
+
+log "files=${loaded}/${#EAGER_FILES[@]} housekeeping=${hk} → inject"
+
+jq -n --arg ctx "$ctx" '{additional_context: $ctx}' 2>/dev/null || true
+exit 0
