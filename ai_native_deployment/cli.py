@@ -19,6 +19,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     deploy_parser = subparsers.add_parser("deploy", help="deploy canonical files into a target repo")
+    deploy_parser.add_argument("--dry-run", action="store_true", help="preview deploy changes without writing files")
     deploy_parser.add_argument("target", help="target repo path")
 
     status_parser = subparsers.add_parser("status", help="check a target repo for drift")
@@ -76,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "deploy":
+            if args.dry_run:
+                preview = deploy.preview_deploy(args.target)
+                print(deploy.format_deploy_preview(preview))
+                return 1 if any(change.action == "blocked" for change in preview.changes) else 0
             deployed_manifest = deploy.deploy_canonical(args.target)
             files = deployed_manifest.get("files", {})
             print(f"deployed {len(files)} files to {Path(args.target).expanduser().resolve()}")

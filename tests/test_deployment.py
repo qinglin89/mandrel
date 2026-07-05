@@ -81,6 +81,39 @@ def test_manifest_creation(tmp_path: Path) -> None:
     )
 
 
+def test_deploy_preview_does_not_write(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    preview = deploy.preview_deploy(target, root=source)
+
+    assert preview.total_files == len(deploy.iter_deployment_items(source))
+    assert {change.action for change in preview.changes} == {"add"}
+    assert preview.gitignore_action == "add"
+    assert not (target / "CLAUDE.md").exists()
+    assert not (target / ".codex" / "config.toml").exists()
+    assert not (target / ".gitignore").exists()
+    assert not (target / ".ai-deploy-manifest.json").exists()
+    assert not (target / ".ai-deploy-lock.json").exists()
+
+
+def test_deploy_preview_after_deploy_and_target_edit(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+
+    in_sync_preview = deploy.preview_deploy(target, root=source)
+    assert {change.action for change in in_sync_preview.changes} == {"unchanged"}
+    assert in_sync_preview.gitignore_action == "unchanged"
+
+    write(target / "CLAUDE.md", "local edit\n")
+    edited_preview = deploy.preview_deploy(target, root=source)
+
+    assert any(
+        change.action == "update" and change.target_relative_path == "CLAUDE.md"
+        for change in edited_preview.changes
+    )
+
+
 def test_status_in_sync(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
 

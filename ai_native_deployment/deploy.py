@@ -72,6 +72,25 @@ class StatusResult:
         return not self.drifts
 
 
+@dataclass(frozen=True)
+class DeployPreviewChange:
+    action: str
+    target_relative_path: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class DeployPreviewResult:
+    target_root: Path
+    total_files: int
+    changes: tuple[DeployPreviewChange, ...]
+    gitignore_action: str
+
+    @property
+    def changed(self) -> tuple[DeployPreviewChange, ...]:
+        return tuple(change for change in self.changes if change.action != "unchanged")
+
+
 def _posix(path: Path | PurePosixPath | str) -> str:
     return str(path).replace(os.sep, "/")
 
@@ -155,6 +174,62 @@ def append_gitignore_block(target_root: Path) -> Path:
         separator += "\n"
     path.write_text(existing + separator + GITIGNORE_BLOCK, encoding="utf-8")
     return path
+
+
+def planned_gitignore_action(target_root: Path) -> str:
+    path = target_root / ".gitignore"
+    if not path.exists():
+        return "add"
+    existing = path.read_text(encoding="utf-8")
+    if GITIGNORE_BEGIN in existing and GITIGNORE_END in existing:
+        updated = GITIGNORE_BLOCK_PATTERN.sub(GITIGNORE_BLOCK, existing)
+        return "unchanged" if updated == existing else "update"
+    return "update"
+
+
+def preview_deploy(target: str | Path, *, root: Path | None = None) -> DeployPreviewResult:
+    root = (root or source_root()).resolve()
+    target_root = Path(target).expanduser().resolve()
+    if not target_root.is_dir():
+        raise FileNotFoundError(f"target repo does not exist: {target_root}")
+
+    changes: list[DeployPreviewChange] = []
+    for item in iter_deployment_items(root):
+        target_path = target_root / item.target_relative_path
+        rendered_bytes = item.bytes_for_target(target_root)
+        detail = ""
+
+        if not target_path.exists():
+            action = "add"
+        elif not target_path.is_file():
+            action = "blocked"
+            detail = "target path exists but is not a file"
+        else:
+            content_changed = target_path.read_bytes() != rendered_bytes
+            mode_changed = stat.S_IMODE(target_path.stat().st_mode) != item.mode
+            if content_changed or mode_changed:
+                action = "update"
+                if content_changed and mode_changed:
+                    detail = "content and mode differ"
+                elif mode_changed:
+                    detail = "mode differs"
+            else:
+                action = "unchanged"
+
+        changes.append(
+            DeployPreviewChange(
+                action=action,
+                target_relative_path=item.target_relative_path,
+                detail=detail,
+            )
+        )
+
+    return DeployPreviewResult(
+        target_root=target_root,
+        total_files=len(changes),
+        changes=tuple(changes),
+        gitignore_action=planned_gitignore_action(target_root),
+    )
 
 
 def deploy_canonical(
@@ -278,4 +353,34 @@ def format_status(result: StatusResult, label: str | None = None) -> str:
         for drift in entries:
             detail = f" ({drift.detail})" if drift.detail else ""
             lines.append(f"    - {drift.target_relative_path}{detail}")
+    return "\n".join(lines)
+
+
+def format_deploy_preview(result: DeployPreviewResult) -> str:
+    counts = {
+        "add": 0,
+        "update": 0,
+        "unchanged": 0,
+        "blocked": 0,
+    }
+    for change in result.changes:
+        counts[change.action] = counts.get(change.action, 0) + 1
+
+    lines = [
+        f"{result.target_root}: dry-run deploy preview ({result.total_files} files)",
+        f"  add: {counts['add']}, update: {counts['update']}, unchanged: {counts['unchanged']}, blocked: {counts['blocked']}",
+        f"  gitignore: {result.gitignore_action}",
+        "  manifest: would write .ai-deploy-manifest.json",
+        "  lockfile: would write .ai-deploy-lock.json",
+        "  registry: would add/update local registry entry",
+    ]
+
+    for action in ("blocked", "add", "update"):
+        entries = [change for change in result.changes if change.action == action]
+        if not entries:
+            continue
+        lines.append(f"  {action}:")
+        for change in entries:
+            detail = f" ({change.detail})" if change.detail else ""
+            lines.append(f"    - {change.target_relative_path}{detail}")
     return "\n".join(lines)

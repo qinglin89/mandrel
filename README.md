@@ -54,6 +54,16 @@ Deployment writes:
 `canonical/codex/config.toml.template` may contain `{{REPO_ROOT}}`; deploy
 renders that placeholder to the absolute target repo path.
 
+Preview a deploy without writing the target repo:
+
+```bash
+./aii-2 deploy --dry-run ../some-target-repo
+```
+
+Dry-run reports which managed files would be added, updated, left unchanged, or
+blocked by a non-file target path. It does not write payload files, manifests,
+lockfiles, `.gitignore`, or registry entries.
+
 ## Status
 
 Check one repo:
