@@ -147,6 +147,12 @@ class FakeAgent:
         return False
 
 
+def assistant_text(text: str) -> None:
+    from types import SimpleNamespace as NS
+    FakeRun.events = [NS(type="assistant", message=NS(content=[
+        NS(type="text", text=text)]))]
+
+
 def patch_module(repo: Path) -> None:
     o.REPO = repo
     o.TASKS_DIR = repo / ".ai-tasks"
@@ -824,6 +830,8 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
         p.rename(repo / ".ai-tasks" / "archive" / p.name)
         idx.write_text("\n".join(
             ln for ln in idx.read_text().splitlines() if tid not in ln) + "\n")
+        assistant_text("Remaining-task audit: checked active tasks; updated "
+                       "none; unchanged all others.")
 
     FakeAgent.script = [gate_rejects, remediates, gate_passes, closes_out]
     orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
@@ -967,6 +975,8 @@ claimed-by: dev-hhhh-0001@2026-01-12T00:00:00Z
         p.rename(repo / ".ai-tasks" / "archive" / p.name)
         idx.write_text("\n".join(ln for ln in idx.read_text().splitlines()
                                  if tid not in ln) + "\n")
+        assistant_text("Remaining-task audit: checked active tasks; updated "
+                       "none; unchanged all others.")
 
     FakeAgent.script = [gate_passes_then_native_closeout]
     orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
@@ -1183,6 +1193,8 @@ claimed-by: dev-kkkk-0001@2026-01-15T00:00:00Z
         (repo / ".ai-tasks" / "archive").mkdir(exist_ok=True)
         p.rename(repo / ".ai-tasks" / "archive" / p.name)
         leftover.write_text("absorption scratch")
+        assistant_text("Remaining-task audit: checked active tasks; updated "
+                       "none; unchanged all others.")
 
     asked: list[str] = []
 
@@ -1398,6 +1410,8 @@ claimed-by: rev-nc-0001@2026-01-17T00:00:00Z
         p.rename(repo / ".ai-tasks" / "archive" / p.name)
         idx.write_text("\n".join(ln for ln in idx.read_text().splitlines()
                                  if tid not in ln) + "\n")
+        assistant_text("Remaining-task audit: checked active tasks; updated "
+                       "none; unchanged all others.")
 
     FakeAgent.script = [resume_concludes_and_closes]
     orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
@@ -1414,6 +1428,102 @@ claimed-by: rev-nc-0001@2026-01-17T00:00:00Z
     assert not FakeAgent.script
     print("scenario 21 (blocked resume → pass → native close-out "
           "recognized): PASS")
+
+
+def scenario_22_closeout_reconciles_remaining_tasks(repo: Path) -> None:
+    """Close-out must reconcile remaining active tasks, not only archive the
+    completed task. A stale task-id blocker referencing the archived task is a
+    close-out violation and is sent back to the close-out session to fix."""
+    tid = "2026-01-10-closeout-reconcile"
+    dep = "2026-01-10-dependent-task"
+    p = repo / ".ai-tasks" / f"{tid}.md"
+    dep_path = repo / ".ai-tasks" / f"{dep}.md"
+    p.write_text(f"""---
+id: {tid}
+status: final_review
+session-est: 1/1
+blockers: []
+claimed-by: dev-mmmm-0001@2026-01-18T00:00:00Z
+---
+
+# Close-out reconciliation mock
+
+## Session log
+
+### 2026-01-18 / dev-mmmm-0001 / (in_progress → final_review)
+- Done: whole scope implemented
+- Next: final gate
+- Open: none
+""")
+    dep_path.write_text(f"""---
+id: {dep}
+status: blocked
+session-est: 0/1
+blockers: [{tid}]
+claimed-by: dep-sid@2026-01-18T00:00:00Z
+---
+
+# Dependent task
+
+## Session log
+
+### 2026-01-18 / dep-sid / (pending → blocked)
+- Done: blocked on {tid}
+- Next: wait for dependency
+- Open: dependency not complete
+""")
+    idx = repo / ".ai-tasks" / "index.md"
+    idx.write_text(idx.read_text()
+                   + f"| [{tid}]({tid}.md) | final_review | mock |\n"
+                   + f"| [{dep}]({dep}.md) | blocked | mock |\n")
+
+    def gate_passes(agent: FakeAgent, prompt: str) -> None:
+        t = o.re.sub(r"^status:.*$", "status: completed", p.read_text(),
+                     flags=o.re.MULTILINE)
+        p.write_text(t + (
+            f"\n### 2026-01-18 / {agent.agent_id} / review of "
+            "dev-mmmm-0001 / (final_review → completed)\n"
+            "- Verdict: pass\n- Group: dev-mmmm-0001\n- Findings: none\n"))
+
+    def sloppy_closeout(agent: FakeAgent, prompt: str) -> None:
+        assert "Remaining-task audit:" in prompt, \
+            "close-out prompt must demand the remaining-task audit"
+        (repo / ".ai-tasks" / "archive").mkdir(exist_ok=True)
+        p.rename(repo / ".ai-tasks" / "archive" / p.name)
+        idx.write_text("\n".join(
+            ln for ln in idx.read_text().splitlines() if tid not in ln) + "\n")
+        assistant_text("Remaining-task audit: checked active tasks; updated "
+                       "none; unchanged all others.")
+
+    def fix_dependent(agent: FakeAgent, prompt: str) -> None:
+        assert "stale blocker" in prompt and dep_path.name in prompt
+        t = dep_path.read_text()
+        t = o.re.sub(r"^status:.*$", "status: pending", t,
+                     flags=o.re.MULTILINE)
+        t = o.re.sub(r"^blockers:.*$", "blockers: []", t,
+                     flags=o.re.MULTILINE)
+        dep_path.write_text(t)
+        idx.write_text(o.re.sub(
+            rf"\| \[{dep}\]\({dep}\.md\) \| blocked \|",
+            f"| [{dep}]({dep}.md) | pending |",
+            idx.read_text()))
+        assistant_text(f"Remaining-task audit: checked active tasks; updated "
+                       f"{dep}; unchanged all others.")
+
+    FakeAgent.script = [gate_passes, sloppy_closeout, fix_dependent]
+    orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
+                          api_key=None, once=False, max_sessions=10)
+    orch.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
+    orch.ask_human = lambda banner: (_ for _ in ()).throw(
+        AssertionError("no escalation expected: " + banner[:200]))
+    orch.loop()
+    log = orch.log_file.read_text()
+    assert "close-out violations: stale blocker" in log
+    dep_task = o.parse_task(dep_path)
+    assert dep_task.status == "pending"
+    assert dep_task.blockers == "[]"
+    assert not FakeAgent.script
+    print("scenario 22 (close-out reconciles remaining active tasks): PASS")
 
 
 def main() -> None:
@@ -1441,6 +1551,7 @@ def main() -> None:
         scenario_19_blocked_foreign_sid_exit(repo)
         scenario_20_cli_argv_and_resume_routing(repo)
         scenario_21_blocked_resume_native_closeout(repo)
+        scenario_22_closeout_reconciles_remaining_tasks(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):

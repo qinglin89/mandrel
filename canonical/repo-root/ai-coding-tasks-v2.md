@@ -6,6 +6,11 @@ Tasks describe in-flight changes. They live in `.ai-tasks/` and feed into memory
 
 - One file per task under `.ai-tasks/`.
 - One session handles one task.
+- Task-id blockers must reference active task files only. No active task may
+  list an archived/completed task id in `blockers`.
+- A `blocked` task must have at least one real blocker. When task-id blockers
+  are cleared and no blockers remain, restore an active status (`pending` or
+  the pre-blocked status inferable from the latest session-log heading).
 
 ## 2. Frontmatter
 
@@ -75,6 +80,13 @@ The session log is the single source for cross-session handoff and the input for
 Close-out (admission → absorb → archive) is executed by `/ai-sync-v2` at the Stop hook trigger.
 
 Absorption may be **retroactive**: multiple archived tasks may collectively warrant a Snapshot update that no single task did alone.
+
+Close-out also performs remaining-task reconciliation: audit every other
+active task under `.ai-tasks/` excluding `archive/`, update blockers/scope/
+assumptions/acceptance criteria/prefetch/estimate/status when the completed
+task changes them, and report `Remaining-task audit: checked N active task(s);
+updated ...; unchanged ...` before ending. This audit is required even when no
+remaining task changes.
 
 ## 7. Archive
 

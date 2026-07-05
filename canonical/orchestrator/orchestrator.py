@@ -10,11 +10,11 @@ finding, over-budget convergence group — pauses the loop and pulls the human
 in on stdin.
 
 Backends (--backend):
-  cursor   (default) fresh Cursor SDK agent per session (dev=Fable-5,
+  cursor   (default) fresh Cursor SDK agent per session (dev=Opus-4.8,
            review=GPT-5.5 by default). Hooks do NOT run under the SDK, so the
            orchestrator injects protocol context itself and exports AI_ORCH=1
            to keep the .cursor hooks quiet. Needs CURSOR_API_KEY.
-  cc-codex Claude Code headless (`claude -p`, dev role, fable-5 @ max effort)
+  cc-codex Claude Code headless (`claude -p`, dev role, opus-4.8 @ max effort)
            + Codex CLI (`codex exec`, review role, gpt-5.5 @ xhigh effort).
            No Cursor dependency; each tool's own hook/import chain loads the
            protocol natively, so the orchestrator does NOT inject it.
@@ -91,9 +91,9 @@ _load_env_file()
 # --- policy ----------------------------------------------------------------
 
 # cursor backend — NOTE: the SDK model namespace differs from `cursor-agent
-# models` (CLI): the SDK wants base ids (claude-fable-5, gpt-5.5), the CLI
+# models` (CLI): the SDK wants base ids (claude-opus-4-8, gpt-5.5), the CLI
 # lists variant ids (claude-opus-4-8-thinking-high, gpt-5.5-high, ...).
-DEFAULT_DEV_MODEL = os.environ.get("ORCH_DEV_MODEL", "claude-fable-5")
+DEFAULT_DEV_MODEL = os.environ.get("ORCH_DEV_MODEL", "claude-opus-4-8")
 DEFAULT_REVIEW_MODEL = os.environ.get("ORCH_REVIEW_MODEL", "gpt-5.5")
 
 # cursor backend efforts — None = the catalog's default variant (claude
@@ -114,7 +114,7 @@ CODEX_EFFORT_ALIASES = {"extra-high": "xhigh"}
 # cc-codex backend — each tool's own model namespace and effort scale.
 # Codex accepts: none|minimal|low|medium|high|xhigh (xhigh = "extra high" in
 # the TUI; verified against the API enum 2026-07-03).
-DEFAULT_CC_MODEL = os.environ.get("ORCH_CC_MODEL", "fable-5")
+DEFAULT_CC_MODEL = os.environ.get("ORCH_CC_MODEL", "claude-opus-4-8")
 DEFAULT_CC_EFFORT = os.environ.get("ORCH_CC_EFFORT", "max")
 DEFAULT_CODEX_MODEL = os.environ.get("ORCH_CODEX_MODEL", "gpt-5.5")
 DEFAULT_CODEX_EFFORT = os.environ.get("ORCH_CODEX_EFFORT", "xhigh")
@@ -989,6 +989,7 @@ class Orchestrator:
         self.plan_gate = plan_gate
         self.last_review_agent: str | None = None
         self.pending_ruling: str | None = None
+        self._native_closeout_text: str | None = None
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.log_file = LOG_DIR / f"{ts}-{task_id}.log"
@@ -1111,6 +1112,7 @@ class Orchestrator:
                     # task is already archived when we get control back.
                     # Recognize the fait accompli instead of fighting it.
                     if (ARCHIVE_DIR / self.task_path.name).exists():
+                        self._native_closeout_text = result.text
                         self.log("task file archived mid-session — the "
                                  "native hook chain ran the close-out "
                                  "inside the session; skipping post-checks")
@@ -1547,13 +1549,14 @@ class Orchestrator:
                       "and continue the session per protocol (AUTOMATION "
                       "MODE rules still apply; end with a clean tree + "
                       "session-log entry).")
-            session.turn(prompt)
+            result = session.turn(prompt)
             if not self.task_path.exists():
                 # Same cc-codex seam as run_session: a resumed blocked
                 # REVIEWER may conclude the final gate (pass → completed),
                 # which trips its native Stop hook → in-session close-out →
                 # the task is archived before post-checks can parse it.
                 if (ARCHIVE_DIR / self.task_path.name).exists():
+                    self._native_closeout_text = result.text
                     self.log("task file archived mid-session — the native "
                              "hook chain ran the close-out inside the "
                              "resumed session; skipping post-checks")
@@ -1608,45 +1611,94 @@ class Orchestrator:
 
     # -- close-out --
 
+    def _active_task_paths(self) -> list[Path]:
+        return sorted(p for p in TASKS_DIR.glob("*.md")
+                      if p.name != INDEX_FILE.name)
+
+    @staticmethod
+    def _blocker_items(raw: str) -> list[str]:
+        text = (raw or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        return [item.strip().strip("`'\"") for item in text.split(",")
+                if item.strip()]
+
+    @staticmethod
+    def _remaining_task_audit_seen(text: str | None) -> bool:
+        return bool(text and re.search(r"remaining[- ]task audit\s*:",
+                                       text, re.IGNORECASE))
+
+    def _closeout_problems(self, audit_text: str | None = None) -> list[str]:
+        problems = []
+        if self.task_path.exists():
+            problems.append(f"{self.task_path.name} still in .ai-tasks/ "
+                            "(not archived)")
+        if not (ARCHIVE_DIR / self.task_path.name).exists():
+            problems.append("archive copy missing")
+        if self.task_id in INDEX_FILE.read_text():
+            problems.append("task row still present in .ai-tasks/index.md")
+        archived_ids = {self.task_id}
+        if ARCHIVE_DIR.exists():
+            archived_ids.update(p.stem for p in ARCHIVE_DIR.glob("*.md"))
+        for path in self._active_task_paths():
+            if path == self.task_path:
+                continue
+            task = parse_task(path)
+            blockers = self._blocker_items(task.blockers)
+            stale = sorted(set(blockers) & archived_ids)
+            for blocker in stale:
+                problems.append(f"stale blocker: {path.name} still lists "
+                                f"archived task {blocker} in blockers")
+            if task.status == "blocked" and not blockers:
+                problems.append(f"blocked task {path.name} has no blockers; "
+                                "restore an active status or add a real "
+                                "blocker")
+        if not self._remaining_task_audit_seen(audit_text):
+            problems.append("remaining-task audit evidence missing (reply "
+                            "with `Remaining-task audit: checked N active "
+                            "task(s); updated ...; unchanged ...`)")
+        if not tree_clean():
+            problems.append("working tree not clean after close-out")
+        return problems
+
     def close_out(self) -> None:
         if not self.last_review_agent:
             self.log("status=completed but no review agent from this run — "
                      "spawning a fresh close-out session (review role)")
+        active_count = len([p for p in self._active_task_paths()
+                            if p != self.task_path])
         prompt = (
             f"Task '.ai-tasks/{self.task_id}.md' has status: completed. "
             f"Invoke /ai-sync-v2 now — read '{SYNC_SKILL}' and follow it — to "
-            "apply absorption and archive the task before ending the "
-            "session. End with a clean working tree.")
+            "apply absorption and archive the task. Before ending, audit all "
+            f"{active_count} remaining active task file(s) in `.ai-tasks/` "
+            "excluding `archive/`: update any blocker, scope, assumptions, "
+            "acceptance criteria, prefetch, estimate, or status changed by "
+            "this completed task. Your final response must include one line "
+            "beginning `Remaining-task audit:` summarizing how many active "
+            "tasks you checked and which task ids changed or did not change. "
+            "End with a clean working tree.")
         if self.last_review_agent:
             session = self.backend.resume_session(self.last_review_agent,
                                                   "review")
         else:
             session = self.backend.new_session("review")
         try:
-            session.turn(prompt)
-            problems = []
-            if self.task_path.exists():
-                problems.append(f"{self.task_path.name} still in .ai-tasks/ "
-                                "(not archived)")
-            if not (ARCHIVE_DIR / self.task_path.name).exists():
-                problems.append("archive copy missing")
-            if self.task_id in INDEX_FILE.read_text():
-                problems.append("task row still present in .ai-tasks/index.md")
-            if not tree_clean():
-                problems.append("working tree not clean after close-out")
+            result = session.turn(prompt)
+            problems = self._closeout_problems(result.text)
             for _ in range(MAX_FOLLOWUPS):
                 if not problems:
                     break
                 self.log("close-out violations: " + "; ".join(problems))
-                session.turn("[orchestrator] Close-out incomplete:\n- "
-                             + "\n- ".join(problems)
-                             + "\nFinish the ai-sync-v2 close-out per the "
-                             "skill, then end with a clean tree.")
-                problems = []
-                if self.task_path.exists():
-                    problems.append("task not archived")
-                if not tree_clean():
-                    problems.append("tree not clean")
+                result = session.turn(
+                    "[orchestrator] Close-out incomplete:\n- "
+                    + "\n- ".join(problems)
+                    + "\nFinish the ai-sync-v2 close-out per the skill. "
+                    "Audit every remaining active task under `.ai-tasks/` "
+                    "excluding `archive/`, update any affected task, remove "
+                    "stale blockers, then end with a clean tree. Your final "
+                    "response must include `Remaining-task audit:`.")
+                problems = self._closeout_problems(result.text)
             if problems:
                 self.ask_human("Close-out still incomplete: "
                                + "; ".join(problems)
@@ -1662,18 +1714,15 @@ class Orchestrator:
         /ai-sync-v2) archived the task mid-session. Verify the close-out is
         complete — archive copy already confirmed by the caller — and end
         the run instead of driving a second close-out."""
-        problems = []
-        if self.task_id in INDEX_FILE.read_text():
-            problems.append("task row still present in .ai-tasks/index.md")
-        if not tree_clean():
-            problems.append("working tree not clean after close-out")
+        problems = self._closeout_problems(self._native_closeout_text)
         if problems:
             self.ask_human("Close-out (performed in-session by the native "
                            "hook chain) is incomplete:\n- "
                            + "\n- ".join(problems)
                            + "\nFinish manually, then type 'done'.")
         self.log("close-out done (performed in-session by the native hook "
-                 "chain; orchestrator verified archive/index/tree)")
+                 "chain; orchestrator verified archive/index/tree/remaining "
+                 "tasks)")
 
     def loop(self) -> None:
         if not self.task_path.exists():

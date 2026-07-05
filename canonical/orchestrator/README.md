@@ -19,7 +19,7 @@ is pluggable:
 
 | | `--backend cursor` (default) | `--backend cc-codex` |
 |---|---|---|
-| dev role | Cursor SDK agent, `claude-fable-5` | Claude Code headless (`claude -p`), `fable-5` @ `max` effort |
+| dev role | Cursor SDK agent, `claude-opus-4-8` | Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort |
 | review role | Cursor SDK agent, `gpt-5.5` | Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
 | auth | `CURSOR_API_KEY` (SDK; login not enough) | each CLI's own login (`claude` `/login`, `codex login`) |
 | subscription | Cursor only (cheapest) | Claude + OpenAI (buys max per-model effort Cursor doesn't expose) |
@@ -57,7 +57,7 @@ All `ORCH_*` variables and `CURSOR_API_KEY` are read from
 | `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
 | `--backend` | `cursor` | `cursor` or `cc-codex` (see §0) |
 | `--plan-gate` | off | every dev session first proposes goal+plan and blocks for your confirmation before implementing (see §5.8) |
-| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (cc-codex) | `claude-fable-5` / `fable-5` | dev-role model, in the backend's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
+| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (cc-codex) | `claude-opus-4-8` | dev-role model, in the backend's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
 | `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (cc-codex) | `gpt-5.5` | review-role model |
 | `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (cc-codex) | catalog default (= `high`) / `max` | dev-role effort. cursor: claude `effort` axis `low..max` via ModelSelection params (`max` verified working through the SDK even though the app UI doesn't offer it); cc-codex: `claude --effort` `low..max` |
 | `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (cc-codex) | catalog default (= `medium`) / `xhigh` | review-role effort: `none/low/medium/high/xhigh`. **Canonical spelling for the top tier is codex's `xhigh`** — the cursor gpt `reasoning` axis natively calls it `extra-high`, and the orchestrator translates per backend, so either spelling works anywhere (both tiers verified live) |
@@ -312,17 +312,20 @@ appended to a fresh review session's prompt.
 
 After `completed`, the review agent is resumed to run `/ai-sync-v2`
 (absorb + archive). The orchestrator verifies: task file gone from
-`.ai-tasks/`, archive copy exists, index row removed, tree clean. Up to 3
-followups; if still incomplete you're asked to finish manually and press
-enter.
+`.ai-tasks/`, archive copy exists, index row removed, no active task still
+lists an archived task id in `blockers`, no `blocked` task has empty blockers,
+the close-out response includes `Remaining-task audit: ...`, and the tree is
+clean. Up to 3 followups; if still incomplete you're asked to finish manually
+and press enter.
 
 cc-codex usually never reaches this path: a final-gate pass trips the
 review session's own Stop hook, which forces `/ai-sync-v2` INSIDE that
 session (verified live 2026-07-04, incl. correct admission rejection of
 non-absorbable content). The orchestrator recognizes the already-archived
-task — it skips post-checks for that session, verifies archive/index/tree,
-logs `close-out done (performed in-session by the native hook chain)`, and
-exits. The same recognition covers a RESUMED blocked reviewer that
+task — it skips post-checks for that session, verifies archive/index/tree plus
+remaining-task reconciliation evidence/invariants, logs `close-out done
+(performed in-session by the native hook chain)`, and exits. The same
+recognition covers a RESUMED blocked reviewer that
 concludes pass → completed (handle_blocked; verified live 2026-07-04 —
 previously a crash). §5.7 remains the cursor-backend path and the
 backstop.

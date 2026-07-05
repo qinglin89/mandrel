@@ -108,9 +108,23 @@ Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle clo
 3. Update task `status` per the status-transition table
    (`ai-coding-tasks-v2.md` §3).
 4. Backfill `prefetch:` with what was actually consulted.
-5. Update any **other** pending tasks whose scope or blockers shifted due to this session. (Current task's row is `/ai-sync-v2`'s domain — see memory §1.)
+5. Run **remaining-task reconciliation**: inspect every other active task
+   under `.ai-tasks/` (all `pending`, `in_progress`, `final_review`, and
+   `blocked` files; exclude `archive/`). For each remaining task, decide
+   whether this session changed its blockers, scope, assumptions, acceptance
+   criteria, prefetch, estimate, or status. Apply required updates, including
+   removing task-id blockers that this session resolved. If a blocked task has
+   no blockers left, restore the active status that is inferable from its
+   latest session-log heading; otherwise set it to `pending`. Current task's
+   row is `/ai-sync-v2`'s domain — see memory §1.
 
 On `task.status == completed`, the Stop hook fires `/ai-sync-v2` to apply close-out per `ai-coding-tasks-v2.md` §6 (Lifecycle close-out). Do not pre-archive the task, pre-edit `.ai/`, or pre-remove the task's row from `.ai-tasks/index.md` — `/ai-sync-v2` owns the entire close-out.
+
+At close-out, `/ai-sync-v2` repeats remaining-task reconciliation and records
+one explicit line in its final response: `Remaining-task audit: checked N
+active task(s); updated ...; unchanged ...`. The orchestrator treats stale
+task-id blockers pointing at archived tasks, blocked tasks with empty
+`blockers`, or missing audit evidence as incomplete close-out.
 
 ## 11. Session roles (dev / review)
 
