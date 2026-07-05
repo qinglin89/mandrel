@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import stat
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -91,8 +93,26 @@ class DeployPreviewResult:
         return tuple(change for change in self.changes if change.action != "unchanged")
 
 
+@dataclass(frozen=True)
+class OrchestratorBootstrapResult:
+    target_root: Path
+    orchestrator_root: Path
+    venv_path: Path
+    python_path: Path
+    requirements_path: Path
+    env_path: Path
+    env_created: bool
+    python_executable: str
+
+
 def _posix(path: Path | PurePosixPath | str) -> str:
     return str(path).replace(os.sep, "/")
+
+
+def _venv_python_path(venv_path: Path) -> Path:
+    if os.name == "nt":
+        return venv_path / "Scripts" / "python.exe"
+    return venv_path / "bin" / "python"
 
 
 def is_forbidden_relative_path(path: Path | PurePosixPath | str) -> bool:
@@ -282,6 +302,59 @@ def deploy_canonical(
         require_manifest=True,
     )
     return deployed_manifest
+
+
+def bootstrap_orchestrator(
+    target: str | Path,
+    *,
+    python_executable: str = "python3.14",
+) -> OrchestratorBootstrapResult:
+    target_root = Path(target).expanduser().resolve()
+    if not target_root.is_dir():
+        raise FileNotFoundError(f"target repo does not exist: {target_root}")
+
+    orchestrator_root = target_root / ".cursor" / "orchestrator"
+    if not orchestrator_root.is_dir():
+        raise FileNotFoundError(f"orchestrator payload is missing: {orchestrator_root}")
+
+    requirements_path = orchestrator_root / "requirements.txt"
+    if not requirements_path.is_file():
+        raise FileNotFoundError(f"orchestrator requirements are missing: {requirements_path}")
+
+    venv_path = orchestrator_root / ".venv"
+    if venv_path.exists() and not venv_path.is_dir():
+        raise FileExistsError(f"orchestrator venv path exists but is not a directory: {venv_path}")
+
+    subprocess.run([python_executable, "-m", "venv", str(venv_path)], cwd=target_root, check=True)
+
+    python_path = _venv_python_path(venv_path)
+    if not python_path.is_file():
+        raise FileNotFoundError(f"orchestrator venv python was not created: {python_path}")
+
+    subprocess.run([str(python_path), "-m", "pip", "install", "-U", "pip"], cwd=target_root, check=True)
+    subprocess.run(
+        [str(python_path), "-m", "pip", "install", "-r", str(requirements_path)],
+        cwd=target_root,
+        check=True,
+    )
+
+    env_example_path = orchestrator_root / ".env.example"
+    env_path = orchestrator_root / ".env"
+    env_created = False
+    if env_example_path.is_file() and not env_path.exists():
+        shutil.copy2(env_example_path, env_path)
+        env_created = True
+
+    return OrchestratorBootstrapResult(
+        target_root=target_root,
+        orchestrator_root=orchestrator_root,
+        venv_path=venv_path,
+        python_path=python_path,
+        requirements_path=requirements_path,
+        env_path=env_path,
+        env_created=env_created,
+        python_executable=python_executable,
+    )
 
 
 def check_status(target: str | Path, *, root: Path | None = None) -> StatusResult:

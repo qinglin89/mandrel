@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from ai_native_deployment import deploy, hashing, lockfile, manifest
+from ai_native_deployment import cli, deploy, hashing, lockfile, manifest
 
 
 def write(path: Path, content: str = "content\n") -> Path:
@@ -29,6 +29,7 @@ def make_source(tmp_path: Path) -> Path:
     write(canonical / "claude" / "settings.json", "{}\n")
     write(canonical / "orchestrator" / "orchestrator.py", 'print("ok")\n')
     write(canonical / "orchestrator" / ".env.example", "TOKEN=\n")
+    write(canonical / "orchestrator" / "requirements.txt", "cursor-sdk\n")
     return root
 
 
@@ -257,3 +258,76 @@ def test_deploy_updates_local_registry(tmp_path: Path) -> None:
             "manifest": str(target.resolve() / ".ai-deploy-manifest.json"),
         }
     ]
+
+
+def test_bootstrap_orchestrator_creates_venv_installs_requirements_and_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _source, target, _deployed = deploy_to_tmp(tmp_path)
+    calls: list[tuple[list[str], Path, bool]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
+        calls.append((command, cwd, check))
+        if command == ["python3.14", "-m", "venv", str(target.resolve() / ".cursor" / "orchestrator" / ".venv")]:
+            python_path = target / ".cursor" / "orchestrator" / ".venv" / "bin" / "python"
+            write(python_path, "#!/bin/sh\n")
+
+    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
+
+    result = deploy.bootstrap_orchestrator(target)
+
+    venv_path = target.resolve() / ".cursor" / "orchestrator" / ".venv"
+    python_path = venv_path / "bin" / "python"
+    requirements_path = target.resolve() / ".cursor" / "orchestrator" / "requirements.txt"
+    assert result.venv_path == venv_path
+    assert result.python_path == python_path
+    assert result.requirements_path == requirements_path
+    assert result.env_created is True
+    assert (target / ".cursor" / "orchestrator" / ".env").read_text(encoding="utf-8") == "TOKEN=\n"
+    assert calls == [
+        (["python3.14", "-m", "venv", str(venv_path)], target.resolve(), True),
+        ([str(python_path), "-m", "pip", "install", "-U", "pip"], target.resolve(), True),
+        ([str(python_path), "-m", "pip", "install", "-r", str(requirements_path)], target.resolve(), True),
+    ]
+
+
+def test_bootstrap_orchestrator_keeps_existing_env_and_accepts_custom_python(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _source, target, _deployed = deploy_to_tmp(tmp_path)
+    write(target / ".cursor" / "orchestrator" / ".env", "CURSOR_API_KEY=local\n")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
+        calls.append(command)
+        if command[:3] == ["python3.13", "-m", "venv"]:
+            write(target / ".cursor" / "orchestrator" / ".venv" / "bin" / "python", "#!/bin/sh\n")
+
+    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
+
+    result = deploy.bootstrap_orchestrator(target, python_executable="python3.13")
+
+    assert result.env_created is False
+    assert (target / ".cursor" / "orchestrator" / ".env").read_text(encoding="utf-8") == "CURSOR_API_KEY=local\n"
+    assert calls[0] == ["python3.13", "-m", "venv", str(target.resolve() / ".cursor" / "orchestrator" / ".venv")]
+
+
+def test_deploy_cli_parser_has_orchestrator_bootstrap_flags() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(
+        [
+            "deploy",
+            "--bootstrap-orchestrator",
+            "--orchestrator-python",
+            "python3.13",
+            "../target",
+        ]
+    )
+
+    assert args.command == "deploy"
+    assert args.bootstrap_orchestrator is True
+    assert args.orchestrator_python == "python3.13"
+    assert args.target == "../target"

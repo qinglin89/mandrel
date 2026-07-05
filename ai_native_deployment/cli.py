@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,16 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
     deploy_parser = subparsers.add_parser("deploy", help="deploy canonical files into a target repo")
     deploy_parser.add_argument("--dry-run", action="store_true", help="preview deploy changes without writing files")
+    deploy_parser.add_argument(
+        "--bootstrap-orchestrator",
+        action="store_true",
+        help="after deployment, create/update .cursor/orchestrator/.venv and install requirements",
+    )
+    deploy_parser.add_argument(
+        "--orchestrator-python",
+        default="python3.14",
+        help="python executable used with --bootstrap-orchestrator (default: python3.14)",
+    )
     deploy_parser.add_argument("target", help="target repo path")
 
     status_parser = subparsers.add_parser("status", help="check a target repo for drift")
@@ -80,11 +91,22 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run:
                 preview = deploy.preview_deploy(args.target)
                 print(deploy.format_deploy_preview(preview))
+                if args.bootstrap_orchestrator:
+                    print("  orchestrator bootstrap: would create/update .cursor/orchestrator/.venv and install requirements")
                 return 1 if any(change.action == "blocked" for change in preview.changes) else 0
             deployed_manifest = deploy.deploy_canonical(args.target)
             files = deployed_manifest.get("files", {})
             print(f"deployed {len(files)} files to {Path(args.target).expanduser().resolve()}")
             print(f"manifest: {Path(args.target).expanduser().resolve() / manifest_path_name()}")
+            if args.bootstrap_orchestrator:
+                result = deploy.bootstrap_orchestrator(args.target, python_executable=args.orchestrator_python)
+                print(f"orchestrator venv: {result.venv_path}")
+                print(f"orchestrator python: {result.python_path}")
+                print(f"orchestrator requirements: {result.requirements_path}")
+                if result.env_created:
+                    print(f"orchestrator env: created {result.env_path}")
+                else:
+                    print(f"orchestrator env: kept existing {result.env_path}")
             return 0
 
         if args.command == "status":
@@ -127,7 +149,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(skills.format_sync_result(result))
                 return 0
 
-    except (FileNotFoundError, manifest.ManifestError, registry.RegistryError, skills.SkillsSyncError, OSError) as exc:
+    except (
+        FileNotFoundError,
+        manifest.ManifestError,
+        registry.RegistryError,
+        skills.SkillsSyncError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

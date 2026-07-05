@@ -34,6 +34,21 @@ The repo-local wrapper is shorter and does not require installation:
 ./aii-2 deploy ../some-target-repo
 ```
 
+To make the deployed orchestrator runtime-ready in the target repo, bootstrap
+its local virtualenv during deploy:
+
+```bash
+./aii-2 deploy --bootstrap-orchestrator ../some-target-repo
+```
+
+This creates or updates `.cursor/orchestrator/.venv` with `python3.14 -m venv`,
+upgrades `pip`, installs `.cursor/orchestrator/requirements.txt`, and creates
+`.cursor/orchestrator/.env` from `.env.example` only if `.env` does not already
+exist. Use `--orchestrator-python /path/to/python` if `python3.14` is not the
+right executable on the machine. Credentials and CLI logins are still local:
+set `CURSOR_API_KEY` for the default Cursor backend, or log in to `claude` and
+`codex` for `--backend cc-codex`.
+
 If installed in editable mode, the same command is exposed as:
 
 ```bash
@@ -50,6 +65,8 @@ Deployment writes:
   payload files, `.ai-tasks/`, and the local manifest, but leaves the lockfile
   trackable
 - a local registry entry in `.registry/repos.local.json`
+- with `--bootstrap-orchestrator`: target `.cursor/orchestrator/.venv/` and a
+  non-overwriting `.cursor/orchestrator/.env` scaffold
 
 `canonical/codex/config.toml.template` may contain `{{REPO_ROOT}}`; deploy
 renders that placeholder to the absolute target repo path.
@@ -62,7 +79,7 @@ Preview a deploy without writing the target repo:
 
 Dry-run reports which managed files would be added, updated, left unchanged, or
 blocked by a non-file target path. It does not write payload files, manifests,
-lockfiles, `.gitignore`, or registry entries.
+lockfiles, `.gitignore`, registry entries, or orchestrator bootstrap files.
 
 ## Status
 
