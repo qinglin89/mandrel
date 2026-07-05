@@ -51,7 +51,7 @@ No initial tasks are derived for brownfield — `.ai-tasks/index.md` stays `(non
 
 ## Greenfield Procedure
 
-1. Ask the user for enough project context to initialize the snapshot: purpose, users, scope, non-goals, tech stack, major capabilities, external systems, deployment/runtime expectations, and known constraints. If the target-project surface is empty after exclusions, do not infer project goals from deployed AI infrastructure.
+1. Ask the user for enough project context to initialize the snapshot: purpose, users, scope, non-goals, tech stack, major capabilities, external systems, deployment/runtime expectations, and known constraints. If the target-project surface is empty after exclusions, do not infer project goals from deployed AI infrastructure.Greenfiled init is interactive and blocking, if the invocation does not already include enough produce context, ask the user for it and stop. Do not create `.ai/` or `.ai-tasks` before receiving answers.
 2. Generate `.ai/` skeletons from the current understanding.
 3. Leave sections without user input as `<!-- TODO -->`.
 4. Create a bounded set of initial pending tasks that covers the system at the feature/scope level. Target 10-25 tasks; do not exceed 30 during init.

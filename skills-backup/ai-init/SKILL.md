@@ -86,4 +86,4 @@ Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is re
 - **Infrastructure-only target surface**: after exclusions, treat as greenfield and ask the user for project goals; do not derive product semantics from deployed AI infrastructure
 - **Brownfield scan finds oversize module**: initialize that module in directory form from the start, not as a single oversize file
 - **User aborts mid-procedure**: leave partial state; user can resume manually or re-invoke `/ai-init` (precondition #2 will see `.ai/index.md` exists and refuse — user should clean up first)
-- **Greenfield with very thin user description**: generate minimal skeletons with extensive `<!-- TODO -->` markers; let user fill in over time via normal absorption flow
+- **Greenfield with very thin user description**: generate minimal skeletons with extensive `<!-- TODO -->` markers; let user fill in over time via normal absorption flow. By the 'thin' it means the user answered but left some fields unknown, it does not mean no answer was provided.
