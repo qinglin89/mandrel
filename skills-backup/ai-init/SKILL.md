@@ -1,6 +1,6 @@
 ---
 name: ai-init
-description: Initialize `.ai/` snapshot content for a project. Two modes — greenfield (empty repo, user describes project) and brownfield (existing codebase, multi-pass scan to derive `.ai/`). Follows `ai-coding-init-v2.md`. Assumes infrastructure (CLAUDE.md, protocol files, hooks, gitignore) is already deployed externally.
+description: Initialize `.ai/` snapshot content for a project. Two modes — greenfield (no substantive target-project surface after excluding deployed AI infrastructure; user describes project) and brownfield (existing target-project codebase, multi-pass scan to derive `.ai/`). Follows `ai-coding-init-v2.md`. Assumes infrastructure (CLAUDE.md, protocol files, hooks, gitignore) is already deployed externally.
 ---
 
 `ai-coding-init-v2.md` is the canonical procedure. This skill orchestrates user-facing flow.
@@ -20,18 +20,23 @@ If any piece is missing, abort and tell the user which — suggest re-running th
 
 ## Invocation
 
-Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `/ai-housekeeping` for ongoing structural maintenance).
+Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is refused; full rebuild requires explicit human instruction and confirmation. Use `/ai-housekeeping` for ongoing structural maintenance.
 
 ## Procedure
 
 1. **Verify preconditions** (see above). If any missing, abort with a clear list of what's needed.
 
-2. **Refuse re-init**: if `.ai/index.md` already exists, abort: "Already initialized. Use `/ai-housekeeping` for structural maintenance, or normal workflow for content updates."
+2. **Determine initialization state**:
+   - If `.ai/index.md` is absent → first init is allowed.
+   - If `.ai/index.md` and `.ai-tasks/index.md` both exist → abort unless the user explicitly requested a full rebuild: "Already initialized. Use `/ai-housekeeping` for structural maintenance, normal workflow for content updates, or explicitly request a full rebuild."
+   - If `.ai/index.md` exists but `.ai-tasks/index.md` is absent → treat as partial / broken init; stop and ask the user whether to repair the tasks layer or perform an explicit full rebuild.
 
-3. **Detect mode**:
-   - Empty / near-empty repo (≤ ~20 source files, README absent or stub) → **greenfield**
-   - Substantial codebase (working source, build artifacts, README with content) → **brownfield**
-   - Ambiguous → ask the user
+3. **Detect mode from target-project surface**:
+   - First exclude deployed AI protocol/tooling paths: `ai-coding-*.md`, `.claude/**`, `.codex/**`, `.cursor/**`, `.ai/**`, `.ai-tasks/**`, `.ai-deploy-*.json`.
+   - No substantive source, build files, or product documentation remain → **greenfield**. If the repo only contains excluded infrastructure, ask the user for project goals instead of inferring them from that infrastructure.
+   - Substantial target-project codebase (working source, build artifacts, product README with content) → **brownfield**.
+   - Ambiguous → ask the user.
+   - Include normally excluded paths only if the user explicitly says the repo's product is the AI protocol/deployment system itself.
 
 4. **Execute mode-specific procedure per `ai-coding-init-v2.md`**:
 
@@ -44,11 +49,11 @@ Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `
    - Follow the `.ai-tasks/` task definition from `ai-coding-tasks-v2.md`
    - Ensure at least one initial task is unblocked and specific enough for a dev session to start
 
-   **Brownfield** (5 passes per init-v2):
-   1. **Inventory** — read README, top-level dirs, build files (`go.mod` / `package.json` / etc.) → produce `overview.md`, skeleton `architecture.md`
-   2. **Module survey** — per-directory deep read; **fan out one sub-agent per top-level module** → produce `modules.md`. If any single module's content would exceed §4 size limit, initialize in directory form (`modules/<name>/index.md` + sub-files) rather than producing oversize content
+   **Brownfield** (5 passes per init-v2; target-project surface only):
+   1. **Inventory** — read target-project README, top-level dirs, build files (`go.mod` / `package.json` / etc.) → produce `overview.md`, skeleton `architecture.md`
+   2. **Module survey** — target-project per-directory deep read; **fan out one sub-agent per top-level module** → produce `modules.md`. If any single module's content would exceed §4 size limit, initialize in directory form (`modules/<name>/index.md` + sub-files) rather than producing oversize content
    3. **Cross-reference** — outputs of pass 1+2 → produce `map.md`, `features.md`
-   4. **Conventions sniff** — 5–10 representative files (test, error, style) → produce `conventions.md`
+   4. **Conventions sniff** — 5–10 representative target-project files (test, error, style) → produce `conventions.md`
    5. **User review** — present produced docs to user for sign-off
 
 5. **Initialize tasks layer**:
@@ -76,7 +81,9 @@ Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `
 ## Edge cases
 
 - **Infrastructure incomplete**: abort with checklist of missing pieces; suggest infrastructure deploy script
-- **Already initialized** (`.ai/index.md` exists): abort; redirect to `/ai-housekeeping` or normal workflow
+- **Already initialized** (`.ai/index.md` and `.ai-tasks/index.md` exist): abort unless the user explicitly requested a full rebuild; redirect ordinary use to `/ai-housekeeping` or normal workflow
+- **Partial / broken init** (`.ai/index.md` exists but `.ai-tasks/index.md` is missing): stop and ask whether to repair the tasks layer or perform an explicit full rebuild
+- **Infrastructure-only target surface**: after exclusions, treat as greenfield and ask the user for project goals; do not derive product semantics from deployed AI infrastructure
 - **Brownfield scan finds oversize module**: initialize that module in directory form from the start, not as a single oversize file
 - **User aborts mid-procedure**: leave partial state; user can resume manually or re-invoke `/ai-init` (precondition #2 will see `.ai/index.md` exists and refuse — user should clean up first)
 - **Greenfield with very thin user description**: generate minimal skeletons with extensive `<!-- TODO -->` markers; let user fill in over time via normal absorption flow
