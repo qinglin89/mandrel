@@ -15,12 +15,14 @@ Agent-facing memory for `.ai/` snapshot: pay re-derivation cost once at admissio
 
 | Tier | Mode | Files |
 |---|---|---|
-| Eager | Always in system prompt | `.ai/index.md`, `.ai/map.md`, `.ai-tasks/index.md`, `.ai/overview.md`, `.ai/architecture.md`, `.ai/design/index.md`, `.ai/conventions/index.md` |
+| Eager | Always in system prompt | `.ai/index.md`, `.ai/map.md`, `.ai-tasks/index.md`, `.ai/overview.md`, `.ai/architecture.md`, `.ai/design.md` or `.ai/design/index.md`, `.ai/conventions.md` or `.ai/conventions/index.md` |
 | Lazy | `Read` on demand, via routing | all other files in `.ai/` |
 
 Eager set carries routing (`index`, `map`, `tasks/index`), project invariants (`overview`, `architecture`, `design`), and writing rules (`conventions`) — every decision and every code write needs them. Lazy set is inventory (`modules`, `apis`, `features`, etc.) — loaded per task via routing.
 
-Sub-indexes from splits (e.g., `.ai/modules/index.md`) are lazy: referenced from the top-level routing.
+Initial snapshots use single-file entries (`design.md`, `conventions.md`). Directory-form entries (`design/index.md`, `conventions/index.md`) exist only after the normal §4 upgrade trigger. Session-start loaders must resolve the current entrypoint from `.ai/index.md` routing when possible, with file-shape fallback for partially initialized repos.
+
+Sub-indexes from splits (e.g., `.ai/modules/index.md`) are lazy unless the upgraded doc is part of the eager set above; referenced from the top-level routing.
 
 ## 3. Admission (Write)
 
@@ -62,6 +64,7 @@ Borderline on any → compress to one keyword-heavy line and keep. Don't deliber
 - Spawn `x/<topic>.md` for each sub-item that warrants its own file (bloated, dominant, or deep-dive nature). Multiple can spawn at once.
 - Keep the rest inline in `x/index.md`.
 - Update top-level routing to point at `x/index.md`.
+- If `x` is an eager doc (`design` or `conventions`), update any session-start loader or root import that cannot resolve entrypoints dynamically to load `x/index.md`.
 
 **Layered routing invariant**: top `.ai/index.md` lists only entry points (single file or sub-index), never individual sub-files. Sub-files are referenced from within the sub-index.
 

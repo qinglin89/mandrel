@@ -63,6 +63,8 @@ No initial tasks are derived for brownfield — `.ai-tasks/index.md` stays `(non
 
 ## Final State
 
+Initialization creates single-file content docs by default. Do not create directory-form `x/index.md` entries during init unless that document already meets a Scaling trigger below.
+
 ```
 .ai/
   index.md

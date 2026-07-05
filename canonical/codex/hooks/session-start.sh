@@ -21,7 +21,8 @@
 #   3. Protocol files: ai-coding-v2.md, ai-coding-memory-v2.md,
 #      ai-coding-tasks-v2.md.
 #   4. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
-#      .ai/architecture.md .ai/design/index.md .ai/conventions/index.md
+#      .ai/architecture.md current design/conventions entrypoints
+#      (resolved from .ai/index.md routing; .md vs /index.md fallback)
 #      .ai-tasks/index.md.
 #   5. Housekeeping reminder when .ai/.housekeeping-pending exists.
 #
@@ -55,10 +56,59 @@ EAGER_FILES=(
   .ai/map.md
   .ai/overview.md
   .ai/architecture.md
-  .ai/design/index.md
-  .ai/conventions/index.md
-  .ai-tasks/index.md
 )
+
+resolve_ai_router_path() {
+  local label="$1"
+  local routed=""
+
+  if [ -f ".ai/index.md" ]; then
+    routed="$(awk -F'|' -v want="$label" '
+      function trim(s) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+        return s
+      }
+      /^[[:space:]]*\|/ {
+        name = tolower(trim($2))
+        file = trim($3)
+        gsub(/`/, "", file)
+        if (name == tolower(want)) {
+          print file
+          exit
+        }
+      }
+    ' .ai/index.md 2>/dev/null || true)"
+  fi
+
+  routed="${routed#./}"
+  if [ -n "$routed" ]; then
+    case "$routed" in
+      .ai/*) printf '%s\n' "$routed" ;;
+      /*|../*|*/../*) return 1 ;;
+      *) printf '.ai/%s\n' "$routed" ;;
+    esac
+  fi
+}
+
+add_eager_entrypoint() {
+  local label="$1"
+  local flat="$2"
+  local dir_index="$3"
+  local routed=""
+
+  routed="$(resolve_ai_router_path "$label" || true)"
+  if [ -n "$routed" ] && [ -f "$routed" ]; then
+    EAGER_FILES+=("$routed")
+  elif [ -f "$dir_index" ] && [ ! -f "$flat" ]; then
+    EAGER_FILES+=("$dir_index")
+  else
+    EAGER_FILES+=("$flat")
+  fi
+}
+
+add_eager_entrypoint "Design" ".ai/design.md" ".ai/design/index.md"
+add_eager_entrypoint "Conventions" ".ai/conventions.md" ".ai/conventions/index.md"
+EAGER_FILES+=(.ai-tasks/index.md)
 
 ctx="PROJECT PROTOCOL CONTEXT (ai-coding-v2) — injected by the Codex SessionStart hook.
 

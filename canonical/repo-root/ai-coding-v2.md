@@ -70,8 +70,8 @@ Bootstrap: `ai-coding-init-v2.md` via `/ai-init`.
 @.ai/map.md
 @.ai/overview.md
 @.ai/architecture.md
-@.ai/design/index.md
-@.ai/conventions/index.md
+@.ai/design.md
+@.ai/conventions.md
 
 ## 9. Work tracking
 

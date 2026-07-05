@@ -14,7 +14,9 @@ Treat everything in that block as binding rules for this session.
 failed), before doing any work read, in order, and follow:
 `ai-coding-v2.md`, `ai-coding-memory-v2.md`, `ai-coding-tasks-v2.md`,
 `.ai/index.md`, `.ai/map.md`, `.ai/overview.md`, `.ai/architecture.md`,
-`.ai/design/index.md`, `.ai/conventions/index.md`, `.ai-tasks/index.md`.
+`.ai/design.md` (or `.ai/design/index.md` if upgraded),
+`.ai/conventions.md` (or `.ai/conventions/index.md` if upgraded),
+`.ai-tasks/index.md`.
 
 ## Cursor adaptations (override wording inside the protocol files)
 

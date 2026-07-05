@@ -36,7 +36,6 @@ Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is re
    - No substantive source, build files, or product documentation remain → **greenfield**. If the repo only contains excluded infrastructure, ask the user for project goals instead of inferring them from that infrastructure.
    - Substantial target-project codebase (working source, build artifacts, product README with content) → **brownfield**.
    - Ambiguous → ask the user.
-   - Include normally excluded paths only if the user explicitly says the repo's product is the AI protocol/deployment system itself.
 
 4. **Execute mode-specific procedure per `ai-coding-init-v2.md`**:
 

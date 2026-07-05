@@ -113,7 +113,7 @@ doc skipped despite existing (name the doc + the routing that points to it)?>
 
 - Read-only. Do **not** edit `.ai/`, archive tasks, or touch `.ai-tasks/`. This is an audit.
 - Credit only what the trace shows. The eager set (`index`, `map`, `overview`, `architecture`,
-  `design/index`, `conventions/index`, `.ai-tasks/index`) is always in context, so *not*
+  current `design` entrypoint, current `conventions` entrypoint, `.ai-tasks/index`) is always in context, so *not*
   reading it is **not** scratch-first — only unread **lazy** docs count against a session.
 - Be honest about blind spots: subagent reads are spliced but their depth>1 grandchildren are
   not; a crashed session may have done work without a session-log entry.
