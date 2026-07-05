@@ -35,6 +35,25 @@ These files are not currently:
 - treated as canonical runtime source
 - installed into `.agents/skills`, `.cursor/skills`, or `.claude/skills`
 
+## Temporary Sync Command
+
+`aii-2` has a temporary compatibility command that can refresh the global Claude
+skills from this backup:
+
+```bash
+./aii-2 skills sync-claude-global --dry-run
+./aii-2 skills sync-claude-global
+```
+
+`--dry-run` reports which skills would be added, updated, or left unchanged
+without writing `~/.claude/skills`.
+
+The real sync copies the managed skill directories from `skills-backup/` into
+`~/.claude/skills/`. It does not remove extra global skills, does not create an
+ai-native manifest, and does not update any target repo manifest or lockfile.
+This command is temporary and exists only for the current tested global-skill
+hook model.
+
 ## Backed Up Skills
 
 Current top-level skills copied from `~/.claude/skills/`:

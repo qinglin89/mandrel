@@ -105,6 +105,30 @@ managed repos on this machine, then start each target repo's deployed
 `.cursor/orchestrator/orchestrator.py` as a subprocess. This repository does
 not implement orch-hub.
 
+## Temporary Global Skills Sync
+
+The current tested Claude/Cursor/Codex workflow still uses global Claude skills
+as the operational skill source:
+
+```text
+~/.claude/skills/<name>/SKILL.md
+```
+
+This repository keeps a parked copy in `skills-backup/`. That directory is not
+part of target repo deployment. To refresh the global Claude skill directory
+from the parked backup, use the temporary compatibility command:
+
+```bash
+./aii-2 skills sync-claude-global --dry-run
+./aii-2 skills sync-claude-global
+```
+
+The command copies only the managed skills listed in `skills-backup/README.md`
+from `skills-backup/` to `~/.claude/skills/`. It does not delete extra global
+skills, does not write a manifest, and does not update target repo manifests or
+lockfiles. It exists to preserve the current tested hook model until skills are
+migrated to repo-local deployment in a separate task.
+
 ## Not Copied
 
 Import and deploy intentionally skip local or sensitive files:

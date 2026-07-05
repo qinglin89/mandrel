@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import deploy, manifest, registry
+from . import deploy, manifest, registry, skills
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -36,6 +36,20 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
     remove_parser = registry_subparsers.add_parser("remove", help="remove a repo from local registry tracking")
     remove_parser.add_argument("name_or_path", help="registered name or repo path")
+
+    skills_parser = subparsers.add_parser("skills", help="temporary global skill compatibility commands")
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
+
+    sync_parser = skills_subparsers.add_parser(
+        "sync-claude-global",
+        help="temporarily sync skills-backup into ~/.claude/skills",
+        description=(
+            "Temporary compatibility command. Sync parked skills-backup entries into "
+            "~/.claude/skills for the current tested Claude/Cursor/Codex hook model. "
+            "This is not target repo deployment and does not update target manifests."
+        ),
+    )
+    sync_parser.add_argument("--dry-run", action="store_true", help="report changes without writing ~/.claude/skills")
 
     return parser
 
@@ -102,7 +116,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"removed from registry: {args.name_or_path}")
                 return 0
 
-    except (FileNotFoundError, manifest.ManifestError, registry.RegistryError, OSError) as exc:
+        if args.command == "skills":
+            if args.skills_command == "sync-claude-global":
+                result = skills.sync_claude_global(dry_run=args.dry_run)
+                print(skills.format_sync_result(result))
+                return 0
+
+    except (FileNotFoundError, manifest.ManifestError, registry.RegistryError, skills.SkillsSyncError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

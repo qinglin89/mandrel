@@ -25,11 +25,15 @@ No initial tasks are derived for brownfield — `.ai-tasks/index.md` stays `(non
 
 ## Greenfield Procedure
 
-1. Ask the user for: purpose, users, scope, non-goals, tech stack.
-2. Generate `.ai/` skeletons from the description.
+1. Ask the user for enough project context to initialize the snapshot: purpose, users, scope, non-goals, tech stack, major capabilities, external systems, deployment/runtime expectations, and known constraints.
+2. Generate `.ai/` skeletons from the current understanding.
 3. Leave sections without user input as `<!-- TODO -->`.
-4. Stamp `last-updated: <today>`, `verified-against: <current HEAD SHA>`.
-5. **Derive initial pending tasks** from the description — scaffolding work, design decisions to make, infrastructure to set up, first features to implement, etc. Write each as `.ai-tasks/<id>.md` per `ai-coding-tasks-v2.md` §2/§3 (status `pending`, `session-est: 0/<rough estimate>`, prefetch as relevant). Populate `.ai-tasks/index.md` with rows for each.
+4. Create a bounded set of initial pending tasks that covers the system at the feature/scope level. Target 10-25 tasks; do not exceed 30 during init.
+5. Tasks are a work pool, not a timeline. Split by functional scope or architectural responsibility. Express hard dependencies only through existing `blockers` frontmatter.
+6. All tasks follow the `.ai-tasks/` task definition from `ai-coding-tasks-v2.md`.
+7. At least one initial task should be unblocked and specific enough for a dev session to start.
+8. Initial tasks are provisional. Later sessions may update pending task scope, blockers, estimates, or split/add/remove tasks as project understanding improves, following the normal session workflow.
+9. Stamp `last-updated: <today>`, `verified-against: <current HEAD SHA>`.
 
 ## Final State
 

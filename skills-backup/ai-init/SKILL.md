@@ -36,10 +36,13 @@ Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `
 4. **Execute mode-specific procedure per `ai-coding-init-v2.md`**:
 
    **Greenfield**:
-   - Ask user for: purpose, users, scope, non-goals, tech stack
-   - Generate `.ai/` skeletons from the description
+   - Ask user for enough project context to initialize the snapshot: purpose, users, scope, non-goals, tech stack, major capabilities, external systems, deployment/runtime expectations, and known constraints
+   - Generate `.ai/` skeletons from the current understanding
    - Mark sections lacking user input as `<!-- TODO -->`
-   - **Derive initial pending tasks** from the description (scaffolding, design decisions, infrastructure setup, first features). Each becomes a `.ai-tasks/<id>.md` per `ai-coding-tasks-v2.md` §2/§3 with `status: pending`, `session-est: 0/<rough>`, prefetch where applicable
+   - Create a bounded set of initial pending tasks that covers the system at the feature/scope level. Target 10-25 tasks; do not exceed 30 during init
+   - Treat tasks as a work pool, not a timeline. Split by functional scope or architectural responsibility. Express hard dependencies only through existing `blockers` frontmatter
+   - Follow the `.ai-tasks/` task definition from `ai-coding-tasks-v2.md`
+   - Ensure at least one initial task is unblocked and specific enough for a dev session to start
 
    **Brownfield** (5 passes per init-v2):
    1. **Inventory** — read README, top-level dirs, build files (`go.mod` / `package.json` / etc.) → produce `overview.md`, skeleton `architecture.md`
@@ -60,7 +63,7 @@ Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `
 7. **Verify**:
    - All `.ai/` docs have correct frontmatter
    - All snapshot docs within §4 size limits (directory form used where needed)
-   - `.ai-tasks/index.md` exists with `(none)`
+   - `.ai-tasks/index.md` exists; brownfield uses `(none)`, greenfield lists the generated pending tasks
 
 8. **Commit**: `chore(.ai): initial setup via /ai-init`
 
@@ -68,7 +71,7 @@ Manual. First-time setup of `.ai/` content for a project. Not for re-init (use `
    - Mode used (greenfield / brownfield)
    - Docs created (with which used directory form)
    - Total snapshot size
-   - Suggested next step: `/intake-task` to file the first task
+   - Suggested next step: start one unblocked pending task, or use `/intake-task` only if the initial backlog does not cover the desired work
 
 ## Edge cases
 

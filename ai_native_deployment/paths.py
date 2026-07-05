@@ -12,6 +12,7 @@ CANONICAL_DIRNAME = "canonical"
 MANIFEST_FILENAME = ".ai-deploy-manifest.json"
 LOCK_FILENAME = ".ai-deploy-lock.json"
 REGISTRY_RELATIVE_PATH = Path(".registry") / "repos.local.json"
+SKILLS_BACKUP_DIRNAME = "skills-backup"
 
 GITIGNORE_BEGIN = "# BEGIN ai-native-deployment"
 GITIGNORE_END = "# END ai-native-deployment"
@@ -28,6 +29,14 @@ def source_root() -> Path:
 
 def canonical_root(root: Path | None = None) -> Path:
     return (root or source_root()) / CANONICAL_DIRNAME
+
+
+def skills_backup_root(root: Path | None = None) -> Path:
+    return (root or source_root()) / SKILLS_BACKUP_DIRNAME
+
+
+def claude_global_skills_root() -> Path:
+    return Path.home() / ".claude" / "skills"
 
 
 def manifest_path(target_root: Path) -> Path:
