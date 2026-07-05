@@ -305,6 +305,23 @@ def summarize(val: object, limit: int = 80) -> str:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+def usage_summary(usage: dict | None) -> str:
+    """Small, non-content usage summary for observability logs."""
+    if not usage:
+        return "usage=?"
+    keys = (
+        ("input_tokens", "input"),
+        ("cached_input_tokens", "cached"),
+        ("cache_read_input_tokens", "cache_read"),
+        ("cache_creation_input_tokens", "cache_create"),
+        ("output_tokens", "output"),
+        ("reasoning_output_tokens", "reasoning"),
+        ("total_tokens", "total"),
+    )
+    parts = [f"{label}={usage[k]}" for k, label in keys if usage.get(k)]
+    return "usage=" + (",".join(parts) if parts else "?")
+
+
 # --- execution backends ------------------------------------------------------
 
 @dataclasses.dataclass
@@ -730,7 +747,8 @@ class ClaudeSession(CliSession):
         if etype == "system":
             self._emit(f"[status] {ev.get('subtype', 'system')}")
         elif etype == "assistant":
-            content = (ev.get("message") or {}).get("content") or []
+            msg = ev.get("message") or {}
+            content = msg.get("content") or []
             n = 0
             for block in content:
                 btype = block.get("type", "")
@@ -748,13 +766,24 @@ class ClaudeSession(CliSession):
             # `result` event's usage is CUMULATIVE across every request of
             # the run (measured 1.89M for a 7.8-min session) and must NOT be
             # used as a context signal.
-            u = (ev.get("message") or {}).get("usage") or {}
+            u = msg.get("usage") or {}
             if u and not ev.get("parent_tool_use_id"):
                 self.context_tokens = (
                     (u.get("input_tokens") or 0)
                     + (u.get("cache_read_input_tokens") or 0)
                     + (u.get("cache_creation_input_tokens") or 0)
                     + (u.get("output_tokens") or 0))
+            observed_model = msg.get("model")
+            if (observed_model and not ev.get("parent_tool_use_id")
+                    and not getattr(self, "_observed_response_logged",
+                                    False)):
+                self._observed_response_logged = True
+                self._emit(
+                    "[status] claude observed response "
+                    f"model={observed_model} "
+                    f"requested_model={getattr(self, 'model', '?')} "
+                    f"requested_effort={getattr(self, 'effort', '?')} "
+                    f"{usage_summary(u)}")
         elif etype == "result":
             self._emit(f"[status] result {ev.get('subtype', '')}".rstrip())
             if ev.get("is_error"):
@@ -774,6 +803,7 @@ class CodexSession(CliSession):
         self.model = model
         self.effort = CODEX_EFFORT_ALIASES.get(effort, effort)
         self.sid = sid  # None until the first stream event names it
+        self._latest_token_usage: str | None = None
 
     def _argv(self, prompt: str) -> list[str]:
         argv = ["codex", "exec", "--json", "-m", self.model,
@@ -800,6 +830,9 @@ class CodexSession(CliSession):
         if not self.sid:
             val = (ev.get("thread_id") or ev.get("session_id")
                    or ev.get("conversation_id"))
+            payload = ev.get("payload")
+            if not val and isinstance(payload, dict):
+                val = payload.get("session_id") or payload.get("id")
             thread = ev.get("thread")
             if not val and isinstance(thread, dict):
                 val = thread.get("id")
@@ -827,12 +860,56 @@ class CodexSession(CliSession):
                     self._emit("[thinking] block")
             elif etype == "item.completed":
                 self._emit(f"[status] {itype}")
+        elif etype == "turn_context":
+            payload = ev.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            observed_model = payload.get("model")
+            observed_effort = payload.get("effort")
+            sandbox = payload.get("sandbox_policy")
+            sandbox_type = (sandbox.get("type") if isinstance(sandbox, dict)
+                            else None)
+            if observed_model or observed_effort or sandbox_type:
+                self._emit(
+                    "[status] codex observed context "
+                    f"model={observed_model or '?'} "
+                    f"effort={observed_effort or '?'} "
+                    f"requested_model={getattr(self, 'model', '?')} "
+                    f"requested_effort={getattr(self, 'effort', '?')} "
+                    f"sandbox={sandbox_type or '?'}")
+        elif etype == "event_msg":
+            payload = ev.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            ptype = payload.get("type")
+            if ptype == "token_count":
+                info = payload.get("info")
+                info = info if isinstance(info, dict) else {}
+                last = info.get("last_token_usage")
+                window = info.get("model_context_window")
+                usage = last if isinstance(last, dict) else None
+                self._latest_token_usage = (
+                    f"{usage_summary(usage)} "
+                    f"context_window={window or '?'}")
+            elif (ptype == "task_complete"
+                  and getattr(self, "_latest_token_usage", None)):
+                self._emit(f"[status] codex token usage "
+                           f"{self._latest_token_usage}")
+                self._latest_token_usage = None
+            elif ptype:
+                self._emit(f"[status] event_msg {ptype}")
         elif etype == "turn.completed":
             # usage here is CUMULATIVE across every request of the turn
             # (measured 2.9M for an 8-min review) — useless as a context
             # signal; the estimate comes from _update_context() instead.
+            if getattr(self, "_latest_token_usage", None):
+                self._emit(f"[status] codex token usage "
+                           f"{self._latest_token_usage}")
+                self._latest_token_usage = None
             pass
         elif etype in ("turn.failed", "error"):
+            if getattr(self, "_latest_token_usage", None):
+                self._emit(f"[status] codex token usage "
+                           f"{self._latest_token_usage}")
+                self._latest_token_usage = None
             self._emit(f"[status] {etype} {summarize(ev.get('message') or ev)}")
             return "error"
         elif etype and not etype.startswith(("item.", "turn.", "thread.")):

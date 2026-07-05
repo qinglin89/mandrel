@@ -59,6 +59,19 @@ def make_repo() -> Path:
     (tmp / ".ai-tasks" / f"{TASK_ID}.md").write_text(TASK_BODY)
     (tmp / ".ai-tasks" / "index.md").write_text(
         f"| [{TASK_ID}]({TASK_ID}.md) | in_progress | mock |\n")
+    canonical = Path(__file__).resolve().parents[1]
+    repo_root = canonical / "repo-root"
+    for name in (
+        "ai-coding-v2.md",
+        "ai-coding-memory-v2.md",
+        "ai-coding-tasks-v2.md",
+        "ai-coding-review-v2.md",
+    ):
+        shutil.copy2(repo_root / name, tmp / name)
+    hooks = tmp / ".cursor" / "hooks"
+    hooks.mkdir(parents=True)
+    shutil.copy2(canonical / "cursor" / "hooks" / "session-start.sh",
+                 hooks / "session-start.sh")
     (tmp / ".gitignore").write_text(".ai-tasks/\n.cursor/\n")
     (tmp / "widget.go").write_text("package main\n")
     sh(tmp, "git", "init", "-q")
@@ -139,6 +152,8 @@ def patch_module(repo: Path) -> None:
     o.TASKS_DIR = repo / ".ai-tasks"
     o.ARCHIVE_DIR = repo / ".ai-tasks" / "archive"
     o.INDEX_FILE = repo / ".ai-tasks" / "index.md"
+    o.SESSION_START_SH = repo / ".cursor" / "hooks" / "session-start.sh"
+    o.REVIEW_RULE = repo / "ai-coding-review-v2.md"
     o.SESSION_MAP = repo / ".ai-tasks" / "sessions.json"
     o.Agent = FakeAgent
 
@@ -432,12 +447,16 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     cs = o.ClaudeSession.__new__(o.ClaudeSession)
     cs.orch, cs.sid = orch, "cc-sid"
+    cs.model, cs.effort = "fable-5", "max"
     chunks: list[str] = []
     assert cs._handle_event(
-        {"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "name": "Bash",
-             "input": {"command": "go test ./..."}},
-            {"type": "text", "text": "done"}]}}, chunks) is None
+        {"type": "assistant", "message": {
+            "model": "claude-fable-5",
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+            "content": [
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "go test ./..."}},
+                {"type": "text", "text": "done"}]}}, chunks) is None
     # thinking_tokens bursts (claude 2.1.199: one event per ~1.5s of
     # thinking, 237 observed in one session) collapse to ONE line; a
     # non-thinking event ends the burst so the next burst logs again
@@ -472,14 +491,30 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     xs = o.CodexSession.__new__(o.CodexSession)
     xs.orch, xs.sid = orch, None
+    xs.model, xs.effort = "gpt-5.5", "xhigh"
     chunks = []
-    xs._handle_event({"type": "thread.started", "thread_id": "codex-123"},
-                     chunks)
+    xs._handle_event(
+        {"type": "session_meta",
+         "payload": {"session_id": "codex-123", "cli_version": "0.142.5"}},
+        chunks)
     assert xs.sid == "codex-123", "codex sid must be captured from the stream"
+    xs._handle_event(
+        {"type": "turn_context",
+         "payload": {"model": "gpt-5.5", "effort": "xhigh",
+                     "sandbox_policy": {"type": "danger-full-access"}}},
+        chunks)
     xs._handle_event({"type": "item.completed",
                       "item": {"type": "agent_message",
                                "text": "verdict below"}}, chunks)
     assert chunks == ["verdict below"]
+    xs._handle_event(
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {
+                "input_tokens": 100, "cached_input_tokens": 90,
+                "output_tokens": 5, "reasoning_output_tokens": 3,
+                "total_tokens": 108},
+            "model_context_window": 258400}}},
+        chunks)
     xs._handle_event({"type": "turn.completed",
                       "usage": {"input_tokens": 2_900_000}}, chunks)
     assert xs.context_tokens == 0, \
@@ -508,6 +543,11 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     log = orch.log_file.read_text()
     assert "[tool] Bash" in log and "[text]" in log
+    assert ("claude observed response model=claude-fable-5 "
+            "requested_model=fable-5 requested_effort=max") in log
+    assert "codex observed context model=gpt-5.5 effort=xhigh" in log
+    assert ("codex token usage usage=input=100,cached=90,output=5,"
+            "reasoning=3,total=108 context_window=258400") in log
     assert log.count("thinking_tokens (burst") == 2, \
         "each thinking burst must log exactly once (2 bursts scripted)"
     assert "[status] compact" in log, "burst-breaking event still logs"
