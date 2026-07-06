@@ -34,7 +34,7 @@ is pluggable:
 | `CURSOR_API_KEY` set (`cursor` backend only) | The SDK needs a real API key; `cursor-agent login` is NOT sufficient for the SDK. Put it in `.cursor/orchestrator/.env` (copy `.env.example`; loaded automatically at startup, file values win) — or export it (fallback when the file is missing or the key is empty there). |
 | `claude` + `codex` CLIs logged in (`cc-codex` backend only) | `claude` must be logged in (check: `claude -p "hi"`); `codex login` for Codex. |
 | Clean working tree | Startup refuses otherwise (`working tree is not clean — resolve before orchestrating`). |
-| A **real terminal** (tty) | Every escalation reads an answer from stdin. Running with `< /dev/null` EOF-crashes at the first `HUMAN INPUT NEEDED`. `--once` for a single non-interactive-ish session is usually safe but not guaranteed (a blocked session or request event still needs stdin). |
+| A **real terminal** (tty) | Every escalation reads an answer from stdin. Running with `< /dev/null` EOF-crashes at the first `HUMAN INPUT NEEDED`. `--once` for a single non-interactive-ish session is usually safe but not guaranteed (a blocked session or request event still needs stdin). **Exception:** with `--control-dir` no tty is needed — escalations go through question/answer files (§5). |
 | `.venv` in this directory | python3.14 + `cursor-sdk` (see `requirements.txt`; the SDK is optional for `cc-codex`). |
 
 ## 2. Invocation
@@ -70,6 +70,7 @@ effort (verified with a bogus value), so a typo would otherwise silently
 downgrade the run; the orchestrator refuses instead.
 | `ORCH_CODEX_SANDBOX` | `danger-full-access` | cc-codex only: codex `-s` sandbox mode. Full access by default (ruled 2026-07-04): `workspace-write` leaves `.git` READ-ONLY, so review-side ai-sync commits and close-out absorption fail (`git add` → `index.lock Operation not permitted`, verified live) |
 | `--max-sessions` | 40 | safety budget per run; exit (resumable) when exhausted |
+| `--control-dir` | unset | file-based control channel for an external supervisor (orch-hub): every escalation writes `NNN-question.json` into the dir and waits for `NNN-answer.json`; a `stop.flag` file stops the run at the next safe point (§5). Unset = interactive stdin, behavior unchanged |
 
 Constants in the source: `MAX_FOLLOWUPS = 3` (post-check fix round-trips per
 session), `GROUP_BUDGET = 2` (changes-requested re-reviews per convergence
@@ -233,6 +234,28 @@ answer>
 `stop` always aborts the whole orchestrator cleanly (tree is clean between
 sessions, so a later restart just re-derives the turn). Anything else is
 used as described below.
+
+With `--control-dir DIR` the same escalations flow through files instead of
+stdin (for an external supervisor such as orch-hub; no tty needed):
+
+- Each escalation atomically writes `NNN-question.json` — `{seq, ts, kind,
+  banner, message}` (`message` = `banner` for now; `kind` names the
+  escalation per §5.1–5.8: `request | run-error | followups-exhausted |
+  blocked | convergence-budget | dispute-unresolved | final-review-stall |
+  closeout-incomplete | plan-gate`) — then polls for `NNN-answer.json`
+  once a second. Only a non-empty string `answer` is required of the answer
+  file (`seq`/`ts`/`responder` are optional extras); a malformed or partial
+  file is logged and re-read each tick, never silently swallowed.
+  `"answer": "stop"` behaves exactly like typing `stop`.
+- A `stop.flag` file in the dir stops the run gracefully at the next
+  session boundary (logged, exit code 0). While a question is pending it
+  aborts the wait like a `stop` answer (nonzero exit). The orchestrator
+  never deletes the flag — use a fresh run dir per run. Numbering continues
+  after any stale `NNN-*` files in a reused dir; they are never overwritten
+  or consumed.
+- Keep the dir OUTSIDE the repo working tree (an in-repo dir would dirty
+  the tree and fail post-checks; startup warns). The banner still goes to
+  the run log in both modes, and `human answered:` is logged identically.
 
 ### 5.1 Request event (agent tried to ask interactively)
 
@@ -403,12 +426,14 @@ entries in the file, including pre-orchestrator ones.
 ## 8. Testing / maintenance
 
 - `test_loop_mock.py` — offline mock-loop tests (no network, temp repo),
-  21 scenarios: loop mechanics (review dispatch, followups, budgets,
+  27 scenarios: loop mechanics (review dispatch, followups, budgets,
   blocked resume — dev and review roles, foreign-sid guidance exit,
   close-out plain / native / native-incomplete / native-on-blocked-resume,
   final_review stall), prompt instantiation, context-budget wrap-ups (both
   session kinds), event-stream logging, CLI argv shapes + sessions.json
-  resume routing. Run after ANY orchestrator change:
+  resume routing, and the `--control-dir` file channel (question/answer
+  files, malformed/stale handling, stop.flag). Run after ANY orchestrator
+  change:
   `.venv/bin/python test_loop_mock.py` (needs to run outside a sandbox; it
   shells out to git).
 - `smoke_hooks.py` — one-off empirical checks of hook behavior under the
@@ -419,8 +444,8 @@ entries in the file, including pre-orchestrator ones.
 
 ## 9. Known limitations
 
-- Escalation is stdin-only: no tty → EOF-crash at the first prompt
-  (candidate fix: file-based answer drop).
+- Without `--control-dir`, escalation is stdin-only: no tty → EOF-crash at
+  the first prompt (`--control-dir` IS the file-based answer drop, §5).
 - Pending ruling not persisted across restarts (§5.5 caveat).
 - Blocked-by-foreign-session exits with guidance instead of resuming
   (§5.4 caveat); on `cc-codex`, resume routing relies on

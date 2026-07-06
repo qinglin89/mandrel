@@ -43,31 +43,61 @@ user's existing local `aii` command (to be extended).
 
 ### Orchestrator change — the ONLY one, strictly non-invasive
 
+**STATUS: IMPLEMENTED 2026-07-06** in the canonical repo (mock scenarios
+23–27 cover the file channel; all pre-existing scenarios stayed green).
+The settled contract below supersedes the earlier sketch.
+
 - `ask_human` is the single human-IO choke point (verified: the only
-  `input()` / stdin read, orchestrator.py ~887–915; all §5.1–5.8 escalations,
-  plan-gate, close-out go through it).
-- Add `--control-dir <run-dir>`:
+  `input()` / stdin read in orchestrator.py — grep `def ask_human`; all
+  §5.1–5.8 escalations, plan-gate, close-out go through it, each call site
+  now passing an explicit `kind=`).
+- `--control-dir <run-dir>` (dir auto-created; keep it OUTSIDE the repo
+  working tree — an in-repo dir would dirty the tree and fail post-checks;
+  the orchestrator warns at startup):
   - unset → current stdin path byte-for-byte unchanged (default; manual tty
-    runs unaffected; `test_loop_mock.py` 13 scenarios unaffected);
-  - set → `ask_human` writes `NNN-question.json` `{seq, ts, kind, banner}`
-    and polls for `NNN-answer.json` `{answer}`; answer `stop` still exits via
-    the existing sys.exit path. Banner already goes to the log file in both
-    modes (auditable, unchanged).
+    runs unaffected; all pre-existing mock scenarios unaffected);
+  - set → `ask_human` atomically writes `NNN-question.json`
+    `{seq, ts (ISO-8601 UTC), kind, banner, message}` — `message` ==
+    `banner` in v1 (reserved to diverge later); `options` reserved, never
+    written in v1 — then polls `NNN-answer.json` every 1s
+    (`CONTROL_POLL_SECONDS`). Only a non-empty string `answer` is REQUIRED
+    of the answer file; `seq` (checked against the filename, mismatch
+    logged file-only), `ts`, `responder` (logged file-only) are optional
+    extras the hub should still write. A malformed/partial answer is
+    logged (once per distinct error) and re-read each tick — the hub may
+    atomically rewrite the file. Answer `stop` still exits via the
+    existing sys.exit path ("stopped by human"). Banner still goes to the
+    log file in both modes (auditable, unchanged).
+  - seq numbering starts after the max existing
+    `NNN-(question|answer).json` in the dir — a reused dir never gets
+    files overwritten and a stale answer is never consumed. Recommended
+    hub practice stays one fresh run-dir per run.
   - `kind` enum maps README §5.1–5.8: `request | run-error |
     followups-exhausted | blocked | convergence-budget | dispute-unresolved |
     final-review-stall | closeout-incomplete | plan-gate`. v1 UI may render
     banner text only; `kind` is for icons/styling (plan-gate later gets
     markdown render + confirm/amend buttons).
-- `stop.flag` in the control dir, checked at loop top ONLY when
-  `--control-dir` is set → graceful stop at the next session boundary (tree
-  is clean between sessions). Hard kill = kill the process group; UI must
-  warn: tree may be dirty, a CLI child may be orphaned.
+- `stop.flag` in the control dir (honored only when `--control-dir` is
+  set; the orchestrator never deletes it):
+  - at loop top → graceful stop at the next session boundary (tree is
+    clean between sessions); logs `control-dir stop request (stop.flag) —
+    stopping at session boundary` and exits 0 via the normal
+    "orchestrator done" path.
+  - while awaiting an answer (ruled 2026-07-06; supersedes the earlier
+    "loop top ONLY") → also honored, semantically identical to answering
+    `stop`: sys.exit (nonzero), may interrupt an open session, tree
+    possibly dirty. Without this a pending question would block graceful
+    stop forever.
+  - Hard kill = kill the process group; UI must warn: tree may be dirty,
+    a CLI child may be orphaned.
 - Deferred (not v1): structured `state.json` / `events.jsonl` — x parses the
   existing stable log lines instead (`state:`, `--- <role> session start`,
-  `context≈N tokens`, `[heartbeat]`).
-- Estimated size: ~50 lines. Keep all state-machine / post-check / prompt /
-  backend code untouched. Add file-channel scenarios to the mock suite; keep
-  all 13 existing scenarios green.
+  `context≈N tokens`, `[heartbeat]`; new stable lines: `control-dir
+  question NNN written (kind=…)`, `human answered: …`, `control-dir stop
+  request (stop.flag)`).
+- State-machine / post-check / prompt / backend code untouched (held).
+  File-channel scenarios added to the mock suite (23–27); all pre-existing
+  scenarios green.
 
 ### orch-hub (service x)
 
@@ -155,9 +185,10 @@ user's existing local `aii` command (to be extended).
 
 ## Feature priorities
 
-- **v1 slice**: orchestrator `--control-dir` + `stop.flag`; x core (repo/task
-  list, start/stop, SSE tail, escalation list+answer, Bark push, token auth,
-  mobile single page); launchd + Tailscale.
+- **v1 slice**: orchestrator `--control-dir` + `stop.flag` (DONE
+  2026-07-06); x core (repo/task list, start/stop, SSE tail, escalation
+  list+answer, Bark push, token auth, mobile single page); launchd +
+  Tailscale.
 - **P1**: task-file rendering (ground truth beats logs on the phone), git
   log/show per run (needed to make informed rulings remotely), remote
   intake-task (phone types a request → x runs a one-shot agent session
@@ -172,8 +203,9 @@ user's existing local `aii` command (to be extended).
    back to quantx, verify byte-identical + hooks still fire. Rationale: gives
    version history BEFORE further edits, and the orchestrator change then
    lands once in the canonical home instead of being migrated later.
-2. Orchestrator `--control-dir` + `stop.flag` (in canonical, deploy to
-   quantx; extend mock suite, keep 13 scenarios green).
+2. Orchestrator `--control-dir` + `stop.flag` — DONE 2026-07-06 (landed in
+   canonical; mock suite extended with scenarios 23–27, all pre-existing
+   scenarios green; redeploy to targets via `aii-2 deploy`).
 3. orch-hub FastAPI core + Bark notifier + single page.
 4. launchd plist + Tailscale (Serve for HTTPS if wanted).
 5. v2: Feishu long-connection bot, remote intake-task, git diff view.

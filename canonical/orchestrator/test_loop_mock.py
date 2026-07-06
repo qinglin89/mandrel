@@ -9,8 +9,9 @@ would. No CURSOR_API_KEY needed.
 Scenarios (one function each, run in order by main()): loop mechanics
 (review dispatch, followups, budgets, blocked resume, close-out — plain and
 native-in-session), prompt instantiation (checklists, wrap-up kinds,
-remediation lock), event-stream logging, CLI argv/routing shapes, and the
-escalation paths (§5.4/§5.6/§5.7 of the README).
+remediation lock), event-stream logging, CLI argv/routing shapes, the
+escalation paths (§5.4/§5.6/§5.7 of the README), and the --control-dir
+file channel (question/answer files, malformed/stale handling, stop.flag).
 
 Run: .venv/bin/python test_loop_mock.py
 """
@@ -18,10 +19,13 @@ Run: .venv/bin/python test_loop_mock.py
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -168,7 +172,8 @@ def new_orch(**kw) -> o.Orchestrator:
     orch = o.Orchestrator(TASK_ID, "mock-dev-model", "mock-review-model",
                           api_key=None, once=True,
                           max_sessions=kw.pop("max_sessions", 10),
-                          plan_gate=kw.pop("plan_gate", False))
+                          plan_gate=kw.pop("plan_gate", False),
+                          control_dir=kw.pop("control_dir", None))
     orch.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
     return orch
 
@@ -264,8 +269,9 @@ def scenario_3_budget_escalation(repo: Path) -> None:
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "convergence-budget", kind
         return "accept the residual risk; ship it"
 
     FakeAgent.script = [third_round]
@@ -296,8 +302,9 @@ def scenario_4_blocked(repo: Path) -> None:
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "blocked", kind
         return "UTC day"
 
     def resume_behavior(agent: FakeAgent, prompt: str) -> None:
@@ -408,8 +415,9 @@ def scenario_6_plan_gate(repo: Path) -> None:
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "plan-gate", kind
         return "confirmed, but skip S6 for now"
 
     # Turn 1: planning only — replies with plan text, touches NOTHING.
@@ -621,8 +629,9 @@ def scenario_9_dispute_escalation(repo: Path) -> None:
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "dispute-unresolved", kind
         return "dev is right: rows are pre-batch, drop the finding"
 
     FakeAgent.script = [review_disputed]
@@ -881,8 +890,9 @@ claimed-by: rev-gate-0001@2026-01-11T00:00:00Z
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "blocked", kind
         return "changes required — hand it back to dev"
 
     def resume_behavior(agent: FakeAgent, prompt: str) -> None:
@@ -1116,8 +1126,9 @@ claimed-by: rev-stall-0001@2026-01-14T00:00:00Z
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "final-review-stall", kind
         return "re-run the gate; the deferred style item does not block"
 
     def fresh_review_concludes(agent: FakeAgent, prompt: str) -> None:
@@ -1198,8 +1209,9 @@ claimed-by: dev-kkkk-0001@2026-01-15T00:00:00Z
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "closeout-incomplete", kind
         # the human finishes manually, then types 'done':
         idx.write_text("\n".join(ln for ln in idx.read_text().splitlines()
                                  if tid not in ln) + "\n")
@@ -1252,8 +1264,9 @@ claimed-by: manual-cc-abc123@2026-01-16T00:00:00Z
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "blocked", kind
         return "drop the shim"
 
     def raiser(sid: str, role: str):
@@ -1393,8 +1406,9 @@ claimed-by: rev-nc-0001@2026-01-17T00:00:00Z
 
     asked: list[str] = []
 
-    def fake_ask(banner: str) -> str:
+    def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
+        assert kind == "blocked", kind
         return "no — test item is carried by the spawned task; pass it"
 
     def resume_concludes_and_closes(agent: FakeAgent, prompt: str) -> None:
@@ -1526,6 +1540,260 @@ claimed-by: dep-sid@2026-01-18T00:00:00Z
     print("scenario 22 (close-out reconciles remaining active tasks): PASS")
 
 
+# -- --control-dir file channel (scenarios 23-27) ----------------------------
+
+def control_answer(ctl: Path, seq: int, payload: dict) -> threading.Thread:
+    """Background hub stand-in: wait for NNN-question.json to appear, then
+    atomically drop NNN-answer.json."""
+    def run() -> None:
+        q = ctl / f"{seq:03d}-question.json"
+        for _ in range(2000):
+            if q.exists():
+                break
+            time.sleep(0.005)
+        else:
+            raise AssertionError(f"question {seq:03d} never appeared")
+        tmp = ctl / f"{seq:03d}-answer.json.tmp"
+        tmp.write_text(json.dumps(payload))
+        o.os.replace(tmp, ctl / f"{seq:03d}-answer.json")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+def scenario_23_control_dir_channel(repo: Path) -> None:
+    """--control-dir: the REAL ask_human writes NNN-question.json and
+    returns the NNN-answer.json payload instead of touching stdin; the dir
+    is created on construction and seq numbering continues across asks."""
+    o.CONTROL_POLL_SECONDS = 0.01
+    base = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+    ctl = base / "nested" / "run"  # does not exist yet → __init__ must mkdir
+    orch = new_orch(control_dir=ctl)
+    assert ctl.is_dir(), "control dir must be created at construction"
+    assert orch._control_seq == 1
+
+    t = control_answer(ctl, 1, {"seq": 1, "ts": "2026-07-06T00:00:00Z",
+                                "responder": "mock-hub",
+                                "answer": "  proceed  "})
+    got = orch.ask_human("Need a ruling on X", kind="blocked")
+    t.join(timeout=10)
+    assert not t.is_alive(), "answerer thread must have finished"
+    assert got == "proceed", got  # answer is stripped like the stdin path
+    q = json.loads((ctl / "001-question.json").read_text())
+    assert q["seq"] == 1 and q["kind"] == "blocked", q
+    assert q["banner"] == "Need a ruling on X"
+    assert q["message"] == q["banner"], "message aliases banner in v1"
+    o.dt.datetime.fromisoformat(q["ts"])  # ts must be ISO-8601
+
+    # minimal answer shape ({"answer": ...} only) + seq continuation
+    t = control_answer(ctl, 2, {"answer": "second"})
+    assert orch.ask_human("Another?", kind="request") == "second"
+    t.join(timeout=10)
+    q2 = json.loads((ctl / "002-question.json").read_text())
+    assert q2["seq"] == 2 and q2["kind"] == "request", q2
+
+    log = orch.log_file.read_text()
+    assert "--- HUMAN INPUT NEEDED ---" in log, "banner must stay audited"
+    assert "control-dir question 001 written (kind=blocked)" in log
+    assert "human answered: 'proceed'" in log
+    shutil.rmtree(base)
+    print("scenario 23 (control-dir question/answer channel): PASS")
+
+
+def scenario_24_control_dir_malformed_answers(repo: Path) -> None:
+    """Malformed answers are logged (once per distinct error, never
+    silently swallowed) and re-read each tick until a valid answer
+    appears; extras (seq mismatch, responder) are logged file-only."""
+    o.CONTROL_POLL_SECONDS = 0.01
+    ctl = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+    orch = new_orch(control_dir=ctl)
+    a_tmp, a = ctl / "001-answer.json.tmp", ctl / "001-answer.json"
+
+    def drop(content: str) -> None:  # atomic, like a well-behaved hub
+        a_tmp.write_text(content)
+        o.os.replace(a_tmp, a)
+
+    def wait_for_log(needle: str) -> None:
+        for _ in range(2000):
+            if needle in orch.log_file.read_text():
+                return
+            time.sleep(0.005)
+        raise AssertionError(f"log line never appeared: {needle!r}")
+
+    def stage() -> None:
+        q = ctl / "001-question.json"
+        for _ in range(2000):
+            if q.exists():
+                break
+            time.sleep(0.005)
+        else:
+            raise AssertionError("question 001 never appeared")
+        drop("{ not json")
+        wait_for_log("malformed: unreadable JSON")
+        drop(json.dumps({"answer": "   "}))
+        wait_for_log("missing/empty `answer` string")
+        drop(json.dumps({"seq": 7, "answer": "fixed", "responder": "hub"}))
+
+    t = threading.Thread(target=stage, daemon=True)
+    t.start()
+    got = orch.ask_human("ruling?", kind="dispute-unresolved")
+    t.join(timeout=10)
+    assert not t.is_alive(), "stage thread must have finished"
+    assert got == "fixed", got
+    log = orch.log_file.read_text()
+    assert log.count("malformed: unreadable JSON") == 1, \
+        "same malformed content must be logged once, not every tick"
+    assert log.count("missing/empty `answer` string") == 1
+    assert "seq field 7 != 1 (filename wins)" in log
+    assert "responder: hub" in log
+    shutil.rmtree(ctl)
+    print("scenario 24 (control-dir malformed answers logged, then healed): "
+          "PASS")
+
+
+def scenario_25_control_dir_stale_files(repo: Path) -> None:
+    """A reused control dir: numbering continues after existing files;
+    stale question/answer files are neither overwritten nor consumed."""
+    o.CONTROL_POLL_SECONDS = 0.01
+    ctl = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+    (ctl / "001-question.json").write_text('{"seq": 1}')
+    (ctl / "001-answer.json").write_text('{"answer": "stale"}')
+    (ctl / "002-question.json").write_text('{"seq": 2}')
+    before = {p.name: p.read_text() for p in ctl.iterdir()}
+
+    orch = new_orch(control_dir=ctl)
+    assert orch._control_seq == 3, orch._control_seq
+    t = control_answer(ctl, 3, {"answer": "fresh"})
+    assert orch.ask_human("new run, new question", kind="request") == "fresh"
+    t.join(timeout=10)
+    for name, text in before.items():
+        assert (ctl / name).read_text() == text, f"{name} was modified"
+    assert (ctl / "003-question.json").exists()
+    shutil.rmtree(ctl)
+    print("scenario 25 (control-dir stale files skipped, never touched): "
+          "PASS")
+
+
+def scenario_26_control_dir_stop_answer_and_flag(repo: Path) -> None:
+    """'stop' through the file channel exits exactly like stdin 'stop';
+    a stop.flag dropped while a question is pending aborts the wait."""
+    o.CONTROL_POLL_SECONDS = 0.01
+    ctl = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+    orch = new_orch(control_dir=ctl)
+    t = control_answer(ctl, 1, {"answer": "stop", "responder": "mock-hub"})
+    try:
+        orch.ask_human("continue?", kind="run-error")
+        raise AssertionError("'stop' answer must sys.exit")
+    except SystemExit as e:
+        assert str(e.code) == "stopped by human", e.code
+    t.join(timeout=10)
+    assert "human answered: 'stop'" in orch.log_file.read_text()
+
+    # fresh orchestrator, same dir (001 files present → next seq is 2)
+    orch2 = new_orch(control_dir=ctl)
+
+    def drop_flag() -> None:
+        q = ctl / "002-question.json"
+        for _ in range(2000):
+            if q.exists():
+                break
+            time.sleep(0.005)
+        else:
+            raise AssertionError("question 002 never appeared")
+        (ctl / "stop.flag").write_text("")
+
+    t2 = threading.Thread(target=drop_flag, daemon=True)
+    t2.start()
+    try:
+        orch2.ask_human("second?", kind="blocked")
+        raise AssertionError("stop.flag while awaiting an answer must exit")
+    except SystemExit as e:
+        assert "stopped by control-dir stop.flag while awaiting answer " \
+               "002" in str(e.code), e.code
+    t2.join(timeout=10)
+    assert not t2.is_alive()
+    assert ("stop request (stop.flag) while awaiting answer 002"
+            in orch2.log_file.read_text())
+    shutil.rmtree(ctl)
+    print("scenario 26 (control-dir stop: answer 'stop' + stop.flag while "
+          "waiting): PASS")
+
+
+def scenario_27_control_dir_graceful_loop_stop(repo: Path) -> None:
+    """stop.flag at the loop top: a pre-existing flag stops before any
+    session is dispatched; a flag dropped during session 1 stops at the
+    next session boundary (once=False) instead of dispatching session 2."""
+    tid = "2026-01-20-ctl-stop"
+    p = repo / ".ai-tasks" / f"{tid}.md"
+    p.write_text(f"""---
+id: {tid}
+status: in_progress
+session-est: 1/2
+blockers: []
+claimed-by: dev-ctl-0001@2026-01-20T00:00:00Z
+---
+
+# Control-dir stop mock
+
+## Session log
+
+### 2026-01-20 / dev-ctl-0001 / (pending → in_progress)
+- Done: initial work
+- Next: review
+- Open: none
+""")
+
+    # part 1: flag already present → not even one session
+    ctl1 = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+    (ctl1 / "stop.flag").write_text("")
+    FakeAgent.script = []
+    orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
+                          api_key=None, once=True, max_sessions=10,
+                          control_dir=ctl1)
+    orch.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
+    orch.ask_human = lambda banner, kind="": (_ for _ in ()).throw(
+        AssertionError("unexpected escalation: " + banner[:200]))
+    orch.loop()
+    log = orch.log_file.read_text()
+    assert "control-dir enabled:" in log
+    assert ("control-dir stop request (stop.flag) — stopping at session "
+            "boundary") in log
+    assert "session start" not in log, "no session may be dispatched"
+
+    # part 2: flag dropped DURING session 1 → stop before session 2
+    ctl2 = Path(tempfile.mkdtemp(prefix="orch-ctl-"))
+
+    def review_and_drop_flag(agent: FakeAgent, prompt: str) -> None:
+        t = p.read_text()
+        t += (f"\n### 2026-01-20 / {agent.agent_id} / review of "
+              "dev-ctl-0001 / (in_progress → in_progress)\n"
+              "- Verdict: changes-requested\n- Group: dev-ctl-0001\n"
+              "- Findings: correctness: mock finding\n")
+        p.write_text(t)
+        (ctl2 / "stop.flag").write_text("")
+
+    FakeAgent.script = [review_and_drop_flag]
+    orch2 = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
+                           api_key=None, once=False, max_sessions=10,
+                           control_dir=ctl2)
+    orch2.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
+    orch2.ask_human = lambda banner, kind="": (_ for _ in ()).throw(
+        AssertionError("unexpected escalation: " + banner[:200]))
+    orch2.loop()
+    assert not FakeAgent.script, "session 1 must have run"
+    log2 = orch2.log_file.read_text()
+    assert "review session end" in log2
+    assert ("control-dir stop request (stop.flag) — stopping at session "
+            "boundary") in log2
+    assert o.parse_task(p).status == "in_progress", \
+        "no second session may have advanced the task"
+    shutil.rmtree(ctl1)
+    shutil.rmtree(ctl2)
+    print("scenario 27 (control-dir stop.flag → graceful stop at session "
+          "boundary): PASS")
+
+
 def main() -> None:
     repo = make_repo()
     try:
@@ -1552,6 +1820,11 @@ def main() -> None:
         scenario_20_cli_argv_and_resume_routing(repo)
         scenario_21_blocked_resume_native_closeout(repo)
         scenario_22_closeout_reconciles_remaining_tasks(repo)
+        scenario_23_control_dir_channel(repo)
+        scenario_24_control_dir_malformed_answers(repo)
+        scenario_25_control_dir_stale_files(repo)
+        scenario_26_control_dir_stop_answer_and_flag(repo)
+        scenario_27_control_dir_graceful_loop_stop(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):

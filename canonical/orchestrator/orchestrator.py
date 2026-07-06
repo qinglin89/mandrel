@@ -159,6 +159,7 @@ GROUP_BUDGET = 2      # changes-requested RE-reviews per group (so 3 entries tot
 DEFAULT_MAX_SESSIONS = 40
 HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
+CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
 # Session context budget (tokens) — port of stop-context-check.sh: a session
 # whose conversation outgrows this must wrap up (clean tree + session-log
 # entry + keep in_progress) and hand off to a fresh session.
@@ -981,12 +982,24 @@ class Orchestrator:
     def __init__(self, task_id: str, dev_model: str, review_model: str,
                  api_key: str | None, once: bool, max_sessions: int,
                  backend: object | None = None,
-                 plan_gate: bool = False) -> None:
+                 plan_gate: bool = False,
+                 control_dir: Path | None = None) -> None:
         self.task_id = task_id
         self.task_path = TASKS_DIR / f"{task_id}.md"
         self.once = once
         self.max_sessions = max_sessions
         self.plan_gate = plan_gate
+        self.control_dir = (Path(control_dir).expanduser().resolve()
+                            if control_dir else None)
+        if self.control_dir:
+            self.control_dir.mkdir(parents=True, exist_ok=True)
+            # A reused dir may hold question/answer files from a previous
+            # run — continue numbering after them; existing files are never
+            # overwritten and a stale answer is never consumed.
+            taken = [int(m.group(1)) for p in self.control_dir.iterdir()
+                     if (m := re.fullmatch(r"(\d+)-(question|answer)\.json",
+                                           p.name))]
+            self._control_seq = max(taken, default=0) + 1
         self.last_review_agent: str | None = None
         self.pending_ruling: str | None = None
         self._native_closeout_text: str | None = None
@@ -1018,35 +1031,104 @@ class Orchestrator:
         with self._log_lock, self.log_file.open("a") as f:
             f.write(f"--- {agent_id} ---\n{text}\n")
 
-    def ask_human(self, banner: str) -> str:
+    def ask_human(self, banner: str, kind: str = "question") -> str:
         # The banner must be auditable after the fact — it only ever printed
         # to the terminal before, which made blockers untraceable.
         with self.log_file.open("a") as f:
             f.write(f"--- HUMAN INPUT NEEDED ---\n{banner}\n--- end banner ---\n")
-        # Drain stray input buffered during the (possibly hour-long) run —
-        # a queued Enter must not silently answer the question.
-        drained = 0
-        with contextlib.suppress(Exception):
-            while select.select([sys.stdin], [], [], 0)[0]:
-                if not sys.stdin.readline():
+        if self.control_dir:
+            answer = self._control_ask(banner, kind)
+        else:
+            # Drain stray input buffered during the (possibly hour-long)
+            # run — a queued Enter must not silently answer the question.
+            drained = 0
+            with contextlib.suppress(Exception):
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    if not sys.stdin.readline():
+                        break
+                    drained += 1
+            if drained:
+                self.log(f"discarded {drained} stale buffered stdin line(s)")
+            print("\n" + "=" * 72)
+            print("HUMAN INPUT NEEDED")
+            print("=" * 72)
+            print(banner)
+            print("(type your answer; 'stop' aborts the orchestrator)")
+            while True:
+                answer = input("answer> ").strip()
+                if answer:
                     break
-                drained += 1
-        if drained:
-            self.log(f"discarded {drained} stale buffered stdin line(s)")
-        print("\n" + "=" * 72)
-        print("HUMAN INPUT NEEDED")
-        print("=" * 72)
-        print(banner)
-        print("(type your answer; 'stop' aborts the orchestrator)")
-        while True:
-            answer = input("answer> ").strip()
-            if answer:
-                break
-            print("(empty answer ignored — type an answer, or 'stop')")
+                print("(empty answer ignored — type an answer, or 'stop')")
         self.log(f"human answered: {answer!r}")
         if answer.lower() == "stop":
             sys.exit("stopped by human")
         return answer
+
+    def _control_ask(self, banner: str, kind: str) -> str:
+        """File-channel ask_human (--control-dir): write NNN-question.json,
+        poll for NNN-answer.json. Only a non-empty string `answer` is
+        required of the answer file (`seq`/`ts`/`responder` are optional
+        extras); a malformed or partial file is logged and re-read next
+        tick — the hub may rewrite it — never silently swallowed. stop.flag
+        is honored while waiting: semantically a human answering 'stop'
+        (may interrupt an open session, tree possibly dirty)."""
+        while ((self.control_dir / f"{self._control_seq:03d}-question.json")
+               .exists()
+               or (self.control_dir / f"{self._control_seq:03d}-answer.json")
+               .exists()):
+            self._control_seq += 1
+        seq = self._control_seq
+        self._control_seq += 1
+        q_path = self.control_dir / f"{seq:03d}-question.json"
+        a_path = self.control_dir / f"{seq:03d}-answer.json"
+        payload = {
+            "seq": seq,
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "kind": kind,
+            "banner": banner,
+            # Hub-side display alias; identical to banner until they diverge.
+            "message": banner,
+        }
+        # Same-dir tmp + atomic rename: the hub must never read a partial
+        # question (the `$`-less name keeps it out of the seq scan).
+        tmp = q_path.with_name(q_path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=1))
+        os.replace(tmp, q_path)
+        self.log(f"control-dir question {seq:03d} written (kind={kind}) — "
+                 f"awaiting {a_path.name}")
+        last_error: str | None = None
+        while True:
+            if (self.control_dir / "stop.flag").exists():
+                self.log(f"control-dir stop request (stop.flag) while "
+                         f"awaiting answer {seq:03d} — aborting")
+                sys.exit(f"stopped by control-dir stop.flag while awaiting "
+                         f"answer {seq:03d}")
+            if a_path.exists():
+                error = None
+                try:
+                    data = json.loads(a_path.read_text())
+                except (OSError, ValueError) as err:
+                    error = f"unreadable JSON ({err})"
+                else:
+                    if not isinstance(data, dict):
+                        error = "not a JSON object"
+                    elif (not isinstance(data.get("answer"), str)
+                          or not data["answer"].strip()):
+                        error = "missing/empty `answer` string"
+                if error is None:
+                    if data.get("seq") not in (None, seq):
+                        self.flog(f"control-dir answer {a_path.name}: seq "
+                                  f"field {data['seq']!r} != {seq} "
+                                  "(filename wins)")
+                    if data.get("responder"):
+                        self.flog(f"control-dir answer {seq:03d} responder: "
+                                  f"{data['responder']}")
+                    return data["answer"].strip()
+                if error != last_error:
+                    self.log(f"control-dir answer {a_path.name} malformed: "
+                             f"{error} — waiting for a valid answer")
+                    last_error = error
+            time.sleep(CONTROL_POLL_SECONDS)
 
     # -- session driving --
 
@@ -1090,7 +1172,8 @@ class Orchestrator:
                     answer = self.ask_human(
                         f"The {role} agent ({sid}) paused awaiting input/"
                         f"approval (see log tail in {self.log_file}).\n"
-                        "Your reply is sent into the same conversation.")
+                        "Your reply is sent into the same conversation.",
+                        kind="request")
                     prompt = (f"[orchestrator] The human answered: {answer}\n"
                               "Continue per AUTOMATION MODE rules; do not "
                               "await interactive input again.")
@@ -1099,7 +1182,8 @@ class Orchestrator:
                     answer = self.ask_human(
                         f"The {role} run errored mid-flight (run ran, then "
                         f"failed). sid={sid}. Inspect the repo/log, then "
-                        "give an instruction to retry with, or 'stop'.")
+                        "give an instruction to retry with, or 'stop'.",
+                        kind="run-error")
                     prompt = (f"[orchestrator] The previous run errored. "
                               f"Human instruction: {answer}\nResume the "
                               f"{role} session for task {self.task_id} and "
@@ -1180,7 +1264,8 @@ class Orchestrator:
                             "failing post-checks after wrap-up attempts:\n- "
                             + "\n- ".join(problems) +
                             "\nFix the task file / tree manually, then type "
-                            "'done' to continue with a fresh session.")
+                            "'done' to continue with a fresh session.",
+                            kind="followups-exhausted")
                         break
                     continue
                 if followups > MAX_FOLLOWUPS:
@@ -1188,7 +1273,8 @@ class Orchestrator:
                         "Post-session checks still failing after "
                         f"{MAX_FOLLOWUPS} followups:\n- " +
                         "\n- ".join(problems) +
-                        "\nGive an instruction for the agent, or 'stop'.")
+                        "\nGive an instruction for the agent, or 'stop'.",
+                        kind="followups-exhausted")
                     prompt = f"[orchestrator] Human instruction: {answer}"
                     followups = 0
                     continue
@@ -1242,7 +1328,8 @@ class Orchestrator:
                        "(it was told not to touch anything). Your answer is "
                        "forwarded either way; consider 'stop'.")
         return self.ask_human(banner + "\n\nConfirm the plan or state "
-                              "amendments; your answer is binding.")
+                              "amendments; your answer is binding.",
+                              kind="plan-gate")
 
     # -- post-session checks (Stop-hook replica / backstop) --
 
@@ -1532,7 +1619,8 @@ class Orchestrator:
             open_ctx = (m.group(1).strip() if m else latest.body.strip())[:2000]
         answer = self.ask_human(
             f"Task is BLOCKED by {role} session {blocked_sid}.\n"
-            f"blockers: {task.blockers}\n\nOpen context:\n{open_ctx}")
+            f"blockers: {task.blockers}\n\nOpen context:\n{open_ctx}",
+            kind="blocked")
         try:
             session = self.backend.resume_session(blocked_sid, role)
         except Exception as err:
@@ -1591,7 +1679,8 @@ class Orchestrator:
                 "the reviewer still holds it valid.\n"
                 f"Reviewer's line: {m.group(1).strip()[:500]}\n\nLatest "
                 f"review entry:\n{latest.body.strip()[:3000]}\n\nGive a "
-                "binding ruling for the next dev session, or 'stop'.")
+                "binding ruling for the next dev session, or 'stop'.",
+                kind="dispute-unresolved")
             self.pending_ruling = ruling
             return
         if latest.verdict != "changes-requested":
@@ -1606,7 +1695,8 @@ class Orchestrator:
                 f"Convergence budget exhausted (group {group}, {rounds} "
                 "changes-requested rounds).\n\nLatest "
                 f"review entry:\n{findings}\n\nGive a binding ruling for the "
-                "next dev session, or 'stop'.")
+                "next dev session, or 'stop'.",
+                kind="convergence-budget")
             self.pending_ruling = ruling
 
     # -- close-out --
@@ -1702,7 +1792,8 @@ class Orchestrator:
             if problems:
                 self.ask_human("Close-out still incomplete: "
                                + "; ".join(problems)
-                               + "\nFinish manually, then type 'done'.")
+                               + "\nFinish manually, then type 'done'.",
+                               kind="closeout-incomplete")
         finally:
             session.close()
         self.log("close-out done")
@@ -1719,18 +1810,32 @@ class Orchestrator:
             self.ask_human("Close-out (performed in-session by the native "
                            "hook chain) is incomplete:\n- "
                            + "\n- ".join(problems)
-                           + "\nFinish manually, then type 'done'.")
+                           + "\nFinish manually, then type 'done'.",
+                           kind="closeout-incomplete")
         self.log("close-out done (performed in-session by the native hook "
                  "chain; orchestrator verified archive/index/tree/remaining "
                  "tasks)")
 
     def loop(self) -> None:
+        if self.control_dir:
+            self.log(f"control-dir enabled: {self.control_dir} "
+                     f"(next question seq {self._control_seq:03d})")
+            if REPO in self.control_dir.parents:
+                self.log("WARNING: control dir is inside the repo working "
+                         "tree — question/answer files will dirty the tree "
+                         "and fail post-checks; use a run dir outside the "
+                         "repo")
         if not self.task_path.exists():
             if (ARCHIVE_DIR / self.task_path.name).exists():
                 sys.exit(f"task already archived: {self.task_path.name}")
             sys.exit(f"task file not found: {self.task_path}")
         sessions = 0
         while True:
+            if (self.control_dir
+                    and (self.control_dir / "stop.flag").exists()):
+                self.log("control-dir stop request (stop.flag) — stopping "
+                         "at session boundary")
+                return
             if not self.task_path.exists():
                 if (ARCHIVE_DIR / self.task_path.name).exists():
                     self._verify_native_closeout()
@@ -1797,7 +1902,8 @@ class Orchestrator:
                     ruling = self.ask_human(
                         "Task sits at final_review with no unreviewed dev "
                         "sessions (last review didn't conclude). Give a "
-                        "ruling for a fresh review session, or 'stop'.")
+                        "ruling for a fresh review session, or 'stop'.",
+                        kind="final-review-stall")
                     self.pending_ruling = ruling
                     self.last_review_agent = self.run_session(
                         "review",
@@ -1879,6 +1985,13 @@ def main() -> None:
                          "Default: cursor = catalog default (medium); "
                          "cc-codex = xhigh")
     ap.add_argument("--max-sessions", type=int, default=DEFAULT_MAX_SESSIONS)
+    ap.add_argument("--control-dir", type=Path, default=None, metavar="DIR",
+                    help="file-based control channel for an external "
+                         "supervisor (orch-hub): every human escalation "
+                         "writes NNN-question.json into DIR and waits for "
+                         "NNN-answer.json; a stop.flag file in DIR stops "
+                         "the run at the next safe point. Unset (default): "
+                         "interactive stdin, behavior unchanged")
     args = ap.parse_args()
 
     if args.backend == "cursor":
@@ -1899,7 +2012,8 @@ def main() -> None:
         os.environ["AI_ORCH"] = "1"
         orch = Orchestrator(args.task_id, dev_model, review_model, api_key,
                             args.once, args.max_sessions,
-                            plan_gate=args.plan_gate)
+                            plan_gate=args.plan_gate,
+                            control_dir=args.control_dir)
         orch.backend = CursorBackend(orch, dev_model, review_model, api_key,
                                      dev_effort=dev_effort,
                                      review_effort=review_effort)
@@ -1918,14 +2032,17 @@ def main() -> None:
         # injection and end-discipline natively for their own sessions.
         orch = Orchestrator(args.task_id, dev_model, review_model, None,
                             args.once, args.max_sessions,
-                            plan_gate=args.plan_gate)
+                            plan_gate=args.plan_gate,
+                            control_dir=args.control_dir)
         orch.backend = CliBackend(orch, dev_model, cc_effort,
                                   review_model, codex_effort)
 
     orch.log(f"orchestrator start: task={args.task_id} "
              f"backend={args.backend} dev={orch.backend.describe('dev')} "
              f"review={orch.backend.describe('review')} once={args.once} "
-             f"plan_gate={args.plan_gate}")
+             f"plan_gate={args.plan_gate}"
+             + (f" control_dir={orch.control_dir}" if orch.control_dir
+                else ""))
     if not tree_clean():
         sys.exit("working tree is not clean — resolve before orchestrating")
     orch.loop()
