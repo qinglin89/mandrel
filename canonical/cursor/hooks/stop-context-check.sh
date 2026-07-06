@@ -112,7 +112,7 @@ if [ "$status" = "completed" ]; then
     block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per §10 End, ${CLEAN_HOWTO} Then end."
   fi
   log "case1 task=$task_file status=completed wt=clean → block (invoke ai-sync-v2)"
-  block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it — to apply absorption and archive the task before ending the session."
+  block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it — to apply absorption and archive the task before ending the session. Close-out includes the remaining-task reconciliation; your final response must include one line beginning \`Remaining-task audit:\` (required even when no remaining task changes)."
 fi
 
 # Case 2: status != completed → check session-log for this session's entry.

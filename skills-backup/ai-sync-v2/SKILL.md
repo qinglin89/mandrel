@@ -1,6 +1,6 @@
 ---
 name: ai-sync-v2
-description: Apply absorption for a completed task. Reviews the task's session log and the session's working context (decisions, code changes, reasoning), applies admission tests from the memory protocol; if any finding passes, absorbs into Snapshot. Always archives the task. Invoked by Stop hook when task.status reaches completed; may also be called manually.
+description: Apply absorption for a completed task. Reviews the task's session log and the session's working context (decisions, code changes, reasoning), applies admission tests from the memory protocol; if any finding passes, absorbs into Snapshot. Always archives the task and reconciles remaining active tasks. Invoked by Stop hook when task.status reaches completed; may also be called manually.
 ---
 
 `ai-coding-memory-v2.md` (admission §3, propagation §4) and
@@ -80,14 +80,27 @@ Stop hook fires this skill when the active task transitions to
    **Always**:
    a. Move task file to `.ai-tasks/archive/` (creating the directory if it doesn't exist).
    b. Remove task line from `.ai-tasks/index.md`.
+   c. Remaining-task reconciliation (tasks protocol §6 — required even when
+      no remaining task changes): audit every other active task under
+      `.ai-tasks/` excluding `archive/`. Update blockers / scope /
+      assumptions / acceptance criteria / prefetch / estimate / status
+      where this completed task changes them; remove blockers naming the
+      just-archived (or any archived) task id. If a `blocked` task is left
+      with no blockers, restore the active status inferable from its latest
+      session-log heading, else `pending`.
 
 8. Commit absorption changes (snapshot edits) so the working tree is clean post-absorption.
 
 9. Verify:
    - Task absent from `.ai-tasks/index.md`.
-   - Touched Snapshot docs within §4 size limits (or flagged in `.ai/.housekeeping-pending` per step 7c).
+   - No active task lists an archived task id in `blockers`; no `blocked`
+     task has empty `blockers`.
+   - Touched Snapshot docs within §4 size limits (or flagged in `.ai/.housekeeping-pending` per step 7 absorption item c).
    - Routing entries consistent with edits.
 10. Print summary: absorbed? / docs touched / task archived / (if any) housekeeping flagged.
+    The summary MUST contain one line in exactly this shape (the
+    orchestrator greps the final response for it):
+    `Remaining-task audit: checked N active task(s); updated <ids|none>; unchanged <ids|none>`
 
 ## Edge cases
 

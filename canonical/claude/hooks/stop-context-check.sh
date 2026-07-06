@@ -108,7 +108,7 @@ EOF
   cat <<EOF
 {
   "decision": "block",
-  "reason": "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now to apply absorption and archive the task before ending the session."
+  "reason": "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now to apply absorption and archive the task before ending the session. Close-out includes the remaining-task reconciliation; your final response must include one line beginning \`Remaining-task audit:\` (required even when no remaining task changes)."
 }
 EOF
   exit 0
