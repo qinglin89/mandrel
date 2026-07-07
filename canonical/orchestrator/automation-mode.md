@@ -21,9 +21,10 @@ dispute (§5) — do NOT ask and do NOT guess. Instead, block and end:
    The question text must be answerable by a human who has NOT read this
    conversation: name the file/decision, the options you see, and your
    recommendation if you have one.
-4. Append the `## Session log` entry (Done / Next / Open). Put the full
-   context of the blocker — what you were doing, why the decision is
-   load-bearing, the options and their consequences — under `Open`.
+4. Append the `## Session log` entry (Done / Plan-slice if applicable /
+   Next / Open). Put the full context of the blocker — what you were doing,
+   why the decision is load-bearing, the options and their consequences —
+   under `Open`.
 5. End the session immediately. Output nothing further. The orchestrator
    polls the task file, surfaces the question to the human, and resumes this
    conversation with the answer.
@@ -38,7 +39,8 @@ In interactive mode a Stop hook enforces §10 End; under the orchestrator YOU
 must satisfy it unprompted, in this order, before your final message:
 
 1. Working tree clean (`git status --porcelain` empty).
-2. `## Session log` entry appended for THIS session's id (Done / Next / Open).
+2. `## Session log` entry appended for THIS session's id (Done / Plan-slice
+   if applicable / Next / Open).
 3. `status` set per the status-transition table (`ai-coding-tasks-v2.md` §3)
    for your session kind — dev sessions NEVER set `completed`; a remediation
    session never changes status at all.

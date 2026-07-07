@@ -162,7 +162,8 @@ GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
 # Session context budget (tokens) — port of stop-context-check.sh: a session
 # whose conversation outgrows this must wrap up (clean tree + session-log
-# entry + keep in_progress) and hand off to a fresh session.
+# entry + no lifecycle advancement from the wrap itself) and hand off to a
+# fresh session.
 CONTEXT_BUDGET = int(os.environ.get("ORCH_CONTEXT_BUDGET", "200000"))
 
 DEV_LEGAL_STATUSES = {"in_progress", "final_review", "blocked"}
@@ -1231,18 +1232,30 @@ class Orchestrator:
                             "any pending dev session you did not finish "
                             "reviewing simply stays pending — the next "
                             "review session continues the set; ")
+                        plan_note = ""
                     elif was_remediation:
                         handoff_note = (
                             "ONLY if your remediation fix set is not yet "
                             "complete, include the line `- Handoff: "
                             "continuation` so remediation continues in a "
                             "fresh session before re-review; ")
+                        plan_note = (
+                            "If useful, write `Plan-slice: remediation "
+                            "for review group <sid>`; do NOT run preReEst "
+                            "or advance planned scope. ")
                     else:
                         handoff_note = (
                             "do NOT write a `Handoff: continuation` line — "
                             "an advancement session's landed work is "
                             "reviewed next (one dev session = one "
                             "reviewable unit, §10); ")
+                        plan_note = (
+                            "If this dev advancement was working from a "
+                            "`## Session plan`, update only the current "
+                            "and future unimplemented slices so the Next "
+                            "work is one-session-sized; prefer adding a "
+                            "continuation slice like `session-2-cont` over "
+                            "renumbering later slices. ")
                     self.log(f"context budget exceeded "
                              f"(≈{session.context_tokens} tokens) with "
                              "violations — sending wrap-up instruction "
@@ -1253,11 +1266,14 @@ class Orchestrator:
                         f"{CONTEXT_BUDGET} budget for reliable work). Wrap "
                         f"up NOW, in this order: (1) {CLEAN_HOWTO} (2) "
                         f"append a `## Session log` entry for session id "
-                        f"{sid} (Done / Next / Open) describing what is done "
+                        f"{sid} (Done / Plan-slice if applicable / Next / "
+                        "Open) describing what is done "
                         f"and what the next session picks up; {handoff_note}"
-                        "re-estimate session-est. (3) set a "
-                        "status legal for your role (keep in_progress if "
-                        "work remains). Do NOT start any new work. Then end.")
+                        f"{plan_note}re-estimate session-est. (3) do NOT "
+                        "advance lifecycle status just because of this "
+                        "context wrap-up; keep status unchanged unless "
+                        "restoring protocol legality requires otherwise. "
+                        "Do NOT start any new work. Then end.")
                     if followups > MAX_FOLLOWUPS:
                         self.ask_human(
                             "Session is over the context budget and still "
@@ -1285,8 +1301,9 @@ class Orchestrator:
                     "session ended:\n- " + "\n- ".join(problems) +
                     f"\nFix now, in order: (1) {CLEAN_HOWTO} (2) ensure a "
                     f"`## Session log` entry for session id {sid} exists "
-                    "(Done / Next / Open — review entries also need Verdict/"
-                    "Group/Findings). (3) set a status legal for your role. "
+                    "(Done / Plan-slice if applicable / Next / Open — review "
+                    "entries also need Verdict/Group/Findings). (3) set a "
+                    "status legal for your role. "
                     "Then end.")
             end_status = ("completed+archived"
                           if not self.task_path.exists()
@@ -1356,7 +1373,7 @@ class Orchestrator:
             "non-empty)"))
         specs.append((
             f"a `## Session log` entry for session id {sid_disp} "
-            "(Done / Next / Open)",
+            "(Done / Plan-slice if applicable / Next / Open)",
             lambda task: None
             if sid and any(e.session_id == sid for e in task.entries) else
             f"no `## Session log` entry for session id {sid}"))
@@ -1555,6 +1572,7 @@ class Orchestrator:
             "silently fix or silently skip it.")
         parts.append("\n" + self._entry_checklist("dev", sid, task))
         if remediation:
+            group = latest.group or latest.reviewed_sid or latest.session_id
             parts.append(
                 "\nREMEDIATION SESSION (roles §11, remediation before "
                 "advancement): the latest review verdict is "
@@ -1562,7 +1580,22 @@ class Orchestrator:
                 "review — fix the valid findings, record disputes for "
                 "invalid ones, then hand back to review. Do NOT advance new "
                 "scope (no new plan steps or features) this session; new "
-                "scope resumes after a pass verdict.")
+                "scope resumes after a pass verdict. Do NOT run preReEst; "
+                "if useful, write `Plan-slice: remediation for review group "
+                f"{group}` in the session-log entry.")
+        else:
+            parts.append(
+                "\npreReEst (dev advancement only): before implementation, "
+                "compare the overall Scope/Acceptance, any `## Session plan`, "
+                "and the latest Session log Next/Open against the remaining "
+                "work. If the current planned slice is too large for one "
+                "effective session, update session-est total and split only "
+                "the current and future unimplemented plan slices; prefer a "
+                "continuation slice like `session-2-cont` over renumbering "
+                "later slices. Do not rewrite completed/reviewed slices. "
+                "Then implement one clear slice and include a simple "
+                "`Plan-slice: <slice-id>` line in your session-log entry when "
+                "a plan slice applies.")
         if self.pending_ruling:
             parts.append(f"\nHUMAN RULING (binding for this session): "
                          f"{self.pending_ruling}")

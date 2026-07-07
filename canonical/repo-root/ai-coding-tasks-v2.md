@@ -18,10 +18,10 @@ Tasks describe in-flight changes. They live in `.ai-tasks/` and feed into memory
 ---
 id: <date-prefixed-slug>
 status: pending | in_progress | final_review | completed | blocked   # final_review = dev-complete claim standing, in the final-review loop. Legal transitions: §3 Status transitions.
-session-est: <current>/<total>      # progress/total; e.g., 0/3 pending, 1/3 after first session entry. `current` increments at DEV session entry (part of the claim, §10 Entry); review sessions do not consume the estimate. Raise `total` if estimate undershoots.
+session-est: <current>/<total>      # progress/total in dev sessions; one estimated session ≈ one effective context window (~200k tokens). e.g., 0/3 pending, 1/3 after first session entry. `current` increments at DEV session entry (part of the claim, §10 Entry); review sessions do not consume the estimate. Raise `total` if estimate undershoots.
 blockers: [<task-id> | external:<text>]   # only if status=blocked. task-id refs another active task by id (e.g., 2026-05-26-foo); external:<text> for non-task blockers (e.g., external:awaiting API spec)
 prefetch: [<.ai/*.md paths>]        # optional hint; lazy docs only (eager set per memory §2 is already loaded). Pre-load at start. Mutable.
-claimed-by: <session-id>@<utc-iso-ts>  # session-id = $CLAUDE_CODE_SESSION_ID; ts = UTC ISO 8601 (e.g., 2026-05-26T09:30:00Z, from `date -u +%Y-%m-%dT%H:%M:%SZ`); set/updated at each session entry
+claimed-by: <session-id>@<utc-iso-ts>  # session-id = the current agent session/conversation id supplied by the tool or orchestrator; ts = UTC ISO 8601 (e.g., 2026-05-26T09:30:00Z, from `date -u +%Y-%m-%dT%H:%M:%SZ`); set/updated at each session entry
 ---
 ```
 
@@ -46,23 +46,35 @@ lifecycle forward.
 
 ## 4. Task body
 
-Must include a `## Session log` section, appended one entry per session-end:
+Task body should include:
+
+- `## Goal`
+- `## Scope`
+- `## Acceptance`
+- optional `## Session plan`
+- required `## Session log`
+
+The `## Session log` section is appended one entry per session-end:
 
 ```
 ## Session log
 
-### YYYY-MM-DD / $CLAUDE_CODE_SESSION_ID / (status_before → status_after)
+### YYYY-MM-DD / <session-id> / (status_before → status_after)
 - Done: ...
+- Plan-slice: session-2   # optional
 - Next: ...
 - Open: ...
 ```
 
-Field semantics (split by time-direction):
+Session-log field semantics:
 
 - **Done** — what happened this session: committed changes, decisions made
   (incl. rejected alternatives + rationale), and truths learned worth
   recording. Past/history. This is the source `/ai-sync-v2` absorbs from at
   close-out — write to enough fidelity that absorption needs no re-derivation.
+- **Plan-slice** — optional soft link from a dev session to the task's
+  `## Session plan` slice (for example `session-2`, or `remediation for review
+  group <sid>`). It is a human-readable handoff aid, not a lifecycle state.
 - **Next** — the immediate forward work the next session resumes (handoff).
 - **Open** — forward-looking unresolved items: open questions, deferred
   decisions, blockers to revisit. In the final entry of a task reaching
@@ -70,6 +82,36 @@ Field semantics (split by time-direction):
   resolved or spawned as a pending task.
 
 The session log is the single source for cross-session handoff and the input for close-out absorption review.
+
+Optional work slicing: a task whose `session-est` total is greater than 1 may
+include a `## Session plan` section before `## Session log`. Keep it simple:
+one heading per planned dev advancement slice, with short Scope and Acceptance
+bullets. Each slice should fit one effective session, using the same ~200k-token
+context budget as `session-est`. The plan is a soft planning aid, not a strict
+state counter. Example:
+
+```
+## Session plan
+
+### session-1
+Scope:
+- ...
+Acceptance:
+- ...
+
+### session-2
+Scope:
+- ...
+Acceptance:
+- ...
+```
+
+The plan is mutable for unimplemented slices only. A dev advancement session
+may split the current or later slices when the work proves too large; prefer
+adding a continuation slice such as `session-2-cont` over renumbering later
+slices. Do not rewrite completed/reviewed slices. Remediation sessions do not
+advance planned slices; their optional `Plan-slice` line names the review group
+they remediate.
 
 ## 5. Tasks index
 

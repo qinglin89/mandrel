@@ -3,7 +3,8 @@ name: intake-task
 description: Create a new pending task from a user request, conforming to the frontmatter shape in ai-coding-tasks-v2.md (id, status, session-est, prefetch, etc.). Generates the task file under .ai-tasks/ and registers it in .ai-tasks/index.md. Invoke when the user wants to start new work that no existing active task covers.
 ---
 
-`ai-coding-tasks-v2.md` is the contract (frontmatter §2, body §3, tasks index §4). This skill produces task files that conform.
+`ai-coding-tasks-v2.md` is the contract (frontmatter §2, task body §4,
+tasks index §5). This skill produces task files that conform.
 
 ## Invocation
 
@@ -42,14 +43,30 @@ When the user requests new work and no active task in `.ai-tasks/index.md` cover
    ```
    # <Title>
 
-   ## Purpose
+   ## Goal
    <one paragraph: the why and the what>
 
-   ## Acceptance criteria
-   <bullet list: how we know it's done>
+   ## Scope
+   <bullet list: the overall task scope>
+
+   ## Acceptance
+   <bullet list: how we know the overall task is done>
+
+   ## Session plan
+   ### session-1
+   Scope:
+   - <one-session-sized slice>
+   Acceptance:
+   - <slice-specific checks>
 
    ## Session log
    ```
+
+   Include `## Session plan` only when `session-est` total is greater than 1.
+   Create one simple slice per estimated dev advancement session
+   (`session-1`, `session-2`, ...). Each slice has short Scope and Acceptance
+   bullets. The plan is intentionally soft: later dev advancement sessions may
+   split current/future unimplemented slices if preReEst finds a slice too large.
 
    Keep body short — task files are operational, not documentation. Detail accumulates in session log as work progresses.
 

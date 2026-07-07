@@ -89,7 +89,13 @@ Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle clo
 
 1. Consult `.ai-tasks/index.md` (already in context).
 2. Pick an `in_progress` (resume) or `pending` task. If no existing task fits new work, invoke `/intake-task` to create a pending one (ad-hoc work bypassing this is not allowed).
-3. Claim the task: set `claimed-by` to `$CLAUDE_CODE_SESSION_ID@<utc-iso-ts>` (UTC ISO 8601, e.g., `2026-05-26T09:30:00Z`, from `date -u +%Y-%m-%dT%H:%M:%SZ`); if status was `pending`, transition to `in_progress`. A dev session also increments `session-est` `<current>` by 1 as part of the claim (review sessions do not consume the estimate — tasks protocol §2).
+3. Claim the task: set `claimed-by` to `<session-id>@<utc-iso-ts>`, where
+   `<session-id>` is the current agent session/conversation id supplied by the
+   tool or orchestrator (UTC ISO 8601, e.g., `2026-05-26T09:30:00Z`, from
+   `date -u +%Y-%m-%dT%H:%M:%SZ`); if status was `pending`, transition to
+   `in_progress`. A dev session also increments `session-est` `<current>` by 1
+   as part of the claim (review sessions do not consume the estimate — tasks
+   protocol §2).
 4. Pre-load `prefetch:` content docs listed in the task.
 
 **Work**:
@@ -99,12 +105,22 @@ Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle clo
 - Modify code per the authority tiers (§7).
 - New work discovered mid-task: if it doesn't block current scope, spawn a pending task via `/intake-task`. If it blocks current scope, adjust the current task body / plan instead — do not spawn.
 - Adjust the active task's body / scope / `session-est` as understanding sharpens. Record the adjustment in the next session-log entry.
-- Calibrate `session-est` to one effective context window per session (~200k tokens for Opus 4.7 1M context). Stop hook prompts mid-session handoff on context overage. A context-overage wrap-up is an ordinary clean handoff: clean tree, session-log entry whose Next carries the handoff, re-estimated `session-est`. One dev session is one reviewable unit — an advancement session's landed work is reviewed before the next dev session advances, regardless of why the session ended (planned convergence or context overage). Sole exception: a remediation session (§11) that must wrap before its fix set is complete marks the entry with `- Handoff: continuation` — remediation resumes in a fresh session and re-review waits until the fix set completes. An advancement session never writes the marker.
+- **preReEst for dev advancement only**: before implementation, compare the
+  overall task Scope/Acceptance, the optional `## Session plan`, and the latest
+  `## Session log` Next/Open to the remaining work. If the current planned
+  slice is too large for one effective session, update `session-est` total and
+  split only the current and future unimplemented plan slices before working.
+  Prefer adding a continuation slice (for example `session-2-cont`) over
+  renumbering later slices. Do not rewrite completed/reviewed slices. The
+  session-log entry should include a simple `Plan-slice:` line naming the slice
+  worked. Remediation sessions do not run preReEst; their optional
+  `Plan-slice:` line names the review group they remediate.
+- Calibrate `session-est` to one effective context window per session (~200k tokens for Opus 4.7 1M context). Stop hook prompts mid-session handoff on context overage. A context-overage wrap-up is an ordinary clean handoff: clean tree, session-log entry whose Next carries the handoff, re-estimated `session-est`; for dev advancement with a `## Session plan`, split the remaining work from the current planned slice into a one-session-sized continuation slice. One dev session is one reviewable unit — an advancement session's landed work is reviewed before the next dev session advances, regardless of why the session ended (planned convergence or context overage). Sole exception: a remediation session (§11) that must wrap before its fix set is complete marks the entry with `- Handoff: continuation` — remediation resumes in a fresh session and re-review waits until the fix set completes. An advancement session never writes the marker.
 
 **End**:
 
 1. Commit all uncommitted changes so the working tree is clean (`git status --porcelain` empty).
-2. Append `## Session log` entries (Done / Next / Open).
+2. Append `## Session log` entries (Done / Plan-slice if applicable / Next / Open).
 3. Update task `status` per the status-transition table
    (`ai-coding-tasks-v2.md` §3).
 4. Backfill `prefetch:` with what was actually consulted.

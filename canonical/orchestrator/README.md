@@ -151,6 +151,12 @@ and close-out). The first prompt is assembled by the orchestrator:
   (claimed-by id@timestamp; dev: `session-est: 1/3 → 2/3` and
   `pending → in_progress` when applicable; review: the pending review set
   at dispatch, and a no-est reminder);
+- dev advancement prompts include the protocol's **preReEst** step: compare
+  overall Scope/Acceptance, any `## Session plan`, and the latest Next/Open;
+  split only current/future unimplemented slices if the current slice is too
+  large; then work one clear slice and optionally log `Plan-slice: <slice>`.
+  Remediation prompts explicitly skip preReEst and may log
+  `Plan-slice: remediation for review group <sid>`;
 - a **POST-SESSION CHECKS** preview — rendered from the SAME spec table
   `post_checks` executes afterwards (single-sourced, so prompt and checker
   cannot drift). The status line of the preview is the per-session-kind
@@ -196,8 +202,11 @@ run tens-of-k — 46k–87k observed across the 2026-07-04 drills). Over
 - post-checks clean → the session simply takes no further turns (any
   remaining work lands in a fresh session — the loop re-derives the turn);
 - post-checks failing → the followup becomes a **wrap-up instruction**
-  (clean tree, session-log handoff entry, no new work), and if wrap-up
-  still fails after `MAX_FOLLOWUPS`, you're asked to fix manually.
+  (clean tree, session-log handoff entry, no new work). For dev advancement
+  with a `## Session plan`, the wrap-up prompt asks the agent to split the
+  remaining current slice into one-session-sized continuation work, preferably
+  by adding a slice like `session-2-cont` instead of renumbering later slices.
+  If wrap-up still fails after `MAX_FOLLOWUPS`, you're asked to fix manually.
 
 **One dev session = one reviewable unit** (§10): an ADVANCEMENT session's
 landed work is reviewed before the next dev session advances, no matter
