@@ -19,10 +19,10 @@ is pluggable:
 
 | | `--backend cursor` (default) | `--backend cc-codex` |
 |---|---|---|
-| dev role | Cursor SDK agent, `claude-opus-4-8` | Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort |
+| dev role | Cursor SDK agent, `claude-opus-4-8` | `--dev-agent claude` (default): Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort; `--dev-agent codex`: Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
 | review role | Cursor SDK agent, `gpt-5.5` | Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
-| auth | `CURSOR_API_KEY` (SDK; login not enough) | each CLI's own login (`claude` `/login`, `codex login`) |
-| subscription | Cursor only (cheapest) | Claude + OpenAI (buys max per-model effort Cursor doesn't expose) |
+| auth | `CURSOR_API_KEY` (SDK; login not enough) | each selected CLI's own login (`claude` `/login` for the default dev agent, `codex login` for review and Codex dev) |
+| subscription | Cursor only (cheapest) | Claude + OpenAI by default; OpenAI only when `--dev-agent codex` |
 | protocol context | orchestrator injects it (SDK doesn't run hooks); `AI_ORCH=1` keeps `.cursor` hooks quiet | native: CC hooks + CLAUDE.md import chain, Codex `.codex` hooks (verified firing in `codex exec` and `claude -p`); no injection, no `AI_ORCH` |
 | end discipline | orchestrator post-checks (sole enforcement) | each tool's Stop-hook chain + the same post-checks as backstop |
 | session ids | SDK agent id | CC: uuid chosen by orchestrator (`--session-id`); Codex: captured from `thread.started`; both recorded in `logs/sessions.json` for resume routing |
@@ -32,7 +32,7 @@ is pluggable:
 | Requirement | Why / how |
 |---|---|
 | `CURSOR_API_KEY` set (`cursor` backend only) | The SDK needs a real API key; `cursor-agent login` is NOT sufficient for the SDK. Put it in `.cursor/orchestrator/.env` (copy `.env.example`; loaded automatically at startup, file values win) — or export it (fallback when the file is missing or the key is empty there). |
-| `claude` + `codex` CLIs logged in (`cc-codex` backend only) | `claude` must be logged in (check: `claude -p "hi"`); `codex login` for Codex. |
+| selected CLIs logged in (`cc-codex` backend only) | Default dev uses Claude Code, so `claude` must be logged in (check: `claude -p "hi"`); review and `--dev-agent codex` use Codex, so run `codex login`. |
 | Clean working tree | Startup refuses otherwise (`working tree is not clean — resolve before orchestrating`). |
 | A **real terminal** (tty) | Every escalation reads an answer from stdin. Running with `< /dev/null` EOF-crashes at the first `HUMAN INPUT NEEDED`. `--once` for a single non-interactive-ish session is usually safe but not guaranteed (a blocked session or request event still needs stdin). **Exception:** with `--control-dir` no tty is needed — escalations go through question/answer files (§5). |
 | `.venv` in this directory | python3.14 + `cursor-sdk` (see `requirements.txt`; the SDK is optional for `cc-codex`). |
@@ -56,10 +56,11 @@ All `ORCH_*` variables and `CURSOR_API_KEY` are read from
 | `<task-id>` | — | e.g. `2026-06-23-v1-risk-control` (file `.ai-tasks/<id>.md` must exist; trailing `.md` tolerated) |
 | `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
 | `--backend` | `cursor` | `cursor` or `cc-codex` (see §0) |
+| `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions. Review sessions remain Codex CLI. |
 | `--plan-gate` | off | every dev session first proposes goal+plan and blocks for your confirmation before implementing (see §5.8) |
-| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (cc-codex) | `claude-opus-4-8` | dev-role model, in the backend's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
+| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_MODEL` (`cc-codex --dev-agent codex`) | `claude-opus-4-8` (cursor/Claude dev) / `gpt-5.5` (Codex dev) | dev-role model, in the selected agent's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
 | `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (cc-codex) | `gpt-5.5` | review-role model |
-| `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (cc-codex) | catalog default (= `high`) / `max` | dev-role effort. cursor: claude `effort` axis `low..max` via ModelSelection params (`max` verified working through the SDK even though the app UI doesn't offer it); cc-codex: `claude --effort` `low..max` |
+| `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_EFFORT` (`cc-codex --dev-agent codex`) | catalog default (= `high`) / `max` (Claude dev) / `xhigh` (Codex dev) | dev-role effort. cursor and Claude Code use the claude `effort` axis `low..max`; Codex dev uses the gpt/codex reasoning axis `none/minimal/low/medium/high/xhigh` |
 | `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (cc-codex) | catalog default (= `medium`) / `xhigh` | review-role effort: `none/low/medium/high/xhigh`. **Canonical spelling for the top tier is codex's `xhigh`** — the cursor gpt `reasoning` axis natively calls it `extra-high`, and the orchestrator translates per backend, so either spelling works anywhere (both tiers verified live) |
 
 Effort values are validated at startup against a per-axis allowlist —
@@ -459,7 +460,7 @@ entries in the file, including pre-orchestrator ones.
 - Blocked-by-foreign-session exits with guidance instead of resuming
   (§5.4 caveat); on `cc-codex`, resume routing relies on
   `logs/sessions.json` — a sid missing there falls back to
-  role→tool guessing with a logged warning.
+  role→configured-tool guessing with a logged warning.
 - Single task per run; no multi-task queue.
 - Codex TUI hook firing is unverified (`codex exec` verified; also
   irrelevant to the `cursor` backend — SDK sessions bypass hooks).

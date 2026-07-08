@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -158,6 +159,15 @@ def assistant_text(text: str) -> None:
 
 
 def patch_module(repo: Path) -> None:
+    class FakeOptions:
+        def __init__(self, **kw) -> None:
+            self.__dict__.update(kw)
+
+    fake_sdk = types.ModuleType("cursor_sdk")
+    fake_sdk.AgentOptions = FakeOptions
+    fake_sdk.LocalAgentOptions = FakeOptions
+    sys.modules.setdefault("cursor_sdk", fake_sdk)
+
     o.REPO = repo
     o.TASKS_DIR = repo / ".ai-tasks"
     o.ARCHIVE_DIR = repo / ".ai-tasks" / "archive"
@@ -1347,8 +1357,12 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "resume inherits the thread's model — argv carries no -m (verify " \
         "live that the resumed thread keeps gpt-5.5)"
 
-    # -- CliBackend.resume_session routing (sessions.json is the truth)
-    b = o.CliBackend(orch, "fable-5", "max", "gpt-5.5", "xhigh")
+    # -- CliBackend session routing (sessions.json is the truth for resume)
+    b = o.CliBackend(orch, "claude", "fable-5", "max", "gpt-5.5",
+                     "xhigh")
+    fresh = b.new_session("dev")
+    assert isinstance(fresh, o.ClaudeSession), \
+        "cc-codex default dev agent stays Claude Code"
     o._session_map_register("known-cc", "claude", "known-cc")
     o._session_map_register("known-cx", "codex", "known-cx")
     s = b.resume_session("known-cc", "dev")
@@ -1362,9 +1376,21 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "sessions.json mapping must win over the role guess"
     s = b.resume_session("mystery-sid", "review")
     assert isinstance(s, o.CodexSession), "unknown sid falls back by role"
+
+    b2 = o.CliBackend(orch, "codex", "gpt-5.5", "xhigh", "gpt-5.5",
+                      "xhigh")
+    fresh = b2.new_session("dev")
+    assert isinstance(fresh, o.CodexSession) \
+        and fresh.model == "gpt-5.5" and fresh.effort == "xhigh", \
+        "--dev-agent codex must dispatch dev through CodexSession"
+    s = b2.resume_session("mystery-dev-sid", "dev")
+    assert isinstance(s, o.CodexSession), \
+        "unknown dev sid must fall back to the configured dev agent"
     log = orch.log_file.read_text()
     assert "WARNING: sid mystery-sid not in" in log, \
         "role-guess fallback must be logged"
+    assert "WARNING: sid mystery-dev-sid not in" in log, \
+        "codex dev fallback must be logged"
     print("scenario 20 (CLI argv shapes + sessions.json resume routing): "
           "PASS")
 

@@ -15,7 +15,8 @@ Backends (--backend):
            orchestrator injects protocol context itself and exports AI_ORCH=1
            to keep the .cursor hooks quiet. Needs CURSOR_API_KEY.
   cc-codex Claude Code headless (`claude -p`, dev role, opus-4.8 @ max effort)
-           + Codex CLI (`codex exec`, review role, gpt-5.5 @ xhigh effort).
+           by default, or Codex CLI dev with `--dev-agent codex`; Codex CLI
+           (`codex exec`, review role, gpt-5.5 @ xhigh effort) reviews.
            No Cursor dependency; each tool's own hook/import chain loads the
            protocol natively, so the orchestrator does NOT inject it.
            Post-checks stay on as an end-discipline backstop.
@@ -30,7 +31,8 @@ Lifecycle the orchestrator owns (both backends):
 
 Usage:
     .venv/bin/python orchestrator.py <task-id> [--once] [--backend B]
-        [--plan-gate] [--dev-model ID] [--review-model ID]
+        [--plan-gate] [--dev-agent claude|codex]
+        [--dev-model ID] [--review-model ID]
         [--dev-effort E] [--review-effort E] [--max-sessions N]
 """
 
@@ -114,8 +116,12 @@ CODEX_EFFORT_ALIASES = {"extra-high": "xhigh"}
 # cc-codex backend — each tool's own model namespace and effort scale.
 # Codex accepts: none|minimal|low|medium|high|xhigh (xhigh = "extra high" in
 # the TUI; verified against the API enum 2026-07-03).
+CLI_DEV_AGENTS = {"claude", "codex"}
+DEFAULT_CC_DEV_AGENT = os.environ.get("ORCH_CC_DEV_AGENT", "claude")
 DEFAULT_CC_MODEL = os.environ.get("ORCH_CC_MODEL", "claude-opus-4-8")
 DEFAULT_CC_EFFORT = os.environ.get("ORCH_CC_EFFORT", "max")
+DEFAULT_CODEX_DEV_MODEL = os.environ.get("ORCH_CODEX_DEV_MODEL", "gpt-5.5")
+DEFAULT_CODEX_DEV_EFFORT = os.environ.get("ORCH_CODEX_DEV_EFFORT", "xhigh")
 DEFAULT_CODEX_MODEL = os.environ.get("ORCH_CODEX_MODEL", "gpt-5.5")
 DEFAULT_CODEX_EFFORT = os.environ.get("ORCH_CODEX_EFFORT", "xhigh")
 # danger-full-access by default (ruled 2026-07-04): codex's workspace-write
@@ -592,7 +598,7 @@ class CursorBackend:
         return CursorSession(self.orch, agent)
 
 
-# -- cc-codex backend (Claude Code dev + Codex review, subprocess CLIs) --
+# -- cc-codex backend (Claude/Codex dev + Codex review, subprocess CLIs) --
 
 def _session_map_load() -> dict:
     if SESSION_MAP.exists():
@@ -943,36 +949,51 @@ class CliBackend:
     name = "cc-codex"
     injects_protocol = False  # native hook/import chains load the protocol
 
-    def __init__(self, orch: "Orchestrator", cc_model: str, cc_effort: str,
-                 codex_model: str, codex_effort: str) -> None:
+    def __init__(self, orch: "Orchestrator", dev_agent: str, dev_model: str,
+                 dev_effort: str, review_model: str,
+                 review_effort: str) -> None:
+        if dev_agent not in CLI_DEV_AGENTS:
+            raise ValueError(f"invalid cc-codex dev_agent: {dev_agent}")
         self.orch = orch
-        self.cc_model, self.cc_effort = cc_model, cc_effort
-        self.codex_model, self.codex_effort = codex_model, codex_effort
+        self.dev_agent = dev_agent
+        self.dev_model, self.dev_effort = dev_model, dev_effort
+        self.review_model, self.review_effort = review_model, review_effort
 
     def describe(self, role: str) -> str:
         if role == "dev":
-            return f"claude:{self.cc_model}@{self.cc_effort}"
-        return f"codex:{self.codex_model}@{self.codex_effort}"
+            return f"{self.dev_agent}:{self.dev_model}@{self.dev_effort}"
+        return f"codex:{self.review_model}@{self.review_effort}"
+
+    def _codex_params(self, role: str) -> tuple[str, str]:
+        if role == "dev":
+            return self.dev_model, self.dev_effort
+        return self.review_model, self.review_effort
 
     def new_session(self, role: str) -> CliSession:
         if role == "dev":
-            return ClaudeSession(self.orch, self.cc_model, self.cc_effort)
-        return CodexSession(self.orch, self.codex_model, self.codex_effort)
+            if self.dev_agent == "codex":
+                model, effort = self._codex_params(role)
+                return CodexSession(self.orch, model, effort)
+            return ClaudeSession(self.orch, self.dev_model, self.dev_effort)
+        model, effort = self._codex_params(role)
+        return CodexSession(self.orch, model, effort)
 
     def resume_session(self, sid: str, role: str) -> CliSession:
         info = _session_map_load().get(sid)
-        tool = (info or {}).get("tool") or ("claude" if role == "dev"
-                                            else "codex")
+        fallback_tool = self.dev_agent if role == "dev" else "codex"
+        tool = (info or {}).get("tool") or fallback_tool
         if info is None:
             self.orch.log(f"WARNING: sid {sid} not in {SESSION_MAP} — "
                           f"assuming tool={tool} by role. If this session "
                           "was created manually in another tool, resume may "
                           "fail; unblock manually in that tool instead.")
         if tool == "claude":
-            return ClaudeSession(self.orch, self.cc_model, self.cc_effort,
+            return ClaudeSession(self.orch, self.dev_model, self.dev_effort,
                                  sid=sid, resume=True)
-        s = CodexSession(self.orch, self.codex_model, self.codex_effort,
-                         sid=sid)
+        if tool != "codex":
+            raise SessionStartError(f"unknown CLI session tool '{tool}' for {sid}")
+        model, effort = self._codex_params(role)
+        s = CodexSession(self.orch, model, effort, sid=sid)
         s.first_turn = False  # force the resume argv shape
         return s
 
@@ -1996,20 +2017,29 @@ def main() -> None:
     ap.add_argument("--backend", choices=["cursor", "cc-codex"],
                     default="cursor",
                     help="cursor = Cursor SDK both roles (default); "
-                         "cc-codex = Claude Code dev + Codex CLI review")
+                         "cc-codex = Claude/Codex dev + Codex CLI review")
+    ap.add_argument("--dev-agent", choices=sorted(CLI_DEV_AGENTS),
+                    default=None,
+                    help="cc-codex only: dev-role CLI agent. Default: "
+                         f"{DEFAULT_CC_DEV_AGENT} (claude = Claude Code; "
+                         "codex = Codex CLI)")
     ap.add_argument("--plan-gate", action="store_true",
                     help="each dev session first proposes goal+plan and "
                          "blocks for human confirmation before implementing")
     ap.add_argument("--dev-model", default=None,
                     help=f"default: {DEFAULT_DEV_MODEL} (cursor) / "
-                         f"{DEFAULT_CC_MODEL} (cc-codex)")
+                         f"{DEFAULT_CC_MODEL} (cc-codex claude dev) / "
+                         f"{DEFAULT_CODEX_DEV_MODEL} (cc-codex codex dev)")
     ap.add_argument("--review-model", default=None,
                     help=f"default: {DEFAULT_REVIEW_MODEL} (cursor) / "
                          f"{DEFAULT_CODEX_MODEL} (cc-codex)")
     ap.add_argument("--dev-effort", default=None,
                     help="dev-role effort. cursor: claude effort axis "
                          "low..max (default: catalog default = high); "
-                         "cc-codex: claude --effort (default: max)")
+                         "cc-codex claude: claude --effort "
+                         f"(default: {DEFAULT_CC_EFFORT}); cc-codex codex: "
+                         "codex reasoning effort "
+                         f"(default: {DEFAULT_CODEX_DEV_EFFORT})")
     ap.add_argument("--review-effort", default=None,
                     help="review-role effort: none/low/medium/high/xhigh "
                          "(canonical = codex spelling; the cursor gpt axis "
@@ -2028,6 +2058,8 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.backend == "cursor":
+        if args.dev_agent:
+            sys.exit("--dev-agent is only supported with --backend cc-codex")
         dev_model = args.dev_model or DEFAULT_DEV_MODEL
         review_model = args.review_model or DEFAULT_REVIEW_MODEL
         dev_effort = args.dev_effort or DEFAULT_CURSOR_DEV_EFFORT
@@ -2051,11 +2083,22 @@ def main() -> None:
                                      dev_effort=dev_effort,
                                      review_effort=review_effort)
     else:
-        dev_model = args.dev_model or DEFAULT_CC_MODEL
+        dev_agent = args.dev_agent or DEFAULT_CC_DEV_AGENT
+        if dev_agent not in CLI_DEV_AGENTS:
+            sys.exit("--dev-agent/ORCH_CC_DEV_AGENT: invalid value "
+                     f"'{dev_agent}' — allowed: "
+                     + "/".join(sorted(CLI_DEV_AGENTS)))
+        if dev_agent == "codex":
+            dev_model = args.dev_model or DEFAULT_CODEX_DEV_MODEL
+            dev_effort = args.dev_effort or DEFAULT_CODEX_DEV_EFFORT
+            dev_axis = "reasoning"
+        else:
+            dev_model = args.dev_model or DEFAULT_CC_MODEL
+            dev_effort = args.dev_effort or DEFAULT_CC_EFFORT
+            dev_axis = "effort"
         review_model = args.review_model or DEFAULT_CODEX_MODEL
-        cc_effort = args.dev_effort or DEFAULT_CC_EFFORT
         codex_effort = args.review_effort or DEFAULT_CODEX_EFFORT
-        for label, axis, eff in (("--dev-effort", "effort", cc_effort),
+        for label, axis, eff in (("--dev-effort", dev_axis, dev_effort),
                                  ("--review-effort", "reasoning",
                                   codex_effort)):
             err = effort_error(axis, eff)
@@ -2067,7 +2110,7 @@ def main() -> None:
                             args.once, args.max_sessions,
                             plan_gate=args.plan_gate,
                             control_dir=args.control_dir)
-        orch.backend = CliBackend(orch, dev_model, cc_effort,
+        orch.backend = CliBackend(orch, dev_agent, dev_model, dev_effort,
                                   review_model, codex_effort)
 
     orch.log(f"orchestrator start: task={args.task_id} "
