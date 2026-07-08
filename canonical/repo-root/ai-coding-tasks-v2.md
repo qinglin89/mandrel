@@ -33,6 +33,14 @@ review entry's verdict is `changes-requested`, otherwise **advancement**; a
 review session is **interim** when it enters at `in_progress`, the **final
 gate** when it enters at `final_review`.
 
+`Verdict` is the routing decision for the next dev session.
+
+- `changes-requested`: the next dev session MUST be remediation. It must address
+    unresolved findings in the active convergence group.
+- `pass`: the next dev session may advance to the next planned scope.
+    `pass` means the active convergence group has no unresolved findings, or
+    all residual behavior was explicitly accepted by the human.
+
 | session kind      | enters at                    | may set status to |
 |-------------------|------------------------------|-------------------|
 | dev advancement   | in_progress                  | in_progress; final_review (only when the whole scope is complete) |
