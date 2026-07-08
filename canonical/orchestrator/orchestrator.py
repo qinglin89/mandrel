@@ -812,6 +812,7 @@ class CodexSession(CliSession):
         self.effort = CODEX_EFFORT_ALIASES.get(effort, effort)
         self.sid = sid  # None until the first stream event names it
         self._latest_token_usage: str | None = None
+        self._observed_contexts: set[tuple[str, str, str]] = set()
 
     def _argv(self, prompt: str) -> list[str]:
         argv = ["codex", "exec", "--json", "-m", self.model,
@@ -830,6 +831,55 @@ class CodexSession(CliSession):
             return argv
         argv.append(prompt)
         return argv
+
+    def _log_observed_context(self, payload: dict, source: str) -> None:
+        settings = payload.get("collaboration_mode")
+        settings = settings if isinstance(settings, dict) else {}
+        settings = settings.get("settings")
+        settings = settings if isinstance(settings, dict) else {}
+        observed_model = payload.get("model") or settings.get("model")
+        observed_effort = (
+            payload.get("effort")
+            or payload.get("model_reasoning_effort")
+            or settings.get("reasoning_effort"))
+        sandbox = payload.get("sandbox_policy") or payload.get("sandbox")
+        sandbox_type = (sandbox.get("type") if isinstance(sandbox, dict)
+                        else sandbox)
+        if not (observed_model or observed_effort or sandbox_type):
+            return
+        key = (observed_model or "?", observed_effort or "?",
+               sandbox_type or "?")
+        seen = getattr(self, "_observed_contexts", set())
+        if key in seen:
+            return
+        seen.add(key)
+        self._observed_contexts = seen
+        self._emit(
+            "[status] codex observed context "
+            f"model={observed_model or '?'} "
+            f"effort={observed_effort or '?'} "
+            f"requested_model={getattr(self, 'model', '?')} "
+            f"requested_effort={getattr(self, 'effort', '?')} "
+            f"sandbox={sandbox_type or '?'} "
+            f"source={source}")
+
+    def _log_rollout_context(self, rollout: Path) -> None:
+        """codex exec --json omits turn_context on stdout in 0.143.0, but
+        the local rollout JSONL still records it. Log the latest one."""
+        latest: dict | None = None
+        with contextlib.suppress(OSError):
+            for line in rollout.open():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") != "turn_context":
+                    continue
+                payload = ev.get("payload")
+                if isinstance(payload, dict):
+                    latest = payload
+        if latest:
+            self._log_observed_context(latest, "rollout")
 
     def _handle_event(self, ev: dict, chunks: list[str]) -> str | None:
         o = self.orch
@@ -871,19 +921,7 @@ class CodexSession(CliSession):
         elif etype == "turn_context":
             payload = ev.get("payload")
             payload = payload if isinstance(payload, dict) else {}
-            observed_model = payload.get("model")
-            observed_effort = payload.get("effort")
-            sandbox = payload.get("sandbox_policy")
-            sandbox_type = (sandbox.get("type") if isinstance(sandbox, dict)
-                            else None)
-            if observed_model or observed_effort or sandbox_type:
-                self._emit(
-                    "[status] codex observed context "
-                    f"model={observed_model or '?'} "
-                    f"effort={observed_effort or '?'} "
-                    f"requested_model={getattr(self, 'model', '?')} "
-                    f"requested_effort={getattr(self, 'effort', '?')} "
-                    f"sandbox={sandbox_type or '?'}")
+            self._log_observed_context(payload, "stream")
         elif etype == "event_msg":
             payload = ev.get("payload")
             payload = payload if isinstance(payload, dict) else {}
@@ -939,7 +977,9 @@ class CodexSession(CliSession):
                 (base / "sessions").rglob(f"*{self.sid}*.jsonl"),
                 key=lambda p: p.stat().st_mtime)
             if rollouts:
-                self.context_tokens = rollouts[-1].stat().st_size // 4
+                rollout = rollouts[-1]
+                self.context_tokens = rollout.stat().st_size // 4
+                self._log_rollout_context(rollout)
             else:
                 self.orch.flog(f"[status] no rollout file found for "
                                f"{self.sid} — context estimate unavailable")

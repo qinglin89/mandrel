@@ -565,11 +565,45 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
             _os.environ["CODEX_HOME"] = prev
     assert xs.context_tokens == 1000, xs.context_tokens
 
+    xs2 = o.CodexSession.__new__(o.CodexSession)
+    xs2.orch, xs2.sid = orch, "codex-rollout"
+    xs2.model, xs2.effort = "gpt-5.5", "xhigh"
+    home2 = Path(tempfile.mkdtemp(prefix="codex-home-"))
+    day2 = home2 / "sessions" / "2026" / "07" / "04"
+    day2.mkdir(parents=True)
+    rollout = day2 / "rollout-2026-07-04T00-00-01-codex-rollout.jsonl"
+    rollout.write_text("\n".join([
+        json.dumps({"type": "thread.started",
+                    "thread_id": "codex-rollout"}),
+        json.dumps({"type": "turn_context", "payload": {
+            "model": "gpt-5.5",
+            "effort": "xhigh",
+            "sandbox_policy": {"type": "danger-full-access"},
+            "collaboration_mode": {"settings": {
+                "model": "gpt-5.5",
+                "reasoning_effort": "xhigh"}}}}),
+        json.dumps({"type": "turn.completed", "usage": {
+            "input_tokens": 99}}),
+    ]))
+    prev = _os.environ.get("CODEX_HOME")
+    _os.environ["CODEX_HOME"] = str(home2)
+    try:
+        xs2._update_context()
+    finally:
+        if prev is None:
+            _os.environ.pop("CODEX_HOME", None)
+        else:
+            _os.environ["CODEX_HOME"] = prev
+    assert xs2.context_tokens == rollout.stat().st_size // 4
+
     log = orch.log_file.read_text()
     assert "[tool] Bash" in log and "[text]" in log
     assert ("claude observed response model=claude-fable-5 "
             "requested_model=fable-5 requested_effort=max") in log
     assert "codex observed context model=gpt-5.5 effort=xhigh" in log
+    assert "codex observed context model=gpt-5.5 effort=xhigh" \
+        " requested_model=gpt-5.5 requested_effort=xhigh" \
+        " sandbox=danger-full-access source=rollout" in log
     assert ("codex token usage usage=input=100,cached=90,output=5,"
             "reasoning=3,total=108 context_window=258400") in log
     assert log.count("thinking_tokens (burst") == 2, \
