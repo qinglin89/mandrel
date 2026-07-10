@@ -40,6 +40,17 @@ GITIGNORE_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+AI_CODING_V2_TARGET = "ai-coding-v2.md"
+NORMALIZED_SHA256_FIELD = "normalized_sha256"
+AI_CODING_V2_MEMORY_IMPORT_TOPICS = frozenset(
+    {
+        "overview",
+        "architecture",
+        "design",
+        "conventions",
+    }
+)
+
 
 @dataclass(frozen=True)
 class DeploymentItem:
@@ -113,6 +124,61 @@ def _venv_python_path(venv_path: Path) -> Path:
     if os.name == "nt":
         return venv_path / "Scripts" / "python.exe"
     return venv_path / "bin" / "python"
+
+
+def _normalize_ai_coding_v2_memory_imports(data: bytes) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+
+    start = text.find("Protocol: `ai-coding-memory-v2.md`")
+    if start == -1:
+        return data
+
+    end = text.find("\n## 9. Work tracking", start)
+    if end == -1:
+        return data
+
+    before = text[:start]
+    block = text[start:end]
+    after = text[end:]
+    lines = block.splitlines(keepends=True)
+    normalized_lines: list[str] = []
+
+    for line in lines:
+        body = line.rstrip("\r\n")
+        newline = line[len(body) :]
+        stripped = body.rstrip(" \t")
+        trailing = body[len(stripped) :]
+        prefix = "@.ai/"
+        suffix = "/index.md"
+
+        if stripped.startswith(prefix) and stripped.endswith(suffix):
+            topic = stripped[len(prefix) : -len(suffix)]
+            if topic in AI_CODING_V2_MEMORY_IMPORT_TOPICS:
+                body = f"{prefix}{topic}.md{trailing}"
+
+        normalized_lines.append(body + newline)
+
+    return (before + "".join(normalized_lines) + after).encode("utf-8")
+
+
+def _status_bytes(item: DeploymentItem, data: bytes) -> bytes:
+    if item.target_relative_path == AI_CODING_V2_TARGET:
+        return _normalize_ai_coding_v2_memory_imports(data)
+    return data
+
+
+def _status_sha256(item: DeploymentItem, data: bytes) -> str:
+    return hashing.sha256_bytes(_status_bytes(item, data))
+
+
+def _manifest_status_hash(record: dict[object, object], manifest_hash: str) -> str:
+    normalized_hash = record.get(NORMALIZED_SHA256_FIELD)
+    if isinstance(normalized_hash, str):
+        return normalized_hash
+    return manifest_hash
 
 
 def is_forbidden_relative_path(path: Path | PurePosixPath | str) -> bool:
@@ -272,14 +338,15 @@ def deploy_canonical(
         target_path.write_bytes(rendered_bytes)
         target_path.chmod(item.mode)
         file_info = hashing.file_record(target_path)
-        manifest_records.append(
-            {
-                "canonical_relative_path": item.canonical_relative_path,
-                "target_relative_path": item.target_relative_path,
-                "sha256": file_info["sha256"],
-                "size_bytes": file_info["size_bytes"],
-            }
-        )
+        manifest_record = {
+            "canonical_relative_path": item.canonical_relative_path,
+            "target_relative_path": item.target_relative_path,
+            "sha256": file_info["sha256"],
+            "size_bytes": file_info["size_bytes"],
+        }
+        if item.target_relative_path == AI_CODING_V2_TARGET:
+            manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item, rendered_bytes)
+        manifest_records.append(manifest_record)
         source_stat = item.source_path.stat()
         lock_records.append(
             {
@@ -379,6 +446,7 @@ def check_status(target: str | Path, *, root: Path | None = None) -> StatusResul
         if not isinstance(manifest_hash, str):
             drifts.append(Drift("invalid manifest entry", target_rel, "missing sha256"))
             continue
+        manifest_status_hash = _manifest_status_hash(raw_record, manifest_hash)
 
         item = current_items.get(target_rel)
         if item is None:
@@ -387,15 +455,19 @@ def check_status(target: str | Path, *, root: Path | None = None) -> StatusResul
             continue
 
         target_path = target_root / target_rel
+        canonical_bytes = item.bytes_for_target(target_root)
+        canonical_hash = hashing.sha256_bytes(canonical_bytes)
         if not target_path.is_file():
             drifts.append(Drift("missing target file", target_rel))
         else:
-            target_hash = hashing.sha256_file(target_path)
-            if target_hash != manifest_hash:
+            target_bytes = target_path.read_bytes()
+            target_hash = hashing.sha256_bytes(target_bytes)
+            target_status_hash = _status_sha256(item, target_bytes)
+            if target_hash != manifest_hash and target_status_hash != manifest_status_hash:
                 drifts.append(Drift("target modified", target_rel))
 
-        canonical_hash = hashing.sha256_bytes(item.bytes_for_target(target_root))
-        if canonical_hash != manifest_hash:
+        canonical_status_hash = _status_sha256(item, canonical_bytes)
+        if canonical_hash != manifest_hash and canonical_status_hash != manifest_status_hash:
             drifts.append(Drift("canonical changed", target_rel))
 
     for target_rel in sorted(set(current_items) - {str(key) for key in manifest_files}):
