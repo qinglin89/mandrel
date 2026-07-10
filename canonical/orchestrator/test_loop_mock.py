@@ -410,9 +410,9 @@ def scenario_5_event_stream_logging(repo: Path) -> None:
 
 
 def scenario_6_plan_gate(repo: Path) -> None:
-    """--plan-gate: extra conversational turn — plan proposed as assistant
-    text (no task-file writes), human ruling injected into the working turn
-    of the SAME session; single session-log entry at the end."""
+    """--plan-gate: a separate preflight planning session loops until explicit
+    confirmation; only the approved plan/ruling reaches the formal dev
+    session."""
     from types import SimpleNamespace as NS
 
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
@@ -423,42 +423,75 @@ def scenario_6_plan_gate(repo: Path) -> None:
         append_review(repo, "rev-cleanup", sid, "pass", sid, "in_progress")
     entries_before = len(o.parse_task(p).entries)
 
+    answers = iter(["skip S6 and avoid riskpolicy/", "confirm: execute it"])
     asked: list[str] = []
 
     def fake_ask(banner: str, kind: str = "") -> str:
         asked.append(banner)
         assert kind == "plan-gate", kind
-        return "confirmed, but skip S6 for now"
+        return next(answers)
 
     # Turn 1: planning only — replies with plan text, touches NOTHING.
     def propose_plan(agent: FakeAgent, prompt: str) -> None:
         assert "PLANNING ONLY" in prompt, "gate instruction missing"
+        assert "read-only shadow of the next formal dev session" in prompt
+        assert "upcoming dev session" in prompt
+        assert "normal entry checklist" in prompt
+        assert "bounded read-only discovery" in prompt
+        assert "`rg`, `sed`, `ls`" in prompt
+        assert "Do NOT run tests/builds" in prompt
+        assert "`## Assumptions / Unknowns`" in prompt
+        assert "`## Risks / Likely Failure Points`" in prompt
+        assert "`None identified`" in prompt
         assert "task " + TASK_ID in prompt, "role line missing"
+        assert agent.agent_id == "fake-agent-006"
         FakeRun.events = [NS(type="assistant", message=NS(content=[
             NS(type="text",
                text="PLAN: fix finding 1+2, then S4; touching riskpolicy/")]))]
         assert not asked, "must not ask before the plan turn ends"
 
-    # Turn 2: working turn carries the ruling; session ends normally.
+    # Turn 2: human feedback is still planning-only; no task-file writes.
+    def revise_plan(agent: FakeAgent, prompt: str) -> None:
+        assert "PLAN FEEDBACK" in prompt and "skip S6" in prompt, \
+            "feedback must be sent back before execution"
+        assert "PLANNING ONLY" in prompt, "revision must still be planning"
+        assert "bounded read-only discovery" in prompt
+        assert "run tests" in prompt
+        assert agent.agent_id == "fake-agent-006"
+        FakeRun.events = [NS(type="assistant", message=NS(content=[
+            NS(type="text",
+               text="REVISED PLAN: skip S6; touch widget.go only")]))]
+
+    # Turn 3: a fresh formal dev session carries the approved plan/ruling.
     def execute(agent: FakeAgent, prompt: str) -> None:
-        assert "PLAN RULING" in prompt and "skip S6" in prompt, \
-            "human ruling must be injected into the working turn"
+        assert agent.agent_id == "fake-agent-007", \
+            "formal dev session must be fresh after the planning session"
+        assert "APPROVED PLAN GATE" in prompt
+        assert "REVISED PLAN: skip S6" in prompt
+        assert "confirm: execute it" in prompt, \
+            "human ruling must be injected into the formal dev session"
+        assert "Your session id is fake-agent-007" in prompt, \
+            "entry checklist must use the formal dev sid"
         bump_est(p)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-06 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
             "- Done: executed confirmed plan\n- Next: review\n- Open: none\n"))
 
-    FakeAgent.script = [propose_plan, execute]
+    FakeAgent.script = [propose_plan, revise_plan, execute]
     orch = new_orch(plan_gate=True)
     orch.ask_human = fake_ask
     orch.loop()
     task = o.parse_task(p)
     assert asked and "PLAN CONFIRMATION" in asked[0], asked
     assert "PLAN: fix finding" in asked[0], "plan text must reach the banner"
+    assert len(asked) == 2, "feedback should force one revised-plan prompt"
+    assert "REVISED PLAN: skip S6" in asked[1]
     assert task.status == "in_progress", "no status churn from the gate"
     assert len(task.entries) == entries_before + 1, \
         "exactly one session-log entry (no plan entry)"
+    assert task.entries[-1].session_id == "fake-agent-007", \
+        "plan-gate sid must not become the dev session-log sid"
     assert not FakeAgent.script
     print("scenario 6 (--plan-gate conversational: plan → confirm → "
           "execute): PASS")
@@ -543,9 +576,54 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
                       "usage": {"input_tokens": 2_900_000}}, chunks)
     assert xs.context_tokens == 0, \
         "cumulative turn.completed usage must not be used as context"
+    assert xs._handle_event(
+        {"type": "error",
+         "message": "Reconnecting... 2/5 (request timed out)"},
+        chunks) is None, "transient codex reconnect must not fail the turn"
+    assert xs._handle_event({"type": "error"}, chunks) is None, \
+        "bare codex error after reconnect is part of the retry sequence"
     assert xs._handle_event({"type": "turn.failed", "message": "boom"},
                             chunks) == "error"
     assert o._session_map_load().get("codex-123", {}).get("tool") == "codex"
+
+    xs_unknown = o.CodexSession.__new__(o.CodexSession)
+    xs_unknown.orch, xs_unknown.sid = orch, "codex-unknown-error"
+    xs_unknown.model, xs_unknown.effort = "gpt-5.5", "xhigh"
+    assert xs_unknown._handle_event(
+        {"type": "error", "message": "model unavailable"}, []) == "error"
+    assert xs_unknown._handle_event({"type": "error"}, []) == "error"
+
+    class FakeCodexProc:
+        pid = 4242
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.stdout = iter([
+                json.dumps({"type": "thread.started",
+                            "thread_id": "codex-turn"}) + "\n",
+                json.dumps({"type": "error",
+                            "message": "Reconnecting... 3/5 "
+                                       "(request timed out)"}) + "\n",
+                json.dumps({"type": "item.completed",
+                            "item": {"type": "agent_message",
+                                     "text": "still finished"}}) + "\n",
+                json.dumps({"type": "turn.completed"}) + "\n",
+            ])
+            self.stderr = types.SimpleNamespace(read=lambda: "")
+
+        def wait(self) -> int:
+            return self.returncode
+
+    prev_popen = o.subprocess.Popen
+    try:
+        o.subprocess.Popen = lambda *_args, **_kw: FakeCodexProc()
+        xs_turn = o.CodexSession(orch, "gpt-5.5", "xhigh")
+        result = xs_turn.turn("review after transient reconnect")
+    finally:
+        o.subprocess.Popen = prev_popen
+    assert result.status == "finished", \
+        "recoverable codex error event plus exit 0 must finish"
+    assert result.text == "still finished"
 
     # codex context estimate = rollout transcript chars / 4 (Stop-hook style)
     import os as _os
@@ -604,6 +682,7 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
     assert "codex observed context model=gpt-5.5 effort=xhigh" \
         " requested_model=gpt-5.5 requested_effort=xhigh" \
         " sandbox=danger-full-access source=rollout" in log
+    assert "[status] error \"Reconnecting... 2/5 (request timed out)\"" in log
     assert ("codex token usage usage=input=100,cached=90,output=5,"
             "reasoning=3,total=108 context_window=258400") in log
     assert log.count("thinking_tokens (burst") == 2, \
@@ -742,7 +821,9 @@ def scenario_10_context_budget(repo: Path) -> None:
 def scenario_11_continuation_same_role(repo: Path) -> None:
     """After a REMEDIATION continuation-marked wrap-up (scenario 10; latest
     verdict is changes-requested), the next turn is DEV remediation again;
-    re-review is deferred until the fix set completes."""
+    re-review is deferred until the fix set completes. Even with --plan-gate,
+    remediation sessions skip the preflight gate because the review findings
+    are already the plan."""
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
     task = o.parse_task(p)
     assert task.entries[-1].is_continuation, \
@@ -763,12 +844,14 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
             "- Next: re-review\n- Open: none\n"))
 
     FakeAgent.script = [dev_completes]
-    orch = new_orch()
-    orch.ask_human = lambda banner: (_ for _ in ()).throw(
-        AssertionError("unexpected escalation"))
+    orch = new_orch(plan_gate=True)
+    orch.ask_human = lambda banner, kind="": (_ for _ in ()).throw(
+        AssertionError(f"unexpected escalation ({kind}): {banner[:200]}"))
     orch.loop()
     log = orch.log_file.read_text()
     assert "remediation continuation: resuming dev" in log
+    assert "plan-gate start" not in log, \
+        "remediation dev sessions should not run the plan gate"
     assert "review session start" not in log, \
         "re-review must be deferred while the fix set is open"
     assert "dev session start" in log
@@ -1854,6 +1937,62 @@ claimed-by: dev-ctl-0001@2026-01-20T00:00:00Z
           "boundary): PASS")
 
 
+def scenario_28_session_start_error_logged(repo: Path) -> None:
+    """A CLI/tool startup failure after the orchestrator log exists must be
+    visible in that log, not only in the outer run manager's spawn.out."""
+    tid = "2026-01-28-session-start-error"
+    p = repo / ".ai-tasks" / f"{tid}.md"
+    p.write_text(f"""---
+id: {tid}
+status: pending
+session-est: 0/1
+blockers: []
+claimed-by:
+---
+
+# Session start error mock
+
+## Session log
+""")
+
+    class FailingSession(o.BackendSession):
+        sid = "fake-missing-cli"
+
+        def turn(self, prompt: str) -> o.TurnResult:
+            assert "task " + tid in prompt
+            raise o.SessionStartError(
+                "claude spawn failed: [Errno 2] No such file or directory: "
+                "'claude'")
+
+    class FailingBackend:
+        injects_protocol = True
+
+        def describe(self, role: str) -> str:
+            return "claude:missing@max" if role == "dev" else "codex:mock@max"
+
+        def new_session(self, role: str) -> o.BackendSession:
+            assert role == "dev"
+            return FailingSession()
+
+        def resume_session(self, sid: str, role: str) -> o.BackendSession:
+            raise AssertionError("unexpected resume")
+
+    orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
+                          api_key=None, once=True, max_sessions=10,
+                          backend=FailingBackend())
+    orch.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
+    try:
+        orch.loop()
+        raise AssertionError("startup failure must exit")
+    except SystemExit as e:
+        assert e.code == 1, e.code
+    log = orch.log_file.read_text()
+    assert "--- dev session start:" in log
+    assert "ERROR: claude spawn failed:" in log
+    assert "No such file or directory: 'claude'" in log
+    print("scenario 28 (session startup error is written to run log): PASS")
+
+
 def main() -> None:
     repo = make_repo()
     try:
@@ -1885,6 +2024,7 @@ def main() -> None:
         scenario_25_control_dir_stale_files(repo)
         scenario_26_control_dir_stop_answer_and_flag(repo)
         scenario_27_control_dir_graceful_loop_stop(repo)
+        scenario_28_session_start_error_logged(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):

@@ -365,17 +365,36 @@ backstop.
 
 ### 5.8 Plan confirmation (`--plan-gate`)
 
-With the flag on, every dev session gets an extra **conversational** turn
-before any work: the agent reads the task and replies with its plan (goal
-as understood, steps, files to touch, risks) — with hard constraints to
-touch nothing: no file edits, no session-log entry, no status change (the
-session log stays an end-of-session record; the plan lives only in the
-conversation and the orchestrator log). The plan text is shown to you under
-a `PLAN CONFIRMATION` banner; your answer is injected into the SAME
-session's working turn as a binding `PLAN RULING`, and the session then
-executes and ends with the normal single session-log entry. If the
-planning turn dirties the tree anyway, the banner warns you (consider
-`stop`).
+With the flag on, every formal dev advancement session is preceded by a
+separate **read-only shadow planning session**. Remediation sessions after a
+`changes-requested` review skip this gate because the review findings already
+define the repair plan. The planning session uses the upcoming dev session's
+perspective to report what it learned and what it plans to do, but must not
+execute the normal entry checklist, claim the task, change
+`session-est`/status, append a session-log entry, edit files, run tests/builds,
+start services, install dependencies, or generate artifacts. It may do bounded
+read-only discovery: read the task/session log, frontmatter `prefetch:` docs,
+and a small number of directly relevant source/test files; run short read-only
+inspection commands such as `rg`, `sed`, `ls`, `git show`, and
+`git diff --name-only`. It then replies with fixed headings:
+`Goal / Acceptance`, `Confirmed Facts`,
+`Assumptions / Unknowns`, `Work Approach`, `Verification Strategy`, and
+`Risks / Likely Failure Points`; empty sections say `None identified`. The
+`Work Approach` section should be concise and name key files/modules only when
+they materially clarify the plan, not as a complete file-by-file checklist.
+
+The plan text is shown to you under a `PLAN CONFIRMATION` banner, capped at
+12,000 characters there with the full plan still available in the orchestrator
+log. Reply with `confirm` (or an explicit approval such as `approve`,
+`proceed`, `确认`) to authorize implementation; any other answer is treated as
+feedback and sent back into the SAME planning session for a revised plan. This
+repeats until you confirm or type `stop`. Once confirmed, the orchestrator
+closes the planning session, starts a fresh formal dev session, and injects
+only the approved plan and human ruling into the formal dev prompt. That formal
+session then runs the
+normal entry checklist, owns the real session id, and ends with the normal
+single session-log entry. If a planning turn dirties the tree anyway, the
+banner warns you (consider `stop`).
 
 If the orchestrator dies between plan and confirmation, nothing was
 persisted — a restart simply proposes a fresh plan (stateless turn

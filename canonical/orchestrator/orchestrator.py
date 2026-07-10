@@ -163,6 +163,7 @@ def effort_error(axis: str, value: str | None) -> str | None:
 MAX_FOLLOWUPS = 3     # post-check violation round-trips per session
 GROUP_BUDGET = 2      # changes-requested RE-reviews per group (so 3 entries total)
 DEFAULT_MAX_SESSIONS = 40
+PLAN_GATE_BANNER_CHARS = 12_000
 HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
@@ -337,6 +338,12 @@ class TurnResult:
     status: str               # "finished" | "error"
     saw_request: bool = False
     text: str = ""            # assistant text of this turn
+
+
+@dataclasses.dataclass
+class PlanGateResult:
+    plan: str
+    ruling: str
 
 
 class SessionStartError(Exception):
@@ -813,6 +820,7 @@ class CodexSession(CliSession):
         self.sid = sid  # None until the first stream event names it
         self._latest_token_usage: str | None = None
         self._observed_contexts: set[tuple[str, str, str]] = set()
+        self._codex_reconnect_in_progress = False
 
     def _argv(self, prompt: str) -> list[str]:
         argv = ["codex", "exec", "--json", "-m", self.model,
@@ -951,15 +959,37 @@ class CodexSession(CliSession):
                            f"{self._latest_token_usage}")
                 self._latest_token_usage = None
             pass
-        elif etype in ("turn.failed", "error"):
+        elif etype == "turn.failed":
             if getattr(self, "_latest_token_usage", None):
                 self._emit(f"[status] codex token usage "
                            f"{self._latest_token_usage}")
                 self._latest_token_usage = None
             self._emit(f"[status] {etype} {summarize(ev.get('message') or ev)}")
             return "error"
+        elif etype == "error":
+            # Codex emits transient transport errors such as websocket
+            # reconnect notices before recovering and completing the turn. A
+            # bare error can immediately follow that reconnect sequence, so
+            # keep that diagnostic nonfatal too; isolated/unknown errors still
+            # fail the turn and trigger the normal run-error escalation.
+            if getattr(self, "_latest_token_usage", None):
+                self._emit(f"[status] codex token usage "
+                           f"{self._latest_token_usage}")
+                self._latest_token_usage = None
+            self._emit(f"[status] {etype} {summarize(ev.get('message') or ev)}")
+            msg = ev.get("message")
+            msg = msg if isinstance(msg, str) else ""
+            reconnecting = msg.startswith("Reconnecting...")
+            if reconnecting or (
+                    not msg
+                    and getattr(self, "_codex_reconnect_in_progress", False)):
+                self._codex_reconnect_in_progress = True
+            else:
+                return "error"
         elif etype and not etype.startswith(("item.", "turn.", "thread.")):
             self._emit(f"[status] {etype}")
+        if etype != "error":
+            self._codex_reconnect_in_progress = False
         return None
 
     def _update_context(self) -> None:
@@ -1089,6 +1119,10 @@ class Orchestrator:
         with self._log_lock, self.log_file.open("a") as f:
             f.write(line + "\n")
 
+    def _exit_session_start_error(self, err: SessionStartError) -> None:
+        self.log(f"ERROR: {err}")
+        sys.exit(1)
+
     def transcript(self, agent_id: str, text: str) -> None:
         with self._log_lock, self.log_file.open("a") as f:
             f.write(f"--- {agent_id} ---\n{text}\n")
@@ -1204,30 +1238,54 @@ class Orchestrator:
         was_remediation = (
             role == "dev" and bool(task_before.review_entries)
             and task_before.review_entries[-1].verdict == "changes-requested")
+        plan_gate: PlanGateResult | None = None
+        if self.plan_gate and role == "dev" and not was_remediation:
+            try:
+                plan_session = self.backend.new_session(role)
+            except SessionStartError as err:
+                self._exit_session_start_error(err)
+            try:
+                self.log(f"--- {role} plan-gate start: "
+                         f"sid={plan_session.sid or '(pending)'} "
+                         f"backend={self.backend.describe(role)} "
+                         f"status_before={status_before}")
+                plan_gate = self._plan_gate_turn(
+                    plan_session, first_prompt_fn(plan_session.sid))
+                self.log(f"--- {role} plan-gate end: "
+                         f"sid={plan_session.sid or '(pending)'}")
+            finally:
+                plan_session.close()
         try:
             session = self.backend.new_session(role)
         except SessionStartError as err:
-            sys.exit(str(err))
+            self._exit_session_start_error(err)
         try:
             sid = session.sid
             self.log(f"--- {role} session start: sid={sid or '(pending)'} "
                      f"backend={self.backend.describe(role)} "
                      f"status_before={status_before}")
             prompt = first_prompt_fn(sid)
-            if self.plan_gate and role == "dev":
-                ruling = self._plan_gate_turn(session, prompt)
-                prompt = (f"[orchestrator] PLAN RULING from the human: "
-                          f"{ruling}\nProceed with the session per the "
-                          "original instructions, honoring this ruling. "
-                          "From here on the normal end-of-session rules "
-                          "apply (clean tree, session-log entry, role-legal "
-                          "status).")
+            if plan_gate:
+                prompt += (
+                    "\n\nAPPROVED PLAN GATE — the human approved this plan "
+                    "before the formal dev session. Treat it as guidance and "
+                    "constraints while still verifying against the actual "
+                    "code. The approved plan is guidance and constraints for "
+                    "this dev session, but the formal dev session still owns "
+                    "the normal entry checklist and preReEst. Use the approved "
+                    "plan as input to preReEst. This is now the formal dev "
+                    "session: execute the normal entry checklist, claim the "
+                    "task with this session id, update session-est/status as "
+                    "required, and end with the normal clean-tree session-log "
+                    "entry.\n\n"
+                    f"Human ruling:\n{plan_gate.ruling}\n\n"
+                    f"Approved plan:\n{plan_gate.plan}")
             followups = 0
             while True:
                 try:
                     result = session.turn(prompt)
                 except SessionStartError as err:
-                    sys.exit(str(err))
+                    self._exit_session_start_error(err)
                 if session.sid != sid:
                     sid = session.sid  # codex names its id on first turn
                 if result.saw_request:
@@ -1375,39 +1433,87 @@ class Orchestrator:
         finally:
             session.close()
 
-    def _plan_gate_turn(self, session: BackendSession, base_prompt: str) -> str:
+    @staticmethod
+    def _plan_gate_confirmed(answer: str) -> bool:
+        token = re.split(r"[\s,;:，。；：]+", answer.strip().lower(),
+                         maxsplit=1)[0]
+        return token in {
+            "confirm", "confirmed", "approve", "approved", "proceed",
+            "yes", "y", "ok", "okay",
+            "确认", "同意", "批准", "通过", "继续", "可以", "开始", "开工",
+            "执行", "实施",
+        }
+
+    def _plan_gate_turn(self, session: BackendSession,
+                        base_prompt: str) -> PlanGateResult:
         """--plan-gate: an extra conversational turn BEFORE any work. The
         plan lives only in the conversation and the orchestrator log — no
         task-file writes, no session-log entry, no status change (the
-        session-log stays an end-of-session record). Returns the human's
-        ruling to inject into the working turn."""
+        session-log stays an end-of-session record). Returns the approved
+        plan plus the human's ruling to inject into a fresh dev session."""
         plan_prompt = (
             base_prompt +
-            "\n\nPLAN GATE — THIS TURN IS PLANNING ONLY. Read the task file, "
-            "its session log, and the relevant context, then reply with your "
-            "plan for this session: the goal as you understand it, the steps "
-            "you will take, the files you expect to touch, and "
-            "risks/assumptions. HARD CONSTRAINTS for this turn: do NOT "
-            "modify any file, do NOT run write/state-changing commands, do "
-            "NOT append a session-log entry, do NOT change the task status. "
-            "Reply with the plan and stop; the human will confirm or amend "
-            "it before you execute.")
-        result = session.turn(plan_prompt)
-        plan = (result.text or "").strip()
-        if not tree_clean():
-            self.log("plan-gate violation: the planning turn modified the "
-                     "tree — surfacing to human")
-        banner = ("PLAN CONFIRMATION (--plan-gate): the dev session "
-                  f"({session.sid}) proposes:\n\n"
-                  + (plan[:4000] if plan else "(no plan text captured — see "
-                     f"log {self.log_file})"))
-        if not tree_clean():
-            banner += ("\n\nWARNING: the planning turn left the tree dirty "
-                       "(it was told not to touch anything). Your answer is "
-                       "forwarded either way; consider 'stop'.")
-        return self.ask_human(banner + "\n\nConfirm the plan or state "
-                              "amendments; your answer is binding.",
-                              kind="plan-gate")
+            "\n\nPLAN GATE — THIS TURN IS PLANNING ONLY. Treat this as a "
+            "read-only shadow of the next formal dev session: understand the "
+            "task and report what you learned and what you plan to do from the "
+            "perspective of the upcoming dev session, but do not execute the "
+            "normal entry checklist yet. Do not claim the task, do not change "
+            "session-est/status, do not append a session-log entry, and do not "
+            "modify any file. This is a research/plan-only session. You MAY do "
+            "bounded read-only discovery: read the task file, its session log, "
+            "the frontmatter `prefetch:` docs, and a small number of directly "
+            "relevant source/test files; run only short read-only inspection "
+            "commands such as `rg`, `sed`, `ls`, `git show`, or "
+            "`git diff --name-only`. Do NOT run tests/builds, start services, "
+            "install dependencies, generate artifacts, or run long diagnostics. "
+            "Reply with exactly these headings, using `None identified` for "
+            "any empty section: `## Goal / Acceptance`, "
+            "`## Confirmed Facts`, `## Assumptions / Unknowns`, "
+            "`## Work Approach`, `## Verification Strategy`, "
+            "`## Risks / Likely Failure Points`. In `## Work Approach`, give "
+            "a concise implementation approach and main work areas; include "
+            "key files/modules only when they materially clarify the plan, and "
+            "do not try to produce a complete file-by-file implementation "
+            "checklist; then stop.")
+        while True:
+            result = session.turn(plan_prompt)
+            plan = (result.text or "").strip()
+            if not tree_clean():
+                self.log("plan-gate violation: the planning turn modified the "
+                         "tree — surfacing to human")
+            if plan:
+                plan_display = plan
+                if len(plan_display) > PLAN_GATE_BANNER_CHARS:
+                    plan_display = (
+                        plan_display[:PLAN_GATE_BANNER_CHARS] +
+                        f"\n\n[plan truncated to {PLAN_GATE_BANNER_CHARS} "
+                        f"chars; full plan is in {self.log_file}]")
+            else:
+                plan_display = (
+                    f"(no plan text captured — see log {self.log_file})")
+            banner = ("PLAN CONFIRMATION (--plan-gate): the dev session "
+                      f"({session.sid}) proposes:\n\n"
+                      + plan_display)
+            if not tree_clean():
+                banner += ("\n\nWARNING: the planning turn left the tree dirty "
+                           "(it was told not to touch anything). Your answer "
+                           "is forwarded either way; consider 'stop'.")
+            answer = self.ask_human(
+                banner + "\n\nReply with `confirm` to authorize "
+                "implementation. Any other answer is treated as plan feedback "
+                "and sent back to the same session for a revised plan.",
+                kind="plan-gate")
+            if self._plan_gate_confirmed(answer):
+                return PlanGateResult(plan=plan, ruling=answer)
+            plan_prompt = (
+                "[orchestrator] PLAN FEEDBACK from the human: "
+                f"{answer}\nThe plan is NOT approved yet. This turn is still "
+                "PLANNING ONLY: do NOT modify files, claim the task, change "
+                "status/session-est, append a session-log entry, run tests, "
+                "start services, install dependencies, or run long diagnostics. "
+                "You may do only bounded read-only discovery if needed. Revise "
+                "the plan to address the feedback, then stop and wait for "
+                "another human confirmation.")
 
     # -- post-session checks (Stop-hook replica / backstop) --
 
