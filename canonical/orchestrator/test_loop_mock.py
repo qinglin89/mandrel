@@ -410,9 +410,12 @@ def scenario_5_event_stream_logging(repo: Path) -> None:
 
 
 def scenario_6_plan_gate(repo: Path) -> None:
-    """--plan-gate: a separate preflight planning session loops until explicit
-    confirmation; only the approved plan/ruling reaches the formal dev
-    session."""
+    """--plan-gate: the loop revolves around a plan-report artifact — a
+    revision replaces it (restated from `## Goal / Acceptance` on), a
+    clarifying round keeps it (`PLAN-REPORT: unchanged` sentinel, pointer
+    banner), a malformed reply keeps it with a WARNING — and confirm
+    delivers the CURRENT report (never the last turn's raw text) plus the
+    human ruling to a fresh formal dev session."""
     from types import SimpleNamespace as NS
 
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
@@ -423,7 +426,10 @@ def scenario_6_plan_gate(repo: Path) -> None:
         append_review(repo, "rev-cleanup", sid, "pass", sid, "in_progress")
     entries_before = len(o.parse_task(p).entries)
 
-    answers = iter(["skip S6 and avoid riskpolicy/", "confirm: execute it"])
+    answers = iter(["does S6 depend on riskpolicy/?",
+                    "skip S6 and avoid riskpolicy/",
+                    "one more consideration?",
+                    "confirm: execute it"])
     asked: list[str] = []
 
     def fake_ask(banner: str, kind: str = "") -> str:
@@ -431,7 +437,28 @@ def scenario_6_plan_gate(repo: Path) -> None:
         assert kind == "plan-gate", kind
         return next(answers)
 
-    # Turn 1: planning only — replies with plan text, touches NOTHING.
+    def reply(text: str) -> None:
+        FakeRun.events = [NS(type="assistant", message=NS(content=[
+            NS(type="text", text=text)]))]
+
+    report_v1 = (
+        "## Goal / Acceptance\nFix finding 1+2, then S4.\n\n"
+        "## Confirmed Facts\n- riskpolicy/ is in scope today.\n\n"
+        "## Assumptions / Unknowns\nNone identified\n\n"
+        "## Work Approach\nPLAN: fix finding 1+2, then S4; touching "
+        "riskpolicy/\n\n"
+        "## Verification Strategy\nmock suite\n\n"
+        "## Risks / Likely Failure Points\nNone identified")
+    report_v2 = (
+        "## Goal / Acceptance\nFix finding 1+2 only.\n\n"
+        "## Confirmed Facts\n- S6 depends only on widget.go.\n\n"
+        "## Assumptions / Unknowns\nNone identified\n\n"
+        "## Work Approach\nREVISED PLAN: skip S6; touch widget.go only\n\n"
+        "## Verification Strategy\nmock suite\n\n"
+        "## Risks / Likely Failure Points\nNone identified")
+
+    # Turn 1: planning only — replies with a preamble + the fixed-headings
+    # report (rev 1 = extraction from the heading on), touches NOTHING.
     def propose_plan(agent: FakeAgent, prompt: str) -> None:
         assert "PLANNING ONLY" in prompt, "gate instruction missing"
         assert "read-only shadow of the next formal dev session" in prompt
@@ -443,14 +470,24 @@ def scenario_6_plan_gate(repo: Path) -> None:
         assert "`## Assumptions / Unknowns`" in prompt
         assert "`## Risks / Likely Failure Points`" in prompt
         assert "`None identified`" in prompt
+        assert "plan-report rev 1" in prompt, "report-capture contract missing"
         assert "task " + TASK_ID in prompt, "role line missing"
         assert agent.agent_id == "fake-agent-006"
-        FakeRun.events = [NS(type="assistant", message=NS(content=[
-            NS(type="text",
-               text="PLAN: fix finding 1+2, then S4; touching riskpolicy/")]))]
+        reply("Preamble: read the task and skimmed the code.\n\n" + report_v1)
         assert not asked, "must not ask before the plan turn ends"
 
-    # Turn 2: human feedback is still planning-only; no task-file writes.
+    # Turn 2: a purely clarifying answer keeps the report via the sentinel.
+    def answer_unchanged(agent: FakeAgent, prompt: str) -> None:
+        assert "PLAN FEEDBACK" in prompt and "does S6 depend" in prompt
+        assert "PLANNING ONLY" in prompt, "clarifying turn is still planning"
+        assert "PLAN-REPORT: unchanged" in prompt, "reply shapes missing"
+        assert "COMPLETE updated plan-report" in prompt
+        assert agent.agent_id == "fake-agent-006"
+        reply("No: S6 only touches widget.go — nothing new to fold in.\n"
+              "PLAN-REPORT: unchanged")
+
+    # Turn 3: real feedback → a change note + the full restated report
+    # (rev 2 replaces rev 1 wholesale).
     def revise_plan(agent: FakeAgent, prompt: str) -> None:
         assert "PLAN FEEDBACK" in prompt and "skip S6" in prompt, \
             "feedback must be sent back before execution"
@@ -458,16 +495,29 @@ def scenario_6_plan_gate(repo: Path) -> None:
         assert "bounded read-only discovery" in prompt
         assert "run tests" in prompt
         assert agent.agent_id == "fake-agent-006"
-        FakeRun.events = [NS(type="assistant", message=NS(content=[
-            NS(type="text",
-               text="REVISED PLAN: skip S6; touch widget.go only")]))]
+        reply("Change note: dropped S6 and riskpolicy/ per feedback.\n\n"
+              + report_v2)
 
-    # Turn 3: a fresh formal dev session carries the approved plan/ruling.
+    # Turn 4: a reply in neither shape — warn-and-keep (rev 2 stays).
+    def malformed(agent: FakeAgent, prompt: str) -> None:
+        assert "PLAN FEEDBACK" in prompt and "one more consideration" in prompt
+        assert agent.agent_id == "fake-agent-006"
+        reply("Considered: nothing changes.")
+
+    # Turn 5: a fresh formal dev session carries the CURRENT report + ruling.
     def execute(agent: FakeAgent, prompt: str) -> None:
         assert agent.agent_id == "fake-agent-007", \
             "formal dev session must be fresh after the planning session"
         assert "APPROVED PLAN GATE" in prompt
-        assert "REVISED PLAN: skip S6" in prompt
+        assert "Approved plan-report:" in prompt
+        assert "REVISED PLAN: skip S6; touch widget.go only" in prompt, \
+            "rev 2 report must be delivered"
+        assert "Change note:" not in prompt, \
+            "extraction must strip text above the report heading"
+        assert "Preamble:" not in prompt
+        assert "Considered: nothing changes." not in prompt, \
+            "a kept round's raw text must never be delivered"
+        assert "PLAN-REPORT" not in prompt, "sentinel must not leak"
         assert "confirm: execute it" in prompt, \
             "human ruling must be injected into the formal dev session"
         assert "Your session id is fake-agent-007" in prompt, \
@@ -478,23 +528,35 @@ def scenario_6_plan_gate(repo: Path) -> None:
             "(in_progress → in_progress)\n"
             "- Done: executed confirmed plan\n- Next: review\n- Open: none\n"))
 
-    FakeAgent.script = [propose_plan, revise_plan, execute]
+    FakeAgent.script = [propose_plan, answer_unchanged, revise_plan,
+                        malformed, execute]
     orch = new_orch(plan_gate=True)
     orch.ask_human = fake_ask
     orch.loop()
     task = o.parse_task(p)
-    assert asked and "PLAN CONFIRMATION" in asked[0], asked
-    assert "PLAN: fix finding" in asked[0], "plan text must reach the banner"
-    assert len(asked) == 2, "feedback should force one revised-plan prompt"
-    assert "REVISED PLAN: skip S6" in asked[1]
+    assert len(asked) == 4, [a[:80] for a in asked]
+    assert "PLAN CONFIRMATION" in asked[0], asked
+    assert "plan-report rev 1" in asked[0]
+    assert "PLAN: fix finding 1+2" in asked[0], \
+        "report text must reach the banner"
+    assert "still rev 1 from round 1" in asked[1], \
+        "unchanged round must point at the current rev"
+    assert "widget.go" in asked[1], "the clarifying answer must be shown"
+    assert "## Goal / Acceptance" not in asked[1], \
+        "pointer banner must not re-attach the report"
+    assert "plan-report rev 2" in asked[2]
+    assert "Change note:" in asked[2] and "REVISED PLAN: skip S6" in asked[2]
+    assert "WARNING" in asked[3] and \
+        "keeping plan-report rev 2 from round 3" in asked[3], \
+        "malformed reply must warn-and-keep"
     assert task.status == "in_progress", "no status churn from the gate"
     assert len(task.entries) == entries_before + 1, \
         "exactly one session-log entry (no plan entry)"
     assert task.entries[-1].session_id == "fake-agent-007", \
         "plan-gate sid must not become the dev session-log sid"
     assert not FakeAgent.script
-    print("scenario 6 (--plan-gate conversational: plan → confirm → "
-          "execute): PASS")
+    print("scenario 6 (--plan-gate plan-report: revise → unchanged pointer → "
+          "warn-and-keep → confirm delivers report): PASS")
 
 
 def scenario_7_cli_event_parsers(repo: Path) -> None:

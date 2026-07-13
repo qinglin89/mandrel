@@ -26,8 +26,10 @@ Lifecycle the orchestrator owns (both backends):
   - convergence-group budget counting (Group: field in review entries)
   - blocked → surface question → resume with answer
   - completed → ai-sync-v2 close-out via the review agent → verify archive
-  - optional --plan-gate: every dev session first states goal+plan and blocks
-    for human confirmation before touching code
+  - optional --plan-gate: every dev session is preceded by a read-only
+    planning session that iterates a plan-report with the human and blocks
+    until confirmation; only the confirmed plan-report (never conversation
+    history) is injected into the fresh dev session
 
 Usage:
     .venv/bin/python orchestrator.py <task-id> [--once] [--backend B]
@@ -164,6 +166,14 @@ MAX_FOLLOWUPS = 3     # post-check violation round-trips per session
 GROUP_BUDGET = 2      # changes-requested RE-reviews per group (so 3 entries total)
 DEFAULT_MAX_SESSIONS = 40
 PLAN_GATE_BANNER_CHARS = 12_000
+# --plan-gate report artifact: a reply revises the plan-report by restating
+# it in full from this heading on; a reply that changes nothing must end
+# with the unchanged sentinel line instead. Anything else keeps the current
+# report (warn-and-keep).
+PLAN_REPORT_START_RE = re.compile(
+    r"^##\s*Goal\s*/\s*Acceptance\s*:?\s*$", re.MULTILINE | re.IGNORECASE)
+PLAN_REPORT_UNCHANGED_RE = re.compile(
+    r"^\s*PLAN-REPORT:\s*unchanged\s*[.。]?\s*$", re.MULTILINE | re.IGNORECASE)
 HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
@@ -1279,7 +1289,7 @@ class Orchestrator:
                     "required, and end with the normal clean-tree session-log "
                     "entry.\n\n"
                     f"Human ruling:\n{plan_gate.ruling}\n\n"
-                    f"Approved plan:\n{plan_gate.plan}")
+                    f"Approved plan-report:\n{plan_gate.plan}")
             followups = 0
             while True:
                 try:
@@ -1444,14 +1454,29 @@ class Orchestrator:
             "执行", "实施",
         }
 
+    @staticmethod
+    def _extract_plan_report(text: str) -> str | None:
+        """Everything from the first `## Goal / Acceptance` heading line to
+        the end of the reply — the plan-report artifact. None when the
+        reply does not carry the heading."""
+        m = PLAN_REPORT_START_RE.search(text)
+        return text[m.start():].strip() if m else None
+
     def _plan_gate_turn(self, session: BackendSession,
                         base_prompt: str) -> PlanGateResult:
-        """--plan-gate: an extra conversational turn BEFORE any work. The
-        plan lives only in the conversation and the orchestrator log — no
-        task-file writes, no session-log entry, no status change (the
-        session-log stays an end-of-session record). Returns the approved
-        plan plus the human's ruling to inject into a fresh dev session."""
-        plan_prompt = (
+        """--plan-gate: extra conversational turns BEFORE any work, looping
+        around a plan-report artifact rather than raw turn text. Each round
+        either replaces the report wholesale (a reply restating it from the
+        `## Goal / Acceptance` heading on) or explicitly keeps it (a purely
+        clarifying reply ending `PLAN-REPORT: unchanged`); anything else
+        keeps the current report with a WARNING in the banner
+        (warn-and-keep). Rounds that keep the report show a rev/round
+        pointer instead of re-attaching it. On confirm, the CURRENT report
+        — never the last turn's raw text, never conversation history — is
+        delivered with the human ruling to a fresh dev session. The plan
+        lives only in the conversation and the orchestrator log — no
+        task-file writes, no session-log entry, no status change."""
+        prompt = (
             base_prompt +
             "\n\nPLAN GATE — THIS TURN IS PLANNING ONLY. Treat this as a "
             "read-only shadow of the next formal dev session: understand the "
@@ -1474,46 +1499,125 @@ class Orchestrator:
             "a concise implementation approach and main work areas; include "
             "key files/modules only when they materially clarify the plan, and "
             "do not try to produce a complete file-by-file implementation "
-            "checklist; then stop.")
+            "checklist; then stop. Everything from the `## Goal / Acceptance` "
+            "line to the end of your reply is captured as plan-report rev 1 — "
+            "the artifact later rounds revise and the ONLY planning output "
+            "delivered to the implementing session once the human confirms.")
+        report, report_rev, report_round = "", 0, 0
+        round_no = 0
         while True:
-            result = session.turn(plan_prompt)
-            plan = (result.text or "").strip()
+            round_no += 1
+            result = session.turn(prompt)
+            reply = (result.text or "").strip()
+            # Banners are display-truncated; the log keeps every round in
+            # full so pointer/truncation notes always have a target.
+            self.flog(f"plan-gate round {round_no} full reply:\n{reply}")
+            extracted = self._extract_plan_report(reply)
+            unchanged = bool(PLAN_REPORT_UNCHANGED_RE.search(reply))
+            warning = ""
+            if unchanged and report:
+                # The sentinel wins over a heading-shaped quote: an answer
+                # may cite report sections; only an explicit restatement
+                # (no sentinel) replaces the report.
+                shown = PLAN_REPORT_UNCHANGED_RE.sub("", reply).strip() or reply
+                headline = (
+                    f"the planning session ({session.sid}) replied without "
+                    f"changing the plan-report — still rev {report_rev} from "
+                    f"round {report_round}, which is what `confirm` delivers "
+                    "(see that round's banner, or the full report in "
+                    f"{self.log_file}):")
+                self.log(f"plan-gate round {round_no}: plan-report unchanged "
+                         f"(rev {report_rev} from round {report_round})")
+            elif extracted and not unchanged:
+                report = extracted
+                report_rev += 1
+                report_round = round_no
+                shown = reply
+                headline = (f"the planning session ({session.sid}) proposes "
+                            f"plan-report rev {report_rev}:")
+                self.log(f"plan-gate round {round_no}: plan-report revised "
+                         f"→ rev {report_rev}")
+            elif report:
+                shown = reply
+                headline = f"the planning session ({session.sid}) replied:"
+                warning = (
+                    "\n\nWARNING: the reply neither restated the complete "
+                    "plan-report (from `## Goal / Acceptance`) nor declared "
+                    "`PLAN-REPORT: unchanged` — keeping plan-report rev "
+                    f"{report_rev} from round {report_round}; that is what "
+                    "`confirm` delivers.")
+                self.log(f"plan-gate round {round_no}: reply matched no "
+                         f"report shape — keeping rev {report_rev}")
+            else:
+                # First usable reply came in the wrong shape: adopt it
+                # wholesale as rev 1 — there is nothing older to keep.
+                report = reply
+                report_rev, report_round = (1, round_no) if reply else (0, 0)
+                shown = reply
+                headline = f"the planning session ({session.sid}) proposes:"
+                if reply:
+                    warning = (
+                        "\n\nWARNING: the reply did not follow the "
+                        "plan-report format (no `## Goal / Acceptance` "
+                        "heading) — using the whole reply as plan-report "
+                        "rev 1.")
+                    self.log(f"plan-gate round {round_no}: reply lacked the "
+                             "report heading — adopted whole reply as rev 1")
+            if shown:
+                if len(shown) > PLAN_GATE_BANNER_CHARS:
+                    shown = (shown[:PLAN_GATE_BANNER_CHARS] +
+                             f"\n\n[reply truncated to "
+                             f"{PLAN_GATE_BANNER_CHARS} chars; full text is "
+                             f"in {self.log_file}]")
+            else:
+                shown = f"(no reply text captured — see log {self.log_file})"
+            banner = ("PLAN CONFIRMATION (--plan-gate): "
+                      f"{headline}\n\n{shown}{warning}")
             if not tree_clean():
                 self.log("plan-gate violation: the planning turn modified the "
                          "tree — surfacing to human")
-            if plan:
-                plan_display = plan
-                if len(plan_display) > PLAN_GATE_BANNER_CHARS:
-                    plan_display = (
-                        plan_display[:PLAN_GATE_BANNER_CHARS] +
-                        f"\n\n[plan truncated to {PLAN_GATE_BANNER_CHARS} "
-                        f"chars; full plan is in {self.log_file}]")
-            else:
-                plan_display = (
-                    f"(no plan text captured — see log {self.log_file})")
-            banner = ("PLAN CONFIRMATION (--plan-gate): the dev session "
-                      f"({session.sid}) proposes:\n\n"
-                      + plan_display)
-            if not tree_clean():
                 banner += ("\n\nWARNING: the planning turn left the tree dirty "
                            "(it was told not to touch anything). Your answer "
                            "is forwarded either way; consider 'stop'.")
             answer = self.ask_human(
                 banner + "\n\nReply with `confirm` to authorize "
-                "implementation. Any other answer is treated as plan feedback "
-                "and sent back to the same session for a revised plan.",
+                "implementation of the current plan-report. Any other answer "
+                "is treated as plan feedback and sent back to the same "
+                "session.",
                 kind="plan-gate")
             if self._plan_gate_confirmed(answer):
-                return PlanGateResult(plan=plan, ruling=answer)
-            plan_prompt = (
+                self.log(f"plan-gate confirmed (round {round_no}): "
+                         f"delivering plan-report rev {report_rev} from "
+                         f"round {report_round}")
+                self.flog(f"plan-gate delivered plan-report rev "
+                          f"{report_rev}:\n{report}")
+                return PlanGateResult(plan=report, ruling=answer)
+            prompt = (
                 "[orchestrator] PLAN FEEDBACK from the human: "
-                f"{answer}\nThe plan is NOT approved yet. This turn is still "
-                "PLANNING ONLY: do NOT modify files, claim the task, change "
-                "status/session-est, append a session-log entry, run tests, "
-                "start services, install dependencies, or run long diagnostics. "
-                "You may do only bounded read-only discovery if needed. Revise "
-                "the plan to address the feedback, then stop and wait for "
-                "another human confirmation.")
+                f"{answer}\nThe plan-report is NOT approved yet. This turn is "
+                "still PLANNING ONLY: do NOT modify files, claim the task, "
+                "change status/session-est, append a session-log entry, run "
+                "tests, start services, install dependencies, or run long "
+                "diagnostics. You may do only bounded read-only discovery if "
+                "needed. Address the feedback, then reply in exactly ONE of "
+                "these two shapes:\n"
+                "1. The plan changes (including folding in any new fact, "
+                "constraint, or decision this discussion produced): reply "
+                "with the COMPLETE updated plan-report — optionally a short "
+                "change summary first, then the full report starting at the "
+                "exact heading `## Goal / Acceptance` with all six sections, "
+                "keeping unchanged sections verbatim. Everything from that "
+                "heading to the end REPLACES the current plan-report; do not "
+                "start a line with that heading except to deliver the full "
+                "report, and never include the `PLAN-REPORT: unchanged` line "
+                "in this shape.\n"
+                "2. No plan change (a purely clarifying answer with nothing "
+                "new worth keeping): reply with your answer and end with the "
+                "exact line `PLAN-REPORT: unchanged`.\n"
+                "Only the plan-report is delivered to the implementing "
+                "session on confirmation — conversation history is NOT — so "
+                "any conclusion worth keeping must be folded into the "
+                "report. Then stop and wait for another human confirmation.")
 
     # -- post-session checks (Stop-hook replica / backstop) --
 
@@ -2170,8 +2274,9 @@ def main() -> None:
                          f"{DEFAULT_CC_DEV_AGENT} (claude = Claude Code; "
                          "codex = Codex CLI)")
     ap.add_argument("--plan-gate", action="store_true",
-                    help="each dev session first proposes goal+plan and "
-                         "blocks for human confirmation before implementing")
+                    help="each dev session first iterates a plan-report in a "
+                         "read-only planning session and blocks for human "
+                         "confirmation before implementing")
     ap.add_argument("--dev-model", default=None,
                     help=f"default: {DEFAULT_DEV_MODEL} (cursor) / "
                          f"{DEFAULT_CC_MODEL} (cc-codex claude dev) / "

@@ -383,18 +383,36 @@ inspection commands such as `rg`, `sed`, `ls`, `git show`, and
 `Work Approach` section should be concise and name key files/modules only when
 they materially clarify the plan, not as a complete file-by-file checklist.
 
-The plan text is shown to you under a `PLAN CONFIRMATION` banner, capped at
-12,000 characters there with the full plan still available in the orchestrator
-log. Reply with `confirm` (or an explicit approval such as `approve`,
-`proceed`, `确认`) to authorize implementation; any other answer is treated as
-feedback and sent back into the SAME planning session for a revised plan. This
-repeats until you confirm or type `stop`. Once confirmed, the orchestrator
-closes the planning session, starts a fresh formal dev session, and injects
-only the approved plan and human ruling into the formal dev prompt. That formal
-session then runs the
-normal entry checklist, owns the real session id, and ends with the normal
-single session-log entry. If a planning turn dirties the tree anyway, the
-banner warns you (consider `stop`).
+The loop revolves around that reply as a **plan-report artifact**: everything
+from the `## Goal / Acceptance` line to the end of the reply is captured as
+plan-report rev 1. Each further round has exactly three possible outcomes:
+
+- **Revised** — the session restates the COMPLETE report (optionally a short
+  change summary first, then `## Goal / Acceptance` onward, unchanged sections
+  kept verbatim). The restated report replaces the current one wholesale and
+  the banner shows it as the next rev. Any new fact, constraint, or decision
+  the discussion produced must be folded into the report, because only the
+  report is ever delivered.
+- **Unchanged** — a purely clarifying answer ends with the exact line
+  `PLAN-REPORT: unchanged`. The banner shows the answer plus a pointer
+  (“still rev N from round M”) instead of re-attaching the report.
+- **Neither shape** (warn-and-keep) — the banner shows the reply with a
+  WARNING that the current rev is kept and is what `confirm` delivers. (A
+  first reply carrying no `## Goal / Acceptance` heading at all is adopted
+  wholesale as rev 1, with a warning — there is nothing older to keep.)
+
+Banners are capped at 12,000 characters; every round's full reply — and, on
+confirmation, the delivered report — goes to the orchestrator log in full.
+Reply with `confirm` (or an explicit approval such as `approve`, `proceed`,
+`确认`) to authorize implementation of the CURRENT plan-report; any other
+answer is treated as feedback and sent back into the SAME planning session.
+This repeats until you confirm or type `stop`. Once confirmed, the
+orchestrator closes the planning session, starts a fresh formal dev session,
+and injects only the approved plan-report and the human ruling into the formal
+dev prompt — never the last turn's raw text, never conversation history. That
+formal session then runs the normal entry checklist, owns the real session id,
+and ends with the normal single session-log entry. If a planning turn dirties
+the tree anyway, the banner warns you (consider `stop`).
 
 If the orchestrator dies between plan and confirmation, nothing was
 persisted — a restart simply proposes a fresh plan (stateless turn
