@@ -177,6 +177,10 @@ PLAN_REPORT_UNCHANGED_RE = re.compile(
 HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
+DISCUSSION_MARKER_RE = re.compile(r"^(?:[?？]|discuss\s*:)", re.IGNORECASE)
+DISCUSSION_HINT = (
+    "Reply with `? ...`, `？...`, or `discuss: ...` to ask the agent a "
+    "clarifying question first; a plain answer is binding.")
 # Session context budget (tokens) — port of stop-context-check.sh: a session
 # whose conversation outgrows this must wrap up (clean tree + session-log
 # entry + no lifecycle advancement from the wrap itself) and hand off to a
@@ -1105,6 +1109,7 @@ class Orchestrator:
         self.last_review_agent: str | None = None
         self.pending_ruling: str | None = None
         self._native_closeout_text: str | None = None
+        self._human_discuss_turn = None
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.log_file = LOG_DIR / f"{ts}-{task_id}.log"
@@ -1137,9 +1142,17 @@ class Orchestrator:
         with self._log_lock, self.log_file.open("a") as f:
             f.write(f"--- {agent_id} ---\n{text}\n")
 
-    def ask_human(self, banner: str, kind: str = "question") -> str:
-        # The banner must be auditable after the fact — it only ever printed
-        # to the terminal before, which made blockers untraceable.
+    @staticmethod
+    def _discussion_text(answer: str) -> str | None:
+        """Return marker-stripped discussion text, or None for a binding
+        answer. Plan-gate bypasses this parser because all of its non-confirm
+        answers already go back to its planning session."""
+        m = DISCUSSION_MARKER_RE.match(answer)
+        return answer[m.end():].strip() if m else None
+
+    def _ask_human_once(self, banner: str, kind: str) -> str:
+        """One stdin/control-dir question-answer pair."""
+        # Every round's banner must be auditable after the fact.
         with self.log_file.open("a") as f:
             f.write(f"--- HUMAN INPUT NEEDED ---\n{banner}\n--- end banner ---\n")
         if self.control_dir:
@@ -1165,10 +1178,81 @@ class Orchestrator:
                 if answer:
                     break
                 print("(empty answer ignored — type an answer, or 'stop')")
-        self.log(f"human answered: {answer!r}")
-        if answer.lower() == "stop":
-            sys.exit("stopped by human")
         return answer
+
+    def ask_human(self, banner: str, kind: str = "question") -> str:
+        """Ask until a binding answer arrives.
+
+        Callers attach a live/resumable session with
+        ``ask_session_human``. Marked answers become read-only discussion
+        turns in that session; its reply is surfaced as a new ordinary
+        question of the same kind. Without a session, markers are recognized
+        and rejected rather than accidentally becoming binding rulings.
+        """
+        discuss_turn = self._human_discuss_turn
+        question = banner
+        while True:
+            shown = question
+            if discuss_turn and kind != "plan-gate":
+                shown += f"\n\n{DISCUSSION_HINT}"
+            answer = self._ask_human_once(shown, kind)
+            self.log(f"human answered: {answer!r}")
+            if answer.lower() == "stop":
+                sys.exit("stopped by human")
+            if kind == "plan-gate":
+                return answer
+            discussion = self._discussion_text(answer)
+            if discussion is None:
+                return answer
+            if not discuss_turn:
+                question = (
+                    "Discussion not available on this escalation. Give a "
+                    "plain binding answer, or 'stop'.")
+                continue
+            result = discuss_turn(
+                "[orchestrator] DISCUSSION TURN ONLY — the human is asking "
+                "for clarification before giving the binding answer to the "
+                "current escalation. Do not modify files, the task, status, "
+                "session log, or working tree, and do not continue the "
+                "blocked/paused work. Answer the question from the existing "
+                "conversation context, then stop and wait for the binding "
+                f"answer.\n\nHuman question:\n{discussion}")
+            reply = (result.text or "").strip()
+            if not reply:
+                reply = "(no reply text captured — inspect the run log)"
+            question = f"The agent replied:\n\n{reply}"
+
+    def ask_session_human(self, session: BackendSession, banner: str,
+                          kind: str) -> str:
+        """Attach ``session`` to one escalation without changing the public
+        ask_human call shape used by integrations and mock overrides."""
+        previous = self._human_discuss_turn
+        self._human_discuss_turn = session.turn
+        try:
+            return self.ask_human(banner, kind)
+        finally:
+            self._human_discuss_turn = previous
+
+    def ask_resumable_human(self, banner: str, kind: str, sid: str,
+                            role: str) -> str:
+        """Discussion-capable ruling backed by a lazily resumed session.
+        A plain answer never opens the session."""
+        session: BackendSession | None = None
+
+        def turn(prompt: str) -> TurnResult:
+            nonlocal session
+            if session is None:
+                session = self.backend.resume_session(sid, role)
+            return session.turn(prompt)
+
+        previous = self._human_discuss_turn
+        self._human_discuss_turn = turn
+        try:
+            return self.ask_human(banner, kind)
+        finally:
+            self._human_discuss_turn = previous
+            if session is not None:
+                session.close()
 
     def _control_ask(self, banner: str, kind: str) -> str:
         """File-channel ask_human (--control-dir): write NNN-question.json,
@@ -1299,7 +1383,8 @@ class Orchestrator:
                 if session.sid != sid:
                     sid = session.sid  # codex names its id on first turn
                 if result.saw_request:
-                    answer = self.ask_human(
+                    answer = self.ask_session_human(
+                        session,
                         f"The {role} agent ({sid}) paused awaiting input/"
                         f"approval (see log tail in {self.log_file}).\n"
                         "Your reply is sent into the same conversation.",
@@ -1309,7 +1394,8 @@ class Orchestrator:
                               "await interactive input again.")
                     continue
                 if result.status == "error":
-                    answer = self.ask_human(
+                    answer = self.ask_session_human(
+                        session,
                         f"The {role} run errored mid-flight (run ran, then "
                         f"failed). sid={sid}. Inspect the repo/log, then "
                         "give an instruction to retry with, or 'stop'.",
@@ -1404,7 +1490,8 @@ class Orchestrator:
                         "restoring protocol legality requires otherwise. "
                         "Do NOT start any new work. Then end.")
                     if followups > MAX_FOLLOWUPS:
-                        self.ask_human(
+                        self.ask_session_human(
+                            session,
                             "Session is over the context budget and still "
                             "failing post-checks after wrap-up attempts:\n- "
                             + "\n- ".join(problems) +
@@ -1414,7 +1501,8 @@ class Orchestrator:
                         break
                     continue
                 if followups > MAX_FOLLOWUPS:
-                    answer = self.ask_human(
+                    answer = self.ask_session_human(
+                        session,
                         "Post-session checks still failing after "
                         f"{MAX_FOLLOWUPS} followups:\n- " +
                         "\n- ".join(problems) +
@@ -1921,17 +2009,29 @@ class Orchestrator:
         if latest:
             m = re.search(r"- Open:(.*)", latest.body, re.DOTALL)
             open_ctx = (m.group(1).strip() if m else latest.body.strip())[:2000]
-        answer = self.ask_human(
-            f"Task is BLOCKED by {role} session {blocked_sid}.\n"
-            f"blockers: {task.blockers}\n\nOpen context:\n{open_ctx}",
-            kind="blocked")
+        session: BackendSession | None = None
+
+        def discuss_turn(prompt: str) -> TurnResult:
+            nonlocal session
+            if session is None:
+                session = self.backend.resume_session(blocked_sid, role)
+            return session.turn(prompt)
+
+        previous = self._human_discuss_turn
+        self._human_discuss_turn = discuss_turn
         try:
-            session = self.backend.resume_session(blocked_sid, role)
-        except Exception as err:
-            sys.exit(f"cannot resume blocked session {blocked_sid}: {err}\n"
-                     "If it was created manually in another tool, answer the "
-                     "blocker there (or edit the task file) and restart.")
-        try:
+            try:
+                answer = self.ask_human(
+                    f"Task is BLOCKED by {role} session {blocked_sid}.\n"
+                    f"blockers: {task.blockers}\n\nOpen context:\n{open_ctx}",
+                    kind="blocked")
+                if session is None:
+                    session = self.backend.resume_session(blocked_sid, role)
+            except Exception as err:
+                sys.exit(
+                    f"cannot resume blocked session {blocked_sid}: {err}\n"
+                    "If it was created manually in another tool, answer the "
+                    "blocker there (or edit the task file) and restart.")
             self.log(f"resuming blocked {role} session {blocked_sid} "
                      "with answer")
             prompt = (f"[orchestrator] The human answered your blocker: "
@@ -1949,6 +2049,8 @@ class Orchestrator:
                 # the task is archived before post-checks can parse it.
                 if (ARCHIVE_DIR / self.task_path.name).exists():
                     self._native_closeout_text = result.text
+                    if role == "review":
+                        self.last_review_agent = blocked_sid
                     self.log("task file archived mid-session — the native "
                              "hook chain ran the close-out inside the "
                              "resumed session; skipping post-checks")
@@ -1961,7 +2063,9 @@ class Orchestrator:
                 session.turn("[orchestrator] Protocol violation(s): "
                              + "; ".join(problems) + " — fix and end.")
         finally:
-            session.close()
+            self._human_discuss_turn = previous
+            if session is not None:
+                session.close()
 
     def check_convergence(self) -> None:
         """After a review session: enforce the per-group budget, detect a
@@ -1978,13 +2082,14 @@ class Orchestrator:
         if m:
             self.log("convergence: unresolved dispute — escalating "
                      "immediately (no budget rounds spent on it)")
-            ruling = self.ask_human(
+            ruling = self.ask_resumable_human(
                 "DISPUTE UNRESOLVED: the dev session disputed a finding and "
                 "the reviewer still holds it valid.\n"
                 f"Reviewer's line: {m.group(1).strip()[:500]}\n\nLatest "
                 f"review entry:\n{latest.body.strip()[:3000]}\n\nGive a "
                 "binding ruling for the next dev session, or 'stop'.",
-                kind="dispute-unresolved")
+                kind="dispute-unresolved", sid=latest.session_id,
+                role="review")
             self.pending_ruling = ruling
             return
         if latest.verdict != "changes-requested":
@@ -1995,12 +2100,13 @@ class Orchestrator:
         self.log(f"convergence: group={group} changes-requested rounds={rounds}")
         if rounds > GROUP_BUDGET:
             findings = latest.body.strip()[:3000]
-            ruling = self.ask_human(
+            ruling = self.ask_resumable_human(
                 f"Convergence budget exhausted (group {group}, {rounds} "
                 "changes-requested rounds).\n\nLatest "
                 f"review entry:\n{findings}\n\nGive a binding ruling for the "
                 "next dev session, or 'stop'.",
-                kind="convergence-budget")
+                kind="convergence-budget", sid=latest.session_id,
+                role="review")
             self.pending_ruling = ruling
 
     # -- close-out --
@@ -2094,10 +2200,11 @@ class Orchestrator:
                     "response must include `Remaining-task audit:`.")
                 problems = self._closeout_problems(result.text)
             if problems:
-                self.ask_human("Close-out still incomplete: "
-                               + "; ".join(problems)
-                               + "\nFinish manually, then type 'done'.",
-                               kind="closeout-incomplete")
+                self.ask_session_human(
+                    session, "Close-out still incomplete: "
+                    + "; ".join(problems)
+                    + "\nFinish manually, then type 'done'.",
+                    kind="closeout-incomplete")
         finally:
             session.close()
         self.log("close-out done")
@@ -2111,11 +2218,15 @@ class Orchestrator:
         the run instead of driving a second close-out."""
         problems = self._closeout_problems(self._native_closeout_text)
         if problems:
-            self.ask_human("Close-out (performed in-session by the native "
-                           "hook chain) is incomplete:\n- "
-                           + "\n- ".join(problems)
-                           + "\nFinish manually, then type 'done'.",
-                           kind="closeout-incomplete")
+            banner = ("Close-out (performed in-session by the native hook "
+                      "chain) is incomplete:\n- " + "\n- ".join(problems)
+                      + "\nFinish manually, then type 'done'.")
+            if self.last_review_agent:
+                self.ask_resumable_human(
+                    banner, kind="closeout-incomplete",
+                    sid=self.last_review_agent, role="review")
+            else:
+                self.ask_human(banner, kind="closeout-incomplete")
         self.log("close-out done (performed in-session by the native hook "
                  "chain; orchestrator verified archive/index/tree/remaining "
                  "tasks)")
@@ -2203,11 +2314,17 @@ class Orchestrator:
                     # Everything reviewed, still final_review, and the last
                     # review didn't conclude with a verdict-driven handback:
                     # a dumb scheduler doesn't loop on this.
-                    ruling = self.ask_human(
+                    banner = (
                         "Task sits at final_review with no unreviewed dev "
                         "sessions (last review didn't conclude). Give a "
-                        "ruling for a fresh review session, or 'stop'.",
-                        kind="final-review-stall")
+                        "ruling for a fresh review session, or 'stop'.")
+                    if latest_rev:
+                        ruling = self.ask_resumable_human(
+                            banner, kind="final-review-stall",
+                            sid=latest_rev.session_id, role="review")
+                    else:
+                        ruling = self.ask_human(
+                            banner, kind="final-review-stall")
                     self.pending_ruling = ruling
                     self.last_review_agent = self.run_session(
                         "review",

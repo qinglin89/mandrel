@@ -237,13 +237,30 @@ Every escalation looks the same on the terminal:
 HUMAN INPUT NEEDED
 ========================================================================
 <banner explaining the situation>
+(discussion-capable escalations also show the opt-in reply hint)
 (type your answer; 'stop' aborts the orchestrator)
 answer>
 ```
 
 `stop` always aborts the whole orchestrator cleanly (tree is clean between
-sessions, so a later restart just re-derives the turn). Anything else is
-used as described below.
+sessions, so a later restart just re-derives the turn). A **plain answer is
+binding exactly as before**. When the escalation has a live or resumable
+agent session, an answer beginning with `?`, `？`, or `discuss:`
+(case-insensitive) is instead a discussion turn: the marker is stripped and
+the rest is sent into that escalation's own session under a strict read-only
+instruction. The agent's reply is surfaced as a new `HUMAN INPUT NEEDED`
+question, and the loop repeats until you give a plain binding answer. The
+banner advertises this option only when discussion is available.
+
+Every discussion round is an ordinary question/answer pair. Under
+`--control-dir`, it therefore gets a new sequence number and retains the
+original escalation `kind`; no hub-specific protocol or discussion kind is
+needed. If a no-session escalation receives a marker anyway, the orchestrator
+re-asks with `Discussion not available on this escalation` instead of
+recording the marker text as a ruling. `plan-gate` is deliberately unchanged:
+its existing confirmation loop already sends every non-confirm answer back to
+the planning session, so marker-looking text there remains ordinary plan
+feedback.
 
 With `--control-dir DIR` the same escalations flow through files instead of
 stdin (for an external supervisor such as orch-hub; no tty needed):
@@ -275,12 +292,18 @@ asks you. Your answer is sent into the same conversation with an instruction
 to continue headless. This is a backstop — reaching it at all means the
 agent ignored the automation rules.
 
+Marked discussion turns ask that same paused conversation for clarification
+without letting it continue work.
+
 ### 5.2 Run errored mid-flight
 
 The run started, then failed (SDK/infra error). You're asked for an
 instruction; it is sent into the same conversation as a retry prompt.
 Startup failures (agent never ran) are different: those exit the
 orchestrator immediately with the error.
+
+The errored conversation remains available for marked clarification rounds
+before the retry instruction.
 
 ### 5.3 Post-checks still failing after 3 followups
 
@@ -289,6 +312,8 @@ after 3 fix round-trips. You're shown the violation list; your answer is
 forwarded verbatim as `[orchestrator] Human instruction: …` and the
 followup counter resets. Useful answers: a concrete fix instruction, or
 `stop` and fix by hand.
+
+Marked turns discuss the violations with the same live session first.
 
 ### 5.4 Blocked task (`status: blocked`)
 
@@ -303,11 +328,18 @@ the §3 table (e.g. a reviewer escalating its round budget), so a blocked
 reviewer resumes as review and is post-checked against the review
 transitions for the status it entered with.
 
-**Caveat**: this only works when the blocked session was an SDK/cursor-agent
-conversation. If a *manual Claude Code / Codex* session left the task
-blocked, `claimed-by` holds a foreign session id and `Agent.resume` crashes
-the orchestrator (uncaught). Unblock manually first (answer the blocker in
-that tool, or edit the task file), then start the orchestrator.
+A marked answer resumes the original conversation for a read-only
+clarification turn only. Its reply becomes a new `blocked` question; the task
+file, status, session log, and working tree must remain untouched. A later
+plain answer is then sent through the normal unblock prompt above. On the
+plain-answer common path, the session is still resumed only after the answer,
+as before.
+
+**Caveat**: this works when the configured backend can resume the id in
+`claimed-by` (including cc-codex sessions recorded in `sessions.json`). If a
+*manual Claude Code / Codex* session left a foreign id, resume may fail; the
+orchestrator exits with guidance. Unblock manually first (answer the blocker
+in that tool, or edit the task file), then restart the orchestrator.
 
 ### 5.5 Convergence budget exhausted / dispute
 
@@ -327,6 +359,11 @@ disagreement is escalated on round 1, not looped until the budget runs
 out. Same banner mechanics (`DISPUTE UNRESOLVED`), same binding-ruling
 injection.
 
+Marked clarification turns resume the reviewer session that produced the
+budget exhaustion or unresolved-dispute entry. The eventual plain answer —
+not the discussion text — is the binding ruling injected into the next dev
+session.
+
 **Caveat**: the pending ruling lives in memory only. If you `stop` here and
 restart later, the next dev session dispatches WITHOUT re-asking; the
 budget re-escalates only after the next failed review. If that matters,
@@ -341,6 +378,10 @@ remediation) — i.e. the last review died without a verdict-driven handback.
 A dumb scheduler doesn't loop on this: you're asked for a ruling, which is
 appended to a fresh review session's prompt.
 
+When the latest review entry identifies a resumable reviewer session, marked
+answers may clarify with that session first. If no such session exists, a
+marker gets the standard discussion-not-available re-ask.
+
 ### 5.7 Close-out incomplete
 
 After `completed`, the review agent is resumed to run `/ai-sync-v2`
@@ -349,7 +390,7 @@ After `completed`, the review agent is resumed to run `/ai-sync-v2`
 lists an archived task id in `blockers`, no `blocked` task has empty blockers,
 the close-out response includes `Remaining-task audit: ...`, and the tree is
 clean. Up to 3 followups; if still incomplete you're asked to finish manually
-and press enter.
+and type `done`.
 
 cc-codex usually never reaches this path: a final-gate pass trips the
 review session's own Stop hook, which forces `/ai-sync-v2` INSIDE that
@@ -362,6 +403,11 @@ recognition covers a RESUMED blocked reviewer that
 concludes pass → completed (handle_blocked; verified live 2026-07-04 —
 previously a crash). §5.7 remains the cursor-backend path and the
 backstop.
+
+The normal close-out path keeps its review session live while asking, and the
+native-close-out verifier resumes the responsible reviewer when its id is
+known, so both support marked clarification rounds. A verifier with no known
+session uses the standard no-session re-ask.
 
 ### 5.8 Plan confirmation (`--plan-gate`)
 
@@ -473,14 +519,15 @@ entries in the file, including pre-orchestrator ones.
 ## 8. Testing / maintenance
 
 - `test_loop_mock.py` — offline mock-loop tests (no network, temp repo),
-  27 scenarios: loop mechanics (review dispatch, followups, budgets,
+  29 scenarios: loop mechanics (review dispatch, followups, budgets,
   blocked resume — dev and review roles, foreign-sid guidance exit,
   close-out plain / native / native-incomplete / native-on-blocked-resume,
   final_review stall), prompt instantiation, context-budget wrap-ups (both
   session kinds), event-stream logging, CLI argv shapes + sessions.json
   resume routing, and the `--control-dir` file channel (question/answer
-  files, malformed/stale handling, stop.flag). Run after ANY orchestrator
-  change:
+  files, malformed/stale handling, stop.flag, same-kind escalation
+  discussion rounds, no-session marker rejection, and unchanged plan-gate
+  feedback semantics). Run after ANY orchestrator change:
   `.venv/bin/python test_loop_mock.py` (needs to run outside a sandbox; it
   shells out to git).
 - `smoke_hooks.py` — one-off empirical checks of hook behavior under the

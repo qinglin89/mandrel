@@ -11,7 +11,8 @@ Scenarios (one function each, run in order by main()): loop mechanics
 native-in-session), prompt instantiation (checklists, wrap-up kinds,
 remediation lock), event-stream logging, CLI argv/routing shapes, the
 escalation paths (§5.4/§5.6/§5.7 of the README), and the --control-dir
-file channel (question/answer files, malformed/stale handling, stop.flag).
+file channel (question/answer files, malformed/stale handling, stop.flag,
+and same-kind discussion rounds).
 
 Run: .venv/bin/python test_loop_mock.py
 """
@@ -2055,6 +2056,136 @@ claimed-by:
     print("scenario 28 (session startup error is written to run log): PASS")
 
 
+def scenario_29_escalation_discussion(repo: Path) -> None:
+    """Marked answers iterate through the escalation's own session using
+    ordinary same-kind control-dir pairs. A blocked discussion is read-only;
+    the later plain answer follows the existing unblock prompt. No-session
+    markers are rejected, while plan-gate keeps its own feedback semantics."""
+    tid = "2026-01-29-escalation-discussion"
+    p = repo / ".ai-tasks" / f"{tid}.md"
+    p.write_text(f"""---
+id: {tid}
+status: blocked
+session-est: 1/1
+blockers: [external:UTC day or rolling 24h?]
+claimed-by: dev-discuss-0001@2026-01-29T00:00:00Z
+---
+
+# Discussion-capable blocked escalation
+
+## Session log
+
+### 2026-01-29 / dev-discuss-0001 / (in_progress → blocked)
+- Done: boundary logic prepared
+- Next: apply the binding reset ruling
+- Open: UTC day or rolling 24h?
+""")
+    before = p.read_text()
+    tree_before = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo, text=True,
+        capture_output=True, check=True).stdout
+    ctl = Path(tempfile.mkdtemp(prefix="orch-discuss-"))
+    o.CONTROL_POLL_SECONDS = 0.01
+
+    def wait_question(seq: int) -> dict:
+        q = ctl / f"{seq:03d}-question.json"
+        for _ in range(2000):
+            if q.exists():
+                return json.loads(q.read_text())
+            time.sleep(0.005)
+        raise AssertionError(f"question {seq:03d} never appeared")
+
+    def answer(seq: int, value: str) -> None:
+        tmp = ctl / f"{seq:03d}-answer.json.tmp"
+        tmp.write_text(json.dumps({"answer": value}))
+        o.os.replace(tmp, ctl / f"{seq:03d}-answer.json")
+
+    def blocked_answers() -> None:
+        q1 = wait_question(1)
+        assert q1["kind"] == "blocked"
+        assert o.DISCUSSION_HINT in q1["banner"]
+        answer(1, "？ Does UTC day include leap seconds?")
+        q2 = wait_question(2)
+        assert q2["kind"] == "blocked", "discussion reuses the same kind"
+        assert "The agent replied:" in q2["banner"]
+        assert "civil UTC calendar boundary" in q2["banner"]
+        assert o.DISCUSSION_HINT in q2["banner"]
+        assert p.read_text() == before, \
+            "discussion must not modify task/status/session log"
+        assert subprocess.run(
+            ["git", "status", "--porcelain"], cwd=repo, text=True,
+            capture_output=True, check=True).stdout == tree_before, \
+            "discussion must not modify the working tree"
+        answer(2, "UTC day")
+
+    def clarify(agent: FakeAgent, prompt: str) -> None:
+        assert agent.agent_id == "dev-discuss-0001"
+        assert "DISCUSSION TURN ONLY" in prompt
+        assert "Human question:\nDoes UTC day include leap seconds?" in prompt
+        assert "？" not in prompt, "discussion marker must be stripped"
+        assert p.read_text() == before
+        assistant_text("Use the civil UTC calendar boundary; leap seconds "
+                       "do not create a separate reset rule.")
+
+    def bind(agent: FakeAgent, prompt: str) -> None:
+        assert agent.agent_id == "dev-discuss-0001"
+        assert "The human answered your blocker: UTC day" in prompt
+        assert "DISCUSSION TURN ONLY" not in prompt
+        t = o.re.sub(r"^status:.*$", "status: in_progress", p.read_text(),
+                     flags=o.re.MULTILINE)
+        t = o.re.sub(r"^blockers:.*$", "blockers: []", t,
+                     flags=o.re.MULTILINE)
+        p.write_text(t)
+        assistant_text("Binding ruling applied.")
+
+    FakeAgent.script = [clarify, bind]
+    orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
+                          api_key=None, once=True, max_sessions=10,
+                          control_dir=ctl)
+    orch.log_file = Path(tempfile.mkstemp(suffix=".log")[1])
+    t = threading.Thread(target=blocked_answers, daemon=True)
+    t.start()
+    orch.handle_blocked()
+    t.join(timeout=10)
+    assert not t.is_alive()
+    assert o.parse_task(p).status == "in_progress"
+    assert not FakeAgent.script
+
+    # The parser accepts all decided marker forms and strips only the marker.
+    assert orch._discussion_text("? why") == "why"
+    assert orch._discussion_text("？为什么") == "为什么"
+    assert orch._discussion_text("DiScUsS: why") == "why"
+    assert orch._discussion_text("plain") is None
+
+    def no_session_answers() -> None:
+        q3 = wait_question(3)
+        assert q3["kind"] == "closeout-incomplete"
+        assert o.DISCUSSION_HINT not in q3["banner"]
+        answer(3, "discuss: can the agent explain?")
+        q4 = wait_question(4)
+        assert q4["kind"] == q3["kind"]
+        assert "Discussion not available on this escalation" in q4["banner"]
+        answer(4, "done")
+
+    t2 = threading.Thread(target=no_session_answers, daemon=True)
+    t2.start()
+    assert orch.ask_human("Manual-only close-out",
+                          kind="closeout-incomplete") == "done"
+    t2.join(timeout=10)
+    assert not t2.is_alive()
+
+    # Plan-gate's existing rule remains: every non-confirm answer, including
+    # marker-looking text, is returned as feedback to its planning loop.
+    t3 = control_answer(ctl, 5, {"answer": "? revise the verification plan"})
+    assert orch.ask_human("Plan report", kind="plan-gate") == \
+        "? revise the verification plan"
+    t3.join(timeout=10)
+    assert not (ctl / "006-question.json").exists()
+    shutil.rmtree(ctl)
+    print("scenario 29 (marked escalation discussion + no-session rejection "
+          "+ plan-gate unchanged): PASS")
+
+
 def main() -> None:
     repo = make_repo()
     try:
@@ -2087,6 +2218,7 @@ def main() -> None:
         scenario_26_control_dir_stop_answer_and_flag(repo)
         scenario_27_control_dir_graceful_loop_stop(repo)
         scenario_28_session_start_error_logged(repo)
+        scenario_29_escalation_discussion(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):
