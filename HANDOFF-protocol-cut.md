@@ -11,6 +11,32 @@
 > Read `canonical/orchestrator/README.md` first if you don't know the
 > system.
 
+## Execution status (cut plan approved by user 2026-07-16)
+
+The implementing session evaluated this handoff against the suite and the user
+approved its execution plan (recorded in the landings below). Phase ladder — each
+phase is one independent commit landing; the suite stays green at every landing:
+
+| Phase | Content | Status |
+|---|---|---|
+| P0 | `CHARTER.md` (boundary law, ratified) | **landed 2026-07-16** |
+| P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | pending |
+| P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | pending |
+| P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | pending |
+| P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | pending |
+| P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
+
+Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
+the doc cut (byte-identity proves the loader with zero assertion churn); templates +
+postcheck contract live under `canonical/orchestrator/prompts/` deploying with the
+existing orchestrator bucket; target docs deploy under a single `.ai-protocol/`
+umbrella dir (one gitignore line, no root collisions); `{{var}}` template syntax
+(deploy.py `{{REPO_ROOT}}` precedent); verb→contract mapping stays in target
+`CLAUDE.md` (loader = dispatch surface, litmus 1 applies to role-doc internals);
+plan is a ROLE with the plan-report as its return-value output contract (adopted);
+`ai-coding-tasks-v2-tmp.md` is deleted in P3a (it deploys today — no `-tmp` filter
+in deploy.py, the "excluded" was convention only).
+
 ## Goal
 
 Separate the **protocol** (what one session does) from the **workflow**
