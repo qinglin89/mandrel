@@ -228,6 +228,77 @@ Constraints to preserve:
 
 Sizing: fits Phase 3, or as its own pre-phase — next session judges.
 
+### Concrete canonical layout (discussion continuation, 2026-07-16 — proposal)
+
+Proposed literal directory target (REFERENCE — evaluate before adopting):
+
+```
+canonical/
+  protocols/            # role contracts (session-facing, anonymous work
+                        # specs, standalone-readable)
+    dev.md (advancement/remediation as mode sections)
+    review.md   plan.md   intake.md
+  workflow/             # caller-layer SPEC (orchestrator = machine
+                        # executor, human = manual executor)
+    runbook.md          # dispatch narrative + budgets + escalation paths
+                        # (human-executable)
+    rolemapping.md      # condition(taskfile[durable] + run-state
+                        # [ephemeral]) -> (contract, prompt composition,
+                        # session mode)
+    prompts/entry/      # *-base, *-add, conduct-annex, plan-report
+                        # injection slot, checks-preview variable slot
+    prompts/midflight/  # wrap-up, violation-fix, resume/answer prompts,
+                        # discussion-turn, close-out, escalation banners
+    postcheck-contract.md  # requirement lines + check-IDs
+    skills/             # boundary-skill specs: session-end bookkeeping,
+                        # task-completion closeout
+  meta/                 # taskfile schema (frontmatter, entry shapes,
+                        # index/archive semantics); .ai/ schema +
+                        # admission + read contract
+  claude/ codex/ cursor/  # tool adapters (hooks wiring the workflow
+                          # trigger points)
+  orchestrator/         # machine-executor code + mock suite (consumes
+                        # workflow/prompts and postcheck-contract)
+```
+
+Notes that make this layout sound (the four corrections from discussion):
+
+- **meta stays explicit** — taskfile/.ai/ schemas have MULTIPLE consumers
+  (boundary skill writes entries, rolemapping parses conditions,
+  post-checks verify shapes); without a single source the entry shape
+  smears back into skills and contracts, recreating the disease.
+- **Prompts are two families** — `entry/` AND `midflight/` (the ruled
+  externalization inventory covers both). Entry composition formalized:
+  `base + mode-add + injected fragments`, the fragments being the
+  plan-report injection (dev-adv after a plan session), the automation
+  conduct annex, and `checks-preview` — which stays a GENERATED variable,
+  never file prose.
+- **Post-check contract externalizes via ID binding**: the contract file
+  holds requirement text + check-ID; code binds checks by ID; startup
+  validates the mapping 1:1 in BOTH directions (mismatch = startup error,
+  like a missing template). The contract file then doubles as the
+  human-as-orchestrator on-return checklist — human and machine read the
+  same source.
+- **rolemapping marks input durability**: the ONLY cross-run durable
+  dispatch input is the taskfile (this IS the stateless-attach
+  invariant); run-local inputs (sessions.json sid→tool routing,
+  pending_ruling, followup/group/max-sessions counters, control-dir
+  signals) are listed but marked ephemeral. Session modes are FOUR, not
+  three:
+
+  | mode | today's mechanics |
+  |---|---|
+  | new (first-entry) | attach-table dispatch, fresh session |
+  | continue-turn (iteration) | same open conversation: followup fixes, answered-continue, discussion rounds, plan feedback |
+  | resume-by-sid | blocked-resume: reopen the SAME persisted conversation |
+  | fresh-continuation (wrap-up) | new session, same role: remediation continuation marker only (advancement never continues — review comes first) |
+
+This proposal answers the "literal layout vs logical layering" open
+question in the affirmative; two deploy touchpoints must be confirmed at
+audit time: the `aii-2` manifest/target-path mapping (today
+`ai-coding-*.md` deploys flat at the target repo root) and the CLAUDE.md
+import chain pointing at the new paths.
+
 ## Phase plan (each phase lands independently)
 
 - **Phase 0 — charter**: write the cut rules above as a short normative
@@ -302,8 +373,9 @@ user; run `aii-2 status` before assuming other targets are current.
   bundle), variable syntax, and how the mock suite consumes the same
   files.
 - Does protocols/workflow/meta become a literal doc/directory layout, or a
-  logical layering inside fewer files? (Deploy surface and CLAUDE.md
-  import chain are affected — decide with `aii-2` mechanics in view.)
+  logical layering inside fewer files? (2026-07-16 proposal: literal —
+  see "Concrete canonical layout". Deploy surface and CLAUDE.md import
+  chain are affected — confirm with `aii-2` mechanics in view.)
 - Confirm orch-hub's task-file/log parsers are unaffected (data shapes
   unchanged → should be a no-op).
 
