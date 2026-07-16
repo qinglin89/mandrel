@@ -430,7 +430,7 @@ def scenario_6_plan_gate(repo: Path) -> None:
     answers = iter(["does S6 depend on riskpolicy/?",
                     "skip S6 and avoid riskpolicy/",
                     "one more consideration?",
-                    "confirm: execute it"])
+                    "confirm"])
     asked: list[str] = []
 
     def fake_ask(banner: str, kind: str = "") -> str:
@@ -519,7 +519,7 @@ def scenario_6_plan_gate(repo: Path) -> None:
         assert "Considered: nothing changes." not in prompt, \
             "a kept round's raw text must never be delivered"
         assert "PLAN-REPORT" not in prompt, "sentinel must not leak"
-        assert "confirm: execute it" in prompt, \
+        assert "Human ruling:\nconfirm" in prompt, \
             "human ruling must be injected into the formal dev session"
         assert "Your session id is fake-agent-007" in prompt, \
             "entry checklist must use the formal dev sid"
@@ -532,6 +532,15 @@ def scenario_6_plan_gate(repo: Path) -> None:
     FakeAgent.script = [propose_plan, answer_unchanged, revise_plan,
                         malformed, execute]
     orch = new_orch(plan_gate=True)
+    assert orch._plan_gate_confirmed("confirm")
+    assert orch._plan_gate_confirmed("  APPROVE  ")
+    assert orch._plan_gate_confirmed("确认")
+    assert not orch._plan_gate_confirmed("confirm: execute it"), \
+        "approval words with trailing text must remain plan feedback"
+    assert not orch._plan_gate_confirmed("ok, one more concern"), \
+        "feedback after an approval-looking prefix must not be discarded"
+    assert not orch._plan_gate_confirmed("confirm!"), \
+        "confirmation requires an exact standalone word"
     orch.ask_human = fake_ask
     orch.loop()
     task = o.parse_task(p)

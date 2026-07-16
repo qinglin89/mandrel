@@ -449,9 +449,11 @@ plan-report rev 1. Each further round has exactly three possible outcomes:
 
 Banners are capped at 12,000 characters; every round's full reply — and, on
 confirmation, the delivered report — goes to the orchestrator log in full.
-Reply with `confirm` (or an explicit approval such as `approve`, `proceed`,
-`确认`) to authorize implementation of the CURRENT plan-report; any other
-answer is treated as feedback and sent back into the SAME planning session.
+Reply with `confirm` to authorize implementation of the CURRENT plan-report.
+Confirmation requires a standalone recognized approval word (matched after
+trimming whitespace and ignoring case); an approval word with any additional
+text is not confirmation. Any other answer is treated as feedback and sent
+back into the SAME planning session.
 This repeats until you confirm or type `stop`. Once confirmed, the
 orchestrator closes the planning session, starts a fresh formal dev session,
 and injects only the approved plan-report and the human ruling into the formal

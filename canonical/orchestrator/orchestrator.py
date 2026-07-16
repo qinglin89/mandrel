@@ -1533,9 +1533,7 @@ class Orchestrator:
 
     @staticmethod
     def _plan_gate_confirmed(answer: str) -> bool:
-        token = re.split(r"[\s,;:，。；：]+", answer.strip().lower(),
-                         maxsplit=1)[0]
-        return token in {
+        return answer.strip().lower() in {
             "confirm", "confirmed", "approve", "approved", "proceed",
             "yes", "y", "ok", "okay",
             "确认", "同意", "批准", "通过", "继续", "可以", "开始", "开工",
