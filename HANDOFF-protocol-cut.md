@@ -24,6 +24,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | **landed 2026-07-16** — 67 templates (`entry/` 26, `midflight/` 41) + `postcheck-contract.md` (9 check-ids); byte-identity PROVEN (AST-extracted templates; old-vs-new capture: 37 suite prompts + 4 banners + 41 probe texts all identical); zero existing-assertion edits; new scenario 30 (startup refusal); mock 30/30 + pytest 25/25 green |
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
+| P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **approved 2026-07-16** (user ruling: Plan A — wrapper-inject plan.md, mirror the review pattern) — entry brief below; runs BEFORE P4; objective-gated ⇒ delegation-eligible |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -224,8 +225,60 @@ consequences live only in their owners. Surfaces trimmed:
   review.md (wrapper-injected) plan.md is NOT in the assembled session
   context, so a trim needs an injection-mechanism decision first (mirror the
   review-rule wrapper?), and (c) scenario 6 guards the freshly-validated
-  plan-gate flow. Recorded under open questions; needs a user ruling before
-  or after P4.
+  plan-gate flow. (RULED 2026-07-16: Plan A, wrapper injection — executed as
+  P3c, entry brief below.)
+
+### P3c entry brief (approved 2026-07-16 — plan-contract injection + trim)
+
+User ruling: Plan A. The plan contract gets INJECTED into planning prompts the
+same way the review contract is injected into review prompts; the three plan
+templates then trim to caller-side instantiation + pointer. Resolves the
+ORC-07 deferral recorded in the P3b landing facts.
+
+- **Mechanism**: `PLAN_RULE = REPO / ".ai-protocol" / "protocols" / "plan.md"`
+  (sibling of `REVIEW_RULE`); new template `entry/plan-rule-wrapper.md`
+  mirroring `entry/review-rule-wrapper.md` exactly in shape (BEGIN/END banner
+  naming `.ai-protocol/protocols/plan.md`, `{{plan_rule}}` placeholder,
+  manifest row); rendered into the plan-gate composition AHEAD of the gate
+  instruction. `make_repo()` already copies canonical protocol docs into the
+  mock repo; `patch_module()` must override `PLAN_RULE` like `REVIEW_RULE`.
+  No deploy.py change (templates ship with the orchestrator bucket; plan.md
+  ships with protocols).
+- **Trims**:
+  - `entry/plan-gate.md` → caller-side only: the PLANNING-ONLY gate
+    declaration, the read-only-shadow framing (naming the upcoming dev
+    session is caller vocabulary), "do not execute the normal entry
+    checklist yet", a pointer at the injected contract, and the rev-1
+    capture note ("everything from `## Goal / Acceptance` … captured as
+    plan-report rev 1 … the only planning output delivered once the human
+    confirms"). Bounds detail, command list, heading list, `None identified`
+    arrive via the injected plan.md.
+  - `midflight/plan-feedback.md` → feedback value + still-PLANNING-ONLY +
+    the two revision shapes BY NAME (revise = complete report from
+    `## Goal / Acceptance`; unchanged = exact `PLAN-REPORT: unchanged`
+    line) + "only the report is delivered onward" + stop-and-wait. Shape
+    detail lives in the contract.
+  - `entry/approved-plan-gate.md` → slim the caller framing (the
+    guidance-and-constraints sentence is duplicated today); keep
+    "APPROVED PLAN GATE", the `Human ruling:` / `Approved plan-report:`
+    labels, and the checklist/preReEst-applies note (caller-side).
+- **Contract addition**: the two parser-critical reply-shape caveats move
+  INTO plan.md §Revision protocol — "do not start a line with
+  `## Goal / Acceptance` except to deliver the full report" and "never
+  include the `PLAN-REPORT: unchanged` line in a revision". They are output-
+  contract properties (charter rule 7), not per-session values.
+- **Guards**: do NOT regress the plan-gate flow semantics (scenario 6 is the
+  guard): rev capture from `## Goal / Acceptance`, unchanged sentinel,
+  warn-and-keep, confirm delivering ONLY the current report + ruling (no
+  conversation history). Scenario 6 assertions churn in lockstep where they
+  anchored on restated text (e.g. "Do NOT run tests/builds" → plan.md's own
+  phrasing); assertions on contract substrings keep passing via the injected
+  text. Log-line formats and `sessions.json` frozen (orch-hub).
+- **Docs**: `workflow/rolemapping.md` plan-gate composition row gains the
+  injected plan contract; prompts/README's layout bullet already covers doc
+  wrappers.
+- **Gate**: mock suite + pytest + boundary-lint green; single commit; flip
+  the P3c status row and append P3c landing facts.
 
 ## Goal
 
@@ -598,11 +651,9 @@ user; run `aii-2 status` before assuming other targets are current.
   legacy `ai-coding-*.md` files at each target, then drop the transitional
   `/ai-coding*.md` gitignore line, the conduct-annex/init "(legacy)"
   mentions, and the ai-init exclusion — one small landing.
-- Plan-prompt trim (ORC-07 second half, deferred at P3b — see landing facts):
-  `plan-gate`/`plan-feedback`/`approved-plan-gate` restate `protocols/plan.md`;
-  decide the injection mechanism (wrapper-inject plan.md like review, or keep
-  prompt-carried) and trim accordingly; scenario 6 churns. Needs a user
-  ruling.
+- ~~Plan-prompt trim (ORC-07 second half, deferred at P3b)~~ — RULED
+  2026-07-16 (Plan A: wrapper-inject plan.md like review, then trim) and
+  scheduled as P3c before P4; see the P3c entry brief.
 
 ## Key invariants to preserve
 
