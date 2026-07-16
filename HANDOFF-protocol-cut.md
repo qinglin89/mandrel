@@ -25,7 +25,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
-| P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
+| P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
 the doc cut (byte-identity proves the loader with zero assertion churn); templates +
@@ -314,6 +314,45 @@ Executed as briefed (Plan A — wrapper injection mirroring the review rule):
   with no history leakage, `Human ruling:\nconfirm` rendered shape) stand
   unchanged.
 - **Gates**: mock 30/30, pytest 25/25, boundary-lint OK.
+
+### P4 sandbox smoke (2026-07-17 — deterministic half, isolated copy)
+
+User-ruled: verify everything automatable in an ISOLATED copy, never touching
+the real targets. Sandbox: local clone of `quantx-bak-0713-before-
+riskcontrolnotify` + its untracked `.ai-tasks/` + legacy `ai-coding-*.md`,
+deployed with a THROWAWAY registry (`AI_NATIVE_DEPLOYMENT_REGISTRY` override —
+real registry/targets/globals untouched). Re-runnable driver:
+`<scratchpad>/p4-sandbox/p4_smoke.py`. 29/29 checks GREEN:
+
+- **Deploy/layout**: `aii-2 deploy` + `status` in-sync; 12 `.ai-protocol/`
+  docs; gitignore carries `/.ai-protocol/` + transitional `/ai-coding*.md`;
+  CLAUDE.md is the loader; orchestrator bucket ships `prompts/` + postcheck
+  contract; deploy diff confined to deploy-owned tracked paths.
+- **Hook I/O on the deployed copies**: cursor+codex session-start inject the
+  labeled context (new eager set; codex self-gate passes); stop-hook case
+  matrix (3 tools × case1 / case1-dirty / case2a / case2b) emits the trimmed
+  texts — closeout-skill pointer + `Remaining-task audit:`, session-end
+  wrap-up pointer, no choreography tails — and allows a completed handoff.
+- **Deployed-layout orchestrator (unpatched paths — what the mock patches
+  away)**: `REPO` resolves to target root; `prompts_error()` None on the
+  deployed template set; `REVIEW_RULE`/`PLAN_RULE` resolve under
+  `.ai-protocol/protocols/`; real dev/review/plan-gate prompts compose on a
+  real task (protocol block via the deployed session-start hook; review +
+  plan contracts wrapper-injected).
+- **orch-hub freeze proven end-to-end**: zero `self.log(` emit calls changed
+  `4be85f2..HEAD`.
+
+**Operational note for the wave**: on targets that TRACK deploy-owned files
+(this bak tracks the lockfile, `.gitignore`, `.claude/` hooks) the deploy
+legitimately modifies them — COMMIT the deploy diff at each target before
+running any session, or the stop hooks will block on the dirty tree.
+
+**Remaining for P4 (genuinely non-deterministic / user-run)**: (1) optional
+live drill — orchestrator `--once` + one plan-gate round with a real
+claude/codex CLI session against the sandbox (burns real tokens; sandbox is
+ready for it); (2) the one-wave deploys to hkchain / orch-hub / quantx +
+committing each deploy diff (user-run per repo convention; globals already
+layout-neutral since P3a).
 
 ## Goal
 
