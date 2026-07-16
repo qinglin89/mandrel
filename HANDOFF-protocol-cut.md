@@ -20,7 +20,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | Phase | Content | Status |
 |---|---|---|
 | P0 | `CHARTER.md` (boundary law, ratified) | **landed 2026-07-16** |
-| P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | pending |
+| P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | **landed 2026-07-16** — 38 findings (3A/14B/1C/9D/11R), all dispositions name their destination; §-ref fates classified; open questions §10 resolved |
 | P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | pending |
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | pending |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | pending |
@@ -36,6 +36,16 @@ umbrella dir (one gitignore line, no root collisions); `{{var}}` template syntax
 plan is a ROLE with the plan-report as its return-value output contract (adopted);
 `ai-coding-tasks-v2-tmp.md` is deleted in P3a (it deploys today — no `-tmp` filter
 in deploy.py, the "excluded" was convention only).
+
+Semantic guards for P3a (from the audit — do not drop silently): (1) §10 End step 5
+runs remaining-task reconciliation at EVERY session end — the session-end boundary
+skill keeps it (closeout additionally repeats it); the handoff's earlier
+session-end list was abbreviated, not a ruled change. (2) The three stop hooks'
+wrap-up texts have drifted (only cursor carries the remediation-marker
+instruction, `AUDIT-protocol-cut.md` HK-01) — single-sourcing from the
+session-end skill resolves it; claude/codex behavior gains the marker line, which
+matches the protocol docs. (3) Log-line formats and all task-file data shapes are
+frozen (orch-hub + mid-flight tasks).
 
 ## Goal
 
