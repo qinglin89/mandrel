@@ -71,6 +71,7 @@ def make_repo() -> Path:
     for rel in (
         "protocols/conduct.md",
         "protocols/dev.md",
+        "protocols/plan.md",
         "protocols/review.md",
         "meta/taskfile.md",
         "meta/memory.md",
@@ -179,6 +180,7 @@ def patch_module(repo: Path) -> None:
     o.INDEX_FILE = repo / ".ai-tasks" / "index.md"
     o.SESSION_START_SH = repo / ".cursor" / "hooks" / "session-start.sh"
     o.REVIEW_RULE = repo / ".ai-protocol" / "protocols" / "review.md"
+    o.PLAN_RULE = repo / ".ai-protocol" / "protocols" / "plan.md"
     o.SESSION_MAP = repo / ".ai-tasks" / "sessions.json"
     o.Agent = FakeAgent
 
@@ -467,12 +469,15 @@ def scenario_6_plan_gate(repo: Path) -> None:
     # report (rev 1 = extraction from the heading on), touches NOTHING.
     def propose_plan(agent: FakeAgent, prompt: str) -> None:
         assert "PLANNING ONLY" in prompt, "gate instruction missing"
+        assert "===== BEGIN .ai-protocol/protocols/plan.md =====" in prompt, \
+            "plan rule missing"
         assert "read-only shadow of the next formal dev session" in prompt
         assert "upcoming dev session" in prompt
         assert "normal entry checklist" in prompt
+        # bounds/shape substrings arrive via the injected plan.md text
         assert "bounded read-only discovery" in prompt
-        assert "`rg`, `sed`, `ls`" in prompt
-        assert "Do NOT run tests/builds" in prompt
+        assert "`sed`, `ls`, `git show`" in prompt
+        assert "run tests/builds, start services" in prompt
         assert "`## Assumptions / Unknowns`" in prompt
         assert "`## Risks / Likely Failure Points`" in prompt
         assert "`None identified`" in prompt
@@ -498,8 +503,8 @@ def scenario_6_plan_gate(repo: Path) -> None:
         assert "PLAN FEEDBACK" in prompt and "skip S6" in prompt, \
             "feedback must be sent back before execution"
         assert "PLANNING ONLY" in prompt, "revision must still be planning"
-        assert "bounded read-only discovery" in prompt
-        assert "run tests" in prompt
+        assert "read-only bounds still apply" in prompt
+        assert "REPLACES the current plan-report" in prompt
         assert agent.agent_id == "fake-agent-006"
         reply("Change note: dropped S6 and riskpolicy/ per feedback.\n\n"
               + report_v2)

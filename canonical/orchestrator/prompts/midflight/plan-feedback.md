@@ -1,5 +1,5 @@
 [orchestrator] PLAN FEEDBACK from the human: {{answer}}
-The plan-report is NOT approved yet. This turn is still PLANNING ONLY: do NOT modify files, claim the task, change status/session-est, append a session-log entry, run tests, start services, install dependencies, or run long diagnostics. You may do only bounded read-only discovery if needed. Address the feedback, then reply in exactly ONE of these two shapes:
-1. The plan changes (including folding in any new fact, constraint, or decision this discussion produced): reply with the COMPLETE updated plan-report — optionally a short change summary first, then the full report starting at the exact heading `## Goal / Acceptance` with all six sections, keeping unchanged sections verbatim. Everything from that heading to the end REPLACES the current plan-report; do not start a line with that heading except to deliver the full report, and never include the `PLAN-REPORT: unchanged` line in this shape.
-2. No plan change (a purely clarifying answer with nothing new worth keeping): reply with your answer and end with the exact line `PLAN-REPORT: unchanged`.
-Only the plan-report is delivered to the implementing session on confirmation — conversation history is NOT — so any conclusion worth keeping must be folded into the report. Then stop and wait for another human confirmation.
+The plan-report is NOT approved yet. This turn is still PLANNING ONLY — the plan contract's read-only bounds still apply. Address the feedback, then reply in exactly ONE of the contract's two revision shapes:
+1. Revise: reply with the COMPLETE updated plan-report, starting at the exact heading `## Goal / Acceptance` — everything from that heading to the end REPLACES the current plan-report.
+2. Unchanged: a purely clarifying answer ending with the exact line `PLAN-REPORT: unchanged`.
+Only the plan-report is delivered onward — fold anything worth keeping into it. Then stop and wait for another human confirmation.

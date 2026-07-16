@@ -70,7 +70,7 @@ composition = base + mode-add + injected fragments:
 | dev advancement | preamble (protocol block or native note) + conduct annex + dev invocation + entry checklist (claim, est, prefetch) + preReEst block + [approved plan-report] + [human ruling] + checks preview |
 | dev remediation | preamble + conduct annex + dev invocation + entry checklist + remediation block (group values) + [human ruling] + checks preview |
 | review (interim/final gate) | preamble + conduct annex + review contract text + review invocation + independence note + entry checklist (pending set, no-est) + checks preview |
-| plan gate | preamble + conduct annex + plan-gate instruction (+ plan feedback rounds midflight) |
+| plan gate | preamble + conduct annex + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
 | close-out | closeout instruction (task id, active count, skill pointer) |
 
 The checks preview is GENERATED from the postcheck contract at dispatch time

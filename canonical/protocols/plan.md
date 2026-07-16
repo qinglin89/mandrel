@@ -47,3 +47,7 @@ Each round of feedback has exactly two conforming reply shapes:
   produced into the report — text outside the report is never delivered.
 - **Unchanged** — a purely clarifying answer that changes nothing ends with
   the exact line `PLAN-REPORT: unchanged`.
+
+Two caveats keep replies unambiguous: do not start a line with
+`## Goal / Acceptance` except to deliver the full report, and never include
+the `PLAN-REPORT: unchanged` line in a revision reply.

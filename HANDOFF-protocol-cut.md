@@ -24,7 +24,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | **landed 2026-07-16** — 67 templates (`entry/` 26, `midflight/` 41) + `postcheck-contract.md` (9 check-ids); byte-identity PROVEN (AST-extracted templates; old-vs-new capture: 37 suite prompts + 4 banners + 41 probe texts all identical); zero existing-assertion edits; new scenario 30 (startup refusal); mock 30/30 + pytest 25/25 green |
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
-| P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **approved 2026-07-16** (user ruling: Plan A — wrapper-inject plan.md, mirror the review pattern) — entry brief below; runs BEFORE P4; objective-gated ⇒ delegation-eligible |
+| P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -279,6 +279,41 @@ ORC-07 deferral recorded in the P3b landing facts.
   wrappers.
 - **Gate**: mock suite + pytest + boundary-lint green; single commit; flip
   the P3c status row and append P3c landing facts.
+
+### P3c landing facts (for the P4 session)
+
+Executed as briefed (Plan A — wrapper injection mirroring the review rule):
+
+- **Files**: `orchestrator.py` (`PLAN_RULE` sibling of `REVIEW_RULE`;
+  `entry/plan-rule-wrapper` manifest row; wrapper rendered inside
+  `_plan_gate_turn` between the dev base prompt and the gate instruction);
+  new `prompts/entry/plan-rule-wrapper.md` (same BEGIN/END banner shape as
+  the review wrapper); `plan-gate` / `plan-feedback` / `approved-plan-gate`
+  trimmed; `protocols/plan.md` Revision protocol gained the two reply-shape
+  caveats ("do not start a line with `## Goal / Acceptance` except to
+  deliver the full report"; "never include the `PLAN-REPORT: unchanged`
+  line in a revision reply"); `workflow/rolemapping.md` plan-gate row now
+  lists "plan contract text"; mock fixtures (`make_repo` copies plan.md,
+  `patch_module` overrides `PLAN_RULE`).
+- **Judgment calls**: (1) two scenario-6 contract substrings could not
+  stand via injection because plan.md wraps/phrases them differently — the
+  command list wraps mid-list, so "`rg`, `sed`, `ls`" re-anchored on the
+  contiguous "`sed`, `ls`, `git show`", and "Do NOT run tests/builds"
+  re-anchored on the contract's "run tests/builds, start services".
+  (2) `approved-plan-gate` also dropped its closing "This is now the formal
+  dev session: execute the normal entry checklist…" sentence — it restated
+  the entry checklist the same composed prompt instantiates; the
+  checklist/preReEst-ownership note stays. (3) `plan-feedback`'s bounds
+  restatement became the pointer "the plan contract's read-only bounds
+  still apply"; its two revise-turn assertions re-anchored on that pointer
+  and on "REPLACES the current plan-report".
+- **Assertion churn**: 5 lines, all in scenario 6 — 4 re-anchored (2 in
+  propose_plan, 2 in revise_plan) + 1 added (plan wrapper banner, analogous
+  to scenario 1's review-banner anchor). Flow-semantics assertions (rev-1
+  capture, unchanged sentinel, warn-and-keep, report+ruling-only delivery
+  with no history leakage, `Human ruling:\nconfirm` rendered shape) stand
+  unchanged.
+- **Gates**: mock 30/30, pytest 25/25, boundary-lint OK.
 
 ## Goal
 

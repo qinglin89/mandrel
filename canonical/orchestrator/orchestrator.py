@@ -66,6 +66,9 @@ SESSION_START_SH = REPO / ".cursor" / "hooks" / "session-start.sh"
 # Canonical review contract (single source; the .cursor/.codex files are
 # pointers to it — inject the real text, not a pointer).
 REVIEW_RULE = REPO / ".ai-protocol" / "protocols" / "review.md"
+# Canonical plan contract — injected into the plan-gate prompt the same way
+# (plan-rule wrapper ahead of the gate instruction).
+PLAN_RULE = REPO / ".ai-protocol" / "protocols" / "plan.md"
 # Single-source prompt/banner templates + the postcheck contract (see
 # prompts/README.md). ORCH_DIR-relative: survives repo layout changes and
 # needs no override in the mock suite. The headless conduct annex is the
@@ -235,6 +238,7 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "entry/est-undershoot-note": frozenset(),
     "entry/human-ruling": frozenset({"ruling"}),
     "entry/plan-gate": frozenset(),
+    "entry/plan-rule-wrapper": frozenset({"plan_rule"}),
     "entry/preamble-native-note": frozenset(),
     "entry/review-independence": frozenset(),
     "entry/review-invocation": frozenset({"task_id", "sid_line"}),
@@ -1789,8 +1793,13 @@ class Orchestrator:
         — never the last turn's raw text, never conversation history — is
         delivered with the human ruling to a fresh dev session. The plan
         lives only in the conversation and the orchestrator log — no
-        task-file writes, no session-log entry, no status change."""
-        prompt = base_prompt + "\n\n" + render_prompt("entry/plan-gate")
+        task-file writes, no session-log entry, no status change. The plan
+        contract text is injected (plan-rule wrapper) ahead of the gate
+        instruction, mirroring the review-rule injection."""
+        prompt = (base_prompt + "\n\n"
+                  + render_prompt("entry/plan-rule-wrapper",
+                                  plan_rule=PLAN_RULE.read_text())
+                  + "\n\n" + render_prompt("entry/plan-gate"))
         report, report_rev, report_round = "", 0, 0
         round_no = 0
         while True:
