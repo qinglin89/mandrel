@@ -290,7 +290,6 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "midflight/wrapup-note-remediation": frozenset(),
     "midflight/wrapup-note-review": frozenset(),
     "midflight/wrapup-plan-advancement": frozenset(),
-    "midflight/wrapup-plan-remediation": frozenset(),
 }
 
 POSTCHECK_MANIFEST: dict[str, frozenset[str]] = {
@@ -1708,8 +1707,7 @@ class Orchestrator:
                     elif was_remediation:
                         handoff_note = render_prompt(
                             "midflight/wrapup-note-remediation")
-                        plan_note = render_prompt(
-                            "midflight/wrapup-plan-remediation")
+                        plan_note = ""
                     else:
                         handoff_note = render_prompt(
                             "midflight/wrapup-note-advancement")
@@ -1923,7 +1921,7 @@ class Orchestrator:
                     f"remediation session changed status `{status_before}` "
                     f"→ `{task.status}` — a remediation session never "
                     "touches status (taskfile transition table); restore "
-                    "it (re-review is triggered by your session-log entry)"))
+                    "it"))
             else:
                 specs.append((
                     "dev-advancement-status",
@@ -1940,9 +1938,7 @@ class Orchestrator:
                     if any(e.is_continuation for e in own):
                         return ("`- Handoff: continuation` on an advancement"
                                 " entry — the marker is remediation-only "
-                                "(dev contract); remove it: an advancement "
-                                "session's landed work is reviewed after "
-                                "every session")
+                                "(dev contract); remove it")
                     return None
                 specs.append((
                     "dev-no-continuation-marker",

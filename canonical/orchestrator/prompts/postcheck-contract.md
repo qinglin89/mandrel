@@ -18,7 +18,7 @@ a `## Session log` entry for session id {{sid_disp}} (Done / Plan-slice if appli
 
 ## dev-remediation-status
 
-status: keep `{{status_before}}` UNCHANGED — a remediation session never touches status (taskfile transition table; re-review is triggered by your session-log entry; `blocked` only for a genuine human question)
+status: keep `{{status_before}}` UNCHANGED — a remediation session never touches status (taskfile transition table; `blocked` only for a genuine human question)
 
 ## dev-advancement-status
 
@@ -26,7 +26,7 @@ status per the taskfile transition table (dev advancement): `in_progress` (work 
 
 ## dev-no-continuation-marker
 
-no `- Handoff: continuation` line in your entry (the marker is remediation-only — dev contract; advancement work is reviewed after every session)
+no `- Handoff: continuation` line in your entry (the marker is remediation-only — dev contract)
 
 ## dev-est-increment
 
@@ -34,7 +34,7 @@ session-est incremented at claim: {{cur}}/{{tot}} → {{nxt}}/{{ntot}}{{undersho
 
 ## review-status-final-gate
 
-status per the taskfile transition table (FINAL GATE — entered at `final_review`): `completed` (pass — the sole ai-sync trigger) | `final_review` (changes required — your entry itself hands back to dev remediation) | `in_progress` (ONLY if final_review was set in error — verify apparent dev-completeness at entry, record why) | `blocked`
+status per the taskfile transition table (FINAL GATE — entered at `final_review`): `completed` (pass) | `final_review` (changes required) | `in_progress` (ONLY if final_review was set in error — verify apparent dev-completeness at entry, record why) | `blocked`
 
 ## review-status-interim
 

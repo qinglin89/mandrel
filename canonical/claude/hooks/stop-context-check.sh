@@ -110,7 +110,7 @@ EOF
   cat <<EOF
 {
   "decision": "block",
-  "reason": "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now to apply absorption and archive the task before ending the session. Close-out includes the remaining-task reconciliation; your final response must include one line beginning \`Remaining-task audit:\` (required even when no remaining task changes)."
+  "reason": "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now and follow it in full — the task-completion closeout (.ai-protocol/workflow/skills/closeout.md) — before ending the session. Your final response must include one line beginning \`Remaining-task audit:\`."
 }
 EOF
   exit 0
@@ -153,7 +153,7 @@ if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   cat <<EOF
 {
   "decision": "block",
-  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session, in this order: (1) ${CLEAN_HOWTO} The session-log must not be written ahead of a clean tree. (2) Append a '## Session log' entry to '${task_file}' (Done / Plan-slice if applicable / Next / Open) describing what's been done and what the next session should pick up. ONLY if you are a remediation session (fixing a changes-requested review) whose fix set is not yet complete, include the line '- Handoff: continuation' so remediation continues before re-review; an advancement session never writes that marker — its landed work is reviewed next (session-end procedure: .ai-protocol/workflow/skills/session-end.md). If this was a dev advancement session using a '## Session plan', update only the current and future unimplemented slices so Next points to one-session-sized work; prefer adding a continuation slice like 'session-2-cont' over renumbering later slices. If this was a remediation session, do not run preReEst or advance planned scope. (3) Re-estimate the session cost and update the session-est total accordingly — wrapping up early means the original estimate was inaccurate. (4) Do not advance lifecycle status just because of this context wrap-up; keep status unchanged unless restoring protocol legality requires otherwise. The user will resume in a fresh session."
+  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session now per the session-end wrap-up procedure (.ai-protocol/workflow/skills/session-end.md): (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff; apply the procedure's wrap-up specifics (continuation-marker rules, session-plan slice split). (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work."
 }
 EOF
   exit 0

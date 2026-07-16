@@ -27,28 +27,17 @@ dispute — do NOT ask and do NOT guess. Instead, block and end:
    under `Open`.
 5. End the session immediately. Output nothing further.
 
-## End-of-session discipline (no Stop hook backstop here)
+## End-of-session discipline
 
-In interactive mode a Stop hook enforces the session-end bookkeeping
-(`.ai-protocol/workflow/skills/session-end.md`); under the orchestrator YOU
-must satisfy it unprompted, in this order, before your final message:
-
-1. Working tree clean (`git status --porcelain` empty).
-2. `## Session log` entry appended for THIS session's id (Done / Plan-slice
-   if applicable / Next / Open).
-3. `status` set per the taskfile transition table
-   (`.ai-protocol/meta/taskfile.md`) for your session kind — dev sessions
-   NEVER set `completed`; a remediation session never changes status at all.
-
-The orchestrator verifies all three after the session and will send the
-violation back to you to fix — but each round-trip wastes a turn; get it
-right the first time.
+No Stop-hook backstop here: satisfy the session-end bookkeeping
+(`.ai-protocol/workflow/skills/session-end.md`) unprompted before your final
+message. Your entry prompt's POST-SESSION CHECKS preview (when present) is
+exactly what gets verified after you end.
 
 ## Scope discipline
 
 - Do exactly the invoked work for exactly the named task. No opportunistic
-  side work; new work discovered mid-task goes through the intake contract
-  as a pending task (conduct: scope discipline).
+  side work (conduct: scope discipline).
 - Never edit `.ai-protocol/**`, `ai-coding-*.md` (legacy), `CLAUDE.md`,
   `.claude/**`, or `~/.claude/**`.
 - Do not edit `.ai/` mid-task (snapshot writes happen only at close-out).

@@ -1,1 +1,1 @@
-do NOT write a `Handoff: continuation` line — an advancement session's landed work is reviewed next (one dev session = one reviewable unit); 
+do NOT write a `Handoff: continuation` line (the marker is remediation-only — dev contract); 

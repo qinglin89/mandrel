@@ -4,8 +4,10 @@ Single source for every prompt and banner text the orchestrator sends or
 shows. `orchestrator.py` loads these files at use time; a human standing in
 for the orchestrator (manual workflow execution) reads the SAME files — one
 text, two executors, no drift. Extracted byte-identically from the previous
-hardcoded strings (protocol-cut P2); content trims to
-instantiation-plus-pointer happen in a later phase.
+hardcoded strings (protocol-cut P2), then trimmed to
+instantiation-plus-pointer (P3b): a template carries a session's concrete
+values and points at the owning protocol/workflow doc — it never restates
+rules (charter litmus 4).
 
 ## Layout
 

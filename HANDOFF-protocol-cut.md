@@ -23,7 +23,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | **landed 2026-07-16** — 38 findings (3A/14B/1C/9D/11R), all dispositions name their destination; §-ref fates classified; open questions §10 resolved |
 | P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | **landed 2026-07-16** — 67 templates (`entry/` 26, `midflight/` 41) + `postcheck-contract.md` (9 check-ids); byte-identity PROVEN (AST-extracted templates; old-vs-new capture: 37 suite prompts + 4 banners + 41 probe texts all identical); zero existing-assertion edits; new scenario 30 (startup refusal); mock 30/30 + pytest 25/25 green |
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
-| P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | pending |
+| P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -171,6 +171,61 @@ drift fixed); no log-line or data-shape changes.
   trigger"); `wrapup-note-review`'s "the next review session continues the
   set"; hook texts trim to instantiation + pointer (HK-01/02/03); ~75 mock
   substring assertions churn in lockstep.
+
+### P3b landing facts (for the P4 session)
+
+Trim rule applied: a prompt/hook text carries the session's concrete values
+and points at the owning doc; rules, procedures, entry shapes, and scheduling
+consequences live only in their owners. Surfaces trimmed:
+
+- **Templates**: `conduct-annex` End section → one line + session-end pointer
+  (AUTO-02; round-trip warning already lives in `checks-preview-header`) and
+  scope-discipline residue → conduct pointer (AUTO-03); `dev-invocation`
+  trailing dispute/remediation restatement dropped (mode now cited as
+  taskfile-derived per the contract); `dev-remediation` → mode declaration +
+  group value (ORC-02); `dev-pre-re-est` → mode declaration + preReEst
+  pointer (ORC-03); `review-independence` → run-fact only (separate
+  conversations, possibly different model; no transcript) — procedure/budget
+  restatement dropped, budgets are caller-counted (ORC-04 judgment);
+  `wrapup` → instantiated tokens/budget/sid + wrap-up-procedure pointer, the
+  three `wrapup-note-*` variants keep only role-local marker semantics
+  (choreography tails dropped: "reviewed next", "before re-review", "the next
+  review session continues the set"); `wrapup-plan-advancement` → slice-split
+  pointer; **`wrapup-plan-remediation` DELETED** (pure dev.md restatement —
+  manifest row removed, builder passes an empty plan note in the remediation
+  branch); `violation-fix` → problems + session-end pointer + clean-howto
+  (numbered End restatement dropped); `closeout` + `closeout-incomplete` →
+  invocation, skill path, active count, audit-line requirement (procedure
+  fields dropped) (ORC-05/06).
+- **Postcheck contract**: scheduling parentheticals dropped — "re-review is
+  triggered by your session-log entry", "advancement work is reviewed after
+  every session", "the sole ai-sync trigger", "your entry itself hands back
+  to dev remediation". Status menus stay (instantiations of the transition
+  table).
+- **Code problem messages** (`check_specs`): same two choreography clauses
+  dropped; message content otherwise unchanged.
+- **Hooks (HK-01/02/03)**: case1 close-out text → invocation + closeout-skill
+  pointer + audit-line requirement (absorption/reconciliation description and
+  "(required even when...)" dropped); case2a wrap-up → instantiated
+  tokens/threshold/task-file + wrap-up-procedure pointer (marker/plan-slice
+  rules and "The user will resume in a fresh session" dropped). All three
+  wrap-up texts remain byte-identical; case1 differs only by the
+  cursor/codex `SYNC_SKILL` read clause (claude has native slash commands).
+  case1-dirty/case2b texts were already instantiation + pointer (P3a).
+- **Zero mock-assertion churn**: the predicted ~75-assertion lockstep churn
+  did not materialize — the suite's substrings anchor on instantiation-level
+  text ("Wrap up NOW", "REMEDIATION SESSION", marker lines, menu values),
+  which is exactly what a litmus-4 trim preserves. Gates: mock 30/30, pytest
+  25/25, boundary-lint OK; hooks `bash -n` clean.
+- **Deliberate deferral — ORC-07's prompt-trim half**: `plan-gate`,
+  `plan-feedback`, and `approved-plan-gate` still restate `protocols/plan.md`
+  (bounds, headings, revision shapes). Excluded here because (a) the ruled
+  P3b surface list and the approved plan both omit them, (b) unlike
+  review.md (wrapper-injected) plan.md is NOT in the assembled session
+  context, so a trim needs an injection-mechanism decision first (mirror the
+  review-rule wrapper?), and (c) scenario 6 guards the freshly-validated
+  plan-gate flow. Recorded under open questions; needs a user ruling before
+  or after P4.
 
 ## Goal
 
@@ -543,6 +598,11 @@ user; run `aii-2 status` before assuming other targets are current.
   legacy `ai-coding-*.md` files at each target, then drop the transitional
   `/ai-coding*.md` gitignore line, the conduct-annex/init "(legacy)"
   mentions, and the ai-init exclusion — one small landing.
+- Plan-prompt trim (ORC-07 second half, deferred at P3b — see landing facts):
+  `plan-gate`/`plan-feedback`/`approved-plan-gate` restate `protocols/plan.md`;
+  decide the injection mechanism (wrapper-inject plan.md like review, or keep
+  prompt-carried) and trim accordingly; scenario 6 churns. Needs a user
+  ruling.
 
 ## Key invariants to preserve
 

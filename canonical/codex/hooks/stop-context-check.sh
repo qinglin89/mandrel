@@ -119,7 +119,7 @@ if [ "$status" = "completed" ]; then
     block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per the session-end procedure (.ai-protocol/workflow/skills/session-end.md), ${CLEAN_HOWTO} Then end."
   fi
   log "case1 task=$task_file status=completed wt=clean → block (invoke ai-sync-v2)"
-  block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it — to apply absorption and archive the task before ending the session. Close-out includes the remaining-task reconciliation; your final response must include one line beginning \`Remaining-task audit:\` (required even when no remaining task changes)."
+  block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it in full — to run the task-completion closeout (.ai-protocol/workflow/skills/closeout.md) before ending the session. Your final response must include one line beginning \`Remaining-task audit:\`."
 fi
 
 # Case 2: status != completed → check session-log for this session's entry.
@@ -148,7 +148,7 @@ THRESHOLD=200000
 
 if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD wt=$wt_clean stop_hook_active=$stop_hook_active → block (wrap up)"
-  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session, in this order: (1) ${CLEAN_HOWTO} The session-log must not be written ahead of a clean tree. (2) Append a '## Session log' entry to '${task_file}' (Done / Plan-slice if applicable / Next / Open) describing what's been done and what the next session should pick up. ONLY if you are a remediation session (fixing a changes-requested review) whose fix set is not yet complete, include the line '- Handoff: continuation' so remediation continues before re-review; an advancement session never writes that marker — its landed work is reviewed next (session-end procedure: .ai-protocol/workflow/skills/session-end.md). If this was a dev advancement session using a '## Session plan', update only the current and future unimplemented slices so Next points to one-session-sized work; prefer adding a continuation slice like 'session-2-cont' over renumbering later slices. If this was a remediation session, do not run preReEst or advance planned scope. (3) Re-estimate the session cost and update the session-est total accordingly — wrapping up early means the original estimate was inaccurate. (4) Do not advance lifecycle status just because of this context wrap-up; keep status unchanged unless restoring protocol legality requires otherwise. The user will resume in a fresh session."
+  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session now per the session-end wrap-up procedure (.ai-protocol/workflow/skills/session-end.md): (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff; apply the procedure's wrap-up specifics (continuation-marker rules, session-plan slice split). (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work."
 fi
 
 # Below threshold without log: allow stop (session may be ending naturally early).
