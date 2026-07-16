@@ -4,8 +4,12 @@
 > mechanism&protocol cut"). SEPARATE workstream from `HANDOFF-orch-hub.md`
 > (orch-hub service) and from the orchestrator state-machine handoff in
 > quantx. This repo does no `.ai-tasks` tracking (human-interactive,
-> handoff-driven) — this document is the work order. Read
-> `canonical/orchestrator/README.md` first if you don't know the system.
+> handoff-driven) — this document anchors the workstream. The ENTIRE
+> handoff is a preliminary study (user-ruled 2026-07-16): reference input,
+> NOT binding constraints — the implementing session must understand it,
+> evaluate it against the actual code/docs, and judge its own approach.
+> Read `canonical/orchestrator/README.md` first if you don't know the
+> system.
 
 ## Goal
 
@@ -133,6 +137,49 @@ Supporting rules (proposed, to ratify or amend):
 - **automation-mode.md split**: scheduling content → runbook; conduct
   adjustments (no interactive asks, blocking rules) → a workflow-injected
   conduct annex; role protocols stay orchestration-unaware.
+
+### Boundary bookkeeping (discussion continuation, 2026-07-16)
+
+- **v2 §10 dissolves**: Entry (claim, est bump, checklist) dissolves into
+  the caller-assembled entry prompt; End (clean-tree commit, session-log
+  entry, status write) dissolves into a boundary skill; what remains of
+  §10 is pure work conduct. Role names (dev/review) are workflow
+  vocabulary — dispatch keys that select a contract; the contract text
+  itself is a self-contained, anonymous work spec ("implement the required
+  slice per the taskfile"; remediation stays role-local via
+  findings-as-input). A session never needs to know it "is a dev session".
+- **Two boundary skills, split by one criterion — does it need the working
+  session's context?**
+  - *Session-end bookkeeping* (every session, stophook-triggered, runs IN
+    the same conversation): commit clean tree, write the session-log entry
+    (shape from the meta schema), status declaration. Only the working
+    session can author this content.
+  - *Task-completion closeout* (fires only at completion): absorption
+    (ai-sync), archive, remaining-task reconcile — context-independent,
+    may run as a fresh session (today's orchestrated ai-sync-v2 path) or
+    natively in-session (the cc-codex seam).
+- **Content/format separation**: the role contract produces judgment
+  content (what was done, findings, verdict conclusions, what remains,
+  disputes); the boundary skill owns persistence format (taskfile entry
+  shapes, status mechanics, commit discipline — shapes specified ONCE in
+  meta). Role contracts contain zero file-format text. Today the entry
+  shape is smeared across v2 §10 / review-v2 / hook texts / orchestrator
+  prompts — after the cut it is one schema consumed by one skill.
+  Post-checks keep verifying declared outputs unchanged; the enforcement
+  layer does not move.
+- **Hook as the single trigger — backstop arrangement**: after the move,
+  bookkeeping instructions are carried ONLY by the stophook chain.
+  Orchestrated mode: post-check followups remain the backstop. Manual
+  mode: the human executing the runbook IS the post-check (the runbook's
+  on-return step includes verifying declared outputs) — do NOT reintroduce
+  End pointers into role contracts. Phase 2 entry precondition: Stop-hook
+  firing verified on every tool in use (cc-codex verified per orchestrator
+  README; cursor backend is orchestrator-injected, so the question is
+  moot there).
+- **`.ai/` read-capability optimization is OUT of this workstream's
+  scope** — the audit records observations but changes nothing there
+  (structure-first discipline; content/quality improvements come after
+  the boundaries are done).
 
 Mapping of current files (audit should verify, then Phase 2 executes):
 
