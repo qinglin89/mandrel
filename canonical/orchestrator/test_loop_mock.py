@@ -10,9 +10,10 @@ Scenarios (one function each, run in order by main()): loop mechanics
 (review dispatch, followups, budgets, blocked resume, close-out — plain and
 native-in-session), prompt instantiation (checklists, wrap-up kinds,
 remediation lock), event-stream logging, CLI argv/routing shapes, the
-escalation paths (§5.4/§5.6/§5.7 of the README), and the --control-dir
+escalation paths (§5.4/§5.6/§5.7 of the README), the --control-dir
 file channel (question/answer files, malformed/stale handling, stop.flag,
-and same-kind discussion rounds).
+and same-kind discussion rounds), and prompt-template startup validation
+(strict render + refusal on missing/mismatched templates).
 
 Run: .venv/bin/python test_loop_mock.py
 """
@@ -2195,6 +2196,68 @@ claimed-by: dev-discuss-0001@2026-01-29T00:00:00Z
           "+ plan-gate unchanged): PASS")
 
 
+def scenario_30_prompt_template_validation(repo: Path) -> None:
+    """P2 startup gate: every prompt/banner text loads from a single-source
+    template file (prompts/ + postcheck-contract.md). A missing template, an
+    undeclared placeholder, an orphan template file, or a postcheck contract
+    whose check-ids don't map 1:1 onto the code-side checks refuses startup
+    (prompts_error, wired into main() like the effort allowlist) — never a
+    silent fallback. Rendering is equally strict about placeholder values."""
+    assert o.prompts_error() is None, "canonical prompts/ must validate"
+
+    # strict render: a missing or extra placeholder value is a hard error
+    try:
+        o.render_prompt("entry/dev-invocation", task_id="t")
+        raise AssertionError("missing placeholder value must raise")
+    except RuntimeError as err:
+        assert "sid_line" in str(err)
+    try:
+        o.render_prompt("midflight/clean-howto", bogus="x")
+        raise AssertionError("undeclared placeholder value must raise")
+    except RuntimeError as err:
+        assert "bogus" in str(err)
+    try:
+        o.render_prompt("no/such-template")
+        raise AssertionError("unknown template name must raise")
+    except KeyError:
+        pass
+
+    # break a COPY of the canonical prompts dir and point the module at it
+    broken = Path(tempfile.mkdtemp(prefix="orch-prompts-")) / "prompts"
+    shutil.copytree(o.PROMPTS_DIR, broken)
+    (broken / "midflight" / "wrapup.md").unlink()
+    (broken / "entry" / "sid-line.md").write_text(
+        "Your session id is {{sid}} ({{typo}}).\n")
+    (broken / "entry" / "not-in-manifest.md").write_text("orphan\n")
+    contract = broken / "postcheck-contract.md"
+    contract.write_text(contract.read_text().replace(
+        "## tree-clean", "## tree-cleen"))  # one unknown id + one missing id
+    prev_dir, prev_contract = o.PROMPTS_DIR, o.POSTCHECK_CONTRACT
+    o.PROMPTS_DIR = broken
+    o.POSTCHECK_CONTRACT = broken / "postcheck-contract.md"
+    try:
+        err = o.prompts_error()
+        assert err and "refusing to start" in err, err
+        assert "missing template: midflight/wrapup" in err, err
+        assert "entry/sid-line: unknown placeholder {{typo}}" in err, err
+        assert ("template file not in the code manifest: "
+                "entry/not-in-manifest") in err, err
+        assert "id `tree-cleen` has no code-side check" in err, err
+        assert ("no requirement line for code-side check `tree-clean`"
+                in err), err
+        try:
+            o.contract_line("tree-clean")
+            raise AssertionError("missing contract line must raise at use")
+        except RuntimeError as err2:
+            assert "tree-clean" in str(err2)
+    finally:
+        o.PROMPTS_DIR, o.POSTCHECK_CONTRACT = prev_dir, prev_contract
+        shutil.rmtree(broken.parent)
+    assert o.prompts_error() is None, "restored canonical dir must validate"
+    print("scenario 30 (prompt templates: strict render + startup refusal "
+          "on missing/mismatched templates): PASS")
+
+
 def main() -> None:
     repo = make_repo()
     try:
@@ -2228,6 +2291,7 @@ def main() -> None:
         scenario_27_control_dir_graceful_loop_stop(repo)
         scenario_28_session_start_error_logged(repo)
         scenario_29_escalation_discussion(repo)
+        scenario_30_prompt_template_validation(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):

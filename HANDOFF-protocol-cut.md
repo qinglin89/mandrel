@@ -21,7 +21,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 |---|---|---|
 | P0 | `CHARTER.md` (boundary law, ratified) | **landed 2026-07-16** |
 | P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | **landed 2026-07-16** — 38 findings (3A/14B/1C/9D/11R), all dispositions name their destination; §-ref fates classified; open questions §10 resolved |
-| P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | pending |
+| P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | **landed 2026-07-16** — 67 templates (`entry/` 26, `midflight/` 41) + `postcheck-contract.md` (9 check-ids); byte-identity PROVEN (AST-extracted templates; old-vs-new capture: 37 suite prompts + 4 banners + 41 probe texts all identical); zero existing-assertion edits; new scenario 30 (startup refusal); mock 30/30 + pytest 25/25 green |
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | pending |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | pending |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
@@ -76,6 +76,28 @@ phases — P2/P3b — never P3a/P4).
   existing orchestrator bucket → `.cursor/orchestrator/prompts/` (no deploy.py
   change in P2).
 - **Landing**: single commit; mark P2 landed in the status table above.
+
+### P2 landing facts (for the P3a session)
+
+- Mechanism as briefed: `PROMPTS_DIR = ORCH_DIR/"prompts"`, strict `{{var}}`
+  substitution, code-side manifests (`PROMPT_MANIFEST`, `POSTCHECK_MANIFEST`
+  in orchestrator.py), `prompts_error()` startup refusal (wired into
+  `main()`; also validates orphan files and exercises `check_specs` across
+  the role/mode matrix for the ID↔callable 1:1 both ways).
+  `check_specs` now returns `(check-id, requirement, check)` triples and is
+  a `@staticmethod`; requirement lines render via `contract_line(id, ...)`.
+- P3a's doc-name/§ re-points now happen in TEXT FILES: grep
+  `canonical/orchestrator/prompts/` for `ai-coding-` and `§` (e.g.
+  `entry/review-rule-wrapper.md` carries the `ai-coding-review-v2.md`
+  banner; contract lines cite `tasks-v2 §3`). Composition and problem-
+  message strings stay in code — P3b's trim churns templates + manifests +
+  the ~75 substring assertions together.
+- WHITESPACE IS BYTE-SIGNIFICANT in templates (several fragments carry
+  leading/trailing spaces) — see `prompts/README.md` rules before editing.
+- `DISCUSSION_HINT`/`CLEAN_HOWTO` remain module constants (mock suite
+  references them) but load at import from their template files.
+- Templates deploy with the existing orchestrator bucket (recursive walk —
+  verified `iter_deployment_items` rglob; no deploy.py change).
 
 Semantic guards for P3a (from the audit — do not drop silently): (1) §10 End step 5
 runs remaining-task reconciliation at EVERY session end — the session-end boundary

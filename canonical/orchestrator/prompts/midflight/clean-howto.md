@@ -1,0 +1,1 @@
+make the working tree clean (`git status --porcelain` empty) — each modified file committed, and each untracked file handled by its nature: real work committed; an unwanted scratch file removed; a run-time artifact covered by a gitignore rule for its category.

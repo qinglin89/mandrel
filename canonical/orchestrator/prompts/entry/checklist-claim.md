@@ -1,0 +1,1 @@
+- claim: set `claimed-by: {{sid_disp}}@{{now}}` (refresh the timestamp with `date -u` at claim time)

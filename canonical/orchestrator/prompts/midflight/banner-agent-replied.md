@@ -1,0 +1,3 @@
+The agent replied:
+
+{{reply}}

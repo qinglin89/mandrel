@@ -1,0 +1,1 @@
+the planning session ({{sid}}) replied without changing the plan-report — still rev {{report_rev}} from round {{report_round}}, which is what `confirm` delivers (see that round's banner, or the full report in {{log_file}}):

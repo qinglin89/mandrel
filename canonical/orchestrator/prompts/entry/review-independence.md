@@ -1,0 +1,1 @@
+Cross-model independence: your evidence is ONLY the task file with its full session log, the relevant `.ai/` docs, and the actual commits/diffs of the pending dev sessions (`git log` / `git show`). No dev conversation transcript exists; do not ask for one. Follow the review-workflow procedure exactly, including the `Group:` field and the per-group round budget.

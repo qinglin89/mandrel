@@ -1,0 +1,1 @@
+- session-est: {{cur}}/{{tot}} → {{nxt}}/{{ntot}}{{undershoot}} (part of the claim, §10 Entry 3)

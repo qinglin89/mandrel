@@ -1,0 +1,1 @@
+WARNING: the reply neither restated the complete plan-report (from `## Goal / Acceptance`) nor declared `PLAN-REPORT: unchanged` — keeping plan-report rev {{report_rev}} from round {{report_round}}; that is what `confirm` delivers.

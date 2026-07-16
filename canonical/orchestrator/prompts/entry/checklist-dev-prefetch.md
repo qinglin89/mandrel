@@ -1,0 +1,1 @@
+- pre-load the `prefetch:` docs listed in the task frontmatter

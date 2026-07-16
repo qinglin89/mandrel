@@ -67,6 +67,11 @@ SESSION_START_SH = REPO / ".cursor" / "hooks" / "session-start.sh"
 # pointers to it — inject the real text, not a pointer).
 REVIEW_RULE = REPO / "ai-coding-review-v2.md"
 AUTOMATION_MD = ORCH_DIR / "automation-mode.md"
+# Single-source prompt/banner templates + the postcheck contract (see
+# prompts/README.md). ORCH_DIR-relative like AUTOMATION_MD: survives repo
+# layout changes and needs no override in the mock suite.
+PROMPTS_DIR = ORCH_DIR / "prompts"
+POSTCHECK_CONTRACT = PROMPTS_DIR / "postcheck-contract.md"
 SYNC_SKILL = Path.home() / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
 LOG_DIR = ORCH_DIR / "logs"
 SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> {tool, native_id} (cli backend)
@@ -178,9 +183,6 @@ HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
 DISCUSSION_MARKER_RE = re.compile(r"^(?:[?？]|discuss\s*:)", re.IGNORECASE)
-DISCUSSION_HINT = (
-    "Reply with `? ...`, `？...`, or `discuss: ...` to ask the agent a "
-    "clarifying question first; a plain answer is binding.")
 # Session context budget (tokens) — port of stop-context-check.sh: a session
 # whose conversation outgrows this must wrap up (clean tree + session-log
 # entry + no lifecycle advancement from the wrap itself) and hand off to a
@@ -196,12 +198,289 @@ REVIEW_LEGAL = {
     "final_review": {"completed", "in_progress", "final_review", "blocked"},
 }
 
-CLEAN_HOWTO = (
-    "make the working tree clean (`git status --porcelain` empty) — each "
-    "modified file committed, and each untracked file handled by its nature: "
-    "real work committed; an unwanted scratch file removed; a run-time "
-    "artifact covered by a gitignore rule for its category."
-)
+# --- prompt templates --------------------------------------------------------
+#
+# Every prompt/banner text the orchestrator sends or shows lives under
+# prompts/ as a single-source template file ({{var}} placeholders, one file
+# per prompt/fragment) — the same files a human standing in for the
+# orchestrator reads, so the two executors cannot drift. Composition (which
+# fragments, in what order, separators, list joins) stays in builder code;
+# templates are text atoms, loaded per use like AUTOMATION_MD. The manifests
+# declare each template's exact placeholder set; prompts_error() refuses
+# startup on a missing/malformed template, an undeclared placeholder, or a
+# postcheck contract that doesn't map 1:1 onto the code-side checks — same
+# policy as the effort allowlist, never a silent fallback.
+
+PROMPT_PLACEHOLDER_RE = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
+
+PROMPT_MANIFEST: dict[str, frozenset[str]] = {
+    "entry/approved-plan-gate": frozenset({"ruling", "plan"}),
+    "entry/automation-wrapper": frozenset({"automation_md"}),
+    "entry/checklist-claim": frozenset({"sid_disp", "now"}),
+    "entry/checklist-dev-claim-status": frozenset(),
+    "entry/checklist-dev-est": frozenset(
+        {"cur", "tot", "nxt", "ntot", "undershoot"}),
+    "entry/checklist-dev-est-unknown": frozenset(),
+    "entry/checklist-dev-prefetch": frozenset(),
+    "entry/checklist-est-undershoot": frozenset(),
+    "entry/checklist-header": frozenset(),
+    "entry/checklist-review-est": frozenset(),
+    "entry/checklist-review-pending": frozenset({"pending"}),
+    "entry/checks-preview-header": frozenset(),
+    "entry/closeout": frozenset({"task_id", "sync_skill", "active_count"}),
+    "entry/dev-invocation": frozenset({"task_id", "sid_line"}),
+    "entry/dev-pre-re-est": frozenset(),
+    "entry/dev-remediation": frozenset({"group"}),
+    "entry/est-undershoot-note": frozenset(),
+    "entry/human-ruling": frozenset({"ruling"}),
+    "entry/plan-gate": frozenset(),
+    "entry/preamble-native-note": frozenset(),
+    "entry/review-independence": frozenset(),
+    "entry/review-invocation": frozenset({"task_id", "sid_line"}),
+    "entry/review-rule-wrapper": frozenset({"review_rule"}),
+    "entry/sid-line": frozenset({"sid"}),
+    "entry/sid-line-from-hook": frozenset(),
+    "entry/stall-ruling": frozenset({"ruling"}),
+    "midflight/answered-continue": frozenset({"answer"}),
+    "midflight/banner-agent-replied": frozenset({"reply"}),
+    "midflight/banner-blocked": frozenset(
+        {"role", "sid", "blockers", "open_context"}),
+    "midflight/banner-closeout-incomplete": frozenset({"problems"}),
+    "midflight/banner-convergence": frozenset(
+        {"group", "rounds", "findings"}),
+    "midflight/banner-discussion-unavailable": frozenset(),
+    "midflight/banner-dispute": frozenset({"reviewer_line", "review_entry"}),
+    "midflight/banner-final-review-stall": frozenset(),
+    "midflight/banner-followups-exhausted": frozenset(
+        {"max_followups", "problems"}),
+    "midflight/banner-native-closeout-incomplete": frozenset({"problems"}),
+    "midflight/banner-no-reply": frozenset(),
+    "midflight/banner-plan-gate": frozenset(
+        {"headline", "shown", "warning"}),
+    "midflight/banner-request": frozenset({"role", "sid", "log_file"}),
+    "midflight/banner-run-error": frozenset({"role", "sid"}),
+    "midflight/banner-wrapup-exhausted": frozenset({"problems"}),
+    "midflight/blocked-resume": frozenset({"answer"}),
+    "midflight/blocked-violation": frozenset({"problems"}),
+    "midflight/clean-howto": frozenset(),
+    "midflight/closeout-incomplete": frozenset({"problems"}),
+    "midflight/discussion-hint": frozenset(),
+    "midflight/discussion-turn": frozenset({"question"}),
+    "midflight/human-instruction": frozenset({"answer"}),
+    "midflight/plan-confirm-instruction": frozenset(),
+    "midflight/plan-feedback": frozenset({"answer"}),
+    "midflight/plan-headline-proposes": frozenset({"sid"}),
+    "midflight/plan-headline-replied": frozenset({"sid"}),
+    "midflight/plan-headline-revised": frozenset({"sid", "report_rev"}),
+    "midflight/plan-headline-unchanged": frozenset(
+        {"sid", "report_rev", "report_round", "log_file"}),
+    "midflight/plan-no-reply": frozenset({"log_file"}),
+    "midflight/plan-truncation-note": frozenset({"chars", "log_file"}),
+    "midflight/plan-warning-dirty-tree": frozenset(),
+    "midflight/plan-warning-keep": frozenset(
+        {"report_rev", "report_round"}),
+    "midflight/plan-warning-no-heading": frozenset(),
+    "midflight/run-error-retry": frozenset({"answer", "role", "task_id"}),
+    "midflight/violation-fix": frozenset({"problems", "clean_howto", "sid"}),
+    "midflight/wrapup": frozenset(
+        {"context_tokens", "context_budget", "clean_howto", "sid",
+         "handoff_note", "plan_note"}),
+    "midflight/wrapup-note-advancement": frozenset(),
+    "midflight/wrapup-note-remediation": frozenset(),
+    "midflight/wrapup-note-review": frozenset(),
+    "midflight/wrapup-plan-advancement": frozenset(),
+    "midflight/wrapup-plan-remediation": frozenset(),
+}
+
+POSTCHECK_MANIFEST: dict[str, frozenset[str]] = {
+    "tree-clean": frozenset(),
+    "session-log-entry": frozenset({"sid_disp"}),
+    "dev-remediation-status": frozenset({"status_before"}),
+    "dev-advancement-status": frozenset(),
+    "dev-no-continuation-marker": frozenset(),
+    "dev-est-increment": frozenset(
+        {"cur", "tot", "nxt", "ntot", "undershoot"}),
+    "review-status-final-gate": frozenset(),
+    "review-status-interim": frozenset({"status_before"}),
+    "review-entry-fields": frozenset(),
+}
+
+
+def _template_path(name: str) -> Path:
+    return PROMPTS_DIR / f"{name}.md"
+
+
+def _read_template(path: Path) -> str:
+    """Template file bytes minus the single trailing newline of the
+    text-file format. Everything else — including leading/trailing SPACES
+    on several fragments — is byte-significant."""
+    text = path.read_text()
+    return text[:-1] if text.endswith("\n") else text
+
+
+def _substitute(text: str, source: str, allowed: frozenset[str],
+                values: dict) -> str:
+    """Strict {{var}} substitution: the placeholders found in the text, the
+    manifest set, and the provided values must all agree — any mismatch is
+    a hard error, never a silent fallback. Values are never re-scanned."""
+    found = set(PROMPT_PLACEHOLDER_RE.findall(text))
+    if found != set(values) or found != allowed:
+        raise RuntimeError(
+            f"{source}: placeholder mismatch — template has "
+            f"{sorted(found)}, manifest declares {sorted(allowed)}, caller "
+            f"passed {sorted(values)}")
+    return PROMPT_PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]), text)
+
+
+def render_prompt(name: str, **values) -> str:
+    if name not in PROMPT_MANIFEST:
+        raise KeyError(f"unknown prompt template: {name}")
+    return _substitute(_read_template(_template_path(name)), name,
+                       PROMPT_MANIFEST[name], values)
+
+
+def _parse_postcheck_contract() -> dict[str, str]:
+    """postcheck-contract.md → {check-id: requirement-line template}. Every
+    `## <id>` heading opens an entry; its body is the requirement line."""
+    entries: dict[str, str] = {}
+    current: str | None = None
+    body: list[str] = []
+
+    def flush() -> None:
+        if current is not None:
+            entries[current] = "\n".join(body).strip("\n")
+
+    for line in POSTCHECK_CONTRACT.read_text().splitlines():
+        m = re.fullmatch(r"##\s+(\S+)\s*", line)
+        if not m:
+            if current is not None:
+                body.append(line)
+            continue
+        flush()
+        current, body = m.group(1), []
+        if current in entries:
+            raise RuntimeError(
+                f"postcheck contract: duplicate check-id `{current}`")
+    flush()
+    return entries
+
+
+def contract_line(check_id: str, **values) -> str:
+    """The requirement line for one check-id, instantiated with this
+    session's values. check_specs pairs it with the verification callable;
+    checks_preview shows the identical line — told and verified cannot
+    drift."""
+    if check_id not in POSTCHECK_MANIFEST:
+        raise KeyError(f"check-id not bound by the code manifest: {check_id}")
+    entries = _parse_postcheck_contract()
+    if check_id not in entries:
+        raise RuntimeError(
+            f"postcheck contract: no requirement line for `{check_id}` in "
+            f"{POSTCHECK_CONTRACT}")
+    return _substitute(entries[check_id], f"postcheck:{check_id}",
+                       POSTCHECK_MANIFEST[check_id], values)
+
+
+def _exercised_postcheck_ids() -> set[str]:
+    """Every check-id check_specs actually binds across the role/mode
+    matrix — the callable side of the contract's 1:1 startup validation."""
+    ids: set[str] = set()
+    for role, status_before, est_before, was_rem in (
+            ("dev", "in_progress", (1, 2), False),
+            ("dev", "in_progress", None, False),
+            ("dev", "final_review", (1, 2), True),
+            ("review", "in_progress", None, False),
+            ("review", "final_review", None, False)):
+        specs = Orchestrator.check_specs(role, "startup-probe", status_before,
+                                         est_before=est_before,
+                                         was_remediation=was_rem)
+        ids.update(check_id for check_id, _, _ in specs)
+    return ids
+
+
+def prompts_error() -> str | None:
+    """None when every template and the postcheck contract validate, else a
+    refusal message. Called at startup for both backends (same policy as
+    effort_error): a missing/malformed template, an undeclared placeholder,
+    or a check-id↔callable mapping that is not 1:1 in both directions
+    refuses the run rather than degrading it silently."""
+    if not PROMPTS_DIR.is_dir():
+        return f"prompt templates: directory missing: {PROMPTS_DIR}"
+    problems: list[str] = []
+    for name, allowed in sorted(PROMPT_MANIFEST.items()):
+        path = _template_path(name)
+        if not path.is_file():
+            problems.append(f"missing template: {name} ({path})")
+            continue
+        found = set(PROMPT_PLACEHOLDER_RE.findall(_read_template(path)))
+        for var in sorted(found - allowed):
+            problems.append(f"{name}: unknown placeholder {{{{{var}}}}}")
+        for var in sorted(allowed - found):
+            problems.append(f"{name}: declared placeholder {{{{{var}}}}} "
+                            "missing from the template")
+    for family in ("entry", "midflight"):
+        family_dir = PROMPTS_DIR / family
+        if not family_dir.is_dir():
+            continue  # already reported as missing templates above
+        for path in sorted(family_dir.glob("*.md")):
+            if f"{family}/{path.stem}" not in PROMPT_MANIFEST:
+                problems.append("template file not in the code manifest: "
+                                f"{family}/{path.stem}")
+    if not POSTCHECK_CONTRACT.is_file():
+        problems.append(f"missing postcheck contract: {POSTCHECK_CONTRACT}")
+    else:
+        try:
+            entries = _parse_postcheck_contract()
+        except RuntimeError as err:
+            entries = None
+            problems.append(str(err))
+        if entries is not None:
+            contract_ids, code_ids = set(entries), set(POSTCHECK_MANIFEST)
+            for cid in sorted(contract_ids - code_ids):
+                problems.append(f"postcheck contract: id `{cid}` has no "
+                                "code-side check")
+            for cid in sorted(code_ids - contract_ids):
+                problems.append("postcheck contract: no requirement line "
+                                f"for code-side check `{cid}`")
+            for cid in sorted(contract_ids & code_ids):
+                line = entries[cid]
+                if not line or "\n" in line:
+                    problems.append(f"postcheck contract: `{cid}` must be "
+                                    "exactly one requirement line")
+                    continue
+                found = set(PROMPT_PLACEHOLDER_RE.findall(line))
+                allowed = POSTCHECK_MANIFEST[cid]
+                for var in sorted(found - allowed):
+                    problems.append(f"postcheck contract: `{cid}` has "
+                                    f"unknown placeholder {{{{{var}}}}}")
+                for var in sorted(allowed - found):
+                    problems.append(f"postcheck contract: `{cid}` lacks "
+                                    f"declared placeholder {{{{{var}}}}}")
+            if contract_ids == code_ids:
+                try:
+                    exercised = _exercised_postcheck_ids()
+                except (RuntimeError, KeyError) as err:
+                    problems.append(f"postcheck binding exercise failed: "
+                                    f"{err}")
+                else:
+                    for cid in sorted(code_ids - exercised):
+                        problems.append(f"postcheck contract: id `{cid}` "
+                                        "is never bound by check_specs")
+                    for cid in sorted(exercised - code_ids):
+                        problems.append(f"check_specs binds `{cid}` which "
+                                        "the contract does not declare")
+    if not problems:
+        return None
+    return ("prompt templates invalid — refusing to start "
+            "(fix canonical prompts/ and redeploy):\n- "
+            + "\n- ".join(problems))
+
+
+# Module-level constants: referenced directly across the code (wrap-up and
+# violation prompts, ask_human) and by the mock suite; loaded once at import
+# from their single-source templates.
+DISCUSSION_HINT = _read_template(_template_path("midflight/discussion-hint"))
+CLEAN_HOWTO = _read_template(_template_path("midflight/clean-howto"))
 
 
 # --- task file parsing -----------------------------------------------------
@@ -1205,22 +1484,16 @@ class Orchestrator:
             if discussion is None:
                 return answer
             if not discuss_turn:
-                question = (
-                    "Discussion not available on this escalation. Give a "
-                    "plain binding answer, or 'stop'.")
+                question = render_prompt(
+                    "midflight/banner-discussion-unavailable")
                 continue
-            result = discuss_turn(
-                "[orchestrator] DISCUSSION TURN ONLY — the human is asking "
-                "for clarification before giving the binding answer to the "
-                "current escalation. Do not modify files, the task, status, "
-                "session log, or working tree, and do not continue the "
-                "blocked/paused work. Answer the question from the existing "
-                "conversation context, then stop and wait for the binding "
-                f"answer.\n\nHuman question:\n{discussion}")
+            result = discuss_turn(render_prompt(
+                "midflight/discussion-turn", question=discussion))
             reply = (result.text or "").strip()
             if not reply:
-                reply = "(no reply text captured — inspect the run log)"
-            question = f"The agent replied:\n\n{reply}"
+                reply = render_prompt("midflight/banner-no-reply")
+            question = render_prompt("midflight/banner-agent-replied",
+                                     reply=reply)
 
     def ask_session_human(self, session: BackendSession, banner: str,
                           kind: str) -> str:
@@ -1360,20 +1633,9 @@ class Orchestrator:
                      f"status_before={status_before}")
             prompt = first_prompt_fn(sid)
             if plan_gate:
-                prompt += (
-                    "\n\nAPPROVED PLAN GATE — the human approved this plan "
-                    "before the formal dev session. Treat it as guidance and "
-                    "constraints while still verifying against the actual "
-                    "code. The approved plan is guidance and constraints for "
-                    "this dev session, but the formal dev session still owns "
-                    "the normal entry checklist and preReEst. Use the approved "
-                    "plan as input to preReEst. This is now the formal dev "
-                    "session: execute the normal entry checklist, claim the "
-                    "task with this session id, update session-est/status as "
-                    "required, and end with the normal clean-tree session-log "
-                    "entry.\n\n"
-                    f"Human ruling:\n{plan_gate.ruling}\n\n"
-                    f"Approved plan-report:\n{plan_gate.plan}")
+                prompt += "\n\n" + render_prompt(
+                    "entry/approved-plan-gate",
+                    ruling=plan_gate.ruling, plan=plan_gate.plan)
             followups = 0
             while True:
                 try:
@@ -1385,25 +1647,21 @@ class Orchestrator:
                 if result.saw_request:
                     answer = self.ask_session_human(
                         session,
-                        f"The {role} agent ({sid}) paused awaiting input/"
-                        f"approval (see log tail in {self.log_file}).\n"
-                        "Your reply is sent into the same conversation.",
+                        render_prompt("midflight/banner-request", role=role,
+                                      sid=sid, log_file=self.log_file),
                         kind="request")
-                    prompt = (f"[orchestrator] The human answered: {answer}\n"
-                              "Continue per AUTOMATION MODE rules; do not "
-                              "await interactive input again.")
+                    prompt = render_prompt("midflight/answered-continue",
+                                           answer=answer)
                     continue
                 if result.status == "error":
                     answer = self.ask_session_human(
                         session,
-                        f"The {role} run errored mid-flight (run ran, then "
-                        f"failed). sid={sid}. Inspect the repo/log, then "
-                        "give an instruction to retry with, or 'stop'.",
+                        render_prompt("midflight/banner-run-error",
+                                      role=role, sid=sid),
                         kind="run-error")
-                    prompt = (f"[orchestrator] The previous run errored. "
-                              f"Human instruction: {answer}\nResume the "
-                              f"{role} session for task {self.task_id} and "
-                              "finish per protocol.")
+                    prompt = render_prompt("midflight/run-error-retry",
+                                           answer=answer, role=role,
+                                           task_id=self.task_id)
                     continue
                 if not self.task_path.exists():
                     # cc-codex seam (seen live 2026-07-04): a final-gate pass
@@ -1443,85 +1701,56 @@ class Orchestrator:
                     # only an incomplete REMEDIATION fix set may defer its
                     # re-review via the continuation marker.
                     if role == "review":
-                        handoff_note = (
-                            "any pending dev session you did not finish "
-                            "reviewing simply stays pending — the next "
-                            "review session continues the set; ")
+                        handoff_note = render_prompt(
+                            "midflight/wrapup-note-review")
                         plan_note = ""
                     elif was_remediation:
-                        handoff_note = (
-                            "ONLY if your remediation fix set is not yet "
-                            "complete, include the line `- Handoff: "
-                            "continuation` so remediation continues in a "
-                            "fresh session before re-review; ")
-                        plan_note = (
-                            "If useful, write `Plan-slice: remediation "
-                            "for review group <sid>`; do NOT run preReEst "
-                            "or advance planned scope. ")
+                        handoff_note = render_prompt(
+                            "midflight/wrapup-note-remediation")
+                        plan_note = render_prompt(
+                            "midflight/wrapup-plan-remediation")
                     else:
-                        handoff_note = (
-                            "do NOT write a `Handoff: continuation` line — "
-                            "an advancement session's landed work is "
-                            "reviewed next (one dev session = one "
-                            "reviewable unit, §10); ")
-                        plan_note = (
-                            "If this dev advancement was working from a "
-                            "`## Session plan`, update only the current "
-                            "and future unimplemented slices so the Next "
-                            "work is one-session-sized; prefer adding a "
-                            "continuation slice like `session-2-cont` over "
-                            "renumbering later slices. ")
+                        handoff_note = render_prompt(
+                            "midflight/wrapup-note-advancement")
+                        plan_note = render_prompt(
+                            "midflight/wrapup-plan-advancement")
                     self.log(f"context budget exceeded "
                              f"(≈{session.context_tokens} tokens) with "
                              "violations — sending wrap-up instruction "
                              f"(followup {followups})")
-                    prompt = (
-                        "[orchestrator] Context has grown to approximately "
-                        f"{session.context_tokens} tokens (over the "
-                        f"{CONTEXT_BUDGET} budget for reliable work). Wrap "
-                        f"up NOW, in this order: (1) {CLEAN_HOWTO} (2) "
-                        f"append a `## Session log` entry for session id "
-                        f"{sid} (Done / Plan-slice if applicable / Next / "
-                        "Open) describing what is done "
-                        f"and what the next session picks up; {handoff_note}"
-                        f"{plan_note}re-estimate session-est. (3) do NOT "
-                        "advance lifecycle status just because of this "
-                        "context wrap-up; keep status unchanged unless "
-                        "restoring protocol legality requires otherwise. "
-                        "Do NOT start any new work. Then end.")
+                    prompt = render_prompt(
+                        "midflight/wrapup",
+                        context_tokens=session.context_tokens,
+                        context_budget=CONTEXT_BUDGET,
+                        clean_howto=CLEAN_HOWTO, sid=sid,
+                        handoff_note=handoff_note, plan_note=plan_note)
                     if followups > MAX_FOLLOWUPS:
                         self.ask_session_human(
                             session,
-                            "Session is over the context budget and still "
-                            "failing post-checks after wrap-up attempts:\n- "
-                            + "\n- ".join(problems) +
-                            "\nFix the task file / tree manually, then type "
-                            "'done' to continue with a fresh session.",
+                            render_prompt(
+                                "midflight/banner-wrapup-exhausted",
+                                problems="\n- ".join(problems)),
                             kind="followups-exhausted")
                         break
                     continue
                 if followups > MAX_FOLLOWUPS:
                     answer = self.ask_session_human(
                         session,
-                        "Post-session checks still failing after "
-                        f"{MAX_FOLLOWUPS} followups:\n- " +
-                        "\n- ".join(problems) +
-                        "\nGive an instruction for the agent, or 'stop'.",
+                        render_prompt(
+                            "midflight/banner-followups-exhausted",
+                            max_followups=MAX_FOLLOWUPS,
+                            problems="\n- ".join(problems)),
                         kind="followups-exhausted")
-                    prompt = f"[orchestrator] Human instruction: {answer}"
+                    prompt = render_prompt("midflight/human-instruction",
+                                           answer=answer)
                     followups = 0
                     continue
                 self.log(f"post-check violations (followup {followups}): "
                          + "; ".join(problems))
-                prompt = (
-                    "[orchestrator] Protocol violation(s) detected after your "
-                    "session ended:\n- " + "\n- ".join(problems) +
-                    f"\nFix now, in order: (1) {CLEAN_HOWTO} (2) ensure a "
-                    f"`## Session log` entry for session id {sid} exists "
-                    "(Done / Plan-slice if applicable / Next / Open — review "
-                    "entries also need Verdict/Group/Findings). (3) set a "
-                    "status legal for your role. "
-                    "Then end.")
+                prompt = render_prompt(
+                    "midflight/violation-fix",
+                    problems="\n- ".join(problems),
+                    clean_howto=CLEAN_HOWTO, sid=sid)
             end_status = ("completed+archived"
                           if not self.task_path.exists()
                           else parse_task(self.task_path).status)
@@ -1562,33 +1791,7 @@ class Orchestrator:
         delivered with the human ruling to a fresh dev session. The plan
         lives only in the conversation and the orchestrator log — no
         task-file writes, no session-log entry, no status change."""
-        prompt = (
-            base_prompt +
-            "\n\nPLAN GATE — THIS TURN IS PLANNING ONLY. Treat this as a "
-            "read-only shadow of the next formal dev session: understand the "
-            "task and report what you learned and what you plan to do from the "
-            "perspective of the upcoming dev session, but do not execute the "
-            "normal entry checklist yet. Do not claim the task, do not change "
-            "session-est/status, do not append a session-log entry, and do not "
-            "modify any file. This is a research/plan-only session. You MAY do "
-            "bounded read-only discovery: read the task file, its session log, "
-            "the frontmatter `prefetch:` docs, and a small number of directly "
-            "relevant source/test files; run only short read-only inspection "
-            "commands such as `rg`, `sed`, `ls`, `git show`, or "
-            "`git diff --name-only`. Do NOT run tests/builds, start services, "
-            "install dependencies, generate artifacts, or run long diagnostics. "
-            "Reply with exactly these headings, using `None identified` for "
-            "any empty section: `## Goal / Acceptance`, "
-            "`## Confirmed Facts`, `## Assumptions / Unknowns`, "
-            "`## Work Approach`, `## Verification Strategy`, "
-            "`## Risks / Likely Failure Points`. In `## Work Approach`, give "
-            "a concise implementation approach and main work areas; include "
-            "key files/modules only when they materially clarify the plan, and "
-            "do not try to produce a complete file-by-file implementation "
-            "checklist; then stop. Everything from the `## Goal / Acceptance` "
-            "line to the end of your reply is captured as plan-report rev 1 — "
-            "the artifact later rounds revise and the ONLY planning output "
-            "delivered to the implementing session once the human confirms.")
+        prompt = base_prompt + "\n\n" + render_prompt("entry/plan-gate")
         report, report_rev, report_round = "", 0, 0
         round_no = 0
         while True:
@@ -1606,12 +1809,10 @@ class Orchestrator:
                 # may cite report sections; only an explicit restatement
                 # (no sentinel) replaces the report.
                 shown = PLAN_REPORT_UNCHANGED_RE.sub("", reply).strip() or reply
-                headline = (
-                    f"the planning session ({session.sid}) replied without "
-                    f"changing the plan-report — still rev {report_rev} from "
-                    f"round {report_round}, which is what `confirm` delivers "
-                    "(see that round's banner, or the full report in "
-                    f"{self.log_file}):")
+                headline = render_prompt(
+                    "midflight/plan-headline-unchanged", sid=session.sid,
+                    report_rev=report_rev, report_round=report_round,
+                    log_file=self.log_file)
                 self.log(f"plan-gate round {round_no}: plan-report unchanged "
                          f"(rev {report_rev} from round {report_round})")
             elif extracted and not unchanged:
@@ -1619,19 +1820,18 @@ class Orchestrator:
                 report_rev += 1
                 report_round = round_no
                 shown = reply
-                headline = (f"the planning session ({session.sid}) proposes "
-                            f"plan-report rev {report_rev}:")
+                headline = render_prompt(
+                    "midflight/plan-headline-revised", sid=session.sid,
+                    report_rev=report_rev)
                 self.log(f"plan-gate round {round_no}: plan-report revised "
                          f"→ rev {report_rev}")
             elif report:
                 shown = reply
-                headline = f"the planning session ({session.sid}) replied:"
-                warning = (
-                    "\n\nWARNING: the reply neither restated the complete "
-                    "plan-report (from `## Goal / Acceptance`) nor declared "
-                    "`PLAN-REPORT: unchanged` — keeping plan-report rev "
-                    f"{report_rev} from round {report_round}; that is what "
-                    "`confirm` delivers.")
+                headline = render_prompt(
+                    "midflight/plan-headline-replied", sid=session.sid)
+                warning = "\n\n" + render_prompt(
+                    "midflight/plan-warning-keep", report_rev=report_rev,
+                    report_round=report_round)
                 self.log(f"plan-gate round {round_no}: reply matched no "
                          f"report shape — keeping rev {report_rev}")
             else:
@@ -1640,36 +1840,34 @@ class Orchestrator:
                 report = reply
                 report_rev, report_round = (1, round_no) if reply else (0, 0)
                 shown = reply
-                headline = f"the planning session ({session.sid}) proposes:"
+                headline = render_prompt(
+                    "midflight/plan-headline-proposes", sid=session.sid)
                 if reply:
-                    warning = (
-                        "\n\nWARNING: the reply did not follow the "
-                        "plan-report format (no `## Goal / Acceptance` "
-                        "heading) — using the whole reply as plan-report "
-                        "rev 1.")
+                    warning = "\n\n" + render_prompt(
+                        "midflight/plan-warning-no-heading")
                     self.log(f"plan-gate round {round_no}: reply lacked the "
                              "report heading — adopted whole reply as rev 1")
             if shown:
                 if len(shown) > PLAN_GATE_BANNER_CHARS:
-                    shown = (shown[:PLAN_GATE_BANNER_CHARS] +
-                             f"\n\n[reply truncated to "
-                             f"{PLAN_GATE_BANNER_CHARS} chars; full text is "
-                             f"in {self.log_file}]")
+                    shown = (shown[:PLAN_GATE_BANNER_CHARS] + "\n\n"
+                             + render_prompt(
+                                 "midflight/plan-truncation-note",
+                                 chars=PLAN_GATE_BANNER_CHARS,
+                                 log_file=self.log_file))
             else:
-                shown = f"(no reply text captured — see log {self.log_file})"
-            banner = ("PLAN CONFIRMATION (--plan-gate): "
-                      f"{headline}\n\n{shown}{warning}")
+                shown = render_prompt("midflight/plan-no-reply",
+                                      log_file=self.log_file)
+            banner = render_prompt("midflight/banner-plan-gate",
+                                   headline=headline, shown=shown,
+                                   warning=warning)
             if not tree_clean():
                 self.log("plan-gate violation: the planning turn modified the "
                          "tree — surfacing to human")
-                banner += ("\n\nWARNING: the planning turn left the tree dirty "
-                           "(it was told not to touch anything). Your answer "
-                           "is forwarded either way; consider 'stop'.")
+                banner += "\n\n" + render_prompt(
+                    "midflight/plan-warning-dirty-tree")
             answer = self.ask_human(
-                banner + "\n\nReply with `confirm` to authorize "
-                "implementation of the current plan-report. Any other answer "
-                "is treated as plan feedback and sent back to the same "
-                "session.",
+                banner + "\n\n"
+                + render_prompt("midflight/plan-confirm-instruction"),
                 kind="plan-gate")
             if self._plan_gate_confirmed(answer):
                 self.log(f"plan-gate confirmed (round {round_no}): "
@@ -1678,42 +1876,20 @@ class Orchestrator:
                 self.flog(f"plan-gate delivered plan-report rev "
                           f"{report_rev}:\n{report}")
                 return PlanGateResult(plan=report, ruling=answer)
-            prompt = (
-                "[orchestrator] PLAN FEEDBACK from the human: "
-                f"{answer}\nThe plan-report is NOT approved yet. This turn is "
-                "still PLANNING ONLY: do NOT modify files, claim the task, "
-                "change status/session-est, append a session-log entry, run "
-                "tests, start services, install dependencies, or run long "
-                "diagnostics. You may do only bounded read-only discovery if "
-                "needed. Address the feedback, then reply in exactly ONE of "
-                "these two shapes:\n"
-                "1. The plan changes (including folding in any new fact, "
-                "constraint, or decision this discussion produced): reply "
-                "with the COMPLETE updated plan-report — optionally a short "
-                "change summary first, then the full report starting at the "
-                "exact heading `## Goal / Acceptance` with all six sections, "
-                "keeping unchanged sections verbatim. Everything from that "
-                "heading to the end REPLACES the current plan-report; do not "
-                "start a line with that heading except to deliver the full "
-                "report, and never include the `PLAN-REPORT: unchanged` line "
-                "in this shape.\n"
-                "2. No plan change (a purely clarifying answer with nothing "
-                "new worth keeping): reply with your answer and end with the "
-                "exact line `PLAN-REPORT: unchanged`.\n"
-                "Only the plan-report is delivered to the implementing "
-                "session on confirmation — conversation history is NOT — so "
-                "any conclusion worth keeping must be folded into the "
-                "report. Then stop and wait for another human confirmation.")
+            prompt = render_prompt("midflight/plan-feedback", answer=answer)
 
     # -- post-session checks (Stop-hook replica / backstop) --
 
-    def check_specs(self, role: str, sid: str | None, status_before: str,
+    @staticmethod
+    def check_specs(role: str, sid: str | None, status_before: str,
                     est_before: tuple[int, int] | None = None,
                     was_remediation: bool = False):
         """Single source for the end-of-session discipline. Each spec is
-        (requirement line, check(task) -> problem | None): post_checks RUNS
-        the checks, and the same requirement lines render into the session
-        prompt as its POST-SESSION CHECKS preview — so what the agent is
+        (check-id, requirement line, check(task) -> problem | None): the
+        requirement line comes from the postcheck contract by check-id
+        (contract_line, validated 1:1 against these bindings at startup),
+        post_checks RUNS the checks, and the same rendered lines become the
+        session prompt's POST-SESSION CHECKS preview — so what the agent is
         told and what the orchestrator verifies cannot drift.
 
         est_before: session-est at session start for a FRESH dev session
@@ -1722,25 +1898,25 @@ class Orchestrator:
         verdict was changes-requested at dev entry → status must not change
         (tasks-v2 §3)."""
         sid_disp = sid or "<this session's id>"
-        specs: list[tuple[str, object]] = []
+        specs: list[tuple[str, str, object]] = []
         specs.append((
-            "working tree clean (`git status --porcelain` empty)",
+            "tree-clean",
+            contract_line("tree-clean"),
             lambda task: None if tree_clean() else
             "working tree is not clean (git status --porcelain is "
             "non-empty)"))
         specs.append((
-            f"a `## Session log` entry for session id {sid_disp} "
-            "(Done / Plan-slice if applicable / Next / Open)",
+            "session-log-entry",
+            contract_line("session-log-entry", sid_disp=sid_disp),
             lambda task: None
             if sid and any(e.session_id == sid for e in task.entries) else
             f"no `## Session log` entry for session id {sid}"))
         if role == "dev":
             if was_remediation:
                 specs.append((
-                    f"status: keep `{status_before}` UNCHANGED — a "
-                    "remediation session never touches status (tasks-v2 §3; "
-                    "re-review is triggered by your session-log entry; "
-                    "`blocked` only for a genuine human question)",
+                    "dev-remediation-status",
+                    contract_line("dev-remediation-status",
+                                  status_before=status_before),
                     lambda task: None
                     if task.status in {status_before, "blocked"} else
                     f"remediation session changed status `{status_before}` "
@@ -1749,10 +1925,8 @@ class Orchestrator:
                     "is triggered by your session-log entry)"))
             else:
                 specs.append((
-                    "status per tasks-v2 §3 (dev advancement): `in_progress`"
-                    " (work remains) | `final_review` (ONLY when the whole "
-                    "scope is complete) | `blocked` (genuine human question)"
-                    " — never `completed`",
+                    "dev-advancement-status",
+                    contract_line("dev-advancement-status"),
                     lambda task: None
                     if task.status in DEV_LEGAL_STATUSES else
                     f"status `{task.status}` is illegal for a dev session "
@@ -1769,15 +1943,14 @@ class Orchestrator:
                                 "landed work is reviewed after every session")
                     return None
                 specs.append((
-                    "no `- Handoff: continuation` line in your entry (the "
-                    "marker is remediation-only — §10; advancement work is "
-                    "reviewed after every session)",
+                    "dev-no-continuation-marker",
+                    contract_line("dev-no-continuation-marker"),
                     _no_marker))
             if est_before:
                 cur, tot = est_before
                 nxt, ntot = cur + 1, max(tot, cur + 1)
-                undershoot = (" (this raises <total> — the estimate "
-                              "undershot)") if ntot > tot else ""
+                undershoot = (render_prompt("entry/est-undershoot-note")
+                              if ntot > tot else "")
 
                 def _est_check(task, cur=cur, tot=tot):
                     after = task.est_tuple
@@ -1789,25 +1962,19 @@ class Orchestrator:
                             "3); raise <total> too if the estimate "
                             "undershot")
                 specs.append((
-                    f"session-est incremented at claim: {cur}/{tot} → "
-                    f"{nxt}/{ntot}{undershoot}",
+                    "dev-est-increment",
+                    contract_line("dev-est-increment", cur=cur, tot=tot,
+                                  nxt=nxt, ntot=ntot, undershoot=undershoot),
                     _est_check))
         else:
             allowed = REVIEW_LEGAL.get(status_before,
                                        {"in_progress", "blocked"})
             if status_before == "final_review":
-                menu = ("status per tasks-v2 §3 (FINAL GATE — entered at "
-                        "`final_review`): `completed` (pass — the sole "
-                        "ai-sync trigger) | `final_review` (changes "
-                        "required — your entry itself hands back to dev "
-                        "remediation) | `in_progress` (ONLY if final_review "
-                        "was set in error — verify apparent dev-completeness"
-                        " at entry, record why) | `blocked`")
+                menu_id = "review-status-final-gate"
+                menu = contract_line(menu_id)
             else:
-                menu = ("status per tasks-v2 §3 (interim review — entered "
-                        f"at `{status_before}`): keep `in_progress` "
-                        "(findings never gate an interim review) | "
-                        "`blocked`")
+                menu_id = "review-status-interim"
+                menu = contract_line(menu_id, status_before=status_before)
 
             def _entry_check(task):
                 latest = (task.review_entries[-1]
@@ -1822,14 +1989,14 @@ class Orchestrator:
                                  "(convergence group anchor)")
                 return "; ".join(probs) or None
             specs.append((
+                menu_id,
                 menu,
                 lambda task: None if task.status in allowed else
                 f"status `{task.status}` is an illegal review transition "
                 f"from `{status_before}` (allowed: {sorted(allowed)})"))
             specs.append((
-                "the review entry carries `Verdict:` (pass | "
-                "changes-requested) and `Group:` (convergence anchor, "
-                "review-v2)",
+                "review-entry-fields",
+                contract_line("review-entry-fields"),
                 _entry_check))
         return specs
 
@@ -1840,7 +2007,7 @@ class Orchestrator:
         specs = self.check_specs(role, sid, status_before,
                                  est_before=est_before,
                                  was_remediation=was_remediation)
-        return [p for _, check in specs if (p := check(task))]
+        return [p for _, _, check in specs if (p := check(task))]
 
     def checks_preview(self, role: str, sid: str | None, status_before: str,
                        est_before: tuple[int, int] | None = None,
@@ -1848,32 +2015,24 @@ class Orchestrator:
         specs = self.check_specs(role, sid, status_before,
                                  est_before=est_before,
                                  was_remediation=was_remediation)
-        return ("POST-SESSION CHECKS — the orchestrator verifies exactly "
-                "these after you end (each failed round-trip wastes a "
-                "turn; get them right the first time):\n"
-                + "\n".join(f"- {line}" for line, _ in specs))
+        return (render_prompt("entry/checks-preview-header") + "\n"
+                + "\n".join(f"- {line}" for _, line, _ in specs))
 
     # -- prompts --
 
     def _sid_line(self, sid: str | None) -> str:
         if sid:
-            return f"Your session id is {sid}."
-        return ("Your session id is provided by your session-start context "
-                "(hook injection); use that id in the session log and "
-                "claimed-by.")
+            return render_prompt("entry/sid-line", sid=sid)
+        return render_prompt("entry/sid-line-from-hook")
 
     def _preamble(self, sid: str | None) -> list[str]:
         parts: list[str] = []
         if self.backend.injects_protocol:
             parts.append(protocol_block(sid or "orchestrated-session"))
         else:
-            parts.append(
-                "NOTE: the full project protocol (PROJECT PROTOCOL CONTEXT) "
-                "arrives via your tool's native session-start mechanism "
-                "(hooks / CLAUDE.md imports); follow it.")
-        parts += ["===== BEGIN AUTOMATION MODE =====",
-                  AUTOMATION_MD.read_text(),
-                  "===== END AUTOMATION MODE =====", ""]
+            parts.append(render_prompt("entry/preamble-native-note"))
+        parts += [render_prompt("entry/automation-wrapper",
+                                automation_md=AUTOMATION_MD.read_text()), ""]
         return parts
 
     @staticmethod
@@ -1886,31 +2045,30 @@ class Orchestrator:
         with this session's concrete values (attention amplification — the
         rules themselves live in the protocol docs)."""
         sid_disp = sid or "<your session id from the session-start context>"
-        lines = ["ENTRY CHECKLIST (do this first, with these exact values):",
-                 f"- claim: set `claimed-by: {sid_disp}@{self._utc_now()}` "
-                 "(refresh the timestamp with `date -u` at claim time)"]
+        lines = [render_prompt("entry/checklist-header"),
+                 render_prompt("entry/checklist-claim", sid_disp=sid_disp,
+                               now=self._utc_now())]
         if role == "dev":
             if task.est_tuple:
                 cur, tot = task.est_tuple
                 nxt, ntot = cur + 1, max(tot, cur + 1)
-                undershoot = (" — this raises <total>: the estimate "
-                              "undershot") if ntot > tot else ""
-                lines.append(f"- session-est: {cur}/{tot} → {nxt}/{ntot}"
-                             f"{undershoot} (part of the claim, §10 Entry 3)")
+                undershoot = (render_prompt("entry/checklist-est-undershoot")
+                              if ntot > tot else "")
+                lines.append(render_prompt(
+                    "entry/checklist-dev-est", cur=cur, tot=tot, nxt=nxt,
+                    ntot=ntot, undershoot=undershoot))
             else:
-                lines.append("- session-est: increment <current> by 1 "
-                             "(part of the claim, §10 Entry 3)")
+                lines.append(render_prompt("entry/checklist-dev-est-unknown"))
             if task.status == "pending":
-                lines.append("- status: pending → in_progress "
-                             "(part of the claim)")
-            lines.append("- pre-load the `prefetch:` docs listed in the "
-                         "task frontmatter")
+                lines.append(render_prompt(
+                    "entry/checklist-dev-claim-status"))
+            lines.append(render_prompt("entry/checklist-dev-prefetch"))
         else:
-            lines.append("- do NOT touch session-est (review sessions "
-                         "don't consume the estimate)")
+            lines.append(render_prompt("entry/checklist-review-est"))
             pending = task.unreviewed_dev_sids()
-            lines.append("- pending review set at dispatch: "
-                         + (", ".join(pending) if pending else "(empty)"))
+            lines.append(render_prompt(
+                "entry/checklist-review-pending",
+                pending=", ".join(pending) if pending else "(empty)"))
         return "\n".join(lines)
 
     def dev_prompt(self, sid: str | None) -> str:
@@ -1918,44 +2076,19 @@ class Orchestrator:
         latest = task.review_entries[-1] if task.review_entries else None
         remediation = bool(latest and latest.verdict == "changes-requested")
         parts = self._preamble(sid)
-        parts.append(
-            f"You are invoked as: `task {self.task_id}` — dev role per the "
-            "Cross-model review section of the protocol. Develop or continue "
-            f"the task per §10. {self._sid_line(sid)} If the session log "
-            "contains review entries with unresolved findings, verify each "
-            "finding against the actual code first, fix the valid ones "
-            "(correctness first), and record any finding you verify as "
-            "invalid in your session-log entry as a dispute — do not "
-            "silently fix or silently skip it.")
+        parts.append(render_prompt("entry/dev-invocation",
+                                   task_id=self.task_id,
+                                   sid_line=self._sid_line(sid)))
         parts.append("\n" + self._entry_checklist("dev", sid, task))
         if remediation:
             group = latest.group or latest.reviewed_sid or latest.session_id
-            parts.append(
-                "\nREMEDIATION SESSION (roles §11, remediation before "
-                "advancement): the latest review verdict is "
-                "changes-requested, so this session ONLY remediates that "
-                "review — fix the valid findings, record disputes for "
-                "invalid ones, then hand back to review. Do NOT advance new "
-                "scope (no new plan steps or features) this session; new "
-                "scope resumes after a pass verdict. Do NOT run preReEst; "
-                "if useful, write `Plan-slice: remediation for review group "
-                f"{group}` in the session-log entry.")
+            parts.append("\n" + render_prompt("entry/dev-remediation",
+                                              group=group))
         else:
-            parts.append(
-                "\npreReEst (dev advancement only): before implementation, "
-                "compare the overall Scope/Acceptance, any `## Session plan`, "
-                "and the latest Session log Next/Open against the remaining "
-                "work. If the current planned slice is too large for one "
-                "effective session, update session-est total and split only "
-                "the current and future unimplemented plan slices; prefer a "
-                "continuation slice like `session-2-cont` over renumbering "
-                "later slices. Do not rewrite completed/reviewed slices. "
-                "Then implement one clear slice and include a simple "
-                "`Plan-slice: <slice-id>` line in your session-log entry when "
-                "a plan slice applies.")
+            parts.append("\n" + render_prompt("entry/dev-pre-re-est"))
         if self.pending_ruling:
-            parts.append(f"\nHUMAN RULING (binding for this session): "
-                         f"{self.pending_ruling}")
+            parts.append("\n" + render_prompt("entry/human-ruling",
+                                              ruling=self.pending_ruling))
             self.pending_ruling = None
         parts.append("\n" + self.checks_preview(
             "dev", sid, task.status, est_before=task.est_tuple,
@@ -1966,18 +2099,12 @@ class Orchestrator:
         task = parse_task(self.task_path)
         return "\n".join([
             *self._preamble(sid),
-            "===== BEGIN ai-coding-review-v2.md =====",
-            REVIEW_RULE.read_text(),
-            "===== END ai-coding-review-v2.md =====",
+            render_prompt("entry/review-rule-wrapper",
+                          review_rule=REVIEW_RULE.read_text()),
             "",
-            f"You are invoked as: `review {self.task_id}` — review role. "
-            f"{self._sid_line(sid)}",
-            "Cross-model independence: your evidence is ONLY the task file "
-            "with its full session log, the relevant `.ai/` docs, and the "
-            "actual commits/diffs of the pending dev sessions (`git log` / "
-            "`git show`). No dev conversation transcript exists; do not ask "
-            "for one. Follow the review-workflow procedure exactly, including "
-            "the `Group:` field and the per-group round budget.",
+            render_prompt("entry/review-invocation", task_id=self.task_id,
+                          sid_line=self._sid_line(sid)),
+            render_prompt("entry/review-independence"),
             "",
             self._entry_checklist("review", sid, task),
             "",
@@ -2020,8 +2147,9 @@ class Orchestrator:
         try:
             try:
                 answer = self.ask_human(
-                    f"Task is BLOCKED by {role} session {blocked_sid}.\n"
-                    f"blockers: {task.blockers}\n\nOpen context:\n{open_ctx}",
+                    render_prompt("midflight/banner-blocked", role=role,
+                                  sid=blocked_sid, blockers=task.blockers,
+                                  open_context=open_ctx),
                     kind="blocked")
                 if session is None:
                     session = self.backend.resume_session(blocked_sid, role)
@@ -2032,13 +2160,7 @@ class Orchestrator:
                     "blocker there (or edit the task file) and restart.")
             self.log(f"resuming blocked {role} session {blocked_sid} "
                      "with answer")
-            prompt = (f"[orchestrator] The human answered your blocker: "
-                      f"{answer}\nRestore `status` to its pre-blocked value "
-                      "(the status on the left of the `→ blocked` in your "
-                      "last session-log entry heading), clear `blockers`, "
-                      "and continue the session per protocol (AUTOMATION "
-                      "MODE rules still apply; end with a clean tree + "
-                      "session-log entry).")
+            prompt = render_prompt("midflight/blocked-resume", answer=answer)
             result = session.turn(prompt)
             if not self.task_path.exists():
                 # Same cc-codex seam as run_session: a resumed blocked
@@ -2058,8 +2180,8 @@ class Orchestrator:
                          "manually")
             problems = self.post_checks(role, blocked_sid, status_before)
             if problems:
-                session.turn("[orchestrator] Protocol violation(s): "
-                             + "; ".join(problems) + " — fix and end.")
+                session.turn(render_prompt("midflight/blocked-violation",
+                                           problems="; ".join(problems)))
         finally:
             self._human_discuss_turn = previous
             if session is not None:
@@ -2081,11 +2203,9 @@ class Orchestrator:
             self.log("convergence: unresolved dispute — escalating "
                      "immediately (no budget rounds spent on it)")
             ruling = self.ask_resumable_human(
-                "DISPUTE UNRESOLVED: the dev session disputed a finding and "
-                "the reviewer still holds it valid.\n"
-                f"Reviewer's line: {m.group(1).strip()[:500]}\n\nLatest "
-                f"review entry:\n{latest.body.strip()[:3000]}\n\nGive a "
-                "binding ruling for the next dev session, or 'stop'.",
+                render_prompt("midflight/banner-dispute",
+                              reviewer_line=m.group(1).strip()[:500],
+                              review_entry=latest.body.strip()[:3000]),
                 kind="dispute-unresolved", sid=latest.session_id,
                 role="review")
             self.pending_ruling = ruling
@@ -2099,10 +2219,8 @@ class Orchestrator:
         if rounds > GROUP_BUDGET:
             findings = latest.body.strip()[:3000]
             ruling = self.ask_resumable_human(
-                f"Convergence budget exhausted (group {group}, {rounds} "
-                "changes-requested rounds).\n\nLatest "
-                f"review entry:\n{findings}\n\nGive a binding ruling for the "
-                "next dev session, or 'stop'.",
+                render_prompt("midflight/banner-convergence", group=group,
+                              rounds=rounds, findings=findings),
                 kind="convergence-budget", sid=latest.session_id,
                 role="review")
             self.pending_ruling = ruling
@@ -2165,17 +2283,9 @@ class Orchestrator:
                      "spawning a fresh close-out session (review role)")
         active_count = len([p for p in self._active_task_paths()
                             if p != self.task_path])
-        prompt = (
-            f"Task '.ai-tasks/{self.task_id}.md' has status: completed. "
-            f"Invoke /ai-sync-v2 now — read '{SYNC_SKILL}' and follow it — to "
-            "apply absorption and archive the task. Before ending, audit all "
-            f"{active_count} remaining active task file(s) in `.ai-tasks/` "
-            "excluding `archive/`: update any blocker, scope, assumptions, "
-            "acceptance criteria, prefetch, estimate, or status changed by "
-            "this completed task. Your final response must include one line "
-            "beginning `Remaining-task audit:` summarizing how many active "
-            "tasks you checked and which task ids changed or did not change. "
-            "End with a clean working tree.")
+        prompt = render_prompt("entry/closeout", task_id=self.task_id,
+                               sync_skill=SYNC_SKILL,
+                               active_count=active_count)
         if self.last_review_agent:
             session = self.backend.resume_session(self.last_review_agent,
                                                   "review")
@@ -2189,19 +2299,14 @@ class Orchestrator:
                     break
                 self.log("close-out violations: " + "; ".join(problems))
                 result = session.turn(
-                    "[orchestrator] Close-out incomplete:\n- "
-                    + "\n- ".join(problems)
-                    + "\nFinish the ai-sync-v2 close-out per the skill. "
-                    "Audit every remaining active task under `.ai-tasks/` "
-                    "excluding `archive/`, update any affected task, remove "
-                    "stale blockers, then end with a clean tree. Your final "
-                    "response must include `Remaining-task audit:`.")
+                    render_prompt("midflight/closeout-incomplete",
+                                  problems="\n- ".join(problems)))
                 problems = self._closeout_problems(result.text)
             if problems:
                 self.ask_session_human(
-                    session, "Close-out still incomplete: "
-                    + "; ".join(problems)
-                    + "\nFinish manually, then type 'done'.",
+                    session,
+                    render_prompt("midflight/banner-closeout-incomplete",
+                                  problems="; ".join(problems)),
                     kind="closeout-incomplete")
         finally:
             session.close()
@@ -2216,9 +2321,9 @@ class Orchestrator:
         the run instead of driving a second close-out."""
         problems = self._closeout_problems(self._native_closeout_text)
         if problems:
-            banner = ("Close-out (performed in-session by the native hook "
-                      "chain) is incomplete:\n- " + "\n- ".join(problems)
-                      + "\nFinish manually, then type 'done'.")
+            banner = render_prompt(
+                "midflight/banner-native-closeout-incomplete",
+                problems="\n- ".join(problems))
             if self.last_review_agent:
                 self.ask_resumable_human(
                     banner, kind="closeout-incomplete",
@@ -2312,10 +2417,8 @@ class Orchestrator:
                     # Everything reviewed, still final_review, and the last
                     # review didn't conclude with a verdict-driven handback:
                     # a dumb scheduler doesn't loop on this.
-                    banner = (
-                        "Task sits at final_review with no unreviewed dev "
-                        "sessions (last review didn't conclude). Give a "
-                        "ruling for a fresh review session, or 'stop'.")
+                    banner = render_prompt(
+                        "midflight/banner-final-review-stall")
                     if latest_rev:
                         ruling = self.ask_resumable_human(
                             banner, kind="final-review-stall",
@@ -2326,8 +2429,8 @@ class Orchestrator:
                     self.pending_ruling = ruling
                     self.last_review_agent = self.run_session(
                         "review",
-                        lambda sid: self.review_prompt(sid)
-                        + f"\nHUMAN RULING (binding): {ruling}")
+                        lambda sid: self.review_prompt(sid) + "\n"
+                        + render_prompt("entry/stall-ruling", ruling=ruling))
                     sessions += 1
                     self.check_convergence()
             else:  # pending / in_progress, nothing awaiting review → dev turn
@@ -2422,6 +2525,10 @@ def main() -> None:
                          "the run at the next safe point. Unset (default): "
                          "interactive stdin, behavior unchanged")
     args = ap.parse_args()
+
+    err = prompts_error()
+    if err:
+        sys.exit(err)
 
     if args.backend == "cursor":
         if args.dev_agent:

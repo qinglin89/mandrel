@@ -1,0 +1,1 @@
+If this dev advancement was working from a `## Session plan`, update only the current and future unimplemented slices so the Next work is one-session-sized; prefer adding a continuation slice like `session-2-cont` over renumbering later slices. 
