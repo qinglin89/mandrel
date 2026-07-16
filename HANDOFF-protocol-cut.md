@@ -37,6 +37,46 @@ plan is a ROLE with the plan-report as its return-value output contract (adopted
 `ai-coding-tasks-v2-tmp.md` is deleted in P3a (it deploys today — no `-tmp` filter
 in deploy.py, the "excluded" was convention only).
 
+### P2 entry brief (for the fresh implementing session)
+
+Read first: `CHARTER.md`, `AUDIT-protocol-cut.md` (§6 is the prompt-site table),
+and the approved plan `/Users/linqing/.claude/plans/cozy-moseying-harbor.md`
+(full plan text; user session-strategy ruling 2026-07-16: one fresh hand session
+per phase; wholesale subagent delegation acceptable only for objective-gated
+phases — P2/P3b — never P3a/P4).
+
+- **Scope** (closed inventory; orchestrator.py line refs at `4be85f2`): builders
+  `dev_prompt` 1916–1963, `review_prompt` 1965–1985, plan-gate initial 1565–1591 +
+  feedback 1681–1706, approved-plan append 1362–1376; nine midflight
+  `[orchestrator]` strings — answered-continue 1392–94, run-error retry 1403–06,
+  context wrap-up 1478–91 (+ role/remediation note variants 1445–73), followup
+  relay 1511, violation fix 1516–24, discussion-turn 1213–19, blocked resume
+  2035–41, blocked violation 2061–62, closeout-incomplete 2192–98; `close_out`
+  2168–78; stall augmentation 2327–30; fragments `_sid_line` 1858–63, `_preamble`
+  1865–77, `_entry_checklist` 1883–1914, `CLEAN_HOWTO` 199–204, `DISCUSSION_HINT`
+  181–83; all `kind=` escalation banners; `check_specs` 1710–1834 →
+  `postcheck-contract.md` (no ID system exists today — P2 introduces IDs).
+- **Mechanism**: `PROMPTS_DIR = ORCH_DIR/"prompts"` (AUTOMATION_MD precedent:
+  ORCH_DIR-relative survives repo-layout changes AND loads unpatched in the mock
+  suite); `{{var}}` substitution, strict; code-side manifest (template name →
+  placeholder set); startup validation = missing/malformed template, unknown
+  placeholder, or postcheck ID↔callable mapping not 1:1 both directions →
+  startup ERROR (same policy as effort validation). Composition (base +
+  mode-add + injected fragments) stays in builder code; `checks_preview` stays
+  GENERATED from the loaded contract.
+- **Gates**: byte-identity ⇒ ZERO edits to the existing ~75 `in prompt` + ~25
+  banner assertions (that is the proof); one NEW mock scenario (startup refusal:
+  missing template + ID mismatch); `pytest tests/` green; log-line formats and
+  `sessions.json` untouched (orch-hub).
+- **Facts that shaped the design**: the mock suite already asserts through
+  externally loaded files (`REVIEW_RULE.read_text()`, session-start.sh output,
+  automation-mode.md) — the seam is proven; `make_repo()` copies real canonical
+  docs; `patch_module()` overrides path constants (an ORCH_DIR-relative
+  PROMPTS_DIR needs no override). Templates deploy automatically with the
+  existing orchestrator bucket → `.cursor/orchestrator/prompts/` (no deploy.py
+  change in P2).
+- **Landing**: single commit; mark P2 landed in the status table above.
+
 Semantic guards for P3a (from the audit — do not drop silently): (1) §10 End step 5
 runs remaining-task reconciliation at EVERY session end — the session-end boundary
 skill keeps it (closeout additionally repeats it); the handoff's earlier
