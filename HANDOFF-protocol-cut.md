@@ -77,6 +77,110 @@ keep parsing, and both execution modes (manual, orchestrated) keep working
 at every step. orch-hub is expected to be untouched (it parses stable log
 lines + task frontmatter only) — confirm, don't assume.
 
+## Target-structure proposal (2026-07-16 discussion — REFERENCE, not binding)
+
+> Produced in a follow-up discussion in the same workstream. It refines the
+> Phase 2 target below. The next session should UNDERSTAND and EVALUATE this
+> proposal against the audit findings, then confirm or adjust — do not
+> inherit it blindly.
+
+Three layers:
+
+1. **protocols/** — roles: `intake`, `plan`, `dev` (advancement |
+   remediation), `review`. Each self-contained and closed:
+   `inputs (task file + assembled context) → role function → declared
+   outputs`. Roles connect to the rest of the system only through declared
+   data and through skills/hooks; anything cross-cutting is defined in the
+   skill/hook, never in the role protocol.
+2. **workflow/** — the caller: orchestrator (or a human executing the same
+   runbook), hooks (session start/stop), core skills (closeout including
+   remaining-task reconciliation, housekeeping, context-check). The
+   **runbook spec** (dispatch table, budgets, escalation paths) stays an
+   explicit single-source document implemented by both executors —
+   hooks/skills are executables, not where the spec lives. Workflow shape:
+   read taskfile → decide role → assemble entry prompt (eager + prefetch)
+   → run session (starthook → work → stophook) → on return: post-check /
+   close-out / escalation / wrap-up.
+3. **meta/** — data + schemas + access contract: `.ai/` (shapes, admission,
+   routing), `.ai-tasks/` (task-file schema, index, archive semantics).
+   Proposal: `scripts/` belongs to workflow (pure executables); meta stays
+   data+schema only — a naming choice for the next session to settle.
+
+Supporting rules (proposed, to ratify or amend):
+
+- **Role vs skill criterion**: dispatched by task state ⇒ role; triggered
+  by a lifecycle event ⇒ skill. Closeout ⇒ skill (it also crosses tasks
+  via remaining-task reconcile). A role may be *packaged* as a skill for
+  invocation (intake today) — its definition (protocol) and its invocation
+  (workflow) are classified separately.
+- **Result dual-channel**: role outputs = task-file declarations ∪ a
+  return value to the caller. Review persists (verdict/findings must
+  survive across sessions); plan returns (the plan-report is consumed
+  immediately by the caller and deliberately not persisted). This also
+  answers the plan-report open question: **plan is a role; the plan-report
+  is its output contract** (a protocol asset); whether/when a plan session
+  runs stays a workflow decision (`--plan-gate`).
+- **Meta read/write asymmetry**: roles READ meta through its access
+  contract; WRITES go only through workflow-invoked skills (closeout
+  absorb, housekeeping) — formalizes the existing "no mid-task `.ai/`
+  edits" convention.
+- **Context assembly by the caller**: static context (eager docs +
+  frontmatter `prefetch:`) is assembled by the workflow into the entry
+  prompt; dynamic mid-session retrieval remains role behavior through the
+  meta read contract. The two backends are two implementations of ONE
+  assembly spec (cursor: orchestrator injection; cc-codex: hooks/CLAUDE.md
+  chain) — spec single-sourced.
+- **automation-mode.md split**: scheduling content → runbook; conduct
+  adjustments (no interactive asks, blocking rules) → a workflow-injected
+  conduct annex; role protocols stay orchestration-unaware.
+
+Mapping of current files (audit should verify, then Phase 2 executes):
+
+| Current | Destination |
+|---|---|
+| ai-coding-v2.md §10/§11 | protocols/dev, protocols/review |
+| ai-coding-v2.md §8/§9 (retrieval) | meta read contract + workflow context-assembly spec |
+| ai-coding-tasks-v2.md | split: taskfile schema → meta; §3 transitions → workflow runbook; close-out section → closeout skill's reference spec |
+| ai-coding-review-v2.md | protocols/review |
+| ai-coding-memory-v2.md | meta (`.ai/` schema + admission) + closeout skill reference |
+| ai-coding-init-v2.md | meta bootstrap (ai-init skill's reference spec) |
+| automation-mode.md | split per rule above |
+| orchestrator README §3/§5/§6 | machine-side implementation doc of the runbook |
+
+### Prompt externalization (user-ruled direction, 2026-07-16)
+
+Orchestrator prompt texts must not stay hardcoded in `orchestrator.py`:
+extract them into single-source template files (workflow-layer artifacts)
+that the orchestrator loads at runtime — the SAME files a human reads when
+standing in for the orchestrator, making human/orchestrator equivalence
+operational. The direction is ruled; the mechanism design belongs to the
+implementing session.
+
+Inventory to externalize (by name; code as of 2026-07-16): role entry
+prompts (`dev_prompt`, `review_prompt`, shared `_preamble` / `_sid_line` /
+`_entry_checklist` fragments); plan-gate prompts (initial PLAN GATE, PLAN
+FEEDBACK two-shape, APPROVED PLAN GATE injection); mid-flight
+`[orchestrator]` prompts (answered-continue, run-error retry, context
+wrap-up, violation fix, blocked resume, close-out incomplete,
+discussion-turn); close-out prompts; escalation banners.
+
+Constraints to preserve:
+
+- `checks_preview` is GENERATED from `check_specs` (told-vs-verified
+  single-sourcing) — in templates it must remain a substitution variable,
+  never frozen prose.
+- Templates instantiate rules with current values (sid, task id, status
+  menus, budget numbers) via variables; they must not restate protocol
+  rules (litmus test 4 applies to templates too).
+- The mock suite asserts prompt substrings — tests must assert through the
+  same loaded templates (or load the same files), so a template edit can
+  never silently diverge from scenario expectations.
+- Templates ship with the deploy payload (`aii-2` alongside
+  `orchestrator.py`); a missing/malformed template is a startup ERROR
+  (refuse, like effort validation), never a silent fallback.
+
+Sizing: fits Phase 3, or as its own pre-phase — next session judges.
+
 ## Phase plan (each phase lands independently)
 
 - **Phase 0 — charter**: write the cut rules above as a short normative
@@ -142,9 +246,17 @@ user; run `aii-2 status` before assuming other targets are current.
 - Exact re-scoped `Next:` wording (proposal: "remaining work / required
   changes on this task; never name sessions or roles").
 - Is the plan-gate plan-report contract protocol data or mechanism-local?
-  (It lives only in orchestrator prompts; manual sessions never run a
-  gate — likely mechanism-local. Decide.)
+  (2026-07-16 proposal: plan is a ROLE and the report is its output
+  contract via the return-value channel — evaluate against the audit,
+  then decide.)
 - Audit depth for memory-v2 / init-v2 / skills (expected light — confirm).
+- Prompt templates (ruled direction, see above): file format and location
+  (e.g. `canonical/orchestrator/prompts/`, one file per prompt vs a
+  bundle), variable syntax, and how the mock suite consumes the same
+  files.
+- Does protocols/workflow/meta become a literal doc/directory layout, or a
+  logical layering inside fewer files? (Deploy surface and CLAUDE.md
+  import chain are affected — decide with `aii-2` mechanics in view.)
 - Confirm orch-hub's task-file/log parsers are unaffected (data shapes
   unchanged → should be a no-op).
 
