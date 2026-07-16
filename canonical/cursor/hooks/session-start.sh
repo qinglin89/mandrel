@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cursor sessionStart hook for the ai-coding-v2 workflow.
+# Cursor sessionStart hook for the ai-protocol workflow.
 #
 # Replicates Claude Code's eager-load semantics (CLAUDE.md @imports) plus the
 # SessionStart housekeeping hint, and additionally injects this conversation's
@@ -8,8 +8,10 @@
 #
 # Injected via additional_context:
 #   1. Session ID line (used for claimed-by / session-log headings).
-#   2. Protocol files: ai-coding-v2.md, ai-coding-memory-v2.md,
-#      ai-coding-tasks-v2.md.
+#   2. The loader (CLAUDE.md, carries the verb→contract mapping) and the
+#      eager protocol set: .ai-protocol/protocols/conduct.md,
+#      .ai-protocol/protocols/dev.md, .ai-protocol/meta/taskfile.md,
+#      .ai-protocol/meta/memory.md.
 #   3. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
 #      .ai/architecture.md current design/conventions entrypoints
 #      (resolved from .ai/index.md routing; .md vs /index.md fallback)
@@ -35,9 +37,11 @@ input=$(cat)
 conversation_id=$(echo "$input" | jq -r '.conversation_id // empty' 2>/dev/null || true)
 
 EAGER_FILES=(
-  ai-coding-v2.md
-  ai-coding-memory-v2.md
-  ai-coding-tasks-v2.md
+  CLAUDE.md
+  .ai-protocol/protocols/conduct.md
+  .ai-protocol/protocols/dev.md
+  .ai-protocol/meta/taskfile.md
+  .ai-protocol/meta/memory.md
   .ai/index.md
   .ai/map.md
   .ai/overview.md
@@ -96,7 +100,7 @@ add_eager_entrypoint "Design" ".ai/design.md" ".ai/design/index.md"
 add_eager_entrypoint "Conventions" ".ai/conventions.md" ".ai/conventions/index.md"
 EAGER_FILES+=(.ai-tasks/index.md)
 
-ctx="PROJECT PROTOCOL CONTEXT (ai-coding-v2) — injected by the sessionStart hook.
+ctx="PROJECT PROTOCOL CONTEXT (ai-protocol) — injected by the sessionStart hook.
 
 Session ID for this conversation: ${conversation_id:-unknown}
 Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the

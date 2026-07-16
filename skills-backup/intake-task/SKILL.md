@@ -1,10 +1,11 @@
 ---
 name: intake-task
-description: Create a new pending task from a user request, conforming to the frontmatter shape in ai-coding-tasks-v2.md (id, status, session-est, prefetch, etc.). Generates the task file under .ai-tasks/ and registers it in .ai-tasks/index.md. Invoke when the user wants to start new work that no existing active task covers.
+description: Create a new pending task from a user request, conforming to the taskfile schema (id, status, session-est, prefetch, etc.). Generates the task file under .ai-tasks/ and registers it in .ai-tasks/index.md. Invoke when the user wants to start new work that no existing active task covers.
 ---
 
-`ai-coding-tasks-v2.md` is the contract (frontmatter §2, task body §4,
-tasks index §5). This skill produces task files that conform.
+This skill packages the intake contract (`.ai-protocol/protocols/intake.md`);
+the taskfile schema (`.ai-protocol/meta/taskfile.md` — frontmatter, body,
+index) defines the shapes. Produce task files that conform.
 
 ## Invocation
 
@@ -34,7 +35,7 @@ When the user requests new work and no active task in `.ai-tasks/index.md` cover
    | `session-est` | `0/<total>` — estimate `<total>` by dividing expected work by ~200k tokens (one effective context window per session for Opus 4.7 1M context) |
    | `blockers` | from user statement + LLM analysis of dependencies on existing active tasks; empty `[]` if none |
    | `prefetch` | suggest 2–5 **lazy** content docs (modules / apis / features / sub-indexes / etc.) from `.ai/index.md` routing relevant to the task. **Exclude eager docs** (overview / architecture / design / conventions) — already in baseline context per memory §2. |
-   | `claimed-by` | empty at intake; set/updated at each session entry that picks up the task (see ai-coding-v2.md §10 Entry) |
+   | `claimed-by` | empty at intake; set/updated at each session entry that picks up the task (claim rules: taskfile schema) |
 
    If `<total>` > 5, flag scope; suggest splitting into smaller independent tasks before proceeding.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Codex CLI SessionStart hook for the ai-coding-v2 workflow.
+# Codex CLI SessionStart hook for the ai-protocol workflow.
 #
 # Port of .cursor/hooks/session-start.sh. Same eager-load semantics; only the
 # Codex I/O surface differs:
@@ -8,18 +8,20 @@
 #              "additionalContext":"..."}}  (plain stdout would also work, but
 #              JSON is explicit and future-proof).
 #
-# Isolation: this script self-gates on the ai-coding protocol marker
-# (ai-coding-v2.md at the git root). It is a silent no-op in any repo that is
-# not an ai-coding-v2 project, so it stays safe even if it is ever promoted
-# from project scope (<repo>/.codex/) to user scope (~/.codex/hooks.json) — the
-# documented fallback when project-scope hooks do not fire in the interactive
-# TUI (see .codex/README.md).
+# Isolation: this script self-gates on the deployed protocol marker
+# (.ai-protocol/protocols/conduct.md at the git root). It is a silent no-op in
+# any repo that is not an ai-protocol project, so it stays safe even if it is
+# ever promoted from project scope (<repo>/.codex/) to user scope
+# (~/.codex/hooks.json) — the documented fallback when project-scope hooks do
+# not fire in the interactive TUI (see .codex/README.md).
 #
 # Injected via additionalContext:
 #   1. Session ID line (used for claimed-by / session-log headings).
 #   2. Codex adaptations preamble (mirrors .cursor/rules/protocol.mdc).
-#   3. Protocol files: ai-coding-v2.md, ai-coding-memory-v2.md,
-#      ai-coding-tasks-v2.md.
+#   3. The loader (CLAUDE.md, carries the verb→contract mapping) and the
+#      eager protocol set: .ai-protocol/protocols/conduct.md,
+#      .ai-protocol/protocols/dev.md, .ai-protocol/meta/taskfile.md,
+#      .ai-protocol/meta/memory.md.
 #   4. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
 #      .ai/architecture.md current design/conventions entrypoints
 #      (resolved from .ai/index.md routing; .md vs /index.md fallback)
@@ -42,16 +44,18 @@ input=$(cat 2>/dev/null || true)
 session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null || true)
 source=$(echo "$input" | jq -r '.source // empty' 2>/dev/null || true)
 
-# Self-gate: only act in an ai-coding-v2 project.
-if [ ! -f "ai-coding-v2.md" ]; then
+# Self-gate: only act in an ai-protocol project.
+if [ ! -f ".ai-protocol/protocols/conduct.md" ]; then
   log "no-protocol-marker root=$root → skip"
   exit 0
 fi
 
 EAGER_FILES=(
-  ai-coding-v2.md
-  ai-coding-memory-v2.md
-  ai-coding-tasks-v2.md
+  CLAUDE.md
+  .ai-protocol/protocols/conduct.md
+  .ai-protocol/protocols/dev.md
+  .ai-protocol/meta/taskfile.md
+  .ai-protocol/meta/memory.md
   .ai/index.md
   .ai/map.md
   .ai/overview.md
@@ -110,7 +114,7 @@ add_eager_entrypoint "Design" ".ai/design.md" ".ai/design/index.md"
 add_eager_entrypoint "Conventions" ".ai/conventions.md" ".ai/conventions/index.md"
 EAGER_FILES+=(.ai-tasks/index.md)
 
-ctx="PROJECT PROTOCOL CONTEXT (ai-coding-v2) — injected by the Codex SessionStart hook.
+ctx="PROJECT PROTOCOL CONTEXT (ai-protocol) — injected by the Codex SessionStart hook.
 
 Session ID for this conversation: ${session_id:-unknown}
 Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the
@@ -125,20 +129,9 @@ Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the
   \`/ai-init\`, \`/ai-housekeeping\`, \`/ctd-tasks\`) map to skills: read
   \`~/.claude/skills/<name>/SKILL.md\` and follow it. (Codex can also load
   these as native skills; see .codex/config.toml.)
-
-== Cross-model review (verb = role, independent of model) ==
-- \`task <id>\`  → dev role: develop or continue the task per §10.
-- \`review <id>\` → review role: evaluate per §6; read and follow
-  \`${root}/.codex/review-workflow.md\`.
-- Status vocabulary extends the base enum with \`final_review\`:
-  - A dev session sets only \`in_progress\` or \`final_review\`; never
-    \`completed\`.
-  - \`final_review\` = dev-complete, awaiting review. It does NOT trigger
-    ai-sync-v2: the Stop hook treats every non-\`completed\` status as
-    in-flight and still enforces the §10 End discipline (clean tree,
-    session-log entry).
-  - Only a review session sets \`completed\`, the sole trigger for the
-    ai-sync-v2 close-out.
+- The verb→contract mapping is in the loader (CLAUDE.md, included below).
+  For \`review <id>\` sessions the review contract is also reachable via the
+  pointer file \`${root}/.codex/review-workflow.md\`.
 
 The protocol files and the eager memory set follow. Treat them as binding rules.
 "

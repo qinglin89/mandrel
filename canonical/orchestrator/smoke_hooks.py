@@ -35,7 +35,7 @@ PROBE_PROMPT = (
     "files, do NOT run any commands. Answer from your context only, with "
     "exactly one word:\n"
     "- Reply INJECTED if your context contains a block labeled "
-    "'PROJECT PROTOCOL CONTEXT (ai-coding-v2)'.\n"
+    "'PROJECT PROTOCOL CONTEXT (ai-protocol)'.\n"
     "- Reply CLEAN if it does not.\n"
 )
 

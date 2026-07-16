@@ -1,18 +1,21 @@
 ---
-description: ai-coding-v2 protocol bootstrap (Cursor adaptation)
+description: ai-protocol bootstrap (Cursor adaptation)
 alwaysApply: true
 ---
 
-# Project protocol (ai-coding-v2)
+# Project protocol (ai-protocol)
 
-This project follows the ai-coding-v2 protocol suite. The full protocol text
-and the eager memory set are injected at session start by the `sessionStart`
-hook, as a context block labeled `PROJECT PROTOCOL CONTEXT (ai-coding-v2)`.
-Treat everything in that block as binding rules for this session.
+This project follows the ai-protocol suite (`.ai-protocol/`). The full
+protocol text and the eager memory set are injected at session start by the
+`sessionStart` hook, as a context block labeled
+`PROJECT PROTOCOL CONTEXT (ai-protocol)`. Treat everything in that block as
+binding rules for this session.
 
 **Fallback**: if that block is NOT present in your context (hook disabled or
 failed), before doing any work read, in order, and follow:
-`ai-coding-v2.md`, `ai-coding-memory-v2.md`, `ai-coding-tasks-v2.md`,
+`CLAUDE.md` (the loader — carries the verb→contract mapping),
+`.ai-protocol/protocols/conduct.md`, `.ai-protocol/protocols/dev.md`,
+`.ai-protocol/meta/taskfile.md`, `.ai-protocol/meta/memory.md`,
 `.ai/index.md`, `.ai/map.md`, `.ai/overview.md`, `.ai/architecture.md`,
 `.ai/design.md` (or `.ai/design/index.md` if upgraded),
 `.ai/conventions.md` (or `.ai/conventions/index.md` if upgraded),
@@ -33,7 +36,7 @@ failed), before doing any work read, in order, and follow:
 
 ## Cross-model review
 
-Session roles (dev / review), the `final_review` status, and the handoff rules
-are defined in the shared protocol — `ai-coding-v2.md` §11 (injected at session
-start). The review-role procedure is single-sourced in `ai-coding-review-v2.md`
-(loaded via `.cursor/rules/review-workflow.mdc` on the `review <id>` verb).
+The verb→contract mapping (`task <id>` / `review <id>`) is defined in the
+loader (`CLAUDE.md`, injected at session start). The review-role procedure is
+single-sourced in `.ai-protocol/protocols/review.md` (loaded via
+`.cursor/rules/review-workflow.mdc` on the `review <id>` verb).

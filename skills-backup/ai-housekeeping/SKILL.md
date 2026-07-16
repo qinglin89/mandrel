@@ -3,7 +3,7 @@ name: ai-housekeeping
 description: Scan `.ai/` snapshot for structural drift (oversize docs, sub-item dominance) and apply memory §4 upgrade procedure per user confirmation. Manually invoked when SessionStart hint flags drift or `.ai/.housekeeping-pending` exists. Clears the flag when scan-clean.
 ---
 
-`ai-coding-memory-v2.md` §4 (Size limits, Upgrade procedure, Layered routing invariant) is in baseline context. This skill applies §4 reactively, per doc.
+The memory protocol §4 (Size limits, Upgrade procedure, Layered routing invariant; deployed as `.ai-protocol/meta/memory.md`) is in baseline context. This skill applies §4 reactively, per doc.
 
 ## Invocation
 

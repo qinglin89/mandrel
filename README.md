@@ -10,6 +10,9 @@ and use `status` to verify drift.
 ## Repository Layout
 
 - `canonical/repo-root/` deploys to the target repo root.
+- `canonical/protocols/` deploys to target `.ai-protocol/protocols/` (role contracts).
+- `canonical/workflow/` deploys to target `.ai-protocol/workflow/` (runbook, rolemapping, boundary-skill specs).
+- `canonical/meta/` deploys to target `.ai-protocol/meta/` (taskfile schema, memory protocol, init).
 - `canonical/cursor/` deploys to target `.cursor/`.
 - `canonical/codex/` deploys to target `.codex/`.
 - `canonical/claude/` deploys to target `.claude/`.
@@ -106,10 +109,10 @@ Status reads the target `.ai-deploy-manifest.json` and reports:
 
 Drift returns a nonzero exit code.
 
-For `ai-coding-v2.md` only, status treats memory topic imports inside the
-memory-system block as equivalent when they differ only by single-file versus
-directory entrypoint form, e.g. `@.ai/design.md` and
-`@.ai/design/index.md`. Other files and other edits remain exact hash checks.
+For `CLAUDE.md` only, status treats memory topic imports as equivalent when
+they differ only by single-file versus directory entrypoint form, e.g.
+`@.ai/design.md` and `@.ai/design/index.md`. Other files and other edits
+remain exact hash checks.
 
 The manifest is target-local state: it includes rendered file hashes and local
 absolute paths, so it should remain ignored. The lockfile is portable: it

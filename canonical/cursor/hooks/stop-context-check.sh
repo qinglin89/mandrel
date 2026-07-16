@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cursor stop hook for the ai-coding-v2 workflow.
+# Cursor stop hook for the ai-protocol workflow.
 # Port of .claude/hooks/stop-context-check.sh — same invariants and case
 # logic; only the I/O surface differs:
 #   - stdin: conversation_id (instead of session_id), transcript_path.
@@ -8,8 +8,8 @@
 #   - /ai-sync-v2 is invoked by pointing the agent at the skill file.
 #
 # Invariant enforced: a task's "advancement" signals — a session-log entry and
-# status=completed — must never run ahead of a clean working tree. §10 End
-# orders it "step1 make the tree clean → then write the log / set completed".
+# status=completed — must never run ahead of a clean working tree. The
+# session-end procedure (workflow/skills/session-end.md) orders it "step1 make the tree clean → then write the log / set completed".
 # The hook computes working-tree cleanliness ONCE on entry (STRICT: includes
 # untracked files) and gates the advancement branches on it.
 #
@@ -70,6 +70,8 @@ fi
 
 # Shared definition of "make the tree clean", stated as a classification frame
 # (not an imperative action list) so the model judges each file by its nature.
+# Single source: workflow/skills/session-end.md step 1 (mirrored here and in the
+# orchestrator's midflight/clean-howto template).
 CLEAN_HOWTO="make the working tree clean (\`git status --porcelain\` empty) — each modified file committed, and each untracked file handled by its nature: real work committed; an unwanted scratch file removed; a run-time artifact covered by a gitignore rule for its category (not ignored file-by-file)."
 
 # How the agent invokes /ai-sync-v2 under Cursor (Agent Skill, not slash command).
@@ -109,7 +111,7 @@ status=$(awk '
 if [ "$status" = "completed" ]; then
   if [ "$wt_clean" -eq 0 ]; then
     log "case1-dirty task=$task_file status=completed wt=dirty → block (clean first)"
-    block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per §10 End, ${CLEAN_HOWTO} Then end."
+    block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per the session-end procedure (.ai-protocol/workflow/skills/session-end.md), ${CLEAN_HOWTO} Then end."
   fi
   log "case1 task=$task_file status=completed wt=clean → block (invoke ai-sync-v2)"
   block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it — to apply absorption and archive the task before ending the session. Close-out includes the remaining-task reconciliation; your final response must include one line beginning \`Remaining-task audit:\` (required even when no remaining task changes)."
@@ -127,7 +129,7 @@ if echo "$session_log_section" | grep -q -F "$session_id"; then
   if [ "$wt_clean" -eq 0 ]; then
     # False handoff: log written but tree not clean.
     log "case2b-dirty task=$task_file status=$status log-entry-present wt=dirty → block"
-    block "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. The session-log is an end-of-session record (§10 End: clean tree first, then write the log). Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
+    block "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. The session-log is an end-of-session record (session-end procedure: clean tree first, then write the log). Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
   fi
   # Handoff complete: clean + entry present.
   log "case2b task=$task_file status=$status log-entry-present wt=clean → allow"
@@ -143,7 +145,7 @@ THRESHOLD=200000
 
 if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD wt=$wt_clean → block (wrap up)"
-  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session, in this order: (1) ${CLEAN_HOWTO} The session-log must not be written ahead of a clean tree. (2) Append a '## Session log' entry to '${task_file}' (Done / Plan-slice if applicable / Next / Open) describing what's been done and what the next session should pick up. ONLY if you are a remediation session (fixing a changes-requested review) whose fix set is not yet complete, include the line '- Handoff: continuation' so remediation continues before re-review; an advancement session never writes that marker — its landed work is reviewed next (protocol §10). If this was a dev advancement session using a '## Session plan', update only the current and future unimplemented slices so Next points to one-session-sized work; prefer adding a continuation slice like 'session-2-cont' over renumbering later slices. If this was a remediation session, do not run preReEst or advance planned scope. (3) Re-estimate the session cost and update the session-est total accordingly — wrapping up early means the original estimate was inaccurate. (4) Do not advance lifecycle status just because of this context wrap-up; keep status unchanged unless restoring protocol legality requires otherwise. The user will resume in a fresh session."
+  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session, in this order: (1) ${CLEAN_HOWTO} The session-log must not be written ahead of a clean tree. (2) Append a '## Session log' entry to '${task_file}' (Done / Plan-slice if applicable / Next / Open) describing what's been done and what the next session should pick up. ONLY if you are a remediation session (fixing a changes-requested review) whose fix set is not yet complete, include the line '- Handoff: continuation' so remediation continues before re-review; an advancement session never writes that marker — its landed work is reviewed next (session-end procedure: .ai-protocol/workflow/skills/session-end.md). If this was a dev advancement session using a '## Session plan', update only the current and future unimplemented slices so Next points to one-session-sized work; prefer adding a continuation slice like 'session-2-cont' over renumbering later slices. If this was a remediation session, do not run preReEst or advance planned scope. (3) Re-estimate the session cost and update the session-est total accordingly — wrapping up early means the original estimate was inaccurate. (4) Do not advance lifecycle status just because of this context wrap-up; keep status unchanged unless restoring protocol legality requires otherwise. The user will resume in a fresh session."
 fi
 
 # Below threshold without log: allow stop (session may be ending naturally early).

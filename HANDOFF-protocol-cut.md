@@ -22,7 +22,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P0 | `CHARTER.md` (boundary law, ratified) | **landed 2026-07-16** |
 | P1 | `AUDIT-protocol-cut.md` (classified leak inventory) | **landed 2026-07-16** — 38 findings (3A/14B/1C/9D/11R), all dispositions name their destination; §-ref fates classified; open questions §10 resolved |
 | P2 | Prompt externalization + postcheck-ID contract, byte-identical (`canonical/orchestrator/prompts/`) | **landed 2026-07-16** — 67 templates (`entry/` 26, `midflight/` 41) + `postcheck-contract.md` (9 check-ids); byte-identity PROVEN (AST-extracted templates; old-vs-new capture: 37 suite prompts + 4 banners + 41 probe texts all identical); zero existing-assertion edits; new scenario 30 (startup refusal); mock 30/30 + pytest 25/25 green |
-| P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | pending |
+| P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | pending |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | pending |
 
@@ -108,6 +108,69 @@ instruction, `AUDIT-protocol-cut.md` HK-01) — single-sourcing from the
 session-end skill resolves it; claude/codex behavior gains the marker line, which
 matches the protocol docs. (3) Log-line formats and all task-file data shapes are
 frozen (orch-hub + mid-flight tasks).
+
+### P3a landing facts (for the P3b session)
+
+All three semantic guards honored: session-end skill keeps per-session
+remaining-task reconciliation (step 5); the three stop-hook wrap-up texts are
+now byte-identical (claude/codex gained the remediation-marker line — HK-01
+drift fixed); no log-line or data-shape changes.
+
+- **New layout**: `canonical/{protocols,meta,workflow}/` → target
+  `.ai-protocol/{protocols,meta,workflow}/` (12 docs). `CLAUDE.md` is the
+  loader (verb→contract mapping + `@.ai-protocol/...` + `@.ai/` imports).
+  Deleted: the five `ai-coding-*.md`, tasks-v2-tmp, automation-mode.md.
+- **automation-mode split**: conduct half → `prompts/entry/conduct-annex.md`
+  (new template, rendered into `automation-wrapper` by `_preamble`;
+  `AUTOMATION_MD` constant gone); scheduling half → runbook §4.4 + the
+  existing `midflight/blocked-resume` template. The annex still carries the
+  End-discipline restatement (AUTO-02) and never-edit list — P3b trims.
+- **deploy.py**: PAYLOADS + 3 buckets; normalization re-keyed
+  `AI_CODING_V2_TARGET` → `CLAUDE_MD_TARGET` and scans the WHOLE file (same 4
+  topics; non-topic variants still rejected). DELIBERATE plan deviation:
+  gitignore block gains `/.ai-protocol/` but KEEPS `/ai-coding*.md` — targets
+  deployed before the cut carry legacy files untracked; dropping the line
+  mid-transition would dirty every target tree and brick their stop hooks.
+  Drop it after post-P4 legacy cleanup (follow-up recorded below).
+- **Hooks**: EAGER_FILES = CLAUDE.md + conduct + dev + taskfile + memory +
+  `.ai/` set; injection label now `PROJECT PROTOCOL CONTEXT (ai-protocol)`
+  (protocol.mdc + smoke_hooks updated to match); codex self-gate marker →
+  `.ai-protocol/protocols/conduct.md` (both codex hooks); codex session-start
+  "Cross-model review" choreography block replaced by one pointer line
+  (HK-04) — the mapping arrives via the injected loader.
+- **Orchestrator**: `REVIEW_RULE` → `.ai-protocol/protocols/review.md`;
+  README slimmed — §3/§5/§6 content moved to runbook/rolemapping, but §
+  NUMBERING retained (stubs + machine mechanics) so test docstrings/§-refs
+  stay valid. Template edits were doc-name re-points only:
+  `review-rule-wrapper` banner (now `===== BEGIN
+  .ai-protocol/protocols/review.md =====`), dev-invocation, dev-remediation
+  ("(dev contract, remediation mode)"), checklist-dev-est(+unknown),
+  wrapup-note-advancement, six postcheck-contract lines ("tasks-v2 §3" →
+  "the taskfile transition table"). Mock churn was ONE assertion (scenario 1
+  review-rule anchor → wrapper banner) + `make_repo`/`patch_module` fixtures.
+- **boundary-lint.sh** (scripts/): layout presence, dead `ai-coding-`
+  references (lines carrying "legacy" or the gitignore glob are allowed),
+  protocols/ purity (no "orchestr", no `§`, no dispatch vocabulary, no other-
+  role session naming, no hook wiring, no skill slash-invocations), dangling
+  `.ai-protocol/*.md` reference check, and `prompts_error()` template
+  validation. Review.md avoids litmus-1 hits by using taskfile vocabulary
+  ("work entries/work sessions") for the entries it evaluates.
+- **Skills** re-pointed LAYOUT-NEUTRALLY (procedure text cites "the memory
+  protocol §3/§4" etc. with the `.ai-protocol/` path as deployment note) so
+  old-layout targets keep working until the P4 wave; globals synced
+  (`aii-2 skills sync-claude-global`: 5 updated, ai-sync/ctd-tasks untouched).
+- **Verified**: mock 30/30, pytest 25/25, boundary-lint OK; real-payload
+  deploy to a scratch target (104 files; 12 `.ai-protocol/` docs; status
+  in-sync; gitignore both lines; cursor+codex session-start hooks inject the
+  new eager set and label; codex self-gate passes).
+- **P3b trim surfaces** (litmus 4, from the audit): conduct-annex End section
+  (AUTO-02) + scope-discipline residue (AUTO-03); ORC-02..06 templates
+  (dev-remediation conduct restatement, dev-pre-re-est, wrapup* variants,
+  violation-fix, closeout); postcheck-contract scheduling parentheticals
+  ("your entry itself hands back to dev remediation", "the sole ai-sync
+  trigger"); `wrapup-note-review`'s "the next review session continues the
+  set"; hook texts trim to instantiation + pointer (HK-01/02/03); ~75 mock
+  substring assertions churn in lockstep.
 
 ## Goal
 
@@ -476,6 +539,10 @@ user; run `aii-2 status` before assuming other targets are current.
   chain are affected — confirm with `aii-2` mechanics in view.)
 - Confirm orch-hub's task-file/log parsers are unaffected (data shapes
   unchanged → should be a no-op).
+- Post-P4 cleanup (after every target is on the new layout): delete the
+  legacy `ai-coding-*.md` files at each target, then drop the transitional
+  `/ai-coding*.md` gitignore line, the conduct-annex/init "(legacy)"
+  mentions, and the ai-init exclusion — one small landing.
 
 ## Key invariants to preserve
 

@@ -67,14 +67,17 @@ def make_repo() -> Path:
     (tmp / ".ai-tasks" / "index.md").write_text(
         f"| [{TASK_ID}]({TASK_ID}.md) | in_progress | mock |\n")
     canonical = Path(__file__).resolve().parents[1]
-    repo_root = canonical / "repo-root"
-    for name in (
-        "ai-coding-v2.md",
-        "ai-coding-memory-v2.md",
-        "ai-coding-tasks-v2.md",
-        "ai-coding-review-v2.md",
+    shutil.copy2(canonical / "repo-root" / "CLAUDE.md", tmp / "CLAUDE.md")
+    for rel in (
+        "protocols/conduct.md",
+        "protocols/dev.md",
+        "protocols/review.md",
+        "meta/taskfile.md",
+        "meta/memory.md",
     ):
-        shutil.copy2(repo_root / name, tmp / name)
+        dst = tmp / ".ai-protocol" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(canonical / rel, dst)
     hooks = tmp / ".cursor" / "hooks"
     hooks.mkdir(parents=True)
     shutil.copy2(canonical / "cursor" / "hooks" / "session-start.sh",
@@ -175,7 +178,7 @@ def patch_module(repo: Path) -> None:
     o.ARCHIVE_DIR = repo / ".ai-tasks" / "archive"
     o.INDEX_FILE = repo / ".ai-tasks" / "index.md"
     o.SESSION_START_SH = repo / ".cursor" / "hooks" / "session-start.sh"
-    o.REVIEW_RULE = repo / "ai-coding-review-v2.md"
+    o.REVIEW_RULE = repo / ".ai-protocol" / "protocols" / "review.md"
     o.SESSION_MAP = repo / ".ai-tasks" / "sessions.json"
     o.Agent = FakeAgent
 
@@ -191,7 +194,7 @@ def new_orch(**kw) -> o.Orchestrator:
 
 
 def bump_est(p: Path) -> None:
-    """What a protocol-conformant dev session does at claim (§10 Entry 3)."""
+    """What a protocol-conformant dev session does at claim."""
     t = p.read_text()
     m = o.re.search(r"^session-est:\s*(\d+)/(\d+)", t, o.re.MULTILINE)
     cur, tot = int(m.group(1)) + 1, int(m.group(2))
@@ -218,7 +221,8 @@ def scenario_1_happy_interim(repo: Path) -> None:
         assert f"review {TASK_ID}" in prompt, "review verb missing from prompt"
         assert "PROJECT PROTOCOL CONTEXT" in prompt, "protocol block missing"
         assert "AUTOMATION MODE" in prompt, "automation fragment missing"
-        assert "review-workflow.mdc" in prompt, "review rule missing"
+        assert "===== BEGIN .ai-protocol/protocols/review.md =====" in prompt, \
+            "review rule missing"
         assert "ENTRY CHECKLIST" in prompt, "entry checklist missing"
         assert f"pending review set at dispatch: {DEV_SID}" in prompt, \
             "pending set must be instantiated in the review prompt"
@@ -853,12 +857,12 @@ def scenario_10_context_budget(repo: Path) -> None:
     generic followup); once discipline is met, no further turns are sent
     into the oversized conversation. Scenario 9 left a changes-requested
     verdict, so this dev session is a REMEDIATION — its wrap-up instructs
-    the CONDITIONAL continuation marker (remediation-only, §10)."""
+    the CONDITIONAL continuation marker (remediation-only)."""
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
     FakeRun.conversation_chars = 1_200_000  # ≈300k tokens > 200k budget
 
     def dev_violates(agent: FakeAgent, prompt: str) -> None:
-        bump_est(p)  # claim-time increment (§10 Entry 3)
+        bump_est(p)  # claim-time increment (part of the claim)
         (repo / "wip.txt").write_text("dirty")  # dirty tree, no log entry
 
     def wrap_up(agent: FakeAgent, prompt: str) -> None:
@@ -979,7 +983,7 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
 
 
 def scenario_13_final_gate_loop(repo: Path) -> None:
-    """tasks-v2 §3 table end-to-end at the final gate: reject keeps
+    """Transition table end-to-end at the final gate: reject keeps
     final_review → dev remediation (status untouched) → re-review pass →
     completed → close-out archives."""
     tid = "2026-01-02-final-loop"
@@ -1019,7 +1023,7 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
         p.write_text(p.read_text() + (
             f"\n### 2026-01-10 / {agent.agent_id} / "
             "(final_review → final_review)\n"
-            "- Done: fixed the cap check; status untouched per tasks-v2 §3\n"
+            "- Done: fixed the cap check; status untouched per the table\n"
             "- Next: re-review\n- Open: none\n"))
 
     def gate_passes(agent: FakeAgent, prompt: str) -> None:
@@ -1059,7 +1063,7 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
 
 
 def scenario_14_blocked_review_resume(repo: Path) -> None:
-    """A blocked REVIEW session (§3: any session may block — here a final
+    """A blocked REVIEW session (any session may block — here a final
     gate escalating a ruling) resumes with the REVIEW role, and post-checks
     key on the status it entered with (left side of `→ blocked` in its
     entry heading): restoring final_review must pass without a violation
@@ -1208,7 +1212,7 @@ claimed-by: dev-hhhh-0001@2026-01-12T00:00:00Z
 
 def scenario_16_advancement_wrapup_review_next(repo: Path) -> None:
     """An ADVANCEMENT session over the context budget wraps up WITHOUT the
-    continuation marker (one dev session = one reviewable unit, §10), and
+    continuation marker (one dev session = one reviewable unit), and
     the next dispatched turn is a REVIEW of its landed work — never another
     dev session."""
     tid = "2026-01-05-adv-wrapup"

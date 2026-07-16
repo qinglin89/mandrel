@@ -8,9 +8,9 @@ protocol context applies unchanged.
 ## Never ask inline
 
 A question typed into the conversation reaches nobody and does not pause the
-run. Whenever the protocol would have you ask the user — a Confirm-tier change
-(§7), load-bearing uncertainty (§2 "ask or stop"), or a reviewer finding you
-dispute (§5) — do NOT ask and do NOT guess. Instead, block and end:
+run. Whenever the protocol would have you ask the user — a Confirm-tier
+change, load-bearing uncertainty ("ask or stop"), or a reviewer finding you
+dispute — do NOT ask and do NOT guess. Instead, block and end:
 
 1. Stop the work at a coherent point. Do not start the change that needs the
    answer; do not leave half-applied edits.
@@ -25,25 +25,20 @@ dispute (§5) — do NOT ask and do NOT guess. Instead, block and end:
    Next / Open). Put the full context of the blocker — what you were doing,
    why the decision is load-bearing, the options and their consequences —
    under `Open`.
-5. End the session immediately. Output nothing further. The orchestrator
-   polls the task file, surfaces the question to the human, and resumes this
-   conversation with the answer.
-
-When the orchestrator resumes you with an answer: restore `status` to its
-pre-blocked value (the status on the left of the `→ blocked` in your last
-session-log entry heading), clear `blockers`, and continue.
+5. End the session immediately. Output nothing further.
 
 ## End-of-session discipline (no Stop hook backstop here)
 
-In interactive mode a Stop hook enforces §10 End; under the orchestrator YOU
+In interactive mode a Stop hook enforces the session-end bookkeeping
+(`.ai-protocol/workflow/skills/session-end.md`); under the orchestrator YOU
 must satisfy it unprompted, in this order, before your final message:
 
 1. Working tree clean (`git status --porcelain` empty).
 2. `## Session log` entry appended for THIS session's id (Done / Plan-slice
    if applicable / Next / Open).
-3. `status` set per the status-transition table (`ai-coding-tasks-v2.md` §3)
-   for your session kind — dev sessions NEVER set `completed`; a remediation
-   session never changes status at all.
+3. `status` set per the taskfile transition table
+   (`.ai-protocol/meta/taskfile.md`) for your session kind — dev sessions
+   NEVER set `completed`; a remediation session never changes status at all.
 
 The orchestrator verifies all three after the session and will send the
 violation back to you to fix — but each round-trip wastes a turn; get it
@@ -51,9 +46,9 @@ right the first time.
 
 ## Scope discipline
 
-- Do exactly the invoked role (`task <id>` = dev, `review <id>` = review) for
-  exactly the named task. No opportunistic side work; new work discovered
-  mid-task goes through `/intake-task` as a pending task per §10.
-- Never edit `ai-coding-*.md`, `CLAUDE.md`, `.claude/**`, or `~/.claude/**`.
-- Do not edit `.ai/` mid-task (snapshot writes happen only at close-out via
-  /ai-sync-v2, when the orchestrator asks for it explicitly).
+- Do exactly the invoked work for exactly the named task. No opportunistic
+  side work; new work discovered mid-task goes through the intake contract
+  as a pending task (conduct: scope discipline).
+- Never edit `.ai-protocol/**`, `ai-coding-*.md` (legacy), `CLAUDE.md`,
+  `.claude/**`, or `~/.claude/**`.
+- Do not edit `.ai/` mid-task (snapshot writes happen only at close-out).

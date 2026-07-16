@@ -15,14 +15,21 @@ from .paths import GITIGNORE_BEGIN, GITIGNORE_END, canonical_root, registry_path
 
 PAYLOADS: tuple[tuple[str, str], ...] = (
     ("repo-root", ""),
+    ("protocols", ".ai-protocol/protocols"),
+    ("workflow", ".ai-protocol/workflow"),
+    ("meta", ".ai-protocol/meta"),
     ("cursor", ".cursor"),
     ("codex", ".codex"),
     ("claude", ".claude"),
     ("orchestrator", ".cursor/orchestrator"),
 )
 
+# /ai-coding*.md stays during the layout transition: targets deployed before
+# the .ai-protocol/ cut still carry the legacy files untracked; drop the line
+# once every target has had its legacy docs removed after the deploy wave.
 GITIGNORE_BLOCK = f"""{GITIGNORE_BEGIN}
 /.ai-deploy-manifest.json
+/.ai-protocol/
 /.cursor/
 /.codex/
 /.claude/
@@ -40,9 +47,9 @@ GITIGNORE_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
-AI_CODING_V2_TARGET = "ai-coding-v2.md"
+CLAUDE_MD_TARGET = "CLAUDE.md"
 NORMALIZED_SHA256_FIELD = "normalized_sha256"
-AI_CODING_V2_MEMORY_IMPORT_TOPICS = frozenset(
+CLAUDE_MD_MEMORY_IMPORT_TOPICS = frozenset(
     {
         "overview",
         "architecture",
@@ -126,24 +133,17 @@ def _venv_python_path(venv_path: Path) -> Path:
     return venv_path / "bin" / "python"
 
 
-def _normalize_ai_coding_v2_memory_imports(data: bytes) -> bytes:
+def _normalize_claude_md_memory_imports(data: bytes) -> bytes:
+    """Treat the eager `@.ai/<topic>.md` imports in the loader (CLAUDE.md)
+    and their directory-form `@.ai/<topic>/index.md` upgrades as the same
+    content for status purposes. Applies to the four upgradeable memory
+    topics only, anywhere in the file — the loader is fully deploy-owned."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return data
 
-    start = text.find("Protocol: `ai-coding-memory-v2.md`")
-    if start == -1:
-        return data
-
-    end = text.find("\n## 9. Work tracking", start)
-    if end == -1:
-        return data
-
-    before = text[:start]
-    block = text[start:end]
-    after = text[end:]
-    lines = block.splitlines(keepends=True)
+    lines = text.splitlines(keepends=True)
     normalized_lines: list[str] = []
 
     for line in lines:
@@ -156,17 +156,17 @@ def _normalize_ai_coding_v2_memory_imports(data: bytes) -> bytes:
 
         if stripped.startswith(prefix) and stripped.endswith(suffix):
             topic = stripped[len(prefix) : -len(suffix)]
-            if topic in AI_CODING_V2_MEMORY_IMPORT_TOPICS:
+            if topic in CLAUDE_MD_MEMORY_IMPORT_TOPICS:
                 body = f"{prefix}{topic}.md{trailing}"
 
         normalized_lines.append(body + newline)
 
-    return (before + "".join(normalized_lines) + after).encode("utf-8")
+    return "".join(normalized_lines).encode("utf-8")
 
 
 def _status_bytes(item: DeploymentItem, data: bytes) -> bytes:
-    if item.target_relative_path == AI_CODING_V2_TARGET:
-        return _normalize_ai_coding_v2_memory_imports(data)
+    if item.target_relative_path == CLAUDE_MD_TARGET:
+        return _normalize_claude_md_memory_imports(data)
     return data
 
 
@@ -344,7 +344,7 @@ def deploy_canonical(
             "sha256": file_info["sha256"],
             "size_bytes": file_info["size_bytes"],
         }
-        if item.target_relative_path == AI_CODING_V2_TARGET:
+        if item.target_relative_path == CLAUDE_MD_TARGET:
             manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item, rendered_bytes)
         manifest_records.append(manifest_record)
         source_stat = item.source_path.stat()

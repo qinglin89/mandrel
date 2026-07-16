@@ -1,1 +1,1 @@
-- session-est: increment <current> by 1 (part of the claim, §10 Entry 3)
+- session-est: increment <current> by 1 (part of the claim)

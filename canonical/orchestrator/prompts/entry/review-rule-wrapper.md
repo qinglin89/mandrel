@@ -1,3 +1,3 @@
-===== BEGIN ai-coding-review-v2.md =====
+===== BEGIN .ai-protocol/protocols/review.md =====
 {{review_rule}}
-===== END ai-coding-review-v2.md =====
+===== END .ai-protocol/protocols/review.md =====

@@ -5,9 +5,15 @@ Agent-facing memory for `.ai/` snapshot: pay re-derivation cost once at admissio
 ## 1. Invariants
 
 - `.ai/` is for agents (compressed, machine-parsable). `docs/` is for humans. Never mix styles.
+- `.ai/` is version-controlled.
 - Code is truth. When `.ai/` conflicts with code, update `.ai/`.
 - Snapshot (`.ai/`) describes current state — timeless.
-- Close-out operations (snapshot writes via §3/§4, task archive, removing the task's row from `.ai-tasks/index.md`) are `/ai-sync-v2`'s exclusive domain. LLM session work stops at the End procedure (`ai-coding-v2.md` §10 End steps 1-5); do not pre-absorb, pre-edit `.ai/`, pre-archive the task, or pre-remove the task's row from the active index.
+- Sessions READ `.ai/`; writes happen only through the task-completion
+  closeout (`.ai-protocol/workflow/skills/closeout.md`: snapshot writes via
+  §3/§4, task archive, removing the task's row from `.ai-tasks/index.md`) and
+  housekeeping. Session work stops at the session-end bookkeeping; do not
+  pre-absorb, pre-edit `.ai/`, pre-archive the task, or pre-remove the task's
+  row from the active index.
 - All `.ai/` content in English.
 - Prefer fewer mechanisms over more contracts. When adding a step or data structure, first check whether an existing one already carries the same semantics. Layered mechanisms degrade execution fidelity multiplicatively.
 
@@ -19,6 +25,10 @@ Agent-facing memory for `.ai/` snapshot: pay re-derivation cost once at admissio
 | Lazy | `Read` on demand, via routing | all other files in `.ai/` |
 
 Eager set carries routing (`index`, `map`, `tasks/index`), project invariants (`overview`, `architecture`, `design`), and writing rules (`conventions`) — every decision and every code write needs them. Lazy set is inventory (`modules`, `apis`, `features`, etc.) — loaded per task via routing.
+
+How the eager set reaches a session (root imports, hook injection, or a
+caller-assembled preamble) is the caller's context-assembly concern, not part
+of this contract; this table defines only WHAT is eager and WHAT is lazy.
 
 Initial snapshots use single-file entries (`design.md`, `conventions.md`). Directory-form entries (`design/index.md`, `conventions/index.md`) exist only after the normal §4 upgrade trigger. Session-start loaders must resolve the current entrypoint from `.ai/index.md` routing when possible, with file-shape fallback for partially initialized repos.
 

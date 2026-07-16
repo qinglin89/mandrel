@@ -3,10 +3,12 @@ name: ai-sync-v2
 description: Apply absorption for a completed task. Reviews the task's session log and the session's working context (decisions, code changes, reasoning), applies admission tests from the memory protocol; if any finding passes, absorbs into Snapshot. Always archives the task and reconciles remaining active tasks. Invoked by Stop hook when task.status reaches completed; may also be called manually.
 ---
 
-`ai-coding-memory-v2.md` (admission §3, propagation §4) and
-`ai-coding-tasks-v2.md` (task shapes + lifecycle close-out §5) are both in
-baseline context (loaded via `CLAUDE.md` → `ai-coding-v2.md`). Refer
-directly; do not re-Read.
+This skill packages the task-completion closeout
+(spec: `.ai-protocol/workflow/skills/closeout.md`). The memory protocol
+(admission §3, propagation §4; deployed as `.ai-protocol/meta/memory.md`) and
+the taskfile schema (deployed as `.ai-protocol/meta/taskfile.md`) are both in
+baseline context (loaded via the `CLAUDE.md` chain). Refer directly; do not
+re-Read.
 
 `.ai/index.md`, `.ai/map.md`, `.ai-tasks/index.md` are also baseline-loaded.
 Read other content docs on demand per memory §2 (loading contract).
@@ -80,7 +82,7 @@ Stop hook fires this skill when the active task transitions to
    **Always**:
    a. Move task file to `.ai-tasks/archive/` (creating the directory if it doesn't exist).
    b. Remove task line from `.ai-tasks/index.md`.
-   c. Remaining-task reconciliation (tasks protocol §6 — required even when
+   c. Remaining-task reconciliation (closeout spec — required even when
       no remaining task changes): audit every other active task under
       `.ai-tasks/` excluding `archive/`. Update blockers / scope /
       assumptions / acceptance criteria / prefetch / estimate / status
@@ -99,7 +101,7 @@ Stop hook fires this skill when the active task transitions to
    - Routing entries consistent with edits.
 10. Print summary: absorbed? / docs touched / task archived / (if any) housekeeping flagged.
     The summary MUST contain one line in exactly this shape (the
-    orchestrator greps the final response for it):
+    caller verifies the final response carries it):
     `Remaining-task audit: checked N active task(s); updated <ids|none>; unchanged <ids|none>`
 
 ## Edge cases

@@ -1,12 +1,14 @@
 # Orchestrator operations manual
 
 Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task with a
-different model per role. The orchestrator is a **dumb scheduler**: it reads
-the task file (status + session log), dispatches the next session, verifies
-protocol discipline afterwards, and pauses for a human on every decision it
-is not allowed to make itself. All protocol semantics live in the shared
-docs (`ai-coding-v2.md` §10/§11, `ai-coding-tasks-v2.md`,
-`ai-coding-review-v2.md`); the orchestrator only counts and checks.
+different model per role. The orchestrator is the **machine executor** of the
+workflow spec (`.ai-protocol/workflow/runbook.md` + `rolemapping.md`) — a
+dumb scheduler: it reads the task file (status + session log), dispatches the
+next session, verifies declared outputs afterwards, and pauses for a human on
+every decision it is not allowed to make itself. All protocol semantics live
+in the deployed suite (`.ai-protocol/`: role contracts, taskfile schema); the
+orchestrator only counts and checks. This README is the machine-side
+implementation notes; the runbook is the executor-neutral spec.
 
 Everything in this directory is gitignored.
 
@@ -80,28 +82,18 @@ per-session context ceiling, replicating `stop-context-check.sh`.
 
 Note on cc-codex permissions: `claude -p` runs with
 `--dangerously-skip-permissions` and codex with `danger-full-access` (both
-overridable) — the safety gates are the protocol layer (automation-mode
+overridable) — the safety gates are the protocol layer (conduct-annex
 blocking rules, authority tiers) plus the post-checks, not per-command
 approval prompts or filesystem sandboxes.
 
 ## 3. How a turn is chosen (state machine)
 
-Each loop iteration re-parses the task file from scratch — there is no
-in-memory flow state. That means you can stop the orchestrator at any point
-(Ctrl-C between sessions, `stop` at a prompt) and later restart it, or
-interleave manual Claude Code / Codex / Cursor sessions: it re-derives the
-turn from the file.
-
-Decision order per iteration:
-
-1. `status: completed` → **close-out** (ai-sync-v2 via the review agent), then exit.
-2. `status: blocked` → **surface the blocker to you**, resume the blocked
-   conversation with your answer (see §5.4).
-3. Any dev session-log entry not yet named by a `review of <sid>` entry
-   → **review turn** (one review session covers the whole pending set).
-4. `status: final_review` with nothing pending → the last review didn't
-   conclude; **ask you for a ruling**, then dispatch a fresh review with it.
-5. Otherwise (`in_progress`/`pending`, nothing awaiting review) → **dev turn**.
+Turn selection is specified in the runbook (`.ai-protocol/workflow/runbook.md`
+§2) — the orchestrator implements it verbatim. Each loop iteration re-parses
+the task file from scratch — there is no in-memory flow state. That means you
+can stop the orchestrator at any point (Ctrl-C between sessions, `stop` at a
+prompt) and later restart it, or interleave manual Claude Code / Codex /
+Cursor sessions: it re-derives the turn from the file. Implementation view:
 
 ```mermaid
 flowchart TD
@@ -121,16 +113,6 @@ flowchart TD
     F -- no --> DEV[dev session\nFable-5] --> P
 ```
 
-Typical full cycle: dev advances scope (`in_progress`) → review of that
-session (changes-requested, interim) → dev **remediation session** (fixes
-valid findings / disputes invalid ones — never advances new scope and never
-touches status, per the status-transition table in `ai-coding-tasks-v2.md`
-§3) → review re-checks the group → pass → dev advances the next scope chunk
-→ … → dev sets `final_review` → final gate reviews the WHOLE findings
-ledger → pass → `completed` → close-out. A final gate that cannot pass
-keeps `final_review` and the loop dispatches dev remediation; it reverts to
-`in_progress` only if `final_review` was set in error (task not actually
-dev-complete).
 
 ## 4. What one session looks like
 
@@ -151,11 +133,12 @@ assembled by the orchestrator:
   (with `AI_ORCH` stripped for that one call). The `cc-codex` backend skips
   this — CC's CLAUDE.md import chain / hooks and Codex's hooks load the
   protocol natively (verified: both fire headless);
-- `automation-mode.md` — headless rules: never ask inline, block via
-  `status: blocked` instead; self-enforce §10 End (clean tree, session-log
-  entry, role-legal status);
+- the conduct annex (`prompts/entry/conduct-annex.md`) — headless rules:
+  never ask inline, block via `status: blocked` instead; self-enforce the
+  session-end bookkeeping (clean tree, session-log entry, role-legal
+  status);
 - role invocation line (`task <id>` / `review <id>`); review prompts also
-  inline the full `ai-coding-review-v2.md`;
+  inline the full review contract (`.ai-protocol/protocols/review.md`);
 - an **ENTRY CHECKLIST** instantiated with this session's concrete values
   (claimed-by id@timestamp; dev: `session-est: 1/3 → 2/3` and
   `pending → in_progress` when applicable; review: the pending review set
@@ -169,7 +152,7 @@ assembled by the orchestrator:
 - a **POST-SESSION CHECKS** preview — rendered from the SAME spec table
   `post_checks` executes afterwards (single-sourced, so prompt and checker
   cannot drift). The status line of the preview is the per-session-kind
-  menu from the tasks-v2 §3 transition table, instantiated with the entry
+  menu from the taskfile transition table, instantiated with the entry
   status (advancement / remediation / interim / final gate).
 
 The **conversation id is the session id** — it's what appears in
@@ -187,7 +170,7 @@ After the agent ends, the orchestrator replays the Stop-hook checks:
    found at entry);
 4. review entries additionally need `Verdict:` and `Group:` lines;
 5. dev sessions must have incremented `session-est` `<current>` (part of
-   the §10 claim; review sessions don't consume the estimate);
+   the claim; review sessions don't consume the estimate);
 6. a remediation session (latest review verdict was changes-requested at
    entry) must not have changed `status` at all.
 
@@ -217,7 +200,7 @@ run tens-of-k — 46k–87k observed across the 2026-07-04 drills). Over
   by adding a slice like `session-2-cont` instead of renumbering later slices.
   If wrap-up still fails after `MAX_FOLLOWUPS`, you're asked to fix manually.
 
-**One dev session = one reviewable unit** (§10): an ADVANCEMENT session's
+**One dev session = one reviewable unit** (runbook §3): an ADVANCEMENT session's
 landed work is reviewed before the next dev session advances, no matter
 why the session ended (planned convergence or context overage) — its
 wrap-up is an ordinary clean handoff and never writes a continuation
@@ -238,7 +221,10 @@ can no longer silently answer a blocker), and empty answers are re-prompted.
 
 ## 5. Human interactions (all of them)
 
-Every escalation looks the same on the terminal:
+Escalation semantics (budgets, rulings, what each escalation means) are
+specified in the runbook (`.ai-protocol/workflow/runbook.md` §4); this
+section is the machine-side mechanics. Every escalation looks the same on
+the terminal:
 
 ```
 ========================================================================
@@ -294,7 +280,7 @@ stdin (for an external supervisor such as orch-hub; no tty needed):
 
 ### 5.1 Request event (agent tried to ask interactively)
 
-`automation-mode.md` forbids inline questions; if an agent still emits a
+The conduct annex forbids inline questions; if an agent still emits a
 `request` (awaiting input/approval), the orchestrator cancels the run and
 asks you. Your answer is sent into the same conversation with an instruction
 to continue headless. This is a backstop — reaching it at all means the
@@ -326,15 +312,15 @@ Marked turns discuss the violations with the same live session first.
 ### 5.4 Blocked task (`status: blocked`)
 
 The agent hit a Confirm-tier change, load-bearing uncertainty, or a
-disputed finding, and blocked per automation-mode. You're shown
+disputed finding, and blocked per the conduct annex. You're shown
 `blockers:` plus the `Open` section of the latest log entry. Your answer is
 sent via `Agent.resume` into the ORIGINAL conversation (full context
 preserved), with instructions to restore the pre-blocked status (the left
 side of `→ blocked` in its entry heading), clear `blockers`, and continue.
 The resume uses the blocked session's own role — any session may block per
-the §3 table (e.g. a reviewer escalating its round budget), so a blocked
-reviewer resumes as review and is post-checked against the review
-transitions for the status it entered with.
+the transition table (e.g. a reviewer escalating), so a blocked reviewer
+resumes as review and is post-checked against the review transitions for
+the status it entered with.
 
 A marked answer resumes the original conversation for a read-only
 clarification turn only. Its reply becomes a new `blocked` question; the task
@@ -361,7 +347,7 @@ not an escalation signal.)
 
 **Unresolved disputes skip the budget**: when a dev session disputed a
 finding and the re-review still holds it valid, the reviewer writes a
-`Dispute-unresolved: …` line in its entry (per `ai-coding-review-v2.md`);
+`Dispute-unresolved: …` line in its entry (per the review contract);
 the orchestrator pauses on that marker immediately — a two-sided
 disagreement is escalated on round 1, not looped until the budget runs
 out. Same banner mechanics (`DISPUTE UNRESOLVED`), same binding-ruling
@@ -420,22 +406,11 @@ session uses the standard no-session re-ask.
 ### 5.8 Plan confirmation (`--plan-gate`)
 
 With the flag on, every formal dev advancement session is preceded by a
-separate **read-only shadow planning session**. Remediation sessions after a
+separate **read-only shadow planning session** under the plan contract
+(`.ai-protocol/protocols/plan.md` — read-only bounds, the six report
+headings, and the revision shapes live there). Remediation sessions after a
 `changes-requested` review skip this gate because the review findings already
-define the repair plan. The planning session uses the upcoming dev session's
-perspective to report what it learned and what it plans to do, but must not
-execute the normal entry checklist, claim the task, change
-`session-est`/status, append a session-log entry, edit files, run tests/builds,
-start services, install dependencies, or generate artifacts. It may do bounded
-read-only discovery: read the task/session log, frontmatter `prefetch:` docs,
-and a small number of directly relevant source/test files; run short read-only
-inspection commands such as `rg`, `sed`, `ls`, `git show`, and
-`git diff --name-only`. It then replies with fixed headings:
-`Goal / Acceptance`, `Confirmed Facts`,
-`Assumptions / Unknowns`, `Work Approach`, `Verification Strategy`, and
-`Risks / Likely Failure Points`; empty sections say `None identified`. The
-`Work Approach` section should be concise and name key files/modules only when
-they materially clarify the plan, not as a complete file-by-file checklist.
+define the repair plan.
 
 The loop revolves around that reply as a **plan-report artifact**: everything
 from the `## Goal / Acceptance` line to the end of the reply is captured as
@@ -481,22 +456,14 @@ change-level risk — they are complementary.
 
 ## 6. Attaching to an in-flight task
 
-Fully supported — turn detection is stateless (§3). Mappings:
-
-| Task state at attach | First action |
-|---|---|
-| latest entry = dev entry marked `Handoff: continuation` (+ latest verdict changes-requested) | dev remediation turn (fix set still open; re-review deferred). Marker without an open remediation → ignored with a WARNING, normal dispatch |
-| dev entries unreviewed (any tool made them) | review turn (reviewer needs only task file + git, no transcript) |
-| all reviewed, `in_progress` (e.g. after a changes-requested review) | dev turn — dev verifies findings, fixes valid ones (correctness first), records disputes |
-| `final_review` + unreviewed dev entries | review turn (final gate) |
-| `final_review`, all reviewed, latest verdict changes-requested | dev remediation turn (status stays `final_review`) |
-| `final_review`, all reviewed, no verdict-driven handback | ruling prompt (§5.6) |
-| `blocked` (by a previous orchestrator run) | blocker prompt → resume (§5.4) |
-| `blocked` (by a manual session) | **crashes — unblock manually first** (§5.4 caveat) |
-| `completed` | close-out with a fresh review-model session |
-
-Group budgets are continuous across attach: counting re-scans ALL review
-entries in the file, including pre-orchestrator ones.
+Fully supported — turn detection is stateless (§3). The attach table
+(task state → first action) and the session-mode taxonomy live in
+`.ai-protocol/workflow/rolemapping.md`. Machine-side specifics: a task left
+`blocked` by a manual session whose id the configured backend cannot resume
+exits with guidance instead of resuming (§5.4 caveat); `completed` attaches
+straight to close-out with a fresh review-model session; group budgets are
+continuous across attach (counting re-scans ALL review entries in the file,
+including pre-orchestrator ones).
 
 ## 7. Logs and monitoring
 

@@ -1,16 +1,16 @@
 ---
 name: ai-init
-description: Initialize `.ai/` snapshot content for a project. Two modes — greenfield (no substantive target-project surface after excluding deployed AI infrastructure; user describes project) and brownfield (existing target-project codebase, multi-pass scan to derive `.ai/`). Follows `ai-coding-init-v2.md`. Assumes infrastructure (CLAUDE.md, protocol files, hooks, gitignore) is already deployed externally.
+description: Initialize `.ai/` snapshot content for a project. Two modes — greenfield (no substantive target-project surface after excluding deployed AI infrastructure; user describes project) and brownfield (existing target-project codebase, multi-pass scan to derive `.ai/`). Follows the init procedure (`.ai-protocol/meta/init.md`). Assumes infrastructure (CLAUDE.md, protocol files, hooks, gitignore) is already deployed externally.
 ---
 
-`ai-coding-init-v2.md` is the canonical procedure. This skill orchestrates user-facing flow.
+`.ai-protocol/meta/init.md` is the canonical procedure. This skill orchestrates user-facing flow.
 
 ## Precondition
 
 Infrastructure must already be in place (deployed externally, e.g., by a setup script):
 
-- `CLAUDE.md` loads `@ai-coding-v2.md`
-- Protocol files present: `ai-coding-v2.md`, `ai-coding-memory-v2.md`, `ai-coding-tasks-v2.md`, `ai-coding-init-v2.md`
+- `CLAUDE.md` (the loader) imports the deployed `.ai-protocol/` suite
+- Protocol suite present: `.ai-protocol/protocols/`, `.ai-protocol/meta/` (incl. `meta/init.md`), `.ai-protocol/workflow/`
 - `.claude/hooks/stop-context-check.sh` and `.claude/hooks/session-start-housekeeping-check.sh` installed and executable
 - `.claude/settings.json` registers Stop + SessionStart hooks
 - `.gitignore` excludes `.ai-tasks/`
@@ -32,12 +32,12 @@ Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is re
    - If `.ai/index.md` exists but `.ai-tasks/index.md` is absent → treat as partial / broken init; stop and ask the user whether to repair the tasks layer or perform an explicit full rebuild.
 
 3. **Detect mode from target-project surface**:
-   - First exclude deployed AI protocol/tooling paths: `ai-coding-*.md`, `.claude/**`, `.codex/**`, `.cursor/**`, `.ai/**`, `.ai-tasks/**`, `.ai-deploy-*.json`.
+   - First exclude deployed AI protocol/tooling paths: `.ai-protocol/**`, `ai-coding-*.md` (legacy), `.claude/**`, `.codex/**`, `.cursor/**`, `.ai/**`, `.ai-tasks/**`, `.ai-deploy-*.json`.
    - No substantive source, build files, or product documentation remain → **greenfield**. If the repo only contains excluded infrastructure, ask the user for project goals instead of inferring them from that infrastructure.
    - Substantial target-project codebase (working source, build artifacts, product README with content) → **brownfield**.
    - Ambiguous → ask the user.
 
-4. **Execute mode-specific procedure per `ai-coding-init-v2.md`**:
+4. **Execute mode-specific procedure per `.ai-protocol/meta/init.md`**:
 
    **Greenfield**:
    - Ask user for enough project context to initialize the snapshot: purpose, users, scope, non-goals, tech stack, major capabilities, external systems, deployment/runtime expectations, and known constraints
@@ -45,7 +45,7 @@ Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is re
    - Mark sections lacking user input as `<!-- TODO -->`
    - Create a bounded set of initial pending tasks that covers the system at the feature/scope level. Target 10-25 tasks; do not exceed 30 during init
    - Treat tasks as a work pool, not a timeline. Split by functional scope or architectural responsibility. Express hard dependencies only through existing `blockers` frontmatter
-   - Follow the `.ai-tasks/` task definition from `ai-coding-tasks-v2.md`
+   - Follow the `.ai-tasks/` task definition from the taskfile schema (`.ai-protocol/meta/taskfile.md`)
    - Ensure at least one initial task is unblocked and specific enough for a dev session to start
 
    **Brownfield** (5 passes per init-v2; target-project surface only):

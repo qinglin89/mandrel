@@ -1,4 +1,4 @@
-# Codex CLI project-layer config for the ai-coding-v2 workflow (quantx).
+# Codex CLI project-layer config for the ai-protocol workflow.
 #
 # This file is discovered when Codex is run from within this repo and the
 # project .codex/ layer is trusted (`/hooks` in the TUI, or
@@ -20,7 +20,7 @@ matcher = "startup|resume|clear|compact"
 type = "command"
 command = "{{REPO_ROOT}}/.codex/hooks/session-start.sh"
 timeout = 15
-statusMessage = "Loading ai-coding-v2 protocol"
+statusMessage = "Loading ai-protocol context"
 
 [[hooks.Stop]]
 
@@ -28,4 +28,4 @@ statusMessage = "Loading ai-coding-v2 protocol"
 type = "command"
 command = "{{REPO_ROOT}}/.codex/hooks/stop-context-check.sh"
 timeout = 30
-statusMessage = "Checking ai-coding-v2 session-end discipline"
+statusMessage = "Checking ai-protocol session-end discipline"

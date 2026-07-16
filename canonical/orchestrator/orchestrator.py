@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dev↔review orchestrator for the ai-coding-v2 workflow (local,
+"""Dev↔review orchestrator for the ai-protocol workflow (local,
 single-machine, status-driven state machine, pluggable execution backend).
 
 Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task, with a
@@ -63,13 +63,13 @@ TASKS_DIR = REPO / ".ai-tasks"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 INDEX_FILE = TASKS_DIR / "index.md"
 SESSION_START_SH = REPO / ".cursor" / "hooks" / "session-start.sh"
-# Canonical review workflow (single source; the .cursor/.codex files are
+# Canonical review contract (single source; the .cursor/.codex files are
 # pointers to it — inject the real text, not a pointer).
-REVIEW_RULE = REPO / "ai-coding-review-v2.md"
-AUTOMATION_MD = ORCH_DIR / "automation-mode.md"
+REVIEW_RULE = REPO / ".ai-protocol" / "protocols" / "review.md"
 # Single-source prompt/banner templates + the postcheck contract (see
-# prompts/README.md). ORCH_DIR-relative like AUTOMATION_MD: survives repo
-# layout changes and needs no override in the mock suite.
+# prompts/README.md). ORCH_DIR-relative: survives repo layout changes and
+# needs no override in the mock suite. The headless conduct annex is the
+# entry/conduct-annex template (the automation-mode rules).
 PROMPTS_DIR = ORCH_DIR / "prompts"
 POSTCHECK_CONTRACT = PROMPTS_DIR / "postcheck-contract.md"
 SYNC_SKILL = Path.home() / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
@@ -191,7 +191,7 @@ CONTEXT_BUDGET = int(os.environ.get("ORCH_CONTEXT_BUDGET", "200000"))
 
 DEV_LEGAL_STATUSES = {"in_progress", "final_review", "blocked"}
 # reviewer transitions, keyed by status found at entry (status-transition
-# table: ai-coding-tasks-v2.md §3; in_progress from final_review is legal
+# table: .ai-protocol/meta/taskfile.md; in_progress from final_review is legal
 # only for the "final_review set in error" revert):
 REVIEW_LEGAL = {
     "in_progress": {"in_progress", "blocked"},
@@ -205,7 +205,7 @@ REVIEW_LEGAL = {
 # per prompt/fragment) — the same files a human standing in for the
 # orchestrator reads, so the two executors cannot drift. Composition (which
 # fragments, in what order, separators, list joins) stays in builder code;
-# templates are text atoms, loaded per use like AUTOMATION_MD. The manifests
+# templates are text atoms, loaded per use. The manifests
 # declare each template's exact placeholder set; prompts_error() refuses
 # startup on a missing/malformed template, an undeclared placeholder, or a
 # postcheck contract that doesn't map 1:1 onto the code-side checks — same
@@ -227,6 +227,7 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "entry/checklist-review-est": frozenset(),
     "entry/checklist-review-pending": frozenset({"pending"}),
     "entry/checks-preview-header": frozenset(),
+    "entry/conduct-annex": frozenset(),
     "entry/closeout": frozenset({"task_id", "sync_skill", "active_count"}),
     "entry/dev-invocation": frozenset({"task_id", "sid_line"}),
     "entry/dev-pre-re-est": frozenset(),
@@ -505,7 +506,7 @@ class LogEntry:
 
     @property
     def is_continuation(self) -> bool:
-        """Remediation-only wrap-up marker (§10): the remediation session
+        """Remediation-only wrap-up marker (dev contract): the remediation session
         wrapped before its fix set was complete; remediation resumes in a
         fresh session and re-review waits until the fix set completes. An
         advancement session never writes it — one dev session is one
@@ -1697,7 +1698,7 @@ class Orchestrator:
                 followups += 1
                 if session.context_tokens > CONTEXT_BUDGET:
                     # Over budget AND discipline unmet: one wrap-up turn.
-                    # The handoff note depends on the session kind (§10):
+                    # The handoff note depends on the session kind:
                     # only an incomplete REMEDIATION fix set may defer its
                     # re-review via the continuation marker.
                     if role == "review":
@@ -1896,7 +1897,7 @@ class Orchestrator:
         (None skips — review sessions don't consume the estimate; a resumed
         blocked session already counted). was_remediation: latest review
         verdict was changes-requested at dev entry → status must not change
-        (tasks-v2 §3)."""
+        (taskfile transition table)."""
         sid_disp = sid or "<this session's id>"
         specs: list[tuple[str, str, object]] = []
         specs.append((
@@ -1921,8 +1922,8 @@ class Orchestrator:
                     if task.status in {status_before, "blocked"} else
                     f"remediation session changed status `{status_before}` "
                     f"→ `{task.status}` — a remediation session never "
-                    "touches status (tasks-v2 §3); restore it (re-review "
-                    "is triggered by your session-log entry)"))
+                    "touches status (taskfile transition table); restore "
+                    "it (re-review is triggered by your session-log entry)"))
             else:
                 specs.append((
                     "dev-advancement-status",
@@ -1939,8 +1940,9 @@ class Orchestrator:
                     if any(e.is_continuation for e in own):
                         return ("`- Handoff: continuation` on an advancement"
                                 " entry — the marker is remediation-only "
-                                "(§10); remove it: an advancement session's "
-                                "landed work is reviewed after every session")
+                                "(dev contract); remove it: an advancement "
+                                "session's landed work is reviewed after "
+                                "every session")
                     return None
                 specs.append((
                     "dev-no-continuation-marker",
@@ -1958,8 +1960,8 @@ class Orchestrator:
                         return None
                     return (f"session-est not incremented: still {task.est} "
                             f"(was {cur}/{tot}) — a dev session increments "
-                            "<current> as part of the claim (§10 Entry step "
-                            "3); raise <total> too if the estimate "
+                            "<current> as part of the claim; raise "
+                            "<total> too if the estimate "
                             "undershot")
                 specs.append((
                     "dev-est-increment",
@@ -2032,7 +2034,8 @@ class Orchestrator:
         else:
             parts.append(render_prompt("entry/preamble-native-note"))
         parts += [render_prompt("entry/automation-wrapper",
-                                automation_md=AUTOMATION_MD.read_text()), ""]
+                                automation_md=render_prompt(
+                                    "entry/conduct-annex")), ""]
         return parts
 
     @staticmethod
@@ -2041,7 +2044,7 @@ class Orchestrator:
 
     def _entry_checklist(self, role: str, sid: str | None,
                          task: TaskState) -> str:
-        """Item-level instantiation of the §10 Entry / review-v2 claim steps
+        """Item-level instantiation of the entry-bookkeeping claim steps
         with this session's concrete values (attention amplification — the
         rules themselves live in the protocol docs)."""
         sid_disp = sid or "<your session id from the session-start context>"
@@ -2116,7 +2119,7 @@ class Orchestrator:
     def handle_blocked(self) -> None:
         task = parse_task(self.task_path)
         blocked_sid = task.claimed_by.split("@")[0].strip()
-        # The §3 table lets ANY session block — dev or review (e.g. a
+        # The transition table lets ANY session block — dev or review (e.g. a
         # reviewer escalating its round budget). Resume with the role the
         # blocked session actually had, and post-check against the status
         # it entered with: the left side of `→ blocked` in its entry
@@ -2380,7 +2383,7 @@ class Orchestrator:
                 task.review_entries
                 and task.review_entries[-1].verdict == "changes-requested")
             if marker and not remediation_open:
-                # The marker is remediation-only (§10). On an advancement
+                # The marker is remediation-only (dev contract). On an advancement
                 # entry it is protocol-illegal — ignore it rather than
                 # skipping the review.
                 self.log("WARNING: `Handoff: continuation` on a "
@@ -2407,7 +2410,7 @@ class Orchestrator:
                 latest_rev = (task.review_entries[-1]
                               if task.review_entries else None)
                 if latest_rev and latest_rev.verdict == "changes-requested":
-                    # Final-gate rejection keeps final_review (tasks-v2 §3);
+                    # Final-gate rejection keeps final_review (transition table);
                     # the next turn is a dev remediation session.
                     self.log("final-gate rejection: dispatching dev "
                              "remediation (status stays final_review)")

@@ -13,14 +13,16 @@ def write(path: Path, content: str = "content\n") -> Path:
     return path
 
 
-AI_CODING_V2_WITH_MEMORY_IMPORTS = """# AI Coding Rules
+CLAUDE_MD_WITH_MEMORY_IMPORTS = """# Project protocol (loader)
 
-## 8. Memory system
+## Protocol imports
 
-Protocol: `ai-coding-memory-v2.md` (data shapes, admission, maintenance).
-Bootstrap: `ai-coding-init-v2.md` via `/ai-init`.
+@.ai-protocol/protocols/conduct.md
+@.ai-protocol/protocols/dev.md
+@.ai-protocol/meta/taskfile.md
+@.ai-protocol/meta/memory.md
 
-@ai-coding-memory-v2.md
+## Memory (eager set)
 
 @.ai/index.md
 @.ai/map.md
@@ -29,11 +31,7 @@ Bootstrap: `ai-coding-init-v2.md` via `/ai-init`.
 @.ai/design.md
 @.ai/conventions.md
 
-## 9. Work tracking
-
-Protocol: `ai-coding-tasks-v2.md` (frontmatter, session log shape, lifecycle close-out).
-
-@ai-coding-tasks-v2.md
+## Work tracking
 
 @.ai-tasks/index.md
 """
@@ -43,7 +41,9 @@ def make_source(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     canonical = root / "canonical"
     write(canonical / "repo-root" / "CLAUDE.md", "claude instructions\n")
-    write(canonical / "repo-root" / "ai-coding-v2.md", "protocol\n")
+    write(canonical / "protocols" / "dev.md", "dev contract\n")
+    write(canonical / "workflow" / "runbook.md", "runbook\n")
+    write(canonical / "meta" / "taskfile.md", "taskfile schema\n")
     write(canonical / "cursor" / "hooks" / "session-start.sh", "#!/bin/sh\n")
     write(canonical / "cursor" / "hooks.json", "{}\n")
     write(canonical / "codex" / "README.md", "codex\n")
@@ -84,6 +84,9 @@ def test_manifest_creation(tmp_path: Path) -> None:
     assert saved["schema_version"] == 1
     assert saved["target_repo_path"] == str(target.resolve())
     assert ".codex/config.toml" in saved["files"]
+    assert ".ai-protocol/protocols/dev.md" in saved["files"]
+    assert ".ai-protocol/workflow/runbook.md" in saved["files"]
+    assert ".ai-protocol/meta/taskfile.md" in saved["files"]
 
     rendered_config = (target / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "{{REPO_ROOT}}" not in rendered_config
@@ -160,17 +163,17 @@ def test_status_target_modified(tmp_path: Path) -> None:
     assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
 
 
-def test_status_allows_ai_coding_v2_target_memory_import_index_variants(tmp_path: Path) -> None:
+def test_status_allows_claude_md_target_memory_import_index_variants(tmp_path: Path) -> None:
     source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "ai-coding-v2.md", AI_CODING_V2_WITH_MEMORY_IMPORTS)
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
-    target_text = (target / "ai-coding-v2.md").read_text(encoding="utf-8")
+    target_text = (target / "CLAUDE.md").read_text(encoding="utf-8")
     target_text = target_text.replace("@.ai/design.md", "@.ai/design/index.md")
     target_text = target_text.replace("@.ai/conventions.md", "@.ai/conventions/index.md")
-    write(target / "ai-coding-v2.md", target_text)
+    write(target / "CLAUDE.md", target_text)
 
     result = deploy.check_status(target, root=source)
 
@@ -178,15 +181,15 @@ def test_status_allows_ai_coding_v2_target_memory_import_index_variants(tmp_path
     assert not result.drifts
 
 
-def test_status_allows_ai_coding_v2_canonical_memory_import_index_variants(tmp_path: Path) -> None:
+def test_status_allows_claude_md_canonical_memory_import_index_variants(tmp_path: Path) -> None:
     source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "ai-coding-v2.md", AI_CODING_V2_WITH_MEMORY_IMPORTS)
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
-    canonical_text = AI_CODING_V2_WITH_MEMORY_IMPORTS.replace("@.ai/design.md", "@.ai/design/index.md")
-    write(source / "canonical" / "repo-root" / "ai-coding-v2.md", canonical_text)
+    canonical_text = CLAUDE_MD_WITH_MEMORY_IMPORTS.replace("@.ai/design.md", "@.ai/design/index.md")
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", canonical_text)
 
     result = deploy.check_status(target, root=source)
 
@@ -194,19 +197,19 @@ def test_status_allows_ai_coding_v2_canonical_memory_import_index_variants(tmp_p
     assert not result.drifts
 
 
-def test_status_allows_ai_coding_v2_memory_import_variants_with_legacy_manifest(tmp_path: Path) -> None:
+def test_status_allows_claude_md_memory_import_variants_with_legacy_manifest(tmp_path: Path) -> None:
     source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "ai-coding-v2.md", AI_CODING_V2_WITH_MEMORY_IMPORTS)
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
     saved = manifest.read_manifest(target)
-    saved["files"]["ai-coding-v2.md"].pop(deploy.NORMALIZED_SHA256_FIELD)
+    saved["files"]["CLAUDE.md"].pop(deploy.NORMALIZED_SHA256_FIELD)
     manifest.write_manifest(target, saved)
 
-    target_text = (target / "ai-coding-v2.md").read_text(encoding="utf-8")
+    target_text = (target / "CLAUDE.md").read_text(encoding="utf-8")
     target_text = target_text.replace("@.ai/overview.md", "@.ai/overview/index.md")
-    write(target / "ai-coding-v2.md", target_text)
+    write(target / "CLAUDE.md", target_text)
 
     result = deploy.check_status(target, root=source)
 
@@ -214,21 +217,21 @@ def test_status_allows_ai_coding_v2_memory_import_variants_with_legacy_manifest(
     assert not result.drifts
 
 
-def test_status_rejects_ai_coding_v2_non_topic_memory_import_variant(tmp_path: Path) -> None:
+def test_status_rejects_claude_md_non_topic_memory_import_variant(tmp_path: Path) -> None:
     source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "ai-coding-v2.md", AI_CODING_V2_WITH_MEMORY_IMPORTS)
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
-    target_text = (target / "ai-coding-v2.md").read_text(encoding="utf-8")
+    target_text = (target / "CLAUDE.md").read_text(encoding="utf-8")
     target_text = target_text.replace("@.ai/map.md", "@.ai/map/index.md")
-    write(target / "ai-coding-v2.md", target_text)
+    write(target / "CLAUDE.md", target_text)
 
     result = deploy.check_status(target, root=source)
 
     assert "target modified" in drift_kinds(result)
-    assert any(drift.target_relative_path == "ai-coding-v2.md" for drift in result.drifts)
+    assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
 
 
 def test_status_canonical_changed(tmp_path: Path) -> None:
@@ -243,22 +246,22 @@ def test_status_canonical_changed(tmp_path: Path) -> None:
 
 def test_status_missing_target_file(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
-    (target / "ai-coding-v2.md").unlink()
+    (target / ".ai-protocol" / "protocols" / "dev.md").unlink()
 
     result = deploy.check_status(target, root=source)
 
     assert "missing target file" in drift_kinds(result)
-    assert any(drift.target_relative_path == "ai-coding-v2.md" for drift in result.drifts)
+    assert any(drift.target_relative_path == ".ai-protocol/protocols/dev.md" for drift in result.drifts)
 
 
 def test_status_extra_deployed_file_when_canonical_removed(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
-    (source / "canonical" / "repo-root" / "ai-coding-v2.md").unlink()
+    (source / "canonical" / "protocols" / "dev.md").unlink()
 
     result = deploy.check_status(target, root=source)
 
     assert "extra deployed file" in drift_kinds(result)
-    assert any(drift.target_relative_path == "ai-coding-v2.md" for drift in result.drifts)
+    assert any(drift.target_relative_path == ".ai-protocol/protocols/dev.md" for drift in result.drifts)
 
 
 def test_deploy_excludes_forbidden_files(tmp_path: Path) -> None:
@@ -312,6 +315,7 @@ def test_gitignore_block_is_idempotent(tmp_path: Path) -> None:
     assert "/.codex/" in content
     assert "/.claude/" in content
     assert "/CLAUDE.md" in content
+    assert "/.ai-protocol/" in content
     assert "/ai-coding*.md" in content
     assert "/.ai-tasks/" in content
     assert "/.ai-deploy-manifest.json" in content

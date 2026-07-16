@@ -16,7 +16,8 @@ Used for first-time setup of project memory. Ordinary `/ai-init` runs only when 
 
 Mode detection and brownfield scanning operate on the target-project surface, not the whole repository. Before judging greenfield vs brownfield, exclude deployed AI protocol/tooling paths:
 
-- `ai-coding-*.md`
+- `.ai-protocol/**`
+- `ai-coding-*.md` (legacy layout, kept excluded during the transition)
 - `.claude/**`
 - `.codex/**`
 - `.cursor/**`
@@ -56,7 +57,7 @@ No initial tasks are derived for brownfield — `.ai-tasks/index.md` stays `(non
 3. Leave sections without user input as `<!-- TODO -->`.
 4. Create a bounded set of initial pending tasks that covers the system at the feature/scope level. Target 10-25 tasks; do not exceed 30 during init.
 5. Tasks are a work pool, not a timeline. Split by functional scope or architectural responsibility. Express hard dependencies only through existing `blockers` frontmatter.
-6. All tasks follow the `.ai-tasks/` task definition from `ai-coding-tasks-v2.md`.
+6. All tasks follow the `.ai-tasks/` task definition from the taskfile schema (`.ai-protocol/meta/taskfile.md`).
 7. At least one initial task should be unblocked and specific enough for a dev session to start.
 8. Initial tasks are provisional. Later sessions may update pending task scope, blockers, estimates, or split/add/remove tasks as project understanding improves, following the normal session workflow.
 9. Stamp `last-updated: <today>`, `verified-against: <current HEAD SHA>`.
@@ -403,4 +404,4 @@ Top-level routing never lists individual sub-files.
 
 ## After Init
 
-Initial content is provisional. Subsequent updates flow via `/ai-sync-v2` at task completion.
+Initial content is provisional. Subsequent updates flow through the task-completion closeout (`/ai-sync-v2`) as tasks complete.
