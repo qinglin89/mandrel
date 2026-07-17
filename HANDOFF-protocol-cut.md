@@ -26,7 +26,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
-| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **P5a landed 2026-07-17** — landing facts below; dev.md split (base + 2 mode adds), eager substrate purified, two-slot dev wrapper injection, `/invoke` skill, charter rule 12, eager-purity lint; mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green. **P5b remains** (runs WITH the user doc-by-doc, never delegated; recommended before the P4 wave so one deploy ships final assembly + final texts) |
+| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **P5a landed 2026-07-17** — landing facts below; dev.md split (base + 2 mode adds), eager substrate purified, two-slot dev wrapper injection, `/invoke` skill, charter rule 12, eager-purity lint; mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green. **P5b closed 2026-07-17** — conduct.md header re-voiced; **dev contracts re-merged per-mode, base retired** (single-slot injection; landing facts below); the remaining voice pass (review/plan/intake + meta) deliberately NOT scheduled — user ruling: the system works, protect product time; reopen only on felt friction. Deferred design annex below. Mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green |
 | P6 | `meta/memory.md` read/write split (write side leaves the ambient channel) | **defined 2026-07-17** (user-ruled: memory ONLY; taskfile explicitly not split) — entry brief below; objective-gated ⇒ delegation-eligible; independent of P5 internals; recommended before the P4 wave |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -546,6 +546,92 @@ Split mechanics (content-preserving; the voice rewrite is still P5b's):
   asserts are path-anchored only — content rewrites churn nothing there;
   review.md/plan.md caveats from the P5 brief unchanged).
 
+### P5b outcome + dev per-mode merge (landed 2026-07-17)
+
+P5b ran interactively as briefed; after two files the register findings
+escalated into structural design and the user cut scope to protect product
+time (the full entry-prompt renders showed the suite self-consistent and
+working — "the short pole is no longer in the system"). Outcomes:
+
+- **conduct.md**: header re-voiced to precedence-only wording ("Contract
+  text delivered at invocation and project-specific rules may extend
+  them") — finding C1. The §7 intake path reference stays: the one
+  sanctioned mid-session contract read (a data-conformance procedure,
+  charter rule 6; intake is never in any session's assembled prompt).
+- **Dev contracts re-merged, base retired** (user-ruled: base=common /
+  add=unique means plain concatenation is the whole contract; the
+  stitching sentences were caller vocabulary inside contract text):
+  `protocols/dev-advancement.md` + `protocols/dev-remediation.md` are
+  content-preserving fusions of base + each add. dev-base.md and both
+  dev-add-*.md DELETED; lint errors if any of the four legacy dev
+  filenames reappears. Ruled semantic deltas beyond the verbatim fusion:
+  the three stitching sentences dropped; base's status-pointer bullet
+  fused with each mode's own vocabulary (advancement: full menu inline;
+  remediation: status-unchanged line); remediation does NOT inherit
+  base's adjust-body/scope/est or est-calibration bullets (they
+  contradict its no-scope-advance rule); the user's interim hand-edits
+  to the old advancement add were reverted as redundant restatements.
+- **Orchestrator**: single-slot injection — DEV_BASE_RULE gone,
+  `DEV_{ADVANCEMENT,REMEDIATION}_RULE` re-pointed; new wrapper templates
+  `entry/dev-{advancement,remediation}-wrapper` ({{dev_rule}}), the three
+  old wrappers deleted; `dev-invocation` drops "(base + mode add)";
+  pre-re-est / dev-remediation templates now say "(dev contract, above)".
+  The plan gate composes dev-advancement + plan (rolemapping composition
+  table updated; remediation still never gates).
+- **Re-points**: loader verb row, rolemapping verb+composition tables,
+  runbook §5/§6, codex README, orchestrator README, `/invoke` dev branch
+  (predicate selects exactly one file; globals resynced), boundary-lint
+  (layout list, legacy-name errors, purity pairs; check 4 gained
+  `-I --exclude-dir=__pycache__` — a recompiled .pyc had started
+  matching), mock (copy list, patched constants, scenarios 11/12
+  single-banner asserts — the old banner-form workaround note is moot).
+- **Deployed-target migration fact**: incremental deploy never removes
+  files — pre-merge targets keep the three old contracts + three old
+  wrapper templates until removed once per target (the stale templates
+  make `prompts_error()` refuse startup, so the miss is loud, same
+  pattern as the P5a dev.md note). The P4 smoke encodes this one-time
+  cleanup; driver updated (A3 count 14→13, A3b/A6/A8/C4 re-anchored).
+- Gates at landing: mock 30/30, pytest 25/25, boundary-lint OK, sandbox
+  smoke 30/30.
+
+### P5b design annex (user-ratified in-session; deliberately not executed)
+
+Register rules for any future contract-text pass, ratified 2026-07-17:
+
+1. **Channel register**: activation-channel contracts speak second-person
+   operative ("You are invoked to…"); ambient substrate stays declarative.
+   (Rule 12 quarantines imperatives to the activation channel; this fixes
+   the register WITHIN it. The remediation contract already partly does.)
+2. **Owner dedup**: contract text carries only role-unique content;
+   anything owned by ambient substrate or caller instantiation is a
+   restatement — bind by reference, never restate. Verified owner table
+   for the old dev-base (every deleted sentence had a live owner):
+   composition → loader + banners; est semantics / entry timing / field
+   glosses → taskfile lines 27 / 83 / 104–116; `.ai/` write bans → memory
+   §1; epistemics / tiers / scope → conduct §2/§6/§7; claim/est/prefetch
+   → caller checklist. Two rules found homeless mid-analysis (would need
+   owners before any such cut): "do not grep across `.ai/`" and the
+   `.ai/`-gap→Done routing — natural owner memory.md §2/§1.
+3. **Reference forms**: path references double as in-context anchors
+   (banners label docs by path) — paths stay canonical everywhere; the
+   title-reference experiment was rejected. Paths to non-ambient files
+   (intake.md, `.ai-tasks/<id>.md`) are true read targets.
+4. **Prompt-unification sketch (L3, not scheduled)**: the loader's
+   workflow prose could leave the orchestrated channel's injection;
+   contract + invocation could merge into one seamless second-person
+   text. Load-bearing details: the invocation line carries the task-id
+   datum (must survive any merge); banners are provenance + mock/path
+   anchors (their removal churns tests for the first time).
+5. **Chronological contract form (user sketch, the preferred end-state
+   for a future pass)**: each mode contract as a temporally ordered
+   walkthrough (enter → work → wrap), stating one core workflow + key
+   emphases; review.md's Procedure is the existing precedent (claim
+   already lives contract-side there). Open tensions if pursued:
+   end-sequence ownership (charter rules 9/10 vs contract-carried
+   chronology — the sequence already reaches every session via
+   POST-SESSION CHECKS / stophook skill / annex) and preReEst-vs-claim
+   ordering.
+
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 
 User ruling (2026-07-17 discussion): split `meta/memory.md` along its
@@ -571,7 +657,8 @@ procedures are consumed only by skill invocations) — the doc layout follows.
 - **Re-point surface**: `workflow/skills/closeout.md` (§3/§4 refs),
   skills-backup `ai-sync-v2` / `ai-housekeeping` / `ai-init` (+ global
   skills resync), boundary-lint layout list (+1 file), deploy doc count
-  14→15 (counts updated for P5a's split; the brief predated it), mock
+  13→14 (counts updated for the P5b per-mode merge; the brief predated
+  it), mock
   `make_repo` copy list, P4 sandbox smoke A3 count. Zero
   EAGER_FILES / CLAUDE.md-import churn by construction.
 - **Gain**: §3–§5 ≈ 60% of the file ≈ ~800 tokens leave every session's

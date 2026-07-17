@@ -1,8 +1,7 @@
 # Conduct
 
-General rules for any session working in this repository. Role contracts in
-this directory extend these rules; project-specific rules may extend them
-further in the project's own documents.
+General rules for any session working in this repository. Contract text
+delivered at invocation and project-specific rules may extend them.
 
 ## 1. General preferences
 

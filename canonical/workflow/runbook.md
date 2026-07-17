@@ -133,8 +133,8 @@ escalation pauses the loop for a binding human answer.
 ## 5. Session boundaries
 
 - **Entry (caller-assembled)**: the entry prompt carries the role contract
-  text (wrapper-injected: review / plan / dev base + the caller-certified
-  mode add — rolemapping's composition table) and instantiates the session's
+  text (wrapper-injected: review / plan / the caller-certified dev mode
+  contract — rolemapping's composition table) and instantiates the session's
   concrete values — claim line (sid@timestamp), est increment, pending
   review set, mode block (remediation group / preReEst), injected fragments
   (approved plan-report, human ruling), and a POST-SESSION CHECKS preview
@@ -165,9 +165,9 @@ self-assembles via hooks/imports; the role contract does NOT ride ambient
 context — the human caller delivers it on the activation channel,
 byte-equivalent to the orchestrator's wrapper injection, either way:
 
-- `/invoke <role> <task-id>` — skill; reads the deployed contract files (for
-  dev it applies the taskfile §3 mode predicate and reads base + exactly one
-  certified mode add), or
+- `/invoke <role> <task-id>` — skill; reads the deployed contract file (for
+  dev it applies the taskfile §3 mode predicate and reads exactly one
+  certified mode contract), or
 - paste the contract file text(s) into the invocation message alongside the
   verb line.
 

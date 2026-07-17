@@ -23,8 +23,8 @@ fail=0
 err() { printf 'boundary-lint: %s\n' "$*" >&2; fail=1; }
 
 # --- 1. layout ---------------------------------------------------------------
-for f in protocols/conduct.md protocols/dev-base.md \
-         protocols/dev-add-advancement.md protocols/dev-add-remediation.md \
+for f in protocols/conduct.md protocols/dev-advancement.md \
+         protocols/dev-remediation.md \
          protocols/review.md protocols/plan.md protocols/intake.md \
          meta/taskfile.md meta/memory.md meta/init.md \
          workflow/runbook.md workflow/rolemapping.md \
@@ -32,7 +32,9 @@ for f in protocols/conduct.md protocols/dev-base.md \
          repo-root/CLAUDE.md; do
   [ -f "canonical/$f" ] || err "missing canonical/$f"
 done
-[ -f "canonical/protocols/dev.md" ] && err "canonical/protocols/dev.md must stay deleted (split at P5a into dev-base + mode adds)"
+for gone in dev.md dev-base.md dev-add-advancement.md dev-add-remediation.md; do
+  [ -f "canonical/protocols/$gone" ] && err "canonical/protocols/$gone must stay deleted (merged into per-mode dev contracts)"
+done
 
 # --- 2. dead doc names -------------------------------------------------------
 dead=$(grep -rnI --exclude-dir=__pycache__ --exclude=boundary-lint.sh 'ai-coding-' \
@@ -63,9 +65,8 @@ purity 're-review waits\|hands\{0,1\} back\|hand the task back\|sends the task\|
 purity 'stop.hook\|stophook' 'hook wiring (workflow-owned, charter rule 10)'
 purity '/ai-sync-v2\|/intake-task\|/ai-init\b' 'skill slash-invocations (contracts reference contracts, not packagings)'
 # other-role session naming inside a role contract (litmus 1)
-for pair in "dev-base.md:review session" \
-            "dev-add-advancement.md:review session" \
-            "dev-add-remediation.md:review session" \
+for pair in "dev-advancement.md:review session" \
+            "dev-remediation.md:review session" \
             "review.md:dev session" \
             "plan.md:dev session" "plan.md:review session" \
             "intake.md:dev session" "intake.md:review session"; do
@@ -98,7 +99,7 @@ if [ -n "$bad" ]; then
 fi
 
 # --- 4. .ai-protocol path references resolve ---------------------------------
-refs=$(grep -rho '\.ai-protocol/[A-Za-z0-9/_-]*\.md' canonical skills-backup 2>/dev/null | sort -u)
+refs=$(grep -rhoI --exclude-dir=__pycache__ '\.ai-protocol/[A-Za-z0-9/_-]*\.md' canonical skills-backup 2>/dev/null | sort -u)
 for ref in $refs; do
   [ -f "canonical/${ref#.ai-protocol/}" ] || err "dangling reference: $ref"
 done

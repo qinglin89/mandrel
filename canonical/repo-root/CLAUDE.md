@@ -12,10 +12,11 @@ text at invocation: orchestrated sessions receive it injected into the entry
 prompt; interactive sessions receive it via the `/invoke` skill or a paste
 (runbook §6, `.ai-protocol/workflow/runbook.md`):
 
-- `task <id>` → dev contract: `.ai-protocol/protocols/dev-base.md` plus the
-  mode add the caller certifies — `dev-add-advancement.md` or
-  `dev-add-remediation.md` (mode predicate: `.ai-protocol/meta/taskfile.md`
-  §3, applied per `.ai-protocol/workflow/rolemapping.md`).
+- `task <id>` → dev contract, the mode file the caller certifies:
+  `.ai-protocol/protocols/dev-advancement.md` or
+  `.ai-protocol/protocols/dev-remediation.md` (mode predicate:
+  `.ai-protocol/meta/taskfile.md` §3, applied per
+  `.ai-protocol/workflow/rolemapping.md`).
 - `review <id>` → review contract: `.ai-protocol/protocols/review.md`.
 
 New work that no active task covers enters through the intake contract

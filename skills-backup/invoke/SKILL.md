@@ -1,6 +1,6 @@
 ---
 name: invoke
-description: Deliver a role contract at session invocation (ai-protocol). /invoke <role> <task-id> reads the deployed contract file(s) under .ai-protocol/protocols/ into context and starts the work — dev (applies the taskfile mode predicate to select the mode add), review, or plan. Interactive equivalent of the orchestrator's contract wrapper injection.
+description: Deliver a role contract at session invocation (ai-protocol). /invoke <role> <task-id> reads the deployed contract file under .ai-protocol/protocols/ into context and starts the work — dev (applies the taskfile mode predicate to select the mode contract), review, or plan. Interactive equivalent of the orchestrator's contract wrapper injection.
 ---
 
 Caller-side contract delivery for interactive sessions (manual workflow
@@ -18,14 +18,14 @@ deployed `.ai-protocol/` tree; in any other repo, say so and stop.
 
 1. Parse `<role>` and `<task-id>` from `$ARGUMENTS`. The task file is
    `.ai-tasks/<task-id>.md`.
-2. Read the contract file(s) for the role — their text is binding for this
+2. Read the contract file for the role — its text is binding for this
    session:
-   - `dev` — read `.ai-protocol/protocols/dev-base.md`, then apply the mode
-     predicate (`.ai-protocol/meta/taskfile.md` §3) to the task file: latest
-     review entry's `Verdict:` is `changes-requested` → read
-     `.ai-protocol/protocols/dev-add-remediation.md`; otherwise → read
-     `.ai-protocol/protocols/dev-add-advancement.md`. Read exactly one add;
-     state the certified mode in your first reply.
+   - `dev` — apply the mode predicate (`.ai-protocol/meta/taskfile.md` §3)
+     to the task file: latest review entry's `Verdict:` is
+     `changes-requested` → read `.ai-protocol/protocols/dev-remediation.md`;
+     otherwise → read `.ai-protocol/protocols/dev-advancement.md`. Read
+     exactly one mode contract; state the certified mode in your first
+     reply.
    - `review` — read `.ai-protocol/protocols/review.md`.
    - `plan` — read `.ai-protocol/protocols/plan.md`.
 3. Work the task under that contract, exactly as if the invocation message

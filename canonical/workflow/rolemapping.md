@@ -30,7 +30,7 @@ contract, and "read it on demand" is not a delivery channel:
 
 | verb | contract |
 |---|---|
-| `task <id>` | `.ai-protocol/protocols/dev-base.md` + exactly one caller-certified mode add: `dev-add-remediation.md` when the latest review verdict is `changes-requested`, else `dev-add-advancement.md` (predicate: taskfile schema §3) |
+| `task <id>` | exactly one caller-certified mode contract: `.ai-protocol/protocols/dev-remediation.md` when the latest review verdict is `changes-requested`, else `.ai-protocol/protocols/dev-advancement.md` (predicate: taskfile schema §3) |
 | `review <id>` | `.ai-protocol/protocols/review.md` (interim at `in_progress`, final gate at `final_review`) |
 | plan gate (caller-initiated) | `.ai-protocol/protocols/plan.md` |
 | intake (new work) | `.ai-protocol/protocols/intake.md` |
@@ -67,14 +67,14 @@ entries in the file, including pre-orchestrator ones.
 ## Prompt composition (caller-assembled entry)
 
 Templates under `.cursor/orchestrator/prompts/` (`entry/` + `midflight/`);
-composition = base + mode-add + injected fragments:
+composition = mode contract + injected fragments:
 
 | kind | composition |
 |---|---|
-| dev advancement | preamble (protocol block or native note) + conduct annex + dev contract text (base + advancement-add wrappers) + dev invocation + entry checklist (claim, est, prefetch) + preReEst block + [approved plan-report] + [human ruling] + checks preview |
-| dev remediation | preamble + conduct annex + dev contract text (base + remediation-add wrappers) + dev invocation + entry checklist + remediation block (group values) + [human ruling] + checks preview |
+| dev advancement | preamble (protocol block or native note) + conduct annex + dev contract text (dev-advancement wrapper) + dev invocation + entry checklist (claim, est, prefetch) + preReEst block + [approved plan-report] + [human ruling] + checks preview |
+| dev remediation | preamble + conduct annex + dev contract text (dev-remediation wrapper) + dev invocation + entry checklist + remediation block (group values) + [human ruling] + checks preview |
 | review (interim/final gate) | preamble + conduct annex + review contract text + review invocation + independence note + entry checklist (pending set, no-est) + checks preview |
-| plan gate | the dev advancement composition as its base prompt (the plan shadow therefore depends on the dev base + advancement-add wrappers riding along; remediation never gates) + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
+| plan gate | the dev advancement composition as its base prompt (the plan shadow therefore carries the dev-advancement contract along; remediation never gates) + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
 | close-out | closeout instruction (task id, active count, skill pointer) |
 
 The checks preview is GENERATED from the postcheck contract at dispatch time
