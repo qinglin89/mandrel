@@ -26,6 +26,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
+| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **defined 2026-07-17** (user-ruled in discussion) — entry brief below; P5a objective-gated (delegation acceptable), P5b runs WITH the user doc-by-doc (never delegated); recommended to land BEFORE the P4 wave so one deploy ships final assembly + final texts |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
 the doc cut (byte-identity proves the loader with zero assertion churn); templates +
@@ -353,6 +354,82 @@ claude/codex CLI session against the sandbox (burns real tokens; sandbox is
 ready for it); (2) the one-wave deploys to hkchain / orch-hub / quantx +
 committing each deploy diff (user-run per repo convention; globals already
 layout-neutral since P3a).
+
+### P5 entry brief (defined 2026-07-17 — assembly symmetrization + protocol-voice pass)
+
+Rulings from the 2026-07-17 discussion (user):
+
+- **dev.md rides the wrong channel.** It is the only role contract in the
+  eager set — second-person imperative text ambient in NON-dev sessions.
+  Live specimen: a re-review session (latest verdict `changes-requested`)
+  carries dev.md's "while the latest verdict is changes-requested, only
+  remediate" — a condition-true, misdirected instruction, suppressed only by
+  activation-layer specificity (a compliance reliance the cut eliminates
+  elsewhere). Size for context: dev.md ≈1.2k tokens (~0.6% of budget) — the
+  cost is awareness/purity, not attention.
+- **Channel principle (to land in CHARTER.md §Rules at P5a)**: imperative /
+  second-person text travels ONLY on the activation channel; the ambient
+  (eager) channel carries only universally-applicable conduct and declarative
+  substrate (schemas, memory contract, indexes, project knowledge).
+- **Caller delivers contracts.** Manual mode's caller is the human
+  (charter: human-as-orchestrator): pasting the contract or invoking a skill
+  is byte-equivalent to orchestrated wrapper injection. Precedent: intake is
+  already a role packaged as a skill for invocation (charter rule 6).
+  Interactive lazy-read ("loaded on demand") is a weak compliance channel to
+  be RETIRED, not a candidate.
+- **Protocol docs still carry conversation/design residue** — not
+  "protocol-voiced" enough. Calibration specimens (review.md): (a)
+  "Self-contained: inputs → evaluation → declared outputs" — architecture
+  self-description (the charter's pure-function model) fed to the session;
+  design-model language belongs to the maintainer layer, not contract text.
+  (b) "## Convergence — To keep the finding-remediation loop bounded:" —
+  workflow-motive narration naming another role's mode. Nuance (user-ruled):
+  cross-role naming is NOT absolutely banned — allowed where it genuinely
+  helps describe THIS role's action (data input/output descriptors); avoided
+  as narrative/rationale.
+
+**P5a — context-assembly symmetrization** (objective-gated):
+
+- Eager substrate := loader (CLAUDE.md) + `protocols/conduct.md` +
+  `meta/taskfile.md` + `meta/memory.md` + `.ai/` eager tier +
+  `.ai-tasks/index.md`. dev.md LEAVES the two session-start `EAGER_FILES`
+  and the CLAUDE.md import block.
+- Contract delivery = caller at activation, ALL roles: orchestrated dev gets
+  a `dev-rule-wrapper` (mirror of the review/plan wrappers; `DEV_RULE`
+  constant). Plan-gate composition then carries dev+plan automatically
+  (base_prompt = dev_prompt already includes the dev wrapper) — record the
+  shadow's dev dependency in rolemapping. Review path unchanged (already
+  injected). Interactive delivery = `/invoke <role>` skills reading the
+  deployed contract file (intake pattern; one parameterized skill vs three
+  separate = P5a design point); paste documented in runbook §6 as the
+  equivalent fallback. Loader keeps the verb→contract mapping (dispatch
+  surface) but points at caller delivery — "loaded on demand" retired.
+- boundary-lint += eager-purity check (EAGER_FILES + CLAUDE.md imports carry
+  no `protocols/*.md` other than conduct.md).
+- Template wording follows (`dev-invocation`'s "in your protocol context" →
+  "above"; `preamble-native-note` re-scoped to substrate). Mock churn
+  expected small; re-run the P4 sandbox smoke (update its C4 to expect the
+  dev wrapper banner). Per-tool hardening (deterministic verb-detection
+  prompt hooks where a tool supports them) = optional follow-up, NOT spec.
+
+**P5b — protocol-voice pass** (interactive with the user; never delegated):
+
+- Scope: the five `protocols/` docs (conduct, dev, review, plan, intake),
+  walked ONE AT A TIME with the user — present findings + proposed rewrite,
+  user rules, land. `meta/` three swept with the same lens afterwards
+  (expected lighter — schema register is already spec-like).
+- Register target: an operative spec addressed to the working session —
+  definitions, requirements, procedures, output shapes. Remove: architecture
+  self-description, workflow-motive narration, design-provenance asides.
+  Rationale lives in CHARTER/audit/handoff (maintainer layer, not deployed).
+- Churn to expect: review.md/plan.md are wrapper-injected, so mock substring
+  assertions re-anchor (scenario 6 asserts plan.md phrasing); boundary-lint
+  purity patterns re-checked (patterns may need updating alongside
+  rewrites); postcheck contract lines unaffected (they cite taskfile).
+
+**Sequencing**: recommended P5a → P5b → P4 wave (one deploy ships final
+assembly + final texts; the optional live drill is also better spent after
+P5). The P4 sandbox smoke re-runs after each landing (cheap).
 
 ## Goal
 
