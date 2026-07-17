@@ -37,7 +37,7 @@ Decision order per iteration (re-parse the task file first):
    blocked conversation with the answer (§4.3).
 3. Any dev session-log entry not yet named by a `review of <sid>` entry →
    **review turn** (one review session covers the whole pending set) —
-   UNLESS the latest entry carries `- Handoff: continuation` (see §3).
+   UNLESS the frontmatter declares `fix-set: open` (see §3).
 4. `status: final_review` with nothing pending → the last review didn't
    conclude; **ask the human for a ruling**, then dispatch a fresh review
    with it (§4.6).
@@ -63,12 +63,13 @@ role-local meanings live in the role contracts:
 - **One dev session = one reviewable unit**: an ADVANCEMENT session's landed
   work is reviewed before the next dev session advances, regardless of why
   the session ended (planned convergence or context overage).
-- **`- Handoff: continuation`** (remediation-only marker): the fix set is
+- **`fix-set: open`** (remediation-only frontmatter flag): the fix set is
   still open — dispatch a fresh DEV (remediation) session instead of a
-  re-review; re-review waits until the fix set completes (latest entry
-  without the marker). A marker on a non-remediation entry is ignored with a
-  warning. Review-side continuation needs no marker: a review that wraps
-  mid-set leaves sids pending, so the next turn is a review anyway.
+  re-review; re-review waits until the fix set completes (`fix-set` back to
+  `complete`/absent). The flag without a changes-requested latest verdict is
+  ignored with a warning. Review-side continuation needs no flag: a review
+  that wraps mid-set leaves sids pending, so the next turn is a review
+  anyway.
 - **Remediation before advancement**: while the latest review verdict is
   `changes-requested`, dev turns dispatch in remediation mode; advancement
   resumes after a `pass` verdict. (Keeps re-reviews delta-only and each

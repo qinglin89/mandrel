@@ -669,6 +669,42 @@ backends, plan-gated) surfaced two findings:
    (closeout.md / ai-sync-v2 / entry template / scenario 22) is
    untouched.
 
+3. **Marker prose false-positive → runaway remediation loop** (fixed,
+   landed 2026-07-18): the remediation session narrated compliance in its
+   Done — "…reviewable unit (no `Handoff: continuation`)" — and the
+   orchestrator's UNANCHORED substring parse (pre-cut code imported with
+   the orchestrator, predates P0) read the mention as the marker: fix set
+   deemed open, re-review deferred, a spurious continuation dev session
+   dispatched. The loop then SELF-REINFORCED: each spurious session read
+   the growing log, imitated the previous entry's closing formula
+   near-verbatim (7 entries / 7 copies of the phrase, sessions 3+ verbatim
+   — in-context imitation, not independent protocol reasoning), and its
+   own clarification ("definitely no continuation") re-armed the
+   misparse. 6 spurious sessions before manual stop.flag; work output
+   never corrupted. **User-ruled fix (both ends strict + channel move)**:
+   the marker LEFT the entry body entirely — new frontmatter field
+   `fix-set: open | complete` (absent = complete), declared only by
+   remediation sessions; entry prose is now structurally inert for
+   dispatch. Write matrix enforced deterministically: `fix-set-value`
+   (universal — present ⇒ exactly open|complete) + `fix-set-closed`
+   (advancement + review — never `open` at session end; replaces
+   dev-no-continuation-marker) post-checks; orchestrator dispatches on
+   `task.fix_set` (same WARNING guard for open-without-remediation);
+   remaining entry fields (Verdict / Group / Dispute-unresolved)
+   line-anchored to the schema's `- X:` list-line grammar, and taskfile
+   §Markers now states the grammar ("a prose mention is not a
+   declaration"). Re-points: dev contracts, review.md step 3 (open fix
+   set ⇒ report and stop), session-end wrap-up variant, wrap-up note
+   templates (advancement note re-voiced positive — the old "do NOT
+   write X" phrasing was itself teaching sessions the fatal string),
+   runbook §2/§3, rolemapping input+attach tables, orchestrator README,
+   charter rule 2 example. Mock: set_fix_set helper; scenarios 10/11
+   drive the flag (incl. a prose-mention-stays-inert entry); scenario 12
+   exercises illegal-open → typo-value → clean across three followups.
+   Data-shape note: first post-cut frontmatter addition (scope-guard
+   freeze lifted by the user's ruling); absent = complete keeps every
+   archived/mid-flight task parsing unchanged.
+
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 
 User ruling (2026-07-17 discussion): split `meta/memory.md` along its

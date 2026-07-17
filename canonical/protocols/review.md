@@ -32,8 +32,8 @@ Classify findings as:
    `.ai-protocol/meta/taskfile.md`).
 3. Determine the pending set: work entries (non-review session-log entries)
    whose session-id is not yet named by any `review of <session-id>` review
-   entry. An entry carrying `- Handoff: continuation` declares an open fix
-   set — not yet a reviewable unit; exclude it from the pending set. If the
+   entry. If the frontmatter declares `fix-set: open`, the work is an open
+   fix set — not yet a reviewable unit; report that and stop. If the
    pending set is empty, report that there is nothing new to review and stop.
 4. For each pending work session, obtain its commits (from `git log` or the
    work entry) and review the actual `git diff`. Classify findings per the

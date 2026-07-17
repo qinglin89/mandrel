@@ -33,7 +33,7 @@ task file. Self-contained: inputs → work → declared outputs. Conduct rules
   handoff, a re-estimated `session-est`, and — when working from a
   `## Session plan` — the remaining work of the current slice split into a
   one-session-sized continuation slice.
-- An advancement session never writes the `- Handoff: continuation` marker.
+- An advancement session never sets frontmatter `fix-set: open`.
 - Modify code per the authority tiers (conduct).
 - Do not edit `.ai/` mid-task (write access per the memory protocol's
   invariants, `.ai-protocol/meta/memory.md`). A `.ai/` gap or discrepancy

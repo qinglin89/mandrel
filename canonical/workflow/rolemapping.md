@@ -13,7 +13,7 @@ session boundary from the file alone. Run-local inputs exist but are
 
 | Input | Durability |
 |---|---|
-| task file: `status`, latest `Verdict:`/`Group:`, `blockers`, unreviewed entries, `- Handoff: continuation`, `Dispute-unresolved:`, `claimed-by` | **durable** (ground truth) |
+| task file: `status`, latest `Verdict:`/`Group:`, `blockers`, unreviewed entries, `fix-set`, `Dispute-unresolved:`, `claimed-by` | **durable** (ground truth) |
 | session-id → tool routing (`logs/sessions.json`) | ephemeral (resume convenience) |
 | pending human ruling | ephemeral (re-escalates after the next failed review) |
 | followup / group-budget / max-session counters | ephemeral (group counts recompute from the file) |
@@ -44,7 +44,7 @@ Four modes of running a session, by conversation lifecycle:
 | new (first-entry) | attach-table dispatch, fresh conversation |
 | continue-turn (iteration) | same open conversation: post-check followups, answered-continue, discussion rounds, plan feedback |
 | resume-by-sid | blocked-resume: reopen the SAME persisted conversation identified by `claimed-by` |
-| fresh-continuation (wrap-up) | new conversation, same contract: remediation `- Handoff: continuation` only (advancement never continues — its landed work is reviewed first) |
+| fresh-continuation (wrap-up) | new conversation, same contract: remediation `fix-set: open` only (advancement never continues — its landed work is reviewed first) |
 
 ## Attach table (in-flight task → first action)
 
@@ -52,7 +52,7 @@ Turn detection is stateless; attaching to any task state is fully supported:
 
 | Task state at attach | First action |
 |---|---|
-| latest entry = dev entry marked `- Handoff: continuation` (+ latest verdict changes-requested) | dev remediation turn (fix set still open; re-review deferred). Marker without an open remediation → ignored with a warning, normal dispatch |
+| frontmatter `fix-set: open` (+ latest verdict changes-requested) | dev remediation turn (fix set still open; re-review deferred). The flag without an open remediation → ignored with a warning, normal dispatch |
 | dev entries unreviewed (any tool made them) | review turn (reviewer needs only task file + git, no transcript) |
 | all reviewed, `in_progress` (e.g. after a changes-requested review) | dev turn (remediation mode) |
 | `final_review` + unreviewed dev entries | review turn (final gate) |

@@ -26,7 +26,7 @@ contract, prompt templates).
    assembled context, role knowledge) → its role's responsibility → declared
    outputs. It never needs to know other session kinds exist.
 2. **Melt rule** — any datum the workflow needs from a session is reified as a
-   protocol field/marker with ROLE-LOCAL semantics ("declare `Handoff: continuation`
+   protocol field/marker with ROLE-LOCAL semantics ("declare `fix-set: open`
    when your fix set is incomplete"). Its scheduling consequence ("remediation
    re-dispatches before re-review") is documented ONLY in the workflow layer. Same
    data, two interpretations, one owner each.

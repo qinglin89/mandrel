@@ -208,16 +208,16 @@ run tens-of-k — 46k–87k observed across the 2026-07-04 drills). Over
 **One dev session = one reviewable unit** (runbook §3): an ADVANCEMENT session's
 landed work is reviewed before the next dev session advances, no matter
 why the session ended (planned convergence or context overage) — its
-wrap-up is an ordinary clean handoff and never writes a continuation
-marker (post-checked). The `- Handoff: continuation` marker is
+wrap-up is an ordinary clean handoff and never opens a fix set
+(post-checked). The frontmatter `fix-set: open` flag is
 **remediation-only**: a remediation session that wraps before its fix set
-is complete marks its entry, and the loop dispatches a fresh DEV
-(remediation) session instead of a re-review; re-review waits until the
-fix set completes (latest entry without the marker). A marker on a
-non-remediation entry is ignored with a WARNING. Review-side continuation
-needs no marker: a review that wraps mid-set leaves sids pending, so the
-next turn is a review anyway (one review entry per pending sid — a sid
-named only in prose stays pending).
+is complete sets it, and the loop dispatches a fresh DEV (remediation)
+session instead of a re-review; re-review waits until the fix set
+completes (`fix-set` back to `complete`/absent). The flag without an open
+remediation is ignored with a WARNING. Review-side continuation needs no
+flag: a review that wraps mid-set leaves sids pending, so the next turn is
+a review anyway (one review entry per pending sid — a sid named only in
+prose stays pending).
 
 Escalation prompts are hardened: every `HUMAN INPUT NEEDED` banner is also
 written to the log file (auditable afterwards), stale buffered stdin lines

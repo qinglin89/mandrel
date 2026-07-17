@@ -213,6 +213,16 @@ def claim(p: Path, agent: "FakeAgent") -> None:
     p.write_text(t)
 
 
+def set_fix_set(p: Path, value: str | None) -> None:
+    """Declare (or clear) the frontmatter fix-set flag like a
+    protocol-conformant remediation session."""
+    t = p.read_text()
+    t = o.re.sub(r"^fix-set:.*\n", "", t, flags=o.re.MULTILINE)
+    if value is not None:
+        t = t.replace("\nclaimed-by:", f"\nfix-set: {value}\nclaimed-by:", 1)
+    p.write_text(t)
+
+
 def bump_est(p: Path, agent: "FakeAgent | None" = None) -> None:
     """What a protocol-conformant dev session does at claim."""
     if agent is not None:
@@ -899,15 +909,16 @@ def scenario_10_context_budget(repo: Path) -> None:
             "over-budget violation must get the wrap-up instruction"
         assert "Do NOT start any new work" in prompt
         assert "ONLY if your remediation fix set is not yet complete" \
-            in prompt, "remediation wrap-up must carry the conditional marker"
-        assert "Handoff: continuation" in prompt
+            in prompt, "remediation wrap-up must carry the conditional flag"
+        assert "fix-set: open" in prompt
         (repo / "wip.txt").unlink()
         p.write_text(p.read_text() + (
             f"\n### 2026-01-08 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
             "- Done: partial fix; wrapped up over context budget\n"
             "- Next: fresh session continues\n"
-            "- Handoff: continuation\n- Open: none\n"))
+            "- Open: none\n"))
+        set_fix_set(p, "open")
 
     FakeAgent.script = [dev_violates, wrap_up]
     orch = new_orch()
@@ -932,10 +943,10 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
     are already the plan."""
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
     task = o.parse_task(p)
-    assert task.entries[-1].is_continuation, \
-        "scenario 10 must have left a continuation entry"
+    assert task.fix_set == "open", \
+        "scenario 10 must have left an open fix set"
     assert task.review_entries[-1].verdict == "changes-requested", \
-        "marker is honored only with an open remediation"
+        "the flag is honored only with an open remediation"
     assert task.unreviewed_dev_sids(), "split entries are pending review"
 
     def dev_completes(agent: FakeAgent, prompt: str) -> None:
@@ -952,8 +963,10 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
         p.write_text(p.read_text() + (
             f"\n### 2026-01-08 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
-            "- Done: completed the fix set\n"
+            "- Done: completed the fix set; ends as one reviewable unit "
+            "(narrating `fix-set` in prose must stay inert)\n"
             "- Next: re-review\n- Open: none\n"))
+        set_fix_set(p, "complete")
 
     FakeAgent.script = [dev_completes]
     orch = new_orch(plan_gate=True)
@@ -967,9 +980,9 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
     assert "review session start" not in log, \
         "re-review must be deferred while the fix set is open"
     assert "dev session start" in log
-    # fix set now complete (latest entry has no marker) → next turn is review
+    # fix set now complete (flag back to complete) → next turn is review
     task = o.parse_task(p)
-    assert not task.entries[-1].is_continuation
+    assert task.fix_set != "open"
     assert len(task.unreviewed_dev_sids()) >= 2, \
         "both split remediation entries await the batched re-review"
     print("scenario 11 (remediation continuation → same-role dev resume, "
@@ -995,27 +1008,33 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
         assert "POST-SESSION CHECKS" in prompt, "check preview missing"
         assert "ONLY when the whole scope is complete" in prompt, \
             "advancement status menu must be in the preview"
-        assert "remediation-only" in prompt, \
-            "no-marker rule must be in the advancement preview"
+        assert "frontmatter `fix-set` is not `open`" in prompt, \
+            "fix-set-closed rule must be in the advancement preview"
         p.write_text(p.read_text() + (
             f"\n### 2026-01-09 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
-            "- Done: work\n- Next: more\n- Handoff: continuation\n"
+            "- Done: work\n- Next: more\n"
             "- Open: none\n"))
+        set_fix_set(p, "open")
 
-    def fixes_est(agent: FakeAgent, prompt: str) -> None:
+    def half_fixes(agent: FakeAgent, prompt: str) -> None:
         assert "session-est not incremented" in prompt, \
             "followup must cite the est violation"
-        assert "remediation-only" in prompt, \
-            "followup must cite the illegal advancement marker"
+        assert "declared only by a remediation" in prompt, \
+            "followup must cite the illegal advancement fix-set: open"
         assert "does not match this session's id" in prompt, \
             "followup must cite the claim-sid violation"
-        # drop the LAST marker occurrence (this session's entry), then bump
-        head, _, tail = p.read_text().rpartition("\n- Handoff: continuation")
-        p.write_text(head + tail)
+        # claim + est fixed, but the fix-set value is corrected to a TYPO —
+        # exercises the fix-set-value shape check on the next round-trip
+        set_fix_set(p, "done")
         bump_est(p, agent)
 
-    FakeAgent.script = [forgets_est, fixes_est]
+    def fixes_value(agent: FakeAgent, prompt: str) -> None:
+        assert "not a legal value" in prompt, \
+            "followup must cite the fix-set value violation"
+        set_fix_set(p, None)
+
+    FakeAgent.script = [forgets_est, half_fixes, fixes_value]
     orch = new_orch()
     orch.ask_human = lambda banner: (_ for _ in ()).throw(
         AssertionError("unexpected escalation"))
@@ -1291,8 +1310,8 @@ claimed-by: dev-iiii-0001@2026-01-13T00:00:00Z
 
     def wrap_up_adv(agent: FakeAgent, prompt: str) -> None:
         assert "Wrap up NOW" in prompt
-        assert "do NOT write a `Handoff: continuation` line" in prompt, \
-            "advancement wrap-up must forbid the marker"
+        assert "your landed slice is a complete reviewable unit" in prompt, \
+            "advancement wrap-up must carry the advancement note"
         assert "ONLY if your remediation fix set" not in prompt, \
             "remediation clause must not leak into an advancement wrap-up"
         (repo / "wip2.txt").unlink()
@@ -1316,7 +1335,7 @@ claimed-by: dev-iiii-0001@2026-01-13T00:00:00Z
     assert "dev session start" in log1
     assert "review session start" not in log1
     task = o.parse_task(p)
-    assert not task.entries[-1].is_continuation, \
+    assert task.fix_set != "open", \
         "advancement wrap-up entry must not carry the marker"
     assert task.unreviewed_dev_sids(), "landed work must be pending review"
 

@@ -24,9 +24,10 @@ Self-contained: inputs → work → declared outputs. Conduct rules
   first.
 - A finding verified invalid is a dispute (conduct: disagreement): record it
   in your session-log entry — do not silently fix and do not silently skip it.
-- Ending with your fix set incomplete: mark your entry with
-  `- Handoff: continuation` — the marker declares an open fix set, which is
-  not yet a reviewable unit. Never write it when the fix set is complete.
+- Ending with your fix set incomplete: set frontmatter `fix-set: open` — it
+  declares an open fix set, which is not yet a reviewable unit. When your
+  fix set is complete, set `fix-set: complete` (this also clears an `open`
+  declared by earlier work on the same fix set).
 - Do not run preReEst and do not advance planned scope. An optional
   `Plan-slice:` line names the review group being remediated
   (`remediation for review group <sid>`).

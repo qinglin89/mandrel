@@ -28,9 +28,13 @@ status: keep `{{status_before}}` UNCHANGED — a remediation session never touch
 
 status per the taskfile transition table (dev advancement): `in_progress` (work remains) | `final_review` (ONLY when the whole scope is complete) | `blocked` (genuine human question) — never `completed`
 
-## dev-no-continuation-marker
+## fix-set-value
 
-no `- Handoff: continuation` line in your entry (the marker is remediation-only — dev contract)
+frontmatter `fix-set`, when present, is exactly `open` or `complete` (absent = complete)
+
+## fix-set-closed
+
+frontmatter `fix-set` is not `open` at your session end (the open flag is declared only by a remediation session whose fix set is incomplete)
 
 ## dev-est-increment
 

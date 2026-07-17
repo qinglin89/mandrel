@@ -309,9 +309,10 @@ POSTCHECK_MANIFEST: dict[str, frozenset[str]] = {
     "tree-clean": frozenset(),
     "session-log-entry": frozenset({"sid_disp"}),
     "claim-sid": frozenset({"sid_disp"}),
+    "fix-set-value": frozenset(),
+    "fix-set-closed": frozenset(),
     "dev-remediation-status": frozenset({"status_before"}),
     "dev-advancement-status": frozenset(),
-    "dev-no-continuation-marker": frozenset(),
     "dev-est-increment": frozenset(
         {"cur", "tot", "nxt", "ntot", "undershoot"}),
     "review-status-final-gate": frozenset(),
@@ -509,22 +510,20 @@ class LogEntry:
 
     @property
     def verdict(self) -> str | None:
-        m = re.search(r"Verdict:\s*([a-z-]+)", self.body)
+        # Entry fields are machine-parsed as exact `- X:` list lines
+        # (taskfile schema); anchored so a prose MENTION of a field name
+        # never parses as the field (live-drill incident: a Done narrating
+        # "(no `Handoff: continuation`)" flipped dispatch for 6 sessions).
+        m = re.search(r"^\s*-\s*Verdict:\s*([a-z-]+)\s*$", self.body,
+                      re.MULTILINE)
         return m.group(1) if m else None
 
     @property
     def group(self) -> str | None:
-        m = re.search(r"Group:\s*(\S+)", self.body)
+        m = re.search(r"^\s*-\s*Group:\s*(\S+)\s*$", self.body,
+                      re.MULTILINE)
         return m.group(1) if m else None
 
-    @property
-    def is_continuation(self) -> bool:
-        """Remediation-only wrap-up marker (dev contract): the remediation session
-        wrapped before its fix set was complete; remediation resumes in a
-        fresh session and re-review waits until the fix set completes. An
-        advancement session never writes it — one dev session is one
-        reviewable unit."""
-        return bool(re.search(r"Handoff:\s*continuation", self.body))
 
 
 @dataclasses.dataclass
@@ -535,6 +534,10 @@ class TaskState:
     claimed_by: str
     est: str
     entries: list[LogEntry]
+    # Frontmatter `fix-set`: "open" = a remediation fix set is incomplete
+    # (not yet a reviewable unit — re-review deferred); "complete"/"" (absent)
+    # = closed. Declared only by remediation sessions (dev contract).
+    fix_set: str = ""
 
     @property
     def est_tuple(self) -> tuple[int, int] | None:
@@ -579,7 +582,7 @@ def parse_task(path: Path) -> TaskState:
             is_review=reviewed is not None, reviewed_sid=reviewed, body=body))
     return TaskState(path=path, status=fm("status"), blockers=fm("blockers"),
                      claimed_by=fm("claimed-by"), est=fm("session-est"),
-                     entries=entries)
+                     entries=entries, fix_set=fm("fix-set"))
 
 
 # --- shell helpers ----------------------------------------------------------
@@ -1948,6 +1951,25 @@ class Orchestrator:
             "claim-sid",
             contract_line("claim-sid", sid_disp=sid_disp),
             _claim_sid))
+
+        def _fix_set_value(task):
+            if task.fix_set and task.fix_set not in ("open", "complete"):
+                return (f"frontmatter `fix-set: {task.fix_set}` is not a "
+                        "legal value — exactly `open` or `complete` "
+                        "(absent = complete)")
+            return None
+        specs.append((
+            "fix-set-value",
+            contract_line("fix-set-value"),
+            _fix_set_value))
+
+        def _fix_set_closed(task):
+            if task.fix_set == "open":
+                return ("frontmatter `fix-set: open` after this session — "
+                        "the open flag is declared only by a remediation "
+                        "session with an incomplete fix set; set "
+                        "`fix-set: complete` or remove the line")
+            return None
         if role == "dev":
             if was_remediation:
                 specs.append((
@@ -1970,18 +1992,10 @@ class Orchestrator:
                     f"(allowed: {sorted(DEV_LEGAL_STATUSES)}; a dev session "
                     "never sets completed)"))
 
-                def _no_marker(task):
-                    own = [e for e in task.entries
-                           if e.session_id == sid and not e.is_review]
-                    if any(e.is_continuation for e in own):
-                        return ("`- Handoff: continuation` on an advancement"
-                                " entry — the marker is remediation-only "
-                                "(dev contract); remove it")
-                    return None
                 specs.append((
-                    "dev-no-continuation-marker",
-                    contract_line("dev-no-continuation-marker"),
-                    _no_marker))
+                    "fix-set-closed",
+                    contract_line("fix-set-closed"),
+                    _fix_set_closed))
             if est_before:
                 cur, tot = est_before
                 nxt, ntot = cur + 1, max(tot, cur + 1)
@@ -2034,6 +2048,10 @@ class Orchestrator:
                 "review-entry-fields",
                 contract_line("review-entry-fields"),
                 _entry_check))
+            specs.append((
+                "fix-set-closed",
+                contract_line("fix-set-closed"),
+                _fix_set_closed))
         return specs
 
     def post_checks(self, role: str, sid: str | None, status_before: str,
@@ -2244,7 +2262,8 @@ class Orchestrator:
         if not task.review_entries:
             return
         latest = task.review_entries[-1]
-        m = re.search(r"Dispute-unresolved:\s*(.*)", latest.body)
+        m = re.search(r"^\s*-\s*Dispute-unresolved:\s*(.*)$", latest.body,
+                      re.MULTILINE)
         if m:
             self.log("convergence: unresolved dispute — escalating "
                      "immediately (no budget rounds spent on it)")
@@ -2419,26 +2438,24 @@ class Orchestrator:
                 sys.exit(f"session budget exhausted ({self.max_sessions}); "
                          "re-run to continue")
             pending = task.unreviewed_dev_sids()
-            latest = task.entries[-1] if task.entries else None
-            marker = bool(latest and not latest.is_review
-                          and latest.is_continuation)
+            fix_set_open = task.fix_set == "open"
             remediation_open = bool(
                 task.review_entries
                 and task.review_entries[-1].verdict == "changes-requested")
-            if marker and not remediation_open:
-                # The marker is remediation-only (dev contract). On an advancement
-                # entry it is protocol-illegal — ignore it rather than
-                # skipping the review.
-                self.log("WARNING: `Handoff: continuation` on a "
-                         "non-remediation entry (latest review verdict is "
-                         "not changes-requested) — marker ignored; an "
-                         "advancement session's work is reviewed next")
-                marker = False
-            if marker:
+            if fix_set_open and not remediation_open:
+                # The flag is remediation-only (dev contract). Without an
+                # open remediation it is protocol-illegal — ignore it rather
+                # than skipping the review.
+                self.log("WARNING: frontmatter `fix-set: open` without a "
+                         "changes-requested latest review verdict — "
+                         "remediation-only flag ignored; landed work is "
+                         "reviewed next")
+                fix_set_open = False
+            if fix_set_open:
                 # Remediation continuation: the last remediation session
                 # wrapped up (context budget) before its fix set was
                 # complete. The same role continues; re-review waits until
-                # the fix set completes (an entry without the marker).
+                # the fix set completes (fix-set returns to complete).
                 self.log("remediation continuation: resuming dev in a fresh "
                          "session (re-review deferred until the fix set "
                          "completes)")

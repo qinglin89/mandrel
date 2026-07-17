@@ -27,6 +27,7 @@ status: pending | in_progress | final_review | completed | blocked   # final_rev
 session-est: <current>/<total>      # progress/total in dev sessions; one estimated session ≈ one effective context window (~200k tokens). e.g., 0/3 pending, 1/3 after first session entry. `current` increments at DEV session entry (part of the claim, §4); review sessions do not consume the estimate. Raise `total` if estimate undershoots.
 blockers: [<task-id> | external:<text>]   # only if status=blocked. task-id refs another active task by id (e.g., 2026-05-26-foo); external:<text> for non-task blockers (e.g., external:awaiting API spec)
 prefetch: [<.ai/*.md paths>]        # optional hint; lazy docs only (eager set per the memory loading contract is already loaded). Pre-load at start. Mutable — backfill with what was actually consulted.
+fix-set: open | complete            # optional; declared only by a remediation-mode dev session. open = the active fix set is incomplete (not yet a reviewable unit); complete/absent = no open fix set. (Local meaning in the dev contract; scheduling consequences in the workflow runbook.)
 claimed-by: <session-id>@<utc-iso-ts>  # session-id = the current agent session/conversation id supplied by the caller; ts = UTC ISO 8601 (e.g., 2026-05-26T09:30:00Z, from `date -u +%Y-%m-%dT%H:%M:%SZ`); set/updated at each session entry
 ---
 ```
@@ -122,12 +123,11 @@ for close-out absorption review.
 
 ### Markers and report lines
 
-- `- Handoff: continuation` — declared by a remediation-mode dev session
-  ending with its fix set incomplete: an open fix set, not yet a reviewable
-  unit. An advancement session never writes it. (Role-local meaning in the
-  dev contract; scheduling consequences in the workflow runbook.)
-- `Dispute-unresolved: <finding, one line>` — declared in a review entry when
-  a disputed finding is still held valid (review contract).
+Entry fields and markers are machine-parsed as exact `- X: ...` list lines;
+a prose mention of a field name elsewhere in an entry is not a declaration.
+
+- `- Dispute-unresolved: <finding, one line>` — declared in a review entry
+  when a disputed finding is still held valid (review contract).
 
 ### Session plan (optional work slicing)
 

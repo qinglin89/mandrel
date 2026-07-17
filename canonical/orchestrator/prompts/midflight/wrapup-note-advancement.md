@@ -1,1 +1,1 @@
-do NOT write a `Handoff: continuation` line (the marker is remediation-only — dev contract); 
+your landed slice is a complete reviewable unit; 
