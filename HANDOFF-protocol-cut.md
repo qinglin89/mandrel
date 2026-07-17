@@ -27,6 +27,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
 | P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **defined 2026-07-17** (user-ruled in discussion) — entry brief below; P5a objective-gated (delegation acceptable), P5b runs WITH the user doc-by-doc (never delegated); recommended to land BEFORE the P4 wave so one deploy ships final assembly + final texts |
+| P6 | `meta/memory.md` read/write split (write side leaves the ambient channel) | **defined 2026-07-17** (user-ruled: memory ONLY; taskfile explicitly not split) — entry brief below; objective-gated ⇒ delegation-eligible; independent of P5 internals; recommended before the P4 wave |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
 the doc cut (byte-identity proves the loader with zero assertion churn); templates +
@@ -463,6 +464,47 @@ Rulings from the 2026-07-17 discussion (user):
 **Sequencing**: recommended P5a → P5b → P4 wave (one deploy ships final
 assembly + final texts; the optional live drill is also better spent after
 P5). The P4 sandbox smoke re-runs after each landing (cheap).
+
+### P6 entry brief (defined 2026-07-17 — memory read/write split)
+
+User ruling (2026-07-17 discussion): split `meta/memory.md` along its
+read/write axis; **taskfile.md is explicitly NOT split** (see below). Third
+application of the channel principle: charter rule 8 (meta read/write
+asymmetry) is already law and the operational layer already matches (write
+procedures are consumed only by skill invocations) — the doc layout follows.
+
+- **Shape (minimal churn)**: `memory.md` KEEPS its name, eager lines, and
+  imports — it retains §1 invariants (incl. the asymmetry statement) + §2
+  loading contract + the staleness-interpretation semantics (readers judge
+  trust by `last-updated`/`verified-against`). EXTRACTED:
+  `meta/memory-write.md` (final name = execution design point; e.g.
+  `absorption.md`) carrying §3 Admission tests + §4 Maintenance
+  (trigger/propagation/size/upgrade) + §5's authoring rules
+  (tables-over-prose, frontmatter authoring, bump rules). Line-level split
+  of §5 is an execution judgment; moves are content-preserving (P2
+  philosophy — the voice pass, if any, is P5b's business).
+- **Delivery vehicle**: not a prompt wrapper — the closeout / housekeeping /
+  init SKILLS are the activation channel; they Read the write doc at
+  invocation (today they cite "the memory protocol §3/§4" layout-neutrally —
+  re-point to the new file).
+- **Re-point surface**: `workflow/skills/closeout.md` (§3/§4 refs),
+  skills-backup `ai-sync-v2` / `ai-housekeeping` / `ai-init` (+ global
+  skills resync), boundary-lint layout list (+1 file), deploy doc count
+  12→13, mock `make_repo` copy list, P4 sandbox smoke A3 count. Zero
+  EAGER_FILES / CLAUDE.md-import churn by construction.
+- **Gain**: §3–§5 ≈ 60% of the file ≈ ~800 tokens leave every session's
+  ambient context; absorber-facing procedural text exits the ambient
+  channel.
+- **taskfile.md — ruled NOT split**: the task file is the shared data
+  plane — role declared-outputs ARE writes (claim, entries, status, body
+  adjustments) and review reads what dev writes; the schema (frontmatter,
+  transitions, entry shapes, markers) is the shared alphabet of both sides.
+  A read/write split would duplicate shape definitions across two docs —
+  re-creating the entry-shape smear P3a cured. Optional micro-cut recorded,
+  NOT scheduled: §7 lifecycle + the closeout-operation semantics inside
+  §6/§8 (~200 tokens) could move to the closeout skill spec.
+- **Gate**: mock + pytest + boundary-lint + sandbox-smoke re-run; single
+  commit; flip this row and append landing facts.
 
 ## Goal
 
