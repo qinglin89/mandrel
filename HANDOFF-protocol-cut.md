@@ -632,6 +632,38 @@ Register rules for any future contract-text pass, ratified 2026-07-17:
    POST-SESSION CHECKS / stophook skill / annex) and preReEst-vs-claim
    ordering.
 
+### P4 live drill findings (2026-07-17, orch-hub-test, hub-orchestrated)
+
+First live run (task 2026-07-17-operations-overview-dashboard, cc-codex
+backends, plan-gated) surfaced two findings:
+
+1. **Claim-sid transcription drift** (fixed, landed): the dev session
+   re-typed its 36-char session id into `claimed-by` and drifted 2 hex
+   digits — despite the prompt carrying the exact instantiated claim line.
+   The net caught it only INDIRECTLY (the entry heading shared the same
+   wrong sid, so `session-log-entry` failed at wrap-up and the session
+   corrected both); a wrong claim + correct entry would have passed
+   everything. Landed: **`claim-sid` post-check** (universal, dev+review —
+   `claimed-by`'s sid part must equal the session's id character-exact;
+   backend-agnostic, rides the checks preview + the manual postcheck
+   contract). Mock: `claim()` conformance helper (+`bump_est(p, agent)`
+   claims), scripted behaviors updated, scenario 12 now exercises the
+   violation→followup→fix loop for the claim too. All gates green (mock
+   30/30, pytest 25/25, lint, sandbox smoke 30/30).
+2. **`Remaining-task audit:` persisted in a review entry** (diagnosed;
+   fix awaiting ruling): the codex reviewer faithfully obeyed
+   taskfile.md §Markers ("emitted by session-end bookkeeping and by
+   close-out") — wording ADDED AT P3a (commit 2b4ea70; the legacy system
+   had no such line). But every consumer (3 stop hooks, closeout entry
+   template, closeout-incomplete followup, runbook §4.7, mock) verifies
+   the line ONLY in the close-out's final RESPONSE, and session-end.md
+   requires the reconciliation ACT without any report line. Per-session
+   persistence is therefore consumer-less ceremony from over-broad P3a
+   wording. Proposed fix (one sentence, zero consumer churn): reword
+   taskfile.md §Markers to close-out-only (report line in the close-out
+   response; sessions still RUN the reconciliation per session-end §5,
+   write no line).
+
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 
 User ruling (2026-07-17 discussion): split `meta/memory.md` along its

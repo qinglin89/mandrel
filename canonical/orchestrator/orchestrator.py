@@ -308,6 +308,7 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
 POSTCHECK_MANIFEST: dict[str, frozenset[str]] = {
     "tree-clean": frozenset(),
     "session-log-entry": frozenset({"sid_disp"}),
+    "claim-sid": frozenset({"sid_disp"}),
     "dev-remediation-status": frozenset({"status_before"}),
     "dev-advancement-status": frozenset(),
     "dev-no-continuation-marker": frozenset(),
@@ -1930,6 +1931,23 @@ class Orchestrator:
             lambda task: None
             if sid and any(e.session_id == sid for e in task.entries) else
             f"no `## Session log` entry for session id {sid}"))
+
+        def _claim_sid(task):
+            # Character-exact claim check: a session re-typing its id (LLM
+            # transcription drift) breaks the task↔transcript join even when
+            # every other declaration is right.
+            if not sid:
+                return None
+            got = (task.claimed_by or "").split("@")[0].strip()
+            if got == sid:
+                return None
+            return (f"frontmatter `claimed-by` sid `{got or '(empty)'}` "
+                    f"does not match this session's id `{sid}` — re-claim "
+                    "with the exact id (taskfile schema claim rules)")
+        specs.append((
+            "claim-sid",
+            contract_line("claim-sid", sid_disp=sid_disp),
+            _claim_sid))
         if role == "dev":
             if was_remediation:
                 specs.append((

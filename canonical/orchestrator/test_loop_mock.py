@@ -200,8 +200,23 @@ def new_orch(**kw) -> o.Orchestrator:
     return orch
 
 
-def bump_est(p: Path) -> None:
+def claim(p: Path, agent: "FakeAgent") -> None:
+    """What a protocol-conformant session does at claim: set claimed-by to
+    its own exact session id (the claim-sid post-check verifies it)."""
+    t = p.read_text()
+    line = f"claimed-by: {agent.agent_id}@2026-01-05T00:00:00Z"
+    if o.re.search(r"^claimed-by:.*$", t, o.re.MULTILINE):
+        t = o.re.sub(r"^claimed-by:.*$", line, t, count=1,
+                     flags=o.re.MULTILINE)
+    else:
+        t = t.replace("\n---\n", f"\n{line}\n---\n", 1)
+    p.write_text(t)
+
+
+def bump_est(p: Path, agent: "FakeAgent | None" = None) -> None:
     """What a protocol-conformant dev session does at claim."""
+    if agent is not None:
+        claim(p, agent)
     t = p.read_text()
     m = o.re.search(r"^session-est:\s*(\d+)/(\d+)", t, o.re.MULTILINE)
     cur, tot = int(m.group(1)) + 1, int(m.group(2))
@@ -216,6 +231,9 @@ def append_review(repo: Path, sid: str, of_sid: str, verdict: str,
     text = p.read_text()
     text = o.re.sub(r"^status:.*$", f"status: {status}", text,
                     flags=o.re.MULTILINE)
+    text = o.re.sub(r"^claimed-by:.*$",
+                    f"claimed-by: {sid}@2026-01-05T00:00:00Z", text,
+                    count=1, flags=o.re.MULTILINE)
     text += (f"\n### 2026-01-02 / {sid} / review of {of_sid} / "
              f"(in_progress → {status})\n"
              f"- Verdict: {verdict}\n- Group: {group}\n"
@@ -372,7 +390,7 @@ def scenario_5_event_stream_logging(repo: Path) -> None:
     p = repo / ".ai-tasks" / f"{TASK_ID}.md"
 
     def do_dev(agent: FakeAgent, prompt: str) -> None:
-        bump_est(p)
+        bump_est(p, agent)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-05 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
@@ -538,7 +556,7 @@ def scenario_6_plan_gate(repo: Path) -> None:
             "human ruling must be injected into the formal dev session"
         assert "Your session id is fake-agent-007" in prompt, \
             "entry checklist must use the formal dev sid"
-        bump_est(p)
+        bump_est(p, agent)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-06 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
@@ -836,6 +854,7 @@ def scenario_9_dispute_escalation(repo: Path) -> None:
                   "finding; I verified against the code and still hold it "
                   "valid\n")
         p.write_text(t)
+        claim(p, agent)
 
     asked: list[str] = []
 
@@ -872,7 +891,7 @@ def scenario_10_context_budget(repo: Path) -> None:
     FakeRun.conversation_chars = 1_200_000  # ≈300k tokens > 200k budget
 
     def dev_violates(agent: FakeAgent, prompt: str) -> None:
-        bump_est(p)  # claim-time increment (part of the claim)
+        bump_est(p, agent)  # claim-time increment (part of the claim)
         (repo / "wip.txt").write_text("dirty")  # dirty tree, no log entry
 
     def wrap_up(agent: FakeAgent, prompt: str) -> None:
@@ -929,7 +948,7 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
         assert ("===== BEGIN .ai-protocol/protocols/dev-advancement.md "
                 "=====") not in prompt, \
             "a remediation prompt must not carry the advancement contract"
-        bump_est(p)
+        bump_est(p, agent)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-08 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
@@ -989,10 +1008,12 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
             "followup must cite the est violation"
         assert "remediation-only" in prompt, \
             "followup must cite the illegal advancement marker"
+        assert "does not match this session's id" in prompt, \
+            "followup must cite the claim-sid violation"
         # drop the LAST marker occurrence (this session's entry), then bump
         head, _, tail = p.read_text().rpartition("\n- Handoff: continuation")
         p.write_text(head + tail)
-        bump_est(p)
+        bump_est(p, agent)
 
     FakeAgent.script = [forgets_est, fixes_est]
     orch = new_orch()
@@ -1036,12 +1057,13 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
             "/ (final_review → final_review)\n"
             "- Verdict: changes-requested\n- Group: dev-ffff-0001\n"
             "- Findings: correctness: off-by-one in cap check\n"))
+        claim(p, agent)
 
     def remediates(agent: FakeAgent, prompt: str) -> None:
         assert "REMEDIATION SESSION" in prompt
         assert "keep `final_review` UNCHANGED" in prompt, \
             "remediation menu must be instantiated with the entry status"
-        bump_est(p)
+        bump_est(p, agent)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-10 / {agent.agent_id} / "
             "(final_review → final_review)\n"
@@ -1058,6 +1080,7 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
             f"\n### 2026-01-10 / {agent.agent_id} / review of {rem_sid} / "
             "(final_review → completed)\n"
             "- Verdict: pass\n- Group: dev-ffff-0001\n- Findings: resolved\n"))
+        claim(p, agent)
 
     def closes_out(agent: FakeAgent, prompt: str) -> None:
         assert "/ai-sync-v2" in prompt
@@ -1135,7 +1158,7 @@ claimed-by: rev-gate-0001@2026-01-11T00:00:00Z
 
     def remediates(agent: FakeAgent, prompt: str) -> None:
         assert "REMEDIATION SESSION" in prompt
-        bump_est(p)
+        bump_est(p, agent)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-11 / {agent.agent_id} / "
             "(final_review → final_review)\n"
@@ -1263,7 +1286,7 @@ claimed-by: dev-iiii-0001@2026-01-13T00:00:00Z
 """)
 
     def dev_violates_adv(agent: FakeAgent, prompt: str) -> None:
-        bump_est(p)
+        bump_est(p, agent)
         (repo / "wip2.txt").write_text("dirty")
 
     def wrap_up_adv(agent: FakeAgent, prompt: str) -> None:
@@ -1305,6 +1328,7 @@ claimed-by: dev-iiii-0001@2026-01-13T00:00:00Z
                   "/ (in_progress → in_progress)\n- Verdict: pass\n"
                   f"- Group: {sid_}\n- Findings: none\n")
         p.write_text(t)
+        claim(p, agent)
 
     FakeAgent.script = [reviews_it]
     orch2 = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
@@ -1371,6 +1395,7 @@ claimed-by: rev-stall-0001@2026-01-14T00:00:00Z
               "- Verdict: pass\n- Group: dev-jjjj-0001\n"
               "- Findings: ledger clean; ruling applied\n")
         p.write_text(t)
+        claim(p, agent)
 
     FakeAgent.script = [fresh_review_concludes]
     orch = o.Orchestrator(tid, "mock-dev-model", "mock-review-model",
@@ -1740,6 +1765,7 @@ claimed-by: dep-sid@2026-01-18T00:00:00Z
             f"\n### 2026-01-18 / {agent.agent_id} / review of "
             "dev-mmmm-0001 / (final_review → completed)\n"
             "- Verdict: pass\n- Group: dev-mmmm-0001\n- Findings: none\n"))
+        claim(p, agent)
 
     def sloppy_closeout(agent: FakeAgent, prompt: str) -> None:
         assert "Remaining-task audit:" in prompt, \
@@ -2013,6 +2039,7 @@ claimed-by: dev-ctl-0001@2026-01-20T00:00:00Z
               "- Verdict: changes-requested\n- Group: dev-ctl-0001\n"
               "- Findings: correctness: mock finding\n")
         p.write_text(t)
+        claim(p, agent)
         (ctl2 / "stop.flag").write_text("")
 
     FakeAgent.script = [review_and_drop_flag]

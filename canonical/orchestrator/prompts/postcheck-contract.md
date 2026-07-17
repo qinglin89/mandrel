@@ -16,6 +16,10 @@ working tree clean (`git status --porcelain` empty)
 
 a `## Session log` entry for session id {{sid_disp}} (Done / Plan-slice if applicable / Next / Open)
 
+## claim-sid
+
+frontmatter `claimed-by` carries THIS session's exact id: `{{sid_disp}}@<claim timestamp>` — copy it character-for-character, never re-type it from memory
+
 ## dev-remediation-status
 
 status: keep `{{status_before}}` UNCHANGED — a remediation session never touches status (taskfile transition table; `blocked` only for a genuine human question)
