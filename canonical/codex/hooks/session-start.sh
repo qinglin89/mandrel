@@ -19,9 +19,10 @@
 #   1. Session ID line (used for claimed-by / session-log headings).
 #   2. Codex adaptations preamble (mirrors .cursor/rules/protocol.mdc).
 #   3. The loader (CLAUDE.md, carries the verb→contract mapping) and the
-#      eager protocol set: .ai-protocol/protocols/conduct.md,
-#      .ai-protocol/protocols/dev.md, .ai-protocol/meta/taskfile.md,
-#      .ai-protocol/meta/memory.md.
+#      eager protocol substrate: .ai-protocol/protocols/conduct.md,
+#      .ai-protocol/meta/taskfile.md, .ai-protocol/meta/memory.md.
+#      Role contracts (protocols/dev-*, review, plan) are NOT eager — the
+#      caller delivers them at invocation.
 #   4. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
 #      .ai/architecture.md current design/conventions entrypoints
 #      (resolved from .ai/index.md routing; .md vs /index.md fallback)
@@ -53,7 +54,6 @@ fi
 EAGER_FILES=(
   CLAUDE.md
   .ai-protocol/protocols/conduct.md
-  .ai-protocol/protocols/dev.md
   .ai-protocol/meta/taskfile.md
   .ai-protocol/meta/memory.md
   .ai/index.md
@@ -125,13 +125,14 @@ Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the
   \$CLAUDE_CODE_SESSION_ID; that env var is NOT set under Codex.
 - \`@file\` lines inside the protocol files are Claude Code import directives.
   The referenced files are already included below; ignore the \`@file\` lines.
-- Skill / slash-command invocations (\`/ai-sync-v2\`, \`/intake-task\`,
-  \`/ai-init\`, \`/ai-housekeeping\`, \`/ctd-tasks\`) map to skills: read
-  \`~/.claude/skills/<name>/SKILL.md\` and follow it. (Codex can also load
-  these as native skills; see .codex/config.toml.)
-- The verb→contract mapping is in the loader (CLAUDE.md, included below).
-  For \`review <id>\` sessions the review contract is also reachable via the
-  pointer file \`${root}/.codex/review-workflow.md\`.
+- Skill / slash-command invocations (\`/invoke\`, \`/ai-sync-v2\`,
+  \`/intake-task\`, \`/ai-init\`, \`/ai-housekeeping\`, \`/ctd-tasks\`) map to
+  skills: read \`~/.claude/skills/<name>/SKILL.md\` and follow it. (Codex can
+  also load these as native skills; see .codex/config.toml.)
+- The verb→contract mapping is in the loader (CLAUDE.md, included below);
+  the caller delivers role contract text at invocation (\`/invoke\` skill or
+  paste). For \`review <id>\` sessions the review contract is also reachable
+  via the pointer file \`${root}/.codex/review-workflow.md\`.
 
 The protocol files and the eager memory set follow. Treat them as binding rules.
 "

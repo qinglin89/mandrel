@@ -26,7 +26,7 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
 | P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
-| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **defined 2026-07-17** (user-ruled in discussion) — entry brief below; P5a objective-gated (delegation acceptable), P5b runs WITH the user doc-by-doc (never delegated); recommended to land BEFORE the P4 wave so one deploy ships final assembly + final texts |
+| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **P5a landed 2026-07-17** — landing facts below; dev.md split (base + 2 mode adds), eager substrate purified, two-slot dev wrapper injection, `/invoke` skill, charter rule 12, eager-purity lint; mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green. **P5b remains** (runs WITH the user doc-by-doc, never delegated; recommended before the P4 wave so one deploy ships final assembly + final texts) |
 | P6 | `meta/memory.md` read/write split (write side leaves the ambient channel) | **defined 2026-07-17** (user-ruled: memory ONLY; taskfile explicitly not split) — entry brief below; objective-gated ⇒ delegation-eligible; independent of P5 internals; recommended before the P4 wave |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -354,7 +354,12 @@ live drill — orchestrator `--once` + one plan-gate round with a real
 claude/codex CLI session against the sandbox (burns real tokens; sandbox is
 ready for it); (2) the one-wave deploys to hkchain / orch-hub / quantx +
 committing each deploy diff (user-run per repo convention; globals already
-layout-neutral since P3a).
+layout-neutral since P3a). **P5a re-run**: driver updated to P5a expectations
+(A3 doc count 14 + new A3b split-files check, A6/B1 flipped to
+substrate-only, C2 71 templates, C4 dev base+exactly-one-add wrappers) —
+30/30 GREEN 2026-07-17. Wave note: deploy never prunes, so targets deployed
+pre-P5a keep a stale `.ai-protocol/protocols/dev.md` — remove it once per
+target (the driver encodes this as its A3 pre-step).
 
 ### P5 entry brief (defined 2026-07-17 — assembly symmetrization + protocol-voice pass)
 
@@ -465,6 +470,82 @@ Rulings from the 2026-07-17 discussion (user):
 assembly + final texts; the optional live drill is also better spent after
 P5). The P4 sandbox smoke re-runs after each landing (cheap).
 
+### P5a landing facts (2026-07-17 — for the P5b session)
+
+Both design points settled and landed:
+
+- **File layout = flat siblings**: `protocols/dev-base.md` +
+  `protocols/dev-add-advancement.md` + `protocols/dev-add-remediation.md`;
+  `protocols/dev.md` DELETED (not kept as the base's name — stale references
+  fail loudly via lint check 4, and a new layout check errors if dev.md ever
+  reappears). Matches the suite's flat convention (P6's memory-write sibling
+  will follow the same shape).
+- **Interactive delivery = ONE parameterized skill** `invoke`
+  (`/invoke <role> <task-id>`, role ∈ dev|review|plan): reads the deployed
+  contract files; for dev applies the taskfile §3 predicate and reads base +
+  exactly one certified add. Lives in `skills-backup/invoke/` +
+  `MANAGED_SKILLS` (skills.py); globals resynced (`aii-2 skills
+  sync-claude-global` → "add invoke"). Paste fallback documented in runbook
+  §6. Intake keeps its existing `/intake-task` packaging.
+
+Split mechanics (content-preserving; the voice rewrite is still P5b's):
+
+- The `## Mode selection` section DISSOLVED as ruled: the predicate lives
+  only in taskfile §3 + rolemapping; the caller certifies the mode
+  (orchestrator `was_remediation`; `/invoke dev` encodes the same predicate).
+  Each mode's one-line definition became its add's opening line; "do not mix
+  modes" survives as the adds' existing scope lines (advancement: never
+  writes the marker; remediation: no preReEst / no scope advance) — no new
+  rule text was needed. Declared outputs split along the postcheck line:
+  base keeps the generic entry + status-declaration pointer; the advancement
+  add carries the advancement status vocabulary; the remediation add already
+  carried status-unchanged + dispute + marker lines.
+- Orchestrator two-slot injection mirrors review/plan: constants
+  `DEV_BASE_RULE` / `DEV_ADVANCEMENT_RULE` / `DEV_REMEDIATION_RULE`; three
+  wrapper templates (`entry/dev-base-wrapper`,
+  `entry/dev-add-{advancement,remediation}-wrapper`) injected in
+  `dev_prompt` ahead of `entry/dev-invocation`. The plan gate's base prompt
+  IS dev_prompt, so the gate carries base + advancement add automatically
+  (remediation never gates) — dependency recorded in rolemapping's
+  composition table.
+- Template wording churn: `dev-invocation` → "per the dev contract above
+  (base + mode add)" (self-derivation clause deleted);
+  `preamble-native-note` re-scoped to substrate ("follow it together with
+  the contract text delivered in this prompt"); `dev-pre-re-est` /
+  `dev-remediation` now point at "the … add (above)". The
+  ADVANCEMENT/REMEDIATION SESSION prefixes and `{{group}}` instantiation are
+  unchanged.
+- Eager substrate purified: dev import dropped from `repo-root/CLAUDE.md` +
+  both session-start `EAGER_FILES`; `protocol.mdc` fallback list and both
+  tools' skill lists updated (+`/invoke`); loader verb rows now state caller
+  delivery — "loaded on demand" retired everywhere. Charter gained **rule 12
+  (channel principle)** with the caller-certifies-mode corollary.
+- boundary-lint: layout list carries the three dev files + errors if dev.md
+  reappears; role-naming purity pairs cover all three; NEW check 3b
+  eager-purity (session-start EAGER_FILES arrays incl. `+=` additions +
+  CLAUDE.md `@`-imports may carry no `protocols/` file other than
+  conduct.md) — negative-tested (a planted dev-base eager line fails the
+  lint).
+- Mock churn as predicted (small): `make_repo` copies the three files,
+  `patch_module` patches the three constants, and scenarios 11/12 gained
+  banner assertions (remediation prompt: base + remediation-add banners
+  present, advancement-add banner ABSENT; scenario 12 the mirror). Zero
+  edits to pre-existing assertions. NOTE: negative assertions must target
+  the `===== BEGIN …` banner form — the base contract's pointer line names
+  both add PATHS, so a bare-path `not in prompt` is always false.
+- pytest untouched (its canonical tree is a synthetic fixture; its
+  `dev.md` is fixture data, not a suite reference).
+- Gates at landing: mock 30/30, pytest 25/25, boundary-lint OK, P4 sandbox
+  smoke 30/30 (driver lives in the P4 session's scratchpad,
+  `…/6c58ad49-…/scratchpad/p4-sandbox/p4_smoke.py`; /tmp is ephemeral — the
+  rebuild recipe is in the P4 sandbox smoke section above).
+- For P5b: the protocols walk is now over SEVEN files (conduct, dev-base,
+  dev-add-advancement, dev-add-remediation, review, plan, intake); dev texts
+  moved but were not re-voiced. Wrapper-injected docs whose rewrites churn
+  mock substrings now include the three dev files (scenarios 11/12 banner
+  asserts are path-anchored only — content rewrites churn nothing there;
+  review.md/plan.md caveats from the P5 brief unchanged).
+
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 
 User ruling (2026-07-17 discussion): split `meta/memory.md` along its
@@ -490,7 +571,8 @@ procedures are consumed only by skill invocations) — the doc layout follows.
 - **Re-point surface**: `workflow/skills/closeout.md` (§3/§4 refs),
   skills-backup `ai-sync-v2` / `ai-housekeeping` / `ai-init` (+ global
   skills resync), boundary-lint layout list (+1 file), deploy doc count
-  12→13, mock `make_repo` copy list, P4 sandbox smoke A3 count. Zero
+  14→15 (counts updated for P5a's split; the brief predated it), mock
+  `make_repo` copy list, P4 sandbox smoke A3 count. Zero
   EAGER_FILES / CLAUDE.md-import churn by construction.
 - **Gain**: §3–§5 ≈ 60% of the file ≈ ~800 tokens leave every session's
   ambient context; absorber-facing procedural text exits the ambient

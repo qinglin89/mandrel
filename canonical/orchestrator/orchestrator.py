@@ -69,6 +69,14 @@ REVIEW_RULE = REPO / ".ai-protocol" / "protocols" / "review.md"
 # Canonical plan contract — injected into the plan-gate prompt the same way
 # (plan-rule wrapper ahead of the gate instruction).
 PLAN_RULE = REPO / ".ai-protocol" / "protocols" / "plan.md"
+# Canonical dev contract, split base + mode adds. The caller certifies the
+# mode: dev prompts get a TWO-SLOT injection — base wrapper + the mode-add
+# wrapper selected by the was_remediation predicate (review/plan mirror).
+DEV_BASE_RULE = REPO / ".ai-protocol" / "protocols" / "dev-base.md"
+DEV_ADVANCEMENT_RULE = (REPO / ".ai-protocol" / "protocols"
+                        / "dev-add-advancement.md")
+DEV_REMEDIATION_RULE = (REPO / ".ai-protocol" / "protocols"
+                        / "dev-add-remediation.md")
 # Single-source prompt/banner templates + the postcheck contract (see
 # prompts/README.md). ORCH_DIR-relative: survives repo layout changes and
 # needs no override in the mock suite. The headless conduct annex is the
@@ -232,6 +240,9 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "entry/checks-preview-header": frozenset(),
     "entry/conduct-annex": frozenset(),
     "entry/closeout": frozenset({"task_id", "sync_skill", "active_count"}),
+    "entry/dev-add-advancement-wrapper": frozenset({"dev_add"}),
+    "entry/dev-add-remediation-wrapper": frozenset({"dev_add"}),
+    "entry/dev-base-wrapper": frozenset({"dev_base"}),
     "entry/dev-invocation": frozenset({"task_id", "sid_line"}),
     "entry/dev-pre-re-est": frozenset(),
     "entry/dev-remediation": frozenset({"group"}),
@@ -1795,7 +1806,9 @@ class Orchestrator:
         lives only in the conversation and the orchestrator log — no
         task-file writes, no session-log entry, no status change. The plan
         contract text is injected (plan-rule wrapper) ahead of the gate
-        instruction, mirroring the review-rule injection."""
+        instruction, mirroring the review-rule injection; base_prompt is the
+        dev prompt, so the gate composition already carries the dev base +
+        advancement-add wrappers (remediation never gates)."""
         prompt = (base_prompt + "\n\n"
                   + render_prompt("entry/plan-rule-wrapper",
                                   plan_rule=PLAN_RULE.read_text())
@@ -2084,6 +2097,18 @@ class Orchestrator:
         latest = task.review_entries[-1] if task.review_entries else None
         remediation = bool(latest and latest.verdict == "changes-requested")
         parts = self._preamble(sid)
+        parts.append(render_prompt("entry/dev-base-wrapper",
+                                   dev_base=DEV_BASE_RULE.read_text()))
+        parts.append("")
+        if remediation:
+            parts.append(render_prompt(
+                "entry/dev-add-remediation-wrapper",
+                dev_add=DEV_REMEDIATION_RULE.read_text()))
+        else:
+            parts.append(render_prompt(
+                "entry/dev-add-advancement-wrapper",
+                dev_add=DEV_ADVANCEMENT_RULE.read_text()))
+        parts.append("")
         parts.append(render_prompt("entry/dev-invocation",
                                    task_id=self.task_id,
                                    sid_line=self._sid_line(sid)))

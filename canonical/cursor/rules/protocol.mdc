@@ -5,21 +5,23 @@ alwaysApply: true
 
 # Project protocol (ai-protocol)
 
-This project follows the ai-protocol suite (`.ai-protocol/`). The full
-protocol text and the eager memory set are injected at session start by the
-`sessionStart` hook, as a context block labeled
+This project follows the ai-protocol suite (`.ai-protocol/`). The protocol
+substrate (loader, conduct, data schemas, memory set) is injected at session
+start by the `sessionStart` hook, as a context block labeled
 `PROJECT PROTOCOL CONTEXT (ai-protocol)`. Treat everything in that block as
 binding rules for this session.
 
 **Fallback**: if that block is NOT present in your context (hook disabled or
 failed), before doing any work read, in order, and follow:
 `CLAUDE.md` (the loader — carries the verb→contract mapping),
-`.ai-protocol/protocols/conduct.md`, `.ai-protocol/protocols/dev.md`,
+`.ai-protocol/protocols/conduct.md`,
 `.ai-protocol/meta/taskfile.md`, `.ai-protocol/meta/memory.md`,
 `.ai/index.md`, `.ai/map.md`, `.ai/overview.md`, `.ai/architecture.md`,
 `.ai/design.md` (or `.ai/design/index.md` if upgraded),
 `.ai/conventions.md` (or `.ai/conventions/index.md` if upgraded),
 `.ai-tasks/index.md`.
+Role contracts are not part of this set — the caller delivers them at
+invocation (loader verb→contract mapping; `/invoke` skill or paste).
 
 ## Cursor adaptations (override wording inside the protocol files)
 
@@ -30,7 +32,7 @@ failed), before doing any work read, in order, and follow:
 - **`@file` lines** inside the protocol files are Claude Code import
   directives. Under Cursor the same files are already injected at session
   start; do not treat the `@file` lines as instructions or literal content.
-- **Skill invocations** written as slash commands (`/ai-sync-v2`,
+- **Skill invocations** written as slash commands (`/invoke`, `/ai-sync-v2`,
   `/intake-task`, `/ai-init`, `/ai-housekeeping`) map to Agent Skills: read
   `~/.claude/skills/<name>/SKILL.md` and follow it.
 

@@ -70,7 +70,9 @@ def make_repo() -> Path:
     shutil.copy2(canonical / "repo-root" / "CLAUDE.md", tmp / "CLAUDE.md")
     for rel in (
         "protocols/conduct.md",
-        "protocols/dev.md",
+        "protocols/dev-base.md",
+        "protocols/dev-add-advancement.md",
+        "protocols/dev-add-remediation.md",
         "protocols/plan.md",
         "protocols/review.md",
         "meta/taskfile.md",
@@ -181,6 +183,11 @@ def patch_module(repo: Path) -> None:
     o.SESSION_START_SH = repo / ".cursor" / "hooks" / "session-start.sh"
     o.REVIEW_RULE = repo / ".ai-protocol" / "protocols" / "review.md"
     o.PLAN_RULE = repo / ".ai-protocol" / "protocols" / "plan.md"
+    o.DEV_BASE_RULE = repo / ".ai-protocol" / "protocols" / "dev-base.md"
+    o.DEV_ADVANCEMENT_RULE = (repo / ".ai-protocol" / "protocols"
+                              / "dev-add-advancement.md")
+    o.DEV_REMEDIATION_RULE = (repo / ".ai-protocol" / "protocols"
+                              / "dev-add-remediation.md")
     o.SESSION_MAP = repo / ".ai-tasks" / "sessions.json"
     o.Agent = FakeAgent
 
@@ -918,6 +925,14 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
         assert f"task {TASK_ID}" in prompt, "must be a dev-role prompt"
         assert "REMEDIATION SESSION" in prompt, \
             "continuation of an open fix set is a remediation session"
+        assert "===== BEGIN .ai-protocol/protocols/dev-base.md =====" \
+            in prompt, "dev base contract must be wrapper-injected"
+        assert ("===== BEGIN .ai-protocol/protocols/dev-add-remediation.md "
+                "=====") in prompt, \
+            "the caller must inject the remediation add"
+        assert ("===== BEGIN .ai-protocol/protocols/dev-add-advancement.md "
+                "=====") not in prompt, \
+            "a remediation prompt must not carry the advancement add"
         bump_est(p)
         p.write_text(p.read_text() + (
             f"\n### 2026-01-08 / {agent.agent_id} / "
@@ -954,6 +969,14 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
 
     def forgets_est(agent: FakeAgent, prompt: str) -> None:
         assert "ENTRY CHECKLIST" in prompt, "dev entry checklist missing"
+        assert "===== BEGIN .ai-protocol/protocols/dev-base.md =====" \
+            in prompt, "dev base contract must be wrapper-injected"
+        assert ("===== BEGIN .ai-protocol/protocols/dev-add-advancement.md "
+                "=====") in prompt, \
+            "the caller must inject the advancement add"
+        assert ("===== BEGIN .ai-protocol/protocols/dev-add-remediation.md "
+                "=====") not in prompt, \
+            "an advancement prompt must not carry the remediation add"
         assert "session-est: 6/6 → 7/7" in prompt, \
             "est increment must be instantiated with concrete values"
         assert "POST-SESSION CHECKS" in prompt, "check preview missing"

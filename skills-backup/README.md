@@ -65,6 +65,9 @@ Current top-level skills copied from `~/.claude/skills/`:
 - `ai-sync-v2`
 - `ctd-tasks`
 - `intake-task`
+- `invoke` (added at protocol-cut P5a — caller-side role-contract delivery
+  for interactive sessions; not copied FROM `~/.claude/skills/`, canonical
+  here first)
 
 The existing `~/.claude/skills/bak/` directory was not copied because it is
 already historical backup material rather than an active top-level skill.

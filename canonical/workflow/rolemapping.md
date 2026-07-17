@@ -22,11 +22,15 @@ session boundary from the file alone. Run-local inputs exist but are
 ## Verb → contract
 
 Interactive sessions get this mapping from the loader (target `CLAUDE.md`);
-the caller applies the same mapping when composing prompts:
+the caller applies the same mapping when composing prompts. The caller also
+DELIVERS the mapped contract text at activation — orchestrated prompts
+wrapper-inject it (composition below); interactive sessions use the
+`/invoke` skill or a paste (runbook §6). Ambient context carries no role
+contract, and "read it on demand" is not a delivery channel:
 
 | verb | contract |
 |---|---|
-| `task <id>` | `.ai-protocol/protocols/dev.md` (mode per the taskfile: remediation when the latest review verdict is `changes-requested`, else advancement) |
+| `task <id>` | `.ai-protocol/protocols/dev-base.md` + exactly one caller-certified mode add: `dev-add-remediation.md` when the latest review verdict is `changes-requested`, else `dev-add-advancement.md` (predicate: taskfile schema §3) |
 | `review <id>` | `.ai-protocol/protocols/review.md` (interim at `in_progress`, final gate at `final_review`) |
 | plan gate (caller-initiated) | `.ai-protocol/protocols/plan.md` |
 | intake (new work) | `.ai-protocol/protocols/intake.md` |
@@ -67,10 +71,10 @@ composition = base + mode-add + injected fragments:
 
 | kind | composition |
 |---|---|
-| dev advancement | preamble (protocol block or native note) + conduct annex + dev invocation + entry checklist (claim, est, prefetch) + preReEst block + [approved plan-report] + [human ruling] + checks preview |
-| dev remediation | preamble + conduct annex + dev invocation + entry checklist + remediation block (group values) + [human ruling] + checks preview |
+| dev advancement | preamble (protocol block or native note) + conduct annex + dev contract text (base + advancement-add wrappers) + dev invocation + entry checklist (claim, est, prefetch) + preReEst block + [approved plan-report] + [human ruling] + checks preview |
+| dev remediation | preamble + conduct annex + dev contract text (base + remediation-add wrappers) + dev invocation + entry checklist + remediation block (group values) + [human ruling] + checks preview |
 | review (interim/final gate) | preamble + conduct annex + review contract text + review invocation + independence note + entry checklist (pending set, no-est) + checks preview |
-| plan gate | preamble + conduct annex + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
+| plan gate | the dev advancement composition as its base prompt (the plan shadow therefore depends on the dev base + advancement-add wrappers riding along; remediation never gates) + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
 | close-out | closeout instruction (task id, active count, skill pointer) |
 
 The checks preview is GENERATED from the postcheck contract at dispatch time

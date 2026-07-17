@@ -19,6 +19,7 @@ MANAGED_SKILLS: tuple[str, ...] = (
     "ai-sync-v2",
     "ctd-tasks",
     "intake-task",
+    "invoke",
 )
 
 

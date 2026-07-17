@@ -58,6 +58,14 @@ contract, prompt templates).
     contract) IS the post-check. No End pointers re-enter role contracts.
 11. **Each rule lives once** — prompts, hooks, and templates instantiate rules with
     current values (sid, task id, status menus, budgets); they never restate them.
+12. **Channel principle** (ruled 2026-07-17, landed P5a) — imperative /
+    second-person text travels ONLY on the activation channel (caller-delivered at
+    invocation: wrapper injection, skill invocation, or paste); the ambient (eager)
+    channel carries only universally-applicable conduct and declarative substrate
+    (schemas, the memory contract, indexes, project knowledge). Corollary: the
+    caller certifies the session's mode — contracts never teach a session to
+    derive which contract applies to it. Interactive lazy-read ("loaded on
+    demand") is not a delivery channel.
 
 ## Litmus tests
 

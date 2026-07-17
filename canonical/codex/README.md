@@ -94,7 +94,9 @@ entries in this project `config.toml`, and trust the user-scope hooks via
 
 ## Cross-model dev/review (verb = role)
 
-- `task <id>` → dev role (the dev contract, `.ai-protocol/protocols/dev.md`).
-  Dev sets only `in_progress` or `final_review`, never `completed`.
+- `task <id>` → dev role (the dev contract: `.ai-protocol/protocols/dev-base.md`
+  plus the caller-certified mode add, `dev-add-advancement.md` or
+  `dev-add-remediation.md` — delivered at invocation via `/invoke dev` or
+  paste). Dev sets only `in_progress` or `final_review`, never `completed`.
 - `review <id>` → review role (read `review-workflow.md`). Only a review session
   sets `completed`, which is the sole trigger for the ai-sync-v2 close-out.

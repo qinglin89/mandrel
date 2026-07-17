@@ -7,12 +7,16 @@ role contracts in `protocols/`, data schemas in `meta/`, caller-layer docs in
 ## Verb → contract mapping
 
 The invocation verb selects the session's work contract — a session-level
-distinction, independent of tool and model:
+distinction, independent of tool and model. The caller delivers the contract
+text at invocation: orchestrated sessions receive it injected into the entry
+prompt; interactive sessions receive it via the `/invoke` skill or a paste
+(runbook §6, `.ai-protocol/workflow/runbook.md`):
 
-- `task <id>` → dev contract: `.ai-protocol/protocols/dev.md` (imported
-  below; work mode derives from the task file per that contract).
-- `review <id>` → review contract: read and follow
-  `.ai-protocol/protocols/review.md` (loaded on demand).
+- `task <id>` → dev contract: `.ai-protocol/protocols/dev-base.md` plus the
+  mode add the caller certifies — `dev-add-advancement.md` or
+  `dev-add-remediation.md` (mode predicate: `.ai-protocol/meta/taskfile.md`
+  §3, applied per `.ai-protocol/workflow/rolemapping.md`).
+- `review <id>` → review contract: `.ai-protocol/protocols/review.md`.
 
 New work that no active task covers enters through the intake contract
 (`.ai-protocol/protocols/intake.md`), packaged as the `/intake-task` skill.
@@ -23,7 +27,6 @@ packaged as `/ai-sync-v2` and fires on `status: completed`. Memory bootstrap
 ## Protocol imports
 
 @.ai-protocol/protocols/conduct.md
-@.ai-protocol/protocols/dev.md
 @.ai-protocol/meta/taskfile.md
 @.ai-protocol/meta/memory.md
 

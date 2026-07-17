@@ -1,1 +1,1 @@
-You are invoked as: `task {{task_id}}` — dev role per the loader's verb→contract mapping. Develop or continue the task per the dev contract (`.ai-protocol/protocols/dev.md`, in your protocol context); your work mode derives from the task file per that contract. {{sid_line}}
+You are invoked as: `task {{task_id}}` — dev role per the loader's verb→contract mapping. Develop or continue the task per the dev contract above (base + mode add). {{sid_line}}

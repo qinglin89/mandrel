@@ -10,6 +10,9 @@
 #   3. protocol purity: canonical/protocols/*.md carry no caller vocabulary
 #      ("orchestrator", dispatch verbs, other-role session naming, hook
 #      wiring, skill slash-invocations) and no `§` cross-references
+#   3b. eager-channel purity (charter rule 12): the session-start EAGER_FILES
+#      arrays and the CLAUDE.md import block carry no protocols/ contract
+#      other than conduct.md
 #   4. every `.ai-protocol/<path>.md` reference resolves to a canonical file
 #   5. orchestrator prompt templates + postcheck contract validate
 #      (prompts_error() startup check)
@@ -20,14 +23,16 @@ fail=0
 err() { printf 'boundary-lint: %s\n' "$*" >&2; fail=1; }
 
 # --- 1. layout ---------------------------------------------------------------
-for f in protocols/conduct.md protocols/dev.md protocols/review.md \
-         protocols/plan.md protocols/intake.md \
+for f in protocols/conduct.md protocols/dev-base.md \
+         protocols/dev-add-advancement.md protocols/dev-add-remediation.md \
+         protocols/review.md protocols/plan.md protocols/intake.md \
          meta/taskfile.md meta/memory.md meta/init.md \
          workflow/runbook.md workflow/rolemapping.md \
          workflow/skills/session-end.md workflow/skills/closeout.md \
          repo-root/CLAUDE.md; do
   [ -f "canonical/$f" ] || err "missing canonical/$f"
 done
+[ -f "canonical/protocols/dev.md" ] && err "canonical/protocols/dev.md must stay deleted (split at P5a into dev-base + mode adds)"
 
 # --- 2. dead doc names -------------------------------------------------------
 dead=$(grep -rnI --exclude-dir=__pycache__ --exclude=boundary-lint.sh 'ai-coding-' \
@@ -58,7 +63,10 @@ purity 're-review waits\|hands\{0,1\} back\|hand the task back\|sends the task\|
 purity 'stop.hook\|stophook' 'hook wiring (workflow-owned, charter rule 10)'
 purity '/ai-sync-v2\|/intake-task\|/ai-init\b' 'skill slash-invocations (contracts reference contracts, not packagings)'
 # other-role session naming inside a role contract (litmus 1)
-for pair in "dev.md:review session" "review.md:dev session" \
+for pair in "dev-base.md:review session" \
+            "dev-add-advancement.md:review session" \
+            "dev-add-remediation.md:review session" \
+            "review.md:dev session" \
             "plan.md:dev session" "plan.md:review session" \
             "intake.md:dev session" "intake.md:review session"; do
   doc=${pair%%:*}; phrase=${pair#*:}
@@ -68,6 +76,26 @@ for pair in "dev.md:review session" "review.md:dev session" \
     printf '%s\n' "$hits" >&2
   fi
 done
+
+# --- 3b. eager-channel purity (charter rule 12) --------------------------------
+# The ambient (eager) channel carries no role contract: the only protocols/
+# file allowed in the session-start EAGER_FILES arrays (initial array + any
+# += additions) and the CLAUDE.md @import block is conduct.md.
+for hook in canonical/cursor/hooks/session-start.sh \
+            canonical/codex/hooks/session-start.sh; do
+  bad=$( { sed -n '/^EAGER_FILES=(/,/^)/p' "$hook"; grep 'EAGER_FILES+=' "$hook"; } \
+         | grep 'protocols/' | grep -v 'protocols/conduct\.md' || true)
+  if [ -n "$bad" ]; then
+    err "$hook eager set carries a role contract (charter rule 12):"
+    printf '%s\n' "$bad" >&2
+  fi
+done
+bad=$(grep '^@' canonical/repo-root/CLAUDE.md \
+      | grep 'protocols/' | grep -v 'protocols/conduct\.md' || true)
+if [ -n "$bad" ]; then
+  err "CLAUDE.md imports a role contract (charter rule 12):"
+  printf '%s\n' "$bad" >&2
+fi
 
 # --- 4. .ai-protocol path references resolve ---------------------------------
 refs=$(grep -rho '\.ai-protocol/[A-Za-z0-9/_-]*\.md' canonical skills-backup 2>/dev/null | sort -u)

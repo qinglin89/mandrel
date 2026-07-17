@@ -137,8 +137,12 @@ assembled by the orchestrator:
   never ask inline, block via `status: blocked` instead; self-enforce the
   session-end bookkeeping (clean tree, session-log entry, role-legal
   status);
-- role invocation line (`task <id>` / `review <id>`); review prompts also
-  inline the full review contract (`.ai-protocol/protocols/review.md`);
+- role invocation line (`task <id>` / `review <id>`) plus the role contract
+  text inlined ahead of it: review prompts carry the full review contract
+  (`.ai-protocol/protocols/review.md`); dev prompts carry the dev base
+  (`.ai-protocol/protocols/dev-base.md`) + the mode add selected by the
+  caller's remediation predicate (`dev-add-remediation.md` when the latest
+  review verdict is `changes-requested`, else `dev-add-advancement.md`);
 - an **ENTRY CHECKLIST** instantiated with this session's concrete values
   (claimed-by id@timestamp; dev: `session-est: 1/3 → 2/3` and
   `pending → in_progress` when applicable; review: the pending review set

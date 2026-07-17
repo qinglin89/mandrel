@@ -132,15 +132,18 @@ escalation pauses the loop for a binding human answer.
 
 ## 5. Session boundaries
 
-- **Entry (caller-assembled)**: the entry prompt instantiates the session's
+- **Entry (caller-assembled)**: the entry prompt carries the role contract
+  text (wrapper-injected: review / plan / dev base + the caller-certified
+  mode add — rolemapping's composition table) and instantiates the session's
   concrete values — claim line (sid@timestamp), est increment, pending
   review set, mode block (remediation group / preReEst), injected fragments
   (approved plan-report, human ruling), and a POST-SESSION CHECKS preview
-  rendered from the postcheck contract. Static context (eager docs +
-  frontmatter `prefetch:`) is assembled by the caller's backend: orchestrator
-  injection (cursor) or the tools' native hooks/import chain (claude/codex).
-  One assembly spec, two backends. Headless runs additionally inject the
-  conduct annex (`.cursor/orchestrator/prompts/entry/conduct-annex.md`).
+  rendered from the postcheck contract. The eager substrate (loader,
+  conduct, schemas, memory set + frontmatter `prefetch:` docs) is assembled
+  by the caller's backend: orchestrator injection (cursor) or the tools'
+  native hooks/import chain (claude/codex). One assembly spec, two backends.
+  Headless runs additionally inject the conduct annex
+  (`.cursor/orchestrator/prompts/entry/conduct-annex.md`).
 - **End (session-side, hook-triggered)**: session-end bookkeeping
   (`.ai-protocol/workflow/skills/session-end.md`) is carried by the stop-hook
   chain in the same conversation. Orchestrated mode: the post-checks (§4.3)
@@ -155,7 +158,18 @@ escalation pauses the loop for a binding human answer.
 
 A human runs the same loop with no orchestrator: pick the turn per §2, invoke
 the verb (`task <id>` / `review <id>` — the loader carries the verb→contract
-mapping; interactive sessions self-assemble context via hooks/imports),
-verify on return per the postcheck contract, count budgets per §4.5, and make
-the escalation decisions inline. Everything a session declares is in the task
-file, so the two executors are interchangeable at every session boundary.
+mapping), deliver the role contract at invocation, verify on return per the
+postcheck contract, count budgets per §4.5, and make the escalation decisions
+inline. The eager substrate (loader, conduct, schemas, memory set)
+self-assembles via hooks/imports; the role contract does NOT ride ambient
+context — the human caller delivers it on the activation channel,
+byte-equivalent to the orchestrator's wrapper injection, either way:
+
+- `/invoke <role> <task-id>` — skill; reads the deployed contract files (for
+  dev it applies the taskfile §3 mode predicate and reads base + exactly one
+  certified mode add), or
+- paste the contract file text(s) into the invocation message alongside the
+  verb line.
+
+Everything a session declares is in the task file, so the two executors are
+interchangeable at every session boundary.

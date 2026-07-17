@@ -1,1 +1,1 @@
-NOTE: the full project protocol (PROJECT PROTOCOL CONTEXT) arrives via your tool's native session-start mechanism (hooks / CLAUDE.md imports); follow it.
+NOTE: the project protocol substrate (PROJECT PROTOCOL CONTEXT: loader, conduct, data schemas, memory set) arrives via your tool's native session-start mechanism (hooks / CLAUDE.md imports); follow it together with the contract text delivered in this prompt.

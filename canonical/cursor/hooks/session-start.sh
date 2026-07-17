@@ -9,9 +9,10 @@
 # Injected via additional_context:
 #   1. Session ID line (used for claimed-by / session-log headings).
 #   2. The loader (CLAUDE.md, carries the verb→contract mapping) and the
-#      eager protocol set: .ai-protocol/protocols/conduct.md,
-#      .ai-protocol/protocols/dev.md, .ai-protocol/meta/taskfile.md,
-#      .ai-protocol/meta/memory.md.
+#      eager protocol substrate: .ai-protocol/protocols/conduct.md,
+#      .ai-protocol/meta/taskfile.md, .ai-protocol/meta/memory.md.
+#      Role contracts (protocols/dev-*, review, plan) are NOT eager — the
+#      caller delivers them at invocation.
 #   3. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
 #      .ai/architecture.md current design/conventions entrypoints
 #      (resolved from .ai/index.md routing; .md vs /index.md fallback)
@@ -39,7 +40,6 @@ conversation_id=$(echo "$input" | jq -r '.conversation_id // empty' 2>/dev/null 
 EAGER_FILES=(
   CLAUDE.md
   .ai-protocol/protocols/conduct.md
-  .ai-protocol/protocols/dev.md
   .ai-protocol/meta/taskfile.md
   .ai-protocol/meta/memory.md
   .ai/index.md
