@@ -387,6 +387,28 @@ Rulings from the 2026-07-17 discussion (user):
   cross-role naming is NOT absolutely banned — allowed where it genuinely
   helps describe THIS role's action (data input/output descriptors); avoided
   as narrative/rationale.
+- **dev.md splits by mode** (user-proposed 2026-07-17; boundary verified
+  clean): `dev-base` (inputs, work conduct, entry-shape outputs) +
+  `dev-add-advancement` (preReEst, slice discipline, advancement status
+  menu, no-marker) + `dev-add-remediation` (findings-as-claims, dispute
+  recording, status-unchanged, continuation marker, no-preReEst). The
+  operational layers are ALREADY mode-split — postchecks
+  (`dev-advancement-status` / `dev-remediation-status` /
+  `dev-no-continuation-marker`), entry templates (ADVANCEMENT/REMEDIATION
+  blocks), wrap-up note variants — the contract file is the only unsplit
+  layer; Declared outputs split along the postcheck contract's existing
+  line. **Mode selection dissolves**: the caller certifies the mode
+  (orchestrator already computes `was_remediation` and declares it in the
+  entry prompt; predicates stay single-sourced in `meta/taskfile.md` §3 +
+  rolemapping; `/invoke dev` encodes the same predicate) — the contract no
+  longer teaches self-derivation, which also deletes the "Your mode
+  derives…" ambient-imperative specimen. "Do not mix modes" survives as
+  each add's own scope restriction (already present in both texts).
+  Bonuses: the plan shadow sheds the remediation half entirely, and a
+  DEMONSTRATED bleed disappears (the no-marker postcheck + mock scenario 12
+  exist precisely because advancement sessions crib the ambient marker
+  rule). Cost acknowledged: a human reading "the whole dev contract" now
+  reads base + add (mitigate with pointer lines in base).
 
 **P5a — context-assembly symmetrization** (objective-gated):
 
@@ -394,30 +416,41 @@ Rulings from the 2026-07-17 discussion (user):
   `meta/taskfile.md` + `meta/memory.md` + `.ai/` eager tier +
   `.ai-tasks/index.md`. dev.md LEAVES the two session-start `EAGER_FILES`
   and the CLAUDE.md import block.
+- The dev split lands here MECHANICALLY (P2 philosophy: content-preserving
+  moves, no rewording — the voice rewrite is P5b's): `dev.md` →
+  base + two mode adds (file layout — `protocols/dev/` dir vs `dev-*.md`
+  siblings — is a P5a design point; path re-points ride the same files P5a
+  touches anyway).
 - Contract delivery = caller at activation, ALL roles: orchestrated dev gets
-  a `dev-rule-wrapper` (mirror of the review/plan wrappers; `DEV_RULE`
-  constant). Plan-gate composition then carries dev+plan automatically
-  (base_prompt = dev_prompt already includes the dev wrapper) — record the
-  shadow's dev dependency in rolemapping. Review path unchanged (already
-  injected). Interactive delivery = `/invoke <role>` skills reading the
-  deployed contract file (intake pattern; one parameterized skill vs three
-  separate = P5a design point); paste documented in runbook §6 as the
-  equivalent fallback. Loader keeps the verb→contract mapping (dispatch
-  surface) but points at caller delivery — "loaded on demand" retired.
+  a TWO-SLOT injection — dev-base wrapper + mode-add wrapper selected by the
+  caller's existing `was_remediation` predicate (mirror of the review/plan
+  wrappers). Plan-gate composition then carries dev-base +
+  dev-add-advancement + plan automatically (base_prompt = dev_prompt;
+  remediation never gates) — record the shadow's dev dependency in
+  rolemapping. Review path unchanged (already injected). Interactive
+  delivery = `/invoke <role>` skills reading the deployed contract files
+  (intake pattern; `/invoke dev` applies the mode predicate; one
+  parameterized skill vs separate skills = P5a design point); paste
+  documented in runbook §6 as the equivalent fallback. Loader keeps the
+  verb→contract mapping (dispatch surface) but points at caller delivery —
+  "loaded on demand" retired.
 - boundary-lint += eager-purity check (EAGER_FILES + CLAUDE.md imports carry
-  no `protocols/*.md` other than conduct.md).
+  no `protocols/` contract other than conduct.md); per-file role-naming
+  purity pairs updated for the split dev filenames.
 - Template wording follows (`dev-invocation`'s "in your protocol context" →
   "above"; `preamble-native-note` re-scoped to substrate). Mock churn
   expected small; re-run the P4 sandbox smoke (update its C4 to expect the
-  dev wrapper banner). Per-tool hardening (deterministic verb-detection
-  prompt hooks where a tool supports them) = optional follow-up, NOT spec.
+  dev base+add wrapper banners). Per-tool hardening (deterministic
+  verb-detection prompt hooks where a tool supports them) = optional
+  follow-up, NOT spec.
 
 **P5b — protocol-voice pass** (interactive with the user; never delegated):
 
-- Scope: the five `protocols/` docs (conduct, dev, review, plan, intake),
-  walked ONE AT A TIME with the user — present findings + proposed rewrite,
-  user rules, land. `meta/` three swept with the same lens afterwards
-  (expected lighter — schema register is already spec-like).
+- Scope: the `protocols/` contracts (conduct; dev as its three post-split
+  files — base + two mode adds; review; plan; intake), walked ONE AT A TIME
+  with the user — present findings + proposed rewrite, user rules, land.
+  `meta/` three swept with the same lens afterwards (expected lighter —
+  schema register is already spec-like).
 - Register target: an operative spec addressed to the working session —
   definitions, requirements, procedures, output shapes. Remove: architecture
   self-description, workflow-motive narration, design-provenance asides.
