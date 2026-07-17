@@ -128,10 +128,6 @@ for close-out absorption review.
   dev contract; scheduling consequences in the workflow runbook.)
 - `Dispute-unresolved: <finding, one line>` — declared in a review entry when
   a disputed finding is still held valid (review contract).
-- `Remaining-task audit: checked N active task(s); updated <ids|none>;
-  unchanged <ids|none>` — the reconciliation report line, emitted by
-  session-end bookkeeping and by close-out (required even when no remaining
-  task changes).
 
 ### Session plan (optional work slicing)
 

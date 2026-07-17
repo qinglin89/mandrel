@@ -659,10 +659,15 @@ backends, plan-gated) surfaced two findings:
    the line ONLY in the close-out's final RESPONSE, and session-end.md
    requires the reconciliation ACT without any report line. Per-session
    persistence is therefore consumer-less ceremony from over-broad P3a
-   wording. Proposed fix (one sentence, zero consumer churn): reword
-   taskfile.md §Markers to close-out-only (report line in the close-out
-   response; sessions still RUN the reconciliation per session-end §5,
-   write no line).
+   wording. **Ruled + landed 2026-07-17**: review sessions change no facts
+   (declarations only affect the current task), so (a) session-end §5
+   reconciliation is scoped to WORK sessions — review skips it; (b) the
+   taskfile §Markers bullet for the audit line is DELETED outright — it
+   was never a task-file line; closeout.md owns the report line in the
+   close-out response (rule 11 restored). Zero consumer churn (all
+   consumers were closeout-side already); the closeout chain
+   (closeout.md / ai-sync-v2 / entry template / scenario 22) is
+   untouched.
 
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 

@@ -23,16 +23,19 @@ formats.
    session's kind.
 4. **Prefetch backfill** — update the task's `prefetch:` with what was
    actually consulted.
-5. **Remaining-task reconciliation** — inspect every other active task under
-   `.ai-tasks/` (all `pending`, `in_progress`, `final_review`, and `blocked`
-   files; exclude `archive/`). For each remaining task, decide whether this
-   session changed its blockers, scope, assumptions, acceptance criteria,
-   prefetch, estimate, or status. Apply required updates, including removing
-   task-id blockers that this session resolved. If a blocked task has no
-   blockers left, restore the active status that is inferable from its
-   latest session-log heading; otherwise set it to `pending`. This runs at
-   every session end; the current task's own row is the closeout skill's
-   domain.
+5. **Remaining-task reconciliation (work sessions only)** — a session that
+   changed facts (code, task scope/est, blockers) inspects every other
+   active task under `.ai-tasks/` (all `pending`, `in_progress`,
+   `final_review`, and `blocked` files; exclude `archive/`). For each
+   remaining task, decide whether this session changed its blockers, scope,
+   assumptions, acceptance criteria, prefetch, estimate, or status. Apply
+   required updates, including removing task-id blockers that this session
+   resolved. If a blocked task has no blockers left, restore the active
+   status that is inferable from its latest session-log heading; otherwise
+   set it to `pending`. A review session skips this step — its declarations
+   (verdict, findings, status) change only the current task. The
+   completion-triggered reconciliation and the current task's own row are
+   the closeout skill's domain.
 
 ## Wrap-up variant (context overage)
 
