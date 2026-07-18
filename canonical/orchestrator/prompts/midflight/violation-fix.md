@@ -1,3 +1,3 @@
 [orchestrator] Protocol violation(s) detected after your session ended:
 - {{problems}}
-Fix exactly these now, per the session-end bookkeeping (`.ai-protocol/workflow/skills/session-end.md`) for session id {{sid}}. Clean tree first: {{clean_howto}} Then end.
+These are known failures, not an exhaustive replacement for the procedure. Read `.ai-protocol/workflow/skills/session-end.md` and execute the applicable procedure in full for session id {{sid}}. In particular, clean tree first: {{clean_howto}} Do not start new task work. Then end.

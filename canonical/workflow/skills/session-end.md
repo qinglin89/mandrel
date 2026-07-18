@@ -1,11 +1,11 @@
-# Session-end bookkeeping (boundary skill)
+# Session-end bookkeeping (boundary procedure)
 
 Runs at EVERY session end, in the working conversation — only the working
 session can author this content. Triggered by the stop-hook chain
 (interactive) or self-applied unprompted (headless, per the conduct annex);
 the caller's post-checks / the human's on-return checklist verify it
 (runbook §5). Entry shapes and status semantics come from the taskfile schema
-(`.ai-protocol/meta/taskfile.md`) — this skill owns the procedure, not the
+(`.ai-protocol/meta/taskfile.md`) — this document owns the procedure, not the
 formats.
 
 ## Procedure (in this order)

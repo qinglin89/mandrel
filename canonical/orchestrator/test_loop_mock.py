@@ -905,8 +905,8 @@ def scenario_10_context_budget(repo: Path) -> None:
         (repo / "wip.txt").write_text("dirty")  # dirty tree, no log entry
 
     def wrap_up(agent: FakeAgent, prompt: str) -> None:
-        assert "Wrap up NOW" in prompt, \
-            "over-budget violation must get the wrap-up instruction"
+        assert "execute its wrap-up variant in full" in prompt, \
+            "over-budget violation must get the full-procedure instruction"
         assert "Do NOT start any new work" in prompt
         assert "ONLY if your remediation fix set is not yet complete" \
             in prompt, "remediation wrap-up must carry the conditional flag"
@@ -1304,7 +1304,7 @@ claimed-by: dev-iiii-0001@2026-01-13T00:00:00Z
         (repo / "wip2.txt").write_text("dirty")
 
     def wrap_up_adv(agent: FakeAgent, prompt: str) -> None:
-        assert "Wrap up NOW" in prompt
+        assert "execute its wrap-up variant in full" in prompt
         assert "your landed slice is a complete reviewable unit" in prompt, \
             "advancement wrap-up must carry the advancement note"
         assert "ONLY if your remediation fix set" not in prompt, \

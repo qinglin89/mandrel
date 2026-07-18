@@ -29,10 +29,11 @@ dispute — do NOT ask and do NOT guess. Instead, block and end:
 
 ## End-of-session discipline
 
-No Stop-hook backstop here: satisfy the session-end bookkeeping
-(`.ai-protocol/workflow/skills/session-end.md`) unprompted before your final
-message. Your entry prompt's POST-SESSION CHECKS preview (when present) is
-exactly what gets verified after you end.
+No Stop-hook backstop here: before your final message, read
+`.ai-protocol/workflow/skills/session-end.md` and execute the applicable
+procedure in full, unprompted. Your entry prompt's POST-SESSION CHECKS preview
+(when present) is exactly what gets verified after you end; it is a backstop,
+not a replacement for the procedure.
 
 ## Scope discipline
 

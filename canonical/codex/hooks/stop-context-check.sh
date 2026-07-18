@@ -116,7 +116,7 @@ status=$(awk '
 if [ "$status" = "completed" ]; then
   if [ "$wt_clean" -eq 0 ]; then
     log "case1-dirty task=$task_file status=completed wt=dirty → block (clean first)"
-    block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per the session-end procedure (.ai-protocol/workflow/skills/session-end.md), ${CLEAN_HOWTO} Then end."
+    block "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Read '.ai-protocol/workflow/skills/session-end.md' and execute the applicable recovery requirements in full. In particular, ${CLEAN_HOWTO} Then end."
   fi
   log "case1 task=$task_file status=completed wt=clean → block (invoke ai-sync-v2)"
   block "Task '${task_file}' has status: completed. Invoke /ai-sync-v2 now — read '${SYNC_SKILL}' and follow it in full — to run the task-completion closeout (.ai-protocol/workflow/skills/closeout.md) before ending the session. Your final response must include one line beginning \`Remaining-task audit:\`."
@@ -133,7 +133,7 @@ if echo "$session_log_section" | grep -q -F "$session_id"; then
   # Case 2b: a session-log entry exists.
   if [ "$wt_clean" -eq 0 ]; then
     log "case2b-dirty task=$task_file status=$status log-entry-present wt=dirty → block"
-    block "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. The session-log is an end-of-session record (session-end procedure: clean tree first, then write the log). Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
+    block "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. Read '.ai-protocol/workflow/skills/session-end.md' and execute the applicable recovery requirements in full. The session log is an end-of-session record: clean tree first, then write the log. Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
   fi
   log "case2b task=$task_file status=$status log-entry-present wt=clean → allow"
   exit 0
@@ -148,7 +148,7 @@ THRESHOLD=200000
 
 if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD wt=$wt_clean stop_hook_active=$stop_hook_active → block (wrap up)"
-  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session now per the session-end wrap-up procedure (.ai-protocol/workflow/skills/session-end.md): (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff; apply the procedure's wrap-up specifics (continuation-marker rules, session-plan slice split). (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work."
+  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Read '.ai-protocol/workflow/skills/session-end.md' and execute its wrap-up variant in full for session id '${session_id}'. In particular: (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff. (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work. Then end."
 fi
 
 # Below threshold without log: allow stop (session may be ending naturally early).

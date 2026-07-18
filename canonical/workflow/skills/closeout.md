@@ -22,7 +22,7 @@ the task, or pre-remove the task's index row.
    across archived tasks. No admitted findings → archive only.
 3. **Archive** — move the task file to `.ai-tasks/archive/` and remove its
    row from `.ai-tasks/index.md`.
-4. **Remaining-task reconciliation** — repeat the session-end skill's
+4. **Remaining-task reconciliation** — repeat the session-end procedure's
    reconciliation (required even when no remaining task changes): audit every
    other active task, update blockers / scope / assumptions / acceptance
    criteria / prefetch / estimate / status where this completed task changes

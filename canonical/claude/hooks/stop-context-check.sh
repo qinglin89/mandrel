@@ -101,7 +101,7 @@ if [ "$status" = "completed" ]; then
     cat <<EOF
 {
   "decision": "block",
-  "reason": "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Per the session-end procedure (.ai-protocol/workflow/skills/session-end.md), ${CLEAN_HOWTO} Then end."
+  "reason": "Protocol violation: task '${task_file}' is status: completed but the working tree is not clean. Do NOT change status back to in_progress. Read '.ai-protocol/workflow/skills/session-end.md' and execute the applicable recovery requirements in full. In particular, ${CLEAN_HOWTO} Then end."
 }
 EOF
     exit 0
@@ -131,7 +131,7 @@ if echo "$session_log_section" | grep -q -F "$session_id"; then
     cat <<EOF
 {
   "decision": "block",
-  "reason": "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. The session-log is an end-of-session record (session-end procedure: clean tree first, then write the log). Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
+  "reason": "Protocol violation: a session-log entry for this session exists in '${task_file}', but the working tree is not clean — this is a false handoff. Read '.ai-protocol/workflow/skills/session-end.md' and execute the applicable recovery requirements in full. The session log is an end-of-session record: clean tree first, then write the log. Resolve one of: (a) ${CLEAN_HOWTO} Then end. Or (b) if the entry was written mid-task by mistake, remove that premature session-log entry."
 }
 EOF
     exit 0
@@ -153,7 +153,7 @@ if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   cat <<EOF
 {
   "decision": "block",
-  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Wrap up this session now per the session-end wrap-up procedure (.ai-protocol/workflow/skills/session-end.md): (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff; apply the procedure's wrap-up specifics (continuation-marker rules, session-plan slice split). (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work."
+  "reason": "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Read '.ai-protocol/workflow/skills/session-end.md' and execute its wrap-up variant in full for session id '${session_id}'. In particular: (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff. (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work. Then end."
 }
 EOF
   exit 0

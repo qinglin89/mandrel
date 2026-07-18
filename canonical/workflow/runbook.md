@@ -145,7 +145,7 @@ escalation pauses the loop for a binding human answer.
   native hooks/import chain (claude/codex). One assembly spec, two backends.
   Headless runs additionally inject the conduct annex
   (`.cursor/orchestrator/prompts/entry/conduct-annex.md`).
-- **End (session-side, hook-triggered)**: session-end bookkeeping
+- **End (session-side, hook-triggered)**: the session-end procedure
   (`.ai-protocol/workflow/skills/session-end.md`) is carried by the stop-hook
   chain in the same conversation. Orchestrated mode: the post-checks (§4.3)
   are the backstop. Manual mode: the human executing this runbook IS the
