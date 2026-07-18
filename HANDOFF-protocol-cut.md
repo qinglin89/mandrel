@@ -25,8 +25,8 @@ phase is one independent commit landing; the suite stays green at every landing:
 | P3a | Doc cut + consumer re-point (new `protocols/ workflow/ meta/`; deploy umbrella `.ai-protocol/` at targets — user-selected; CLAUDE.md chain, hooks, `REVIEW_RULE`, deploy.py, tests, boundary-lint) | **landed 2026-07-16** — 12 new docs; 5 `ai-coding-*.md` + tasks-v2-tmp + automation-mode.md deleted; all consumers re-pointed; `scripts/boundary-lint.sh` added; mock 30/30 + pytest 25/25 + lint green; scratch-target deploy smoke verified; globals resynced |
 | P3b | Prompt/hook content trim to instantiation (litmus 4; mock substring assertions churn here) | **landed 2026-07-16** — all listed surfaces trimmed; `wrapup-plan-remediation` template deleted; ZERO mock-assertion edits needed (assertions anchor on instantiation substrings, which survive); ORC-07's plan-prompt trim deliberately deferred (see landing facts); mock 30/30 + pytest 25/25 + lint green |
 | P3c | Plan-contract injection + plan-prompt trim (ORC-07 second half; scenario 6 churns) | **landed 2026-07-16** — `PLAN_RULE` + `entry/plan-rule-wrapper` injected ahead of the gate instruction (review-pattern mirror); three plan templates trimmed to instantiation + pointer; the two reply-shape caveats moved into plan.md's Revision protocol; scenario-6 churn: 4 assertions re-anchored + 1 wrapper-banner assertion added; mock 30/30 + pytest 25/25 + lint green |
-| P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** in an isolated sandbox (29/29 checks — see P4 sandbox smoke below); remaining: live LLM drill (optional) + the real-target wave (user-run) |
-| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **P5a landed 2026-07-17** — landing facts below; dev.md split (base + 2 mode adds), eager substrate purified, two-slot dev wrapper injection, `/invoke` skill, charter rule 12, eager-purity lint; mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green. **P5b closed 2026-07-17** — conduct.md header re-voiced; **dev contracts re-merged per-mode, base retired** (single-slot injection; landing facts below); the remaining voice pass (review/plan/intake + meta) deliberately NOT scheduled — user ruling: the system works, protect product time; reopen only on felt friction. Deferred design annex below. Mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green |
+| P4 | Live smoke on a `quantx-bak-*` repo + one-wave target deploys (user-run) | **deterministic half GREEN 2026-07-17** (sandbox smoke, since extended to 30/30 — re-run at every landing). **Live LLM drill RUN 2026-07-17/18** on orch-hub-test (hub-orchestrated, full loop incl. plan gate, interim + final reviews, remediation, closeout; shipped a real dashboard feature end-to-end) — surfaced 3 findings, all fixed same-day (see P4 live drill findings) and drove the entry-prompt slim pass. Remaining: the real-target wave (user-run; ALL targets currently lag canonical — see the slim-pass addendum) |
+| P5 | Context-assembly symmetrization (P5a) + protocol-voice pass (P5b, interactive) | **P5a landed 2026-07-17** — landing facts below; dev.md split (base + 2 mode adds), eager substrate purified, two-slot dev wrapper injection, `/invoke` skill, charter rule 12, eager-purity lint; mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green. **P5b closed 2026-07-17** — conduct.md header re-voiced; **dev contracts re-merged per-mode, base retired** (single-slot injection; landing facts below); the remaining voice pass (review/plan/intake + meta) deliberately NOT scheduled — user ruling: the system works, protect product time; reopen only on felt friction. Deferred design annex below (items 1–2 partially applied 2026-07-18 by the user-driven entry-prompt slim pass). Mock 30/30 + pytest 25/25 + lint + sandbox smoke 30/30 green |
 | P6 | `meta/memory.md` read/write split (write side leaves the ambient channel) | **defined 2026-07-17** (user-ruled: memory ONLY; taskfile explicitly not split) — entry brief below; objective-gated ⇒ delegation-eligible; independent of P5 internals; recommended before the P4 wave |
 
 Key plan decisions (full plan text approved 2026-07-16): externalization runs BEFORE
@@ -675,7 +675,10 @@ backends, plan-gated) surfaced two findings:
    orchestrator's UNANCHORED substring parse (pre-cut code imported with
    the orchestrator, predates P0) read the mention as the marker: fix set
    deemed open, re-review deferred, a spurious continuation dev session
-   dispatched. The loop then SELF-REINFORCED: each spurious session read
+   dispatched. (NOTE: the fix-set algebra described below was simplified
+   on 2026-07-18 to present ⟺ `open` — completion REMOVES the line; see
+   the entry-prompt slim pass section.) The loop then SELF-REINFORCED:
+   each spurious session read
    the growing log, imitated the previous entry's closing formula
    near-verbatim (7 entries / 7 copies of the phrase, sessions 3+ verbatim
    — in-context imitation, not independent protocol reasoning), and its
@@ -746,6 +749,31 @@ smoke 30/30 — smoke A6 re-anchored to the trimmed loader):
 - **Pending (approved, not yet landed)**: consecutive
   remediation-continuation dispatch cap in the orchestrator (escalate
   to the human after N consecutive continuation dispatches).
+
+**Addendum — state at `2026-07-18` (aligned after user commit `4a46c0c`):**
+
+- `4a46c0c` (user): session-end ACTIVATION clarified across the three stop
+  hooks, conduct-annex, violation-fix / wrapup templates, runbook,
+  closeout, session-end.md — block/wrap-up messages now instruct "Read
+  `.ai-protocol/workflow/skills/session-end.md` and execute the applicable
+  requirements in full" instead of paraphrasing the procedure inline; the
+  wrap-up message no longer teaches marker rules (consistent with the
+  fix-set migration). Mock re-anchored by the user.
+- Alignment pass found + fixed one defect in `4a46c0c`: the cursor stop
+  hook's new wrap-up text interpolated undefined `${conversation_id}`
+  (the cursor hook stores the id in `session_id`) — under `set -u` the
+  block aborted with EMPTY output, i.e. cursor over-budget sessions would
+  stop with no wrap-up instruction at all. Caught by smoke B5 (all three
+  B5 cases re-anchored to the new pointer wording).
+- Gates at HEAD: mock 30/30, pytest 25/25, boundary-lint OK, sandbox
+  smoke 30/30. Tree clean.
+- **Deploy lag**: orch-hub-test is at `f2ee85d` (pre claim-sid /
+  reconciliation-scoping / fix-set / slim-pass / session-end-activation —
+  the 2026-07-18 runaway ran on that old code); hkchain / orch-hub /
+  quantx are older still. One `aii-2 deploy` per target before the next
+  drill or the wave; no stale-file cleanup needed (post-merge layouts
+  have no retired filenames).
+- Micro-pending: review.md header typo "You evaluates" → "You evaluate".
 
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 

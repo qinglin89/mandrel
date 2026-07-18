@@ -145,7 +145,7 @@ THRESHOLD=200000
 
 if [ "$approx_tokens" -gt "$THRESHOLD" ]; then
   log "case2a task=$task_file status=$status tokens=$approx_tokens > $THRESHOLD wt=$wt_clean → block (wrap up)"
-  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Read '.ai-protocol/workflow/skills/session-end.md' and execute its wrap-up variant in full for session id '${conversation_id}'. In particular: (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff. (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work. Then end."
+  block "Context has grown to approximately ${approx_tokens} tokens (over the ${THRESHOLD} budget for reliable work). Read '.ai-protocol/workflow/skills/session-end.md' and execute its wrap-up variant in full for session id '${session_id}'. In particular: (1) ${CLEAN_HOWTO} (2) append the '## Session log' entry to '${task_file}' — Next carries the handoff. (3) re-estimate the session-est total. (4) keep status unchanged unless restoring protocol legality requires otherwise. Start no new work. Then end."
 fi
 
 # Below threshold without log: allow stop (session may be ending naturally early).
