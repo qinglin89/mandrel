@@ -1,29 +1,11 @@
 # Project protocol (loader)
 
-This project runs the ai-protocol suite deployed under `.ai-protocol/`:
-role contracts in `protocols/`, data schemas in `meta/`, caller-layer docs in
-`workflow/`. The documents imported below are binding for every session.
-
-## Verb → contract mapping
-
-The invocation verb selects the session's work contract — a session-level
-distinction, independent of tool and model. The caller delivers the contract
-text at invocation: orchestrated sessions receive it injected into the entry
-prompt; interactive sessions receive it via the `/invoke` skill or a paste
-(runbook §6, `.ai-protocol/workflow/runbook.md`):
-
-- `task <id>` → dev contract, the mode file the caller certifies:
-  `.ai-protocol/protocols/dev-advancement.md` or
-  `.ai-protocol/protocols/dev-remediation.md` (mode predicate:
-  `.ai-protocol/meta/taskfile.md` §3, applied per
-  `.ai-protocol/workflow/rolemapping.md`).
-- `review <id>` → review contract: `.ai-protocol/protocols/review.md`.
-
-New work that no active task covers enters through the intake contract
-(`.ai-protocol/protocols/intake.md`), packaged as the `/intake-task` skill.
-The task-completion closeout (`.ai-protocol/workflow/skills/closeout.md`) is
-packaged as `/ai-sync-v2` and fires on `status: completed`. Memory bootstrap
-(`.ai-protocol/meta/init.md`) is packaged as `/ai-init`.
+The documents imported below are binding for every session. Work runs under
+role contracts delivered at invocation: `/invoke <role> <task-id>`, or a
+paste (runbook §6, `.ai-protocol/workflow/runbook.md`); the role→contract
+mapping lives in `.ai-protocol/workflow/rolemapping.md`. New work enters
+via `/intake-task`; task-completion closeout is `/ai-sync-v2`; memory
+bootstrap is `/ai-init`.
 
 ## Protocol imports
 

@@ -30,11 +30,11 @@ status per the taskfile transition table (dev advancement): `in_progress` (work 
 
 ## fix-set-value
 
-frontmatter `fix-set`, when present, is exactly `open` or `complete` (absent = complete)
+frontmatter `fix-set`, when present, is exactly `open`; remove the line when your fix set completes
 
 ## fix-set-closed
 
-frontmatter `fix-set` is not `open` at your session end (the open flag is declared only by a remediation session whose fix set is incomplete)
+frontmatter `fix-set` is not set at your session end
 
 ## dev-est-increment
 

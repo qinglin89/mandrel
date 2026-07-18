@@ -49,10 +49,10 @@ handoff, not an emergency:
   and future unimplemented slices so Next points to one-session-sized work;
   prefer adding a continuation slice like `session-2-cont` over renumbering
   later slices.
-- Dev remediation: do not run preReEst or advance planned scope. Declare the
-  fix set in frontmatter: `fix-set: open` if it is not yet complete,
-  `fix-set: complete` when it is. An advancement session never sets
-  `fix-set: open` — its landed work is a complete reviewable unit.
+- Dev remediation: do not run preReEst or advance planned scope. If the fix
+  set is not yet complete, set frontmatter `fix-set: open`; remove the line
+  when it completes. An advancement session never sets `fix-set` — its
+  landed work is a complete reviewable unit.
 - Do not advance lifecycle status just because of the wrap-up; keep status
   unchanged unless restoring protocol legality requires otherwise. Start no
   new work.

@@ -966,7 +966,7 @@ def scenario_11_continuation_same_role(repo: Path) -> None:
             "- Done: completed the fix set; ends as one reviewable unit "
             "(narrating `fix-set` in prose must stay inert)\n"
             "- Next: re-review\n- Open: none\n"))
-        set_fix_set(p, "complete")
+        set_fix_set(p, None)
 
     FakeAgent.script = [dev_completes]
     orch = new_orch(plan_gate=True)
@@ -1008,8 +1008,10 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
         assert "POST-SESSION CHECKS" in prompt, "check preview missing"
         assert "ONLY when the whole scope is complete" in prompt, \
             "advancement status menu must be in the preview"
-        assert "frontmatter `fix-set` is not `open`" in prompt, \
+        assert "frontmatter `fix-set` is not set" in prompt, \
             "fix-set-closed rule must be in the advancement preview"
+        assert "when present, is exactly `open`" not in prompt, \
+            "fix-set-value is remediation-only preview text"
         p.write_text(p.read_text() + (
             f"\n### 2026-01-09 / {agent.agent_id} / "
             "(in_progress → in_progress)\n"
@@ -1017,24 +1019,17 @@ def scenario_12_est_increment_enforced(repo: Path) -> None:
             "- Open: none\n"))
         set_fix_set(p, "open")
 
-    def half_fixes(agent: FakeAgent, prompt: str) -> None:
+    def fixes_all(agent: FakeAgent, prompt: str) -> None:
         assert "session-est not incremented" in prompt, \
             "followup must cite the est violation"
         assert "declared only by a remediation" in prompt, \
-            "followup must cite the illegal advancement fix-set: open"
+            "followup must cite the illegal advancement fix-set flag"
         assert "does not match this session's id" in prompt, \
             "followup must cite the claim-sid violation"
-        # claim + est fixed, but the fix-set value is corrected to a TYPO —
-        # exercises the fix-set-value shape check on the next round-trip
-        set_fix_set(p, "done")
+        set_fix_set(p, None)
         bump_est(p, agent)
 
-    def fixes_value(agent: FakeAgent, prompt: str) -> None:
-        assert "not a legal value" in prompt, \
-            "followup must cite the fix-set value violation"
-        set_fix_set(p, None)
-
-    FakeAgent.script = [forgets_est, half_fixes, fixes_value]
+    FakeAgent.script = [forgets_est, fixes_all]
     orch = new_orch()
     orch.ask_human = lambda banner: (_ for _ in ()).throw(
         AssertionError("unexpected escalation"))

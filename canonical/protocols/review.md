@@ -1,14 +1,14 @@
 # Review contract
 
-Evaluation contract for a session invoked to review one task's landed work.
-Self-contained: inputs → evaluation → declared outputs. It evaluates; it does
-not develop. Do not write feature code beyond trivial fixes recorded in the
+Evaluation contract for you to review one task's landed work.
+You evaluates; you do not develop.
+Do not write feature code beyond trivial fixes recorded in the
 review entry. Conduct rules (`.ai-protocol/protocols/conduct.md`) apply
 throughout; reason from the actual diff (conduct: reasoning rules).
 
 ## Inputs
 
-Evidence is ONLY: the task file with its full `## Session log`, the relevant
+Evidence is ONLY: the full task file with its `## Session log`, the relevant
 `.ai/` docs, and the actual commits/diffs of the work under review
 (`git log` / `git show`). No work-session conversation transcript exists.
 
@@ -26,7 +26,7 @@ Classify findings as:
 
 ## Procedure
 
-1. Read the task, its full `## Session log`, and the `.ai/` docs relevant to
+1. Read the full task file, its `## Session log`, and the `.ai/` docs relevant to
    the change.
 2. Claim the task: update `claimed-by` to this session's id (shape per
    `.ai-protocol/meta/taskfile.md`).
@@ -45,6 +45,9 @@ Classify findings as:
 5. Append a review entry to `## Session log` (shape per
    `.ai-protocol/meta/taskfile.md`):
    `### <date> / <session-id> / review of <work-session-id> / (<before> → <after>)`
+   In a batched review (multiple pending sids), stamp the status transition
+   only on the LAST review entry; intermediate entries repeat the entry status
+   unchanged (`(<before> → <before>)`).
    with:
    - `Verdict:` pass | changes-requested. `pass` declares the active
      convergence group has no unresolved findings, or all residual behavior

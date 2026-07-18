@@ -65,8 +65,8 @@ role-local meanings live in the role contracts:
   the session ended (planned convergence or context overage).
 - **`fix-set: open`** (remediation-only frontmatter flag): the fix set is
   still open — dispatch a fresh DEV (remediation) session instead of a
-  re-review; re-review waits until the fix set completes (`fix-set` back to
-  `complete`/absent). The flag without a changes-requested latest verdict is
+  re-review; re-review waits until the fix set completes (the `fix-set`
+  line removed). The flag without a changes-requested latest verdict is
   ignored with a warning. Review-side continuation needs no flag: a review
   that wraps mid-set leaves sids pending, so the next turn is a review
   anyway.

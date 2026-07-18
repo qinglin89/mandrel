@@ -213,7 +213,7 @@ wrap-up is an ordinary clean handoff and never opens a fix set
 **remediation-only**: a remediation session that wraps before its fix set
 is complete sets it, and the loop dispatches a fresh DEV (remediation)
 session instead of a re-review; re-review waits until the fix set
-completes (`fix-set` back to `complete`/absent). The flag without an open
+completes (the `fix-set` line removed). The flag without an open
 remediation is ignored with a WARNING. Review-side continuation needs no
 flag: a review that wraps mid-set leaves sids pending, so the next turn is
 a review anyway (one review entry per pending sid — a sid named only in

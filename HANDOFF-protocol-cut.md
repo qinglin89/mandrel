@@ -705,6 +705,48 @@ backends, plan-gated) surfaced two findings:
    freeze lifted by the user's ruling); absent = complete keeps every
    archived/mid-flight task parsing unchanged.
 
+### Entry-prompt slim pass (landed 2026-07-18, user-driven review of the assembled prompt)
+
+The user reviewed the rendered dev-advancement entry prompt line by line;
+rulings landed as one batch (gates green: mock 30/30, pytest 25/25, lint,
+smoke 30/30 — smoke A6 re-anchored to the trimmed loader):
+
+- **Loader trimmed to imports + pointers**: the suite self-description, the
+  verb→contract mapping (now single-sourced in rolemapping — the loader
+  copy was a rule-11 duplicate), and the skills narration all left
+  CLAUDE.md; an 8-line orientation header remains. `dev-invocation`
+  dropped "per the loader's verb→contract mapping".
+- **/invoke hardened**: roles are now explicit — `dev-advancement` |
+  `dev-remediation` | `review` | `plan` | `dev` (auto-select) — with a
+  deterministic legality precheck against the task file (mode predicate,
+  fix-set state, pending set); mismatch ⇒ report and stop. Human names
+  the mode, the skill verifies (caller-certification inverted from
+  compute-to-validate). Globals resynced.
+- **Contracts re-voiced second person** (user-edited; the deferred P5b
+  register annex partially applied): advancement + remediation +
+  review headers now address the session ("Work contract for you to…");
+  Inputs trimmed to task-file + assembled-context bullets; the memory
+  retrieval rule moved into Work conduct; "Self-contained: inputs → …"
+  design-language line dropped. Advancement gained a user-authored
+  output note: no Open items may remain at `final_review`.
+- **fix-set algebra simplified to present ⟺ open**: `open` is the only
+  legal value; completion = REMOVE the line (absent = no open fix set).
+  Post-check previews are now per-mode: advancement/review carry one
+  line ("fix-set is not set at your session end"), remediation carries
+  the value line ("when present, exactly `open`; remove when complete").
+  taskfile §2, both dev contracts, wrapup-note-remediation,
+  session-end.md, runbook §3 re-pointed.
+- **Batched-review stamp ruling**: a batched review session stamps its
+  status transition only on its LAST entry; intermediate entries repeat
+  the entry status unchanged (review.md step 5 + taskfile) — kills the
+  "7× (final_review → completed)" visual from the drill.
+- Cross-channel duplicate-import audit: none (claude native import +
+  native-note preamble; cursor/codex hook injection with @-lines
+  neutralized) — recorded as verified, no change needed.
+- **Pending (approved, not yet landed)**: consecutive
+  remediation-continuation dispatch cap in the orchestrator (escalate
+  to the human after N consecutive continuation dispatches).
+
 ### P6 entry brief (defined 2026-07-17 — memory read/write split)
 
 User ruling (2026-07-17 discussion): split `meta/memory.md` along its

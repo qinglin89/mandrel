@@ -535,8 +535,8 @@ class TaskState:
     est: str
     entries: list[LogEntry]
     # Frontmatter `fix-set`: "open" = a remediation fix set is incomplete
-    # (not yet a reviewable unit — re-review deferred); "complete"/"" (absent)
-    # = closed. Declared only by remediation sessions (dev contract).
+    # (not yet a reviewable unit — re-review deferred); absent ("") = no
+    # open fix set. Declared only by remediation sessions (dev contract).
     fix_set: str = ""
 
     @property
@@ -1953,22 +1953,18 @@ class Orchestrator:
             _claim_sid))
 
         def _fix_set_value(task):
-            if task.fix_set and task.fix_set not in ("open", "complete"):
+            if task.fix_set and task.fix_set != "open":
                 return (f"frontmatter `fix-set: {task.fix_set}` is not a "
-                        "legal value — exactly `open` or `complete` "
-                        "(absent = complete)")
+                        "legal value — the only legal value is `open`; "
+                        "remove the line when the fix set is complete")
             return None
-        specs.append((
-            "fix-set-value",
-            contract_line("fix-set-value"),
-            _fix_set_value))
 
         def _fix_set_closed(task):
-            if task.fix_set == "open":
-                return ("frontmatter `fix-set: open` after this session — "
-                        "the open flag is declared only by a remediation "
-                        "session with an incomplete fix set; set "
-                        "`fix-set: complete` or remove the line")
+            if task.fix_set:
+                return ("frontmatter `fix-set` is set after this session — "
+                        "the flag is declared only by a remediation "
+                        "session with an incomplete fix set; remove the "
+                        "line")
             return None
         if role == "dev":
             if was_remediation:
@@ -1982,6 +1978,10 @@ class Orchestrator:
                     f"→ `{task.status}` — a remediation session never "
                     "touches status (taskfile transition table); restore "
                     "it"))
+                specs.append((
+                    "fix-set-value",
+                    contract_line("fix-set-value"),
+                    _fix_set_value))
             else:
                 specs.append((
                     "dev-advancement-status",
@@ -2455,7 +2455,7 @@ class Orchestrator:
                 # Remediation continuation: the last remediation session
                 # wrapped up (context budget) before its fix set was
                 # complete. The same role continues; re-review waits until
-                # the fix set completes (fix-set returns to complete).
+                # the fix set completes (the fix-set line removed).
                 self.log("remediation continuation: resuming dev in a fresh "
                          "session (re-review deferred until the fix set "
                          "completes)")
