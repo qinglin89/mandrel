@@ -19,7 +19,7 @@ Everything in this directory is gitignored.
 The scheduler/state machine is backend-independent; only session execution
 is pluggable:
 
-| | `--backend cursor` (default) | `--backend cc-codex` |
+| | `--backend cursor` | `--backend cc-codex` (default) |
 |---|---|---|
 | dev role | Cursor SDK agent, `claude-opus-4-8` | `--dev-agent claude` (default): Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort; `--dev-agent codex`: Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
 | review role | Cursor SDK agent, `gpt-5.5` | Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
@@ -46,24 +46,67 @@ cd /absolute/path/to/target-repo
 # one-time runtime setup can be done by deployment:
 #   aii-2 deploy --bootstrap-orchestrator /absolute/path/to/target-repo
 # or manually: python3.14 -m venv .cursor/orchestrator/.venv && .cursor/orchestrator/.venv/bin/python -m pip install -r .cursor/orchestrator/requirements.txt
-# edit .cursor/orchestrator/.env when using the cursor backend
+# edit .cursor/orchestrator/.env only for overrides (and CURSOR_API_KEY when using Cursor)
 .cursor/orchestrator/.venv/bin/python .cursor/orchestrator/orchestrator.py <task-id> [flags]
 ```
 
-All `ORCH_*` variables and `CURSOR_API_KEY` are read from
-`.cursor/orchestrator/.env` first, then from the exported environment.
+Runtime defaults and named profiles live in `orchestrator.toml`. All
+`ORCH_*` variables and `CURSOR_API_KEY` are read from
+`.cursor/orchestrator/.env` first, then from the exported environment. The
+selection precedence is:
+
+```text
+explicit CLI flag > named --profile > environment > orchestrator.toml
+```
+
+`--profile` is optional: existing commands with no profile keep working.
+`standard` resolves to Opus 4.8 @ max + GPT-5.5 @ xhigh; `excellent`
+resolves to Fable 5 @ max + GPT-5.6 Sol @ xhigh. The Excellent profile uses
+Claude Code's full model name `claude-fable-5` (`fable` is the corresponding
+CLI alias; `fable-5` is not valid). An explicit role flag overrides the
+corresponding profile field. If `--dev-agent` changes a profile from Claude
+to Codex or vice versa, both `--dev-model` and `--dev-effort` must also be
+explicit.
+
+Supervisors can query the exact effective launch values without a task,
+credentials, model-catalog call, or clean-tree check:
+
+```bash
+# inherited default
+.cursor/orchestrator/.venv/bin/python \
+  .cursor/orchestrator/orchestrator.py --print-config
+
+# named profile for a selected backend
+.cursor/orchestrator/.venv/bin/python \
+  .cursor/orchestrator/orchestrator.py --print-config \
+  --backend cc-codex --profile excellent
+```
+
+The JSON includes `config_revision`, an `effective_revision` that also changes
+with environment/resolved values, the available profiles, every resolved
+model/effort, backend/dev-agent, session/context limits, launch booleans,
+control directory, and a per-field `sources` map (`cli`, `profile:<name>`,
+`env:<name>`, or `config`). Every real run writes the same JSON on the stable
+startup log line `effective-config: {...}` so a supervisor can persist the
+actual launch snapshot.
 
 | Flag / env | Default | Meaning |
 |---|---|---|
 | `<task-id>` | — | e.g. `2026-06-23-v1-risk-control` (file `.ai-tasks/<id>.md` must exist; trailing `.md` tolerated) |
+| `--print-config` | off | print effective launch configuration as JSON and exit; `<task-id>` is optional in this mode |
+| `--profile` | unset | optional `standard` or `excellent` named role selection; no flag means inherited defaults |
 | `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
-| `--backend` | `cursor` | `cursor` or `cc-codex` (see §0) |
+| `--backend` / `ORCH_BACKEND` | `cc-codex` | `cursor` or `cc-codex` (see §0) |
 | `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions. Review sessions remain Codex CLI. |
 | `--plan-gate` | off | every dev session first proposes goal+plan and blocks for your confirmation before implementing (see §5.8) |
 | `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_MODEL` (`cc-codex --dev-agent codex`) | `claude-opus-4-8` (cursor/Claude dev) / `gpt-5.5` (Codex dev) | dev-role model, in the selected agent's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
 | `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (cc-codex) | `gpt-5.5` | review-role model |
-| `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_EFFORT` (`cc-codex --dev-agent codex`) | catalog default (= `high`) / `max` (Claude dev) / `xhigh` (Codex dev) | dev-role effort. cursor and Claude Code use the claude `effort` axis `low..max`; Codex dev uses the gpt/codex reasoning axis `none/minimal/low/medium/high/xhigh` |
-| `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (cc-codex) | catalog default (= `medium`) / `xhigh` | review-role effort: `none/low/medium/high/xhigh`. **Canonical spelling for the top tier is codex's `xhigh`** — the cursor gpt `reasoning` axis natively calls it `extra-high`, and the orchestrator translates per backend, so either spelling works anywhere (both tiers verified live) |
+| `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_EFFORT` (`cc-codex --dev-agent codex`) | `high` (Cursor) / `max` (Claude dev) / `xhigh` (Codex dev) | dev-role effort. Cursor and Claude Code use the claude effort axis `low..max`; Codex dev uses the reasoning axis `none/minimal/low/medium/high/xhigh` |
+| `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (cc-codex) | `medium` (Cursor) / `xhigh` (cc-codex) | review-role effort: `none/low/medium/high/xhigh`. Canonical top-tier spelling is `xhigh`; Cursor calls it `extra-high`, and the orchestrator translates either spelling |
+| `ORCH_CODEX_SANDBOX` | `danger-full-access` | cc-codex only: codex `-s` sandbox mode. Full access by default (ruled 2026-07-04): `workspace-write` leaves `.git` read-only, so review-side ai-sync commits and close-out absorption fail |
+| `--max-sessions` / `ORCH_MAX_SESSIONS` | 40 | safety budget per run; exit (resumable) when exhausted |
+| `ORCH_CONTEXT_BUDGET` | 200000 | per-session context ceiling |
+| `--control-dir` | unset | file-based control channel for orch-hub: questions/answers plus `stop.flag` (§5); unset preserves interactive stdin |
 
 Effort values are validated at startup against a per-axis allowlist —
 claude/fable axis: `low/medium/high/xhigh/max`; gpt/codex axis:
@@ -71,14 +114,11 @@ claude/fable axis: `low/medium/high/xhigh/max`; gpt/codex axis:
 accepts unknown effort values **silently** and falls back to the default
 effort (verified with a bogus value), so a typo would otherwise silently
 downgrade the run; the orchestrator refuses instead.
-| `ORCH_CODEX_SANDBOX` | `danger-full-access` | cc-codex only: codex `-s` sandbox mode. Full access by default (ruled 2026-07-04): `workspace-write` leaves `.git` READ-ONLY, so review-side ai-sync commits and close-out absorption fail (`git add` → `index.lock Operation not permitted`, verified live) |
-| `--max-sessions` | 40 | safety budget per run; exit (resumable) when exhausted |
-| `--control-dir` | unset | file-based control channel for an external supervisor (orch-hub): every escalation writes `NNN-question.json` into the dir and waits for `NNN-answer.json`; a `stop.flag` file stops the run at the next safe point (§5). Unset = interactive stdin, behavior unchanged |
 
 Constants in the source: `MAX_FOLLOWUPS = 3` (post-check fix round-trips per
-session), `GROUP_BUDGET = 2` (changes-requested re-reviews per convergence
-group), `CONTEXT_BUDGET = 200000` tokens (or `ORCH_CONTEXT_BUDGET`) — the
-per-session context ceiling, replicating `stop-context-check.sh`.
+session) and `GROUP_BUDGET = 2` (changes-requested re-reviews per convergence
+group). Configurable launch defaults are in `orchestrator.toml`, not duplicated
+as source literals.
 
 Note on cc-codex permissions: `claude -p` runs with
 `--dangerously-skip-permissions` and codex with `danger-full-access` (both

@@ -10,16 +10,17 @@ finding, over-budget convergence group — pauses the loop and pulls the human
 in on stdin.
 
 Backends (--backend):
-  cursor   (default) fresh Cursor SDK agent per session (dev=Opus-4.8,
+  cursor   fresh Cursor SDK agent per session (dev=Opus-4.8,
            review=GPT-5.5 by default). Hooks do NOT run under the SDK, so the
            orchestrator injects protocol context itself and exports AI_ORCH=1
            to keep the .cursor hooks quiet. Needs CURSOR_API_KEY.
-  cc-codex Claude Code headless (`claude -p`, dev role, opus-4.8 @ max effort)
-           by default, or Codex CLI dev with `--dev-agent codex`; Codex CLI
-           (`codex exec`, review role, gpt-5.5 @ xhigh effort) reviews.
-           No Cursor dependency; each tool's own hook/import chain loads the
-           protocol natively, so the orchestrator does NOT inject it.
-           Post-checks stay on as an end-discipline backstop.
+  cc-codex (default) Claude Code headless (`claude -p`, dev role,
+           opus-4.8 @ max effort) by default, or Codex CLI dev with
+           `--dev-agent codex`; Codex CLI (`codex exec`, review role,
+           gpt-5.5 @ xhigh effort) reviews. No Cursor dependency; each tool's
+           own hook/import chain loads the protocol natively, so the
+           orchestrator does NOT inject it. Post-checks stay on as an
+           end-discipline backstop.
 
 Lifecycle the orchestrator owns (both backends):
   - post-session checks: clean tree, session-log entry, legal status per role
@@ -33,9 +34,11 @@ Lifecycle the orchestrator owns (both backends):
 
 Usage:
     .venv/bin/python orchestrator.py <task-id> [--once] [--backend B]
+        [--profile standard|excellent]
         [--plan-gate] [--dev-agent claude|codex]
         [--dev-model ID] [--review-model ID]
         [--dev-effort E] [--review-effort E] [--max-sessions N]
+    .venv/bin/python orchestrator.py --print-config [the same selection flags]
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -52,6 +56,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -109,18 +114,6 @@ _load_env_file()
 
 # --- policy ----------------------------------------------------------------
 
-# cursor backend — NOTE: the SDK model namespace differs from `cursor-agent
-# models` (CLI): the SDK wants base ids (claude-opus-4-8, gpt-5.5), the CLI
-# lists variant ids (claude-opus-4-8-thinking-high, gpt-5.5-high, ...).
-DEFAULT_DEV_MODEL = os.environ.get("ORCH_DEV_MODEL", "claude-opus-4-8")
-DEFAULT_REVIEW_MODEL = os.environ.get("ORCH_REVIEW_MODEL", "gpt-5.5")
-
-# cursor backend efforts — None = the catalog's default variant (claude
-# family: high, gpt-5.5: medium). Verified live 2026-07-03: claude effort=max
-# and gpt-5.5 reasoning=extra-high are accepted by the SDK even though the
-# Cursor app UI doesn't offer them.
-DEFAULT_CURSOR_DEV_EFFORT = os.environ.get("ORCH_CURSOR_DEV_EFFORT") or None
-DEFAULT_CURSOR_REVIEW_EFFORT = os.environ.get("ORCH_CURSOR_REVIEW_EFFORT") or None
 # The parameter axis differs per model family (and so does the value
 # vocabulary: claude family low..max, gpt none..extra-high).
 EFFORT_AXIS = {"claude": "effort", "fable": "effort", "gpt": "reasoning"}
@@ -130,24 +123,7 @@ EFFORT_AXIS = {"claude": "effort", "fable": "effort", "gpt": "reasoning"}
 CURSOR_REASONING_ALIASES = {"xhigh": "extra-high"}
 CODEX_EFFORT_ALIASES = {"extra-high": "xhigh"}
 
-# cc-codex backend — each tool's own model namespace and effort scale.
-# Codex accepts: none|minimal|low|medium|high|xhigh (xhigh = "extra high" in
-# the TUI; verified against the API enum 2026-07-03).
 CLI_DEV_AGENTS = {"claude", "codex"}
-DEFAULT_CC_DEV_AGENT = os.environ.get("ORCH_CC_DEV_AGENT", "claude")
-DEFAULT_CC_MODEL = os.environ.get("ORCH_CC_MODEL", "claude-opus-4-8")
-DEFAULT_CC_EFFORT = os.environ.get("ORCH_CC_EFFORT", "max")
-DEFAULT_CODEX_DEV_MODEL = os.environ.get("ORCH_CODEX_DEV_MODEL", "gpt-5.5")
-DEFAULT_CODEX_DEV_EFFORT = os.environ.get("ORCH_CODEX_DEV_EFFORT", "xhigh")
-DEFAULT_CODEX_MODEL = os.environ.get("ORCH_CODEX_MODEL", "gpt-5.5")
-DEFAULT_CODEX_EFFORT = os.environ.get("ORCH_CODEX_EFFORT", "xhigh")
-# danger-full-access by default (ruled 2026-07-04): codex's workspace-write
-# sandbox leaves `.git` READ-ONLY, so any git commit fails — which breaks the
-# review-side ai-sync (Stop hook forces it at status=completed) and the
-# close-out absorption (verified live: `git add` → index.lock Operation not
-# permitted → blocked). Safety here is the protocol layer + post-checks,
-# same philosophy as claude's --dangerously-skip-permissions.
-CODEX_SANDBOX = os.environ.get("ORCH_CODEX_SANDBOX", "danger-full-access")
 
 # Startup effort allowlists, keyed by parameter axis. The server accepts
 # unknown effort values SILENTLY (verified 2026-07-03 with a bogus value) and
@@ -177,9 +153,414 @@ def effort_error(axis: str, value: str | None) -> str | None:
               "to the default effort, so a typo would silently downgrade "
               "the run — refusing)")
 
+
+CONFIG_FILE = ORCH_DIR / "orchestrator.toml"
+CONFIG_SCHEMA_VERSION = 1
+BACKENDS = {"cursor", "cc-codex"}
+CODEX_SANDBOX_ALLOWED = {"read-only", "workspace-write",
+                         "danger-full-access"}
+
+
+class OrchestratorConfigError(ValueError):
+    """The committed orchestrator configuration is missing or malformed."""
+
+
+def _table(parent: dict, key: str, where: str) -> dict:
+    value = parent.get(key)
+    if not isinstance(value, dict):
+        raise OrchestratorConfigError(f"{where}.{key} must be a table")
+    return value
+
+
+def _string(parent: dict, key: str, where: str) -> str:
+    value = parent.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise OrchestratorConfigError(
+            f"{where}.{key} must be a non-empty string")
+    return value
+
+
+def _positive_int(parent: dict, key: str, where: str) -> int:
+    value = parent.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise OrchestratorConfigError(
+            f"{where}.{key} must be a positive integer")
+    return value
+
+
+def _effort_axis(model: str) -> str:
+    for prefix, axis in EFFORT_AXIS.items():
+        if model.startswith(prefix):
+            return axis
+    return "effort"
+
+
+def _validate_role(where: str, table: dict, *, dev_axis: str | None = None,
+                   review_axis: str | None = None,
+                   flat: bool = True) -> None:
+    if flat:
+        dev_model = _string(table, "dev_model", where)
+        dev_effort = _string(table, "dev_effort", where)
+        review_model = _string(table, "review_model", where)
+        review_effort = _string(table, "review_effort", where)
+        axes = (dev_axis or _effort_axis(dev_model),
+                review_axis or _effort_axis(review_model))
+        values = ((f"{where}.dev_effort", axes[0], dev_effort),
+                  (f"{where}.review_effort", axes[1], review_effort))
+    else:
+        model = _string(table, "model", where)
+        effort = _string(table, "effort", where)
+        values = ((f"{where}.effort", dev_axis or _effort_axis(model),
+                   effort),)
+    for label, axis, effort in values:
+        error = effort_error(axis, effort)
+        if error:
+            raise OrchestratorConfigError(f"{label}: {error}")
+
+
+def load_orchestrator_config(
+        path: Path = CONFIG_FILE) -> tuple[dict, str]:
+    """Load and validate the deployed TOML policy plus its content hash."""
+    try:
+        raw = path.read_bytes()
+    except OSError as err:
+        raise OrchestratorConfigError(
+            f"cannot read orchestrator config {path}: {err}") from err
+    try:
+        config = tomllib.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as err:
+        raise OrchestratorConfigError(
+            f"cannot parse orchestrator config {path}: {err}") from err
+
+    if config.get("schema_version") != CONFIG_SCHEMA_VERSION:
+        raise OrchestratorConfigError(
+            f"{path}: schema_version must be {CONFIG_SCHEMA_VERSION}")
+    defaults = _table(config, "defaults", "config")
+    backend = _string(defaults, "backend", "defaults")
+    if backend not in BACKENDS:
+        raise OrchestratorConfigError(
+            f"defaults.backend must be one of {sorted(BACKENDS)}")
+    _positive_int(defaults, "max_sessions", "defaults")
+    _positive_int(defaults, "context_budget", "defaults")
+    sandbox = _string(defaults, "codex_sandbox", "defaults")
+    if sandbox not in CODEX_SANDBOX_ALLOWED:
+        raise OrchestratorConfigError(
+            "defaults.codex_sandbox must be one of "
+            f"{sorted(CODEX_SANDBOX_ALLOWED)}")
+
+    cursor = _table(defaults, "cursor", "defaults")
+    _validate_role("defaults.cursor", cursor)
+    cc = _table(defaults, "cc-codex", "defaults")
+    dev_agent = _string(cc, "dev_agent", "defaults.cc-codex")
+    if dev_agent not in CLI_DEV_AGENTS:
+        raise OrchestratorConfigError(
+            "defaults.cc-codex.dev_agent must be claude or codex")
+    review_model = _string(cc, "review_model", "defaults.cc-codex")
+    review_effort = _string(cc, "review_effort", "defaults.cc-codex")
+    error = effort_error("reasoning", review_effort)
+    if error:
+        raise OrchestratorConfigError(
+            f"defaults.cc-codex.review_effort: {error}")
+    cc_dev = _table(cc, "dev", "defaults.cc-codex")
+    for agent, axis in (("claude", "effort"), ("codex", "reasoning")):
+        _validate_role(f"defaults.cc-codex.dev.{agent}",
+                       _table(cc_dev, agent, "defaults.cc-codex.dev"),
+                       dev_axis=axis, flat=False)
+
+    profiles = _table(config, "profiles", "config")
+    if not profiles:
+        raise OrchestratorConfigError("config.profiles must not be empty")
+    for name, profile in profiles.items():
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+            raise OrchestratorConfigError(
+                f"invalid profile name {name!r}")
+        if not isinstance(profile, dict):
+            raise OrchestratorConfigError(
+                f"profiles.{name} must be a table")
+        _validate_role(f"profiles.{name}.cursor",
+                       _table(profile, "cursor", f"profiles.{name}"))
+        profile_cc = _table(profile, "cc-codex", f"profiles.{name}")
+        agent = _string(profile_cc, "dev_agent",
+                        f"profiles.{name}.cc-codex")
+        if agent not in CLI_DEV_AGENTS:
+            raise OrchestratorConfigError(
+                f"profiles.{name}.cc-codex.dev_agent must be claude or codex")
+        _validate_role(f"profiles.{name}.cc-codex", profile_cc,
+                       dev_axis=("effort" if agent == "claude"
+                                 else "reasoning"),
+                       review_axis="reasoning")
+
+    revision = hashlib.sha256(raw).hexdigest()
+    return config, revision
+
+
+ORCH_CONFIG, ORCH_CONFIG_REVISION = load_orchestrator_config()
+CONFIG_DEFAULTS = ORCH_CONFIG["defaults"]
+CONFIG_CURSOR = CONFIG_DEFAULTS["cursor"]
+CONFIG_CC = CONFIG_DEFAULTS["cc-codex"]
+
+
+def _env(name: str) -> str | None:
+    value = os.environ.get(name)
+    return value.strip() if value and value.strip() else None
+
+
+def _env_int(name: str, fallback: int) -> int:
+    value = _env(name)
+    if value is None:
+        return fallback
+    try:
+        parsed = int(value)
+    except ValueError as err:
+        raise OrchestratorConfigError(
+            f"{name} must be a positive integer, got {value!r}") from err
+    if parsed <= 0:
+        raise OrchestratorConfigError(
+            f"{name} must be a positive integer, got {value!r}")
+    return parsed
+
+
+# Compatibility names retained for imports, help text, and existing tests.
+# Their fallback values now come from orchestrator.toml instead of literals.
+DEFAULT_BACKEND = _env("ORCH_BACKEND") or CONFIG_DEFAULTS["backend"]
+DEFAULT_DEV_MODEL = _env("ORCH_DEV_MODEL") or CONFIG_CURSOR["dev_model"]
+DEFAULT_REVIEW_MODEL = (_env("ORCH_REVIEW_MODEL")
+                        or CONFIG_CURSOR["review_model"])
+DEFAULT_CURSOR_DEV_EFFORT = (_env("ORCH_CURSOR_DEV_EFFORT")
+                             or CONFIG_CURSOR["dev_effort"])
+DEFAULT_CURSOR_REVIEW_EFFORT = (_env("ORCH_CURSOR_REVIEW_EFFORT")
+                                or CONFIG_CURSOR["review_effort"])
+DEFAULT_CC_DEV_AGENT = (_env("ORCH_CC_DEV_AGENT")
+                        or CONFIG_CC["dev_agent"])
+DEFAULT_CC_MODEL = (_env("ORCH_CC_MODEL")
+                    or CONFIG_CC["dev"]["claude"]["model"])
+DEFAULT_CC_EFFORT = (_env("ORCH_CC_EFFORT")
+                     or CONFIG_CC["dev"]["claude"]["effort"])
+DEFAULT_CODEX_DEV_MODEL = (_env("ORCH_CODEX_DEV_MODEL")
+                           or CONFIG_CC["dev"]["codex"]["model"])
+DEFAULT_CODEX_DEV_EFFORT = (_env("ORCH_CODEX_DEV_EFFORT")
+                            or CONFIG_CC["dev"]["codex"]["effort"])
+DEFAULT_CODEX_MODEL = (_env("ORCH_CODEX_MODEL")
+                       or CONFIG_CC["review_model"])
+DEFAULT_CODEX_EFFORT = (_env("ORCH_CODEX_EFFORT")
+                        or CONFIG_CC["review_effort"])
+# Display/backward-compatibility constant. ORCH_MAX_SESSIONS is parsed by the
+# resolver only when no CLI value supersedes it, so a stale invalid env value
+# cannot block an explicit --max-sessions override.
+DEFAULT_MAX_SESSIONS = CONFIG_DEFAULTS["max_sessions"]
+CONTEXT_BUDGET = _env_int(
+    "ORCH_CONTEXT_BUDGET", CONFIG_DEFAULTS["context_budget"])
+CONTEXT_BUDGET_SOURCE = ("env:ORCH_CONTEXT_BUDGET"
+                         if _env("ORCH_CONTEXT_BUDGET") else "config")
+CODEX_SANDBOX = (_env("ORCH_CODEX_SANDBOX")
+                 or CONFIG_DEFAULTS["codex_sandbox"])
+CODEX_SANDBOX_SOURCE = ("env:ORCH_CODEX_SANDBOX"
+                        if _env("ORCH_CODEX_SANDBOX") else "config")
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedLaunchConfig:
+    profile: str | None
+    backend: str
+    dev_agent: str | None
+    dev_model: str
+    dev_effort: str
+    review_model: str
+    review_effort: str
+    max_sessions: int
+    context_budget: int
+    codex_sandbox: str
+    sources: dict[str, str]
+
+    def public_dict(self) -> dict:
+        result = {
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "config_revision": ORCH_CONFIG_REVISION,
+            "profile": self.profile or "default",
+            "available_profiles": sorted(ORCH_CONFIG["profiles"]),
+            "backend": self.backend,
+            "dev": {
+                "agent": self.dev_agent,
+                "model": self.dev_model,
+                "effort": self.dev_effort,
+            },
+            "review": {
+                "agent": "cursor" if self.backend == "cursor" else "codex",
+                "model": self.review_model,
+                "effort": self.review_effort,
+            },
+            "max_sessions": self.max_sessions,
+            "context_budget": self.context_budget,
+            "codex_sandbox": (
+                self.codex_sandbox if self.backend == "cc-codex" else None),
+            "sources": dict(sorted(self.sources.items())),
+        }
+        effective_bytes = json.dumps(
+            result, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        result["effective_revision"] = hashlib.sha256(
+            effective_bytes).hexdigest()
+        return result
+
+
+def launch_config_dict(resolved: ResolvedLaunchConfig,
+                       args: argparse.Namespace) -> dict:
+    """Public, serializable snapshot of every launch-relevant selection."""
+    result = resolved.public_dict()
+    result.update({
+        "task_id": args.task_id,
+        "once": bool(args.once),
+        "plan_gate": bool(args.plan_gate),
+        "control_dir": (
+            str(args.control_dir.expanduser().resolve())
+            if args.control_dir is not None else None),
+    })
+    return result
+
+
+def _resolved_value(*, cli_value, profile_table: dict | None,
+                    profile_key: str, env_name: str | None,
+                    config_value, profile_name: str | None) -> tuple[object, str]:
+    if cli_value is not None:
+        return cli_value, "cli"
+    if profile_table is not None and profile_key in profile_table:
+        return profile_table[profile_key], f"profile:{profile_name}"
+    if env_name and (value := _env(env_name)) is not None:
+        return value, f"env:{env_name}"
+    return config_value, "config"
+
+
+def resolve_launch_config(
+        *, backend: str | None = None, profile: str | None = None,
+        dev_agent: str | None = None, dev_model: str | None = None,
+        review_model: str | None = None, dev_effort: str | None = None,
+        review_effort: str | None = None,
+        max_sessions: int | None = None) -> ResolvedLaunchConfig:
+    """Resolve CLI > named profile > environment > TOML defaults."""
+    profiles = ORCH_CONFIG["profiles"]
+    if profile is not None and profile not in profiles:
+        raise OrchestratorConfigError(
+            f"unknown profile {profile!r}; available: "
+            + ", ".join(sorted(profiles)))
+
+    effective_backend, backend_source = _resolved_value(
+        cli_value=backend, profile_table=None, profile_key="backend",
+        env_name="ORCH_BACKEND", config_value=CONFIG_DEFAULTS["backend"],
+        profile_name=profile)
+    if effective_backend not in BACKENDS:
+        raise OrchestratorConfigError(
+            f"invalid backend {effective_backend!r}; available: "
+            + ", ".join(sorted(BACKENDS)))
+    if (effective_backend == "cc-codex"
+            and CODEX_SANDBOX not in CODEX_SANDBOX_ALLOWED):
+        raise OrchestratorConfigError(
+            "ORCH_CODEX_SANDBOX must be one of "
+            f"{sorted(CODEX_SANDBOX_ALLOWED)}")
+    profile_table = (profiles[profile][effective_backend]
+                     if profile is not None else None)
+    sources = {"backend": backend_source}
+    sources["context_budget"] = CONTEXT_BUDGET_SOURCE
+    sources["codex_sandbox"] = CODEX_SANDBOX_SOURCE
+
+    effective_max, max_source = _resolved_value(
+        cli_value=max_sessions, profile_table=None, profile_key="max_sessions",
+        env_name="ORCH_MAX_SESSIONS",
+        config_value=CONFIG_DEFAULTS["max_sessions"],
+        profile_name=profile)
+    try:
+        effective_max = int(effective_max)
+    except (TypeError, ValueError) as err:
+        raise OrchestratorConfigError(
+            f"max_sessions must be a positive integer, got "
+            f"{effective_max!r}") from err
+    if effective_max <= 0:
+        raise OrchestratorConfigError(
+            f"max_sessions must be a positive integer, got {effective_max!r}")
+    sources["max_sessions"] = max_source
+
+    if effective_backend == "cursor":
+        if dev_agent is not None:
+            raise OrchestratorConfigError(
+                "--dev-agent is only supported with --backend cc-codex")
+        fields = {}
+        for key, cli_value, env_name in (
+                ("dev_model", dev_model, "ORCH_DEV_MODEL"),
+                ("dev_effort", dev_effort, "ORCH_CURSOR_DEV_EFFORT"),
+                ("review_model", review_model, "ORCH_REVIEW_MODEL"),
+                ("review_effort", review_effort,
+                 "ORCH_CURSOR_REVIEW_EFFORT")):
+            fields[key], sources[key.replace("_", ".", 1)] = _resolved_value(
+                cli_value=cli_value, profile_table=profile_table,
+                profile_key=key, env_name=env_name,
+                config_value=CONFIG_CURSOR[key], profile_name=profile)
+        effective_dev_agent = None
+    else:
+        effective_dev_agent, agent_source = _resolved_value(
+            cli_value=dev_agent, profile_table=profile_table,
+            profile_key="dev_agent", env_name="ORCH_CC_DEV_AGENT",
+            config_value=CONFIG_CC["dev_agent"], profile_name=profile)
+        if effective_dev_agent not in CLI_DEV_AGENTS:
+            raise OrchestratorConfigError(
+                f"invalid cc-codex dev_agent {effective_dev_agent!r}; "
+                "available: claude, codex")
+        sources["dev.agent"] = agent_source
+        if (profile_table is not None and dev_agent is not None
+                and dev_agent != profile_table["dev_agent"]
+                and (dev_model is None or dev_effort is None)):
+            raise OrchestratorConfigError(
+                "overriding a profile's --dev-agent also requires explicit "
+                "--dev-model and --dev-effort")
+        dev_defaults = CONFIG_CC["dev"][effective_dev_agent]
+        dev_model_env = ("ORCH_CC_MODEL" if effective_dev_agent == "claude"
+                         else "ORCH_CODEX_DEV_MODEL")
+        dev_effort_env = ("ORCH_CC_EFFORT" if effective_dev_agent == "claude"
+                          else "ORCH_CODEX_DEV_EFFORT")
+        fields = {}
+        for key, cli_value, env_name, config_value in (
+                ("dev_model", dev_model, dev_model_env,
+                 dev_defaults["model"]),
+                ("dev_effort", dev_effort, dev_effort_env,
+                 dev_defaults["effort"]),
+                ("review_model", review_model, "ORCH_CODEX_MODEL",
+                 CONFIG_CC["review_model"]),
+                ("review_effort", review_effort, "ORCH_CODEX_EFFORT",
+                 CONFIG_CC["review_effort"])):
+            fields[key], sources[key.replace("_", ".", 1)] = _resolved_value(
+                cli_value=cli_value, profile_table=profile_table,
+                profile_key=key, env_name=env_name,
+                config_value=config_value, profile_name=profile)
+
+    dev_axis = (_effort_axis(str(fields["dev_model"]))
+                if effective_backend == "cursor"
+                else ("effort" if effective_dev_agent == "claude"
+                      else "reasoning"))
+    review_axis = (_effort_axis(str(fields["review_model"]))
+                   if effective_backend == "cursor" else "reasoning")
+    for label, axis, value in (
+            ("dev_effort", dev_axis, str(fields["dev_effort"])),
+            ("review_effort", review_axis,
+             str(fields["review_effort"]))):
+        error = effort_error(axis, value)
+        if error:
+            raise OrchestratorConfigError(f"{label}: {error}")
+
+    return ResolvedLaunchConfig(
+        profile=profile,
+        backend=str(effective_backend),
+        dev_agent=(str(effective_dev_agent)
+                   if effective_dev_agent is not None else None),
+        dev_model=str(fields["dev_model"]),
+        dev_effort=str(fields["dev_effort"]),
+        review_model=str(fields["review_model"]),
+        review_effort=str(fields["review_effort"]),
+        max_sessions=effective_max,
+        context_budget=CONTEXT_BUDGET,
+        codex_sandbox=CODEX_SANDBOX,
+        sources=sources,
+    )
+
+
 MAX_FOLLOWUPS = 3     # post-check violation round-trips per session
 GROUP_BUDGET = 2      # changes-requested RE-reviews per group (so 3 entries total)
-DEFAULT_MAX_SESSIONS = 40
 PLAN_GATE_BANNER_CHARS = 12_000
 # --plan-gate report artifact: a reply revises the plan-report by restating
 # it in full from this heading on; a reply that changes nothing must end
@@ -193,11 +574,9 @@ HEARTBEAT_SILENCE = 30  # seconds without stream events before a log-file beat
 GEN_WINDOW = 30       # seconds — [gen] aggregation window for text/thinking
 CONTROL_POLL_SECONDS = 1.0  # --control-dir: answer / stop.flag poll interval
 DISCUSSION_MARKER_RE = re.compile(r"^(?:[?？]|discuss\s*:)", re.IGNORECASE)
-# Session context budget (tokens) — port of stop-context-check.sh: a session
-# whose conversation outgrows this must wrap up (clean tree + session-log
-# entry + no lifecycle advancement from the wrap itself) and hand off to a
-# fresh session.
-CONTEXT_BUDGET = int(os.environ.get("ORCH_CONTEXT_BUDGET", "200000"))
+# Session context budget (tokens) — port of stop-context-check.sh. Its
+# effective value is resolved from env/config above and exposed in the
+# machine-readable launch configuration.
 
 DEV_LEGAL_STATUSES = {"in_progress", "final_review", "blocked"}
 # reviewer transitions, keyed by status found at entry (status-transition
@@ -882,10 +1261,7 @@ class CursorBackend:
 
     @staticmethod
     def _effort_axis(model: str) -> str:
-        for prefix, axis in EFFORT_AXIS.items():
-            if model.startswith(prefix):
-                return axis
-        return "effort"
+        return _effort_axis(model)
 
     def _model_selection(self, role: str):
         model = self.models[role]
@@ -2538,17 +2914,27 @@ def validate_models(api_key: str | None, ids: list[str]) -> None:
         sys.exit(f"model(s) not available: {missing}\navailable: {avail}")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("task_id", type=lambda s: s.removesuffix(".md"),
+    ap.add_argument("task_id", nargs="?",
+                    type=lambda s: s.removesuffix(".md"),
                     help="task id, e.g. 2026-06-23-v1-risk-control "
-                         "(a trailing .md is tolerated)")
+                         "(a trailing .md is tolerated); omitted only with "
+                         "--print-config")
+    ap.add_argument("--print-config", action="store_true",
+                    help="print the resolved launch configuration as JSON "
+                         "and exit without starting a task")
+    ap.add_argument("--profile", choices=sorted(ORCH_CONFIG["profiles"]),
+                    default=None,
+                    help="optional named model/effort profile; explicit "
+                         "role flags override profile values")
     ap.add_argument("--once", action="store_true",
                     help="run exactly one session, then exit")
     ap.add_argument("--backend", choices=["cursor", "cc-codex"],
-                    default="cursor",
-                    help="cursor = Cursor SDK both roles (default); "
-                         "cc-codex = Claude/Codex dev + Codex CLI review")
+                    default=None,
+                    help=f"cursor = Cursor SDK both roles; cc-codex = "
+                         f"Claude/Codex dev + Codex CLI review "
+                         f"(effective default: {DEFAULT_BACKEND})")
     ap.add_argument("--dev-agent", choices=sorted(CLI_DEV_AGENTS),
                     default=None,
                     help="cc-codex only: dev-role CLI agent. Default: "
@@ -2567,7 +2953,7 @@ def main() -> None:
                          f"{DEFAULT_CODEX_MODEL} (cc-codex)")
     ap.add_argument("--dev-effort", default=None,
                     help="dev-role effort. cursor: claude effort axis "
-                         "low..max (default: catalog default = high); "
+                         f"low..max (default: {DEFAULT_CURSOR_DEV_EFFORT}); "
                          "cc-codex claude: claude --effort "
                          f"(default: {DEFAULT_CC_EFFORT}); cc-codex codex: "
                          "codex reasoning effort "
@@ -2577,9 +2963,12 @@ def main() -> None:
                          "(canonical = codex spelling; the cursor gpt axis "
                          "calls the top tier 'extra-high' — both spellings "
                          "are accepted and translated per backend). "
-                         "Default: cursor = catalog default (medium); "
-                         "cc-codex = xhigh")
-    ap.add_argument("--max-sessions", type=int, default=DEFAULT_MAX_SESSIONS)
+                         f"Default: cursor = "
+                         f"{DEFAULT_CURSOR_REVIEW_EFFORT}; cc-codex = "
+                         f"{DEFAULT_CODEX_EFFORT}")
+    ap.add_argument("--max-sessions", type=int, default=None,
+                    help=f"maximum sessions (default: "
+                         f"{DEFAULT_MAX_SESSIONS})")
     ap.add_argument("--control-dir", type=Path, default=None, metavar="DIR",
                     help="file-based control channel for an external "
                          "supervisor (orch-hub): every human escalation "
@@ -2587,70 +2976,73 @@ def main() -> None:
                          "NNN-answer.json; a stop.flag file in DIR stops "
                          "the run at the next safe point. Unset (default): "
                          "interactive stdin, behavior unchanged")
-    args = ap.parse_args()
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = build_parser()
+    args = ap.parse_args(argv)
+
+    try:
+        resolved = resolve_launch_config(
+            backend=args.backend,
+            profile=args.profile,
+            dev_agent=args.dev_agent,
+            dev_model=args.dev_model,
+            review_model=args.review_model,
+            dev_effort=args.dev_effort,
+            review_effort=args.review_effort,
+            max_sessions=args.max_sessions,
+        )
+    except OrchestratorConfigError as err:
+        ap.error(str(err))
+
+    launch_config = launch_config_dict(resolved, args)
+    if args.print_config:
+        print(json.dumps(launch_config, indent=2, sort_keys=True))
+        return
+    if not args.task_id:
+        ap.error("task_id is required unless --print-config is used")
 
     err = prompts_error()
     if err:
         sys.exit(err)
 
-    if args.backend == "cursor":
-        if args.dev_agent:
-            sys.exit("--dev-agent is only supported with --backend cc-codex")
-        dev_model = args.dev_model or DEFAULT_DEV_MODEL
-        review_model = args.review_model or DEFAULT_REVIEW_MODEL
-        dev_effort = args.dev_effort or DEFAULT_CURSOR_DEV_EFFORT
-        review_effort = args.review_effort or DEFAULT_CURSOR_REVIEW_EFFORT
-        for label, model, eff in (
-                ("--dev-effort", dev_model, dev_effort),
-                ("--review-effort", review_model, review_effort)):
-            err = effort_error(CursorBackend._effort_axis(model), eff)
-            if err:
-                sys.exit(f"{label}: {err}")
+    dev_model = resolved.dev_model
+    review_model = resolved.review_model
+    dev_effort = resolved.dev_effort
+    review_effort = resolved.review_effort
+    if resolved.backend == "cursor":
         api_key = os.environ.get("CURSOR_API_KEY")
         validate_models(api_key, [dev_model, review_model])
         # Hooks must no-op inside SDK-driven sessions (the orchestrator owns
         # the lifecycle); the SDK's local executor inherits this env.
         os.environ["AI_ORCH"] = "1"
         orch = Orchestrator(args.task_id, dev_model, review_model, api_key,
-                            args.once, args.max_sessions,
+                            args.once, resolved.max_sessions,
                             plan_gate=args.plan_gate,
                             control_dir=args.control_dir)
         orch.backend = CursorBackend(orch, dev_model, review_model, api_key,
                                      dev_effort=dev_effort,
                                      review_effort=review_effort)
     else:
-        dev_agent = args.dev_agent or DEFAULT_CC_DEV_AGENT
-        if dev_agent not in CLI_DEV_AGENTS:
-            sys.exit("--dev-agent/ORCH_CC_DEV_AGENT: invalid value "
-                     f"'{dev_agent}' — allowed: "
-                     + "/".join(sorted(CLI_DEV_AGENTS)))
-        if dev_agent == "codex":
-            dev_model = args.dev_model or DEFAULT_CODEX_DEV_MODEL
-            dev_effort = args.dev_effort or DEFAULT_CODEX_DEV_EFFORT
-            dev_axis = "reasoning"
-        else:
-            dev_model = args.dev_model or DEFAULT_CC_MODEL
-            dev_effort = args.dev_effort or DEFAULT_CC_EFFORT
-            dev_axis = "effort"
-        review_model = args.review_model or DEFAULT_CODEX_MODEL
-        codex_effort = args.review_effort or DEFAULT_CODEX_EFFORT
-        for label, axis, eff in (("--dev-effort", dev_axis, dev_effort),
-                                 ("--review-effort", "reasoning",
-                                  codex_effort)):
-            err = effort_error(axis, eff)
-            if err:
-                sys.exit(f"{label}: {err}")
+        dev_agent = resolved.dev_agent
+        assert dev_agent is not None
         # NO AI_ORCH here: cc/codex hooks must fire — they carry protocol
         # injection and end-discipline natively for their own sessions.
         orch = Orchestrator(args.task_id, dev_model, review_model, None,
-                            args.once, args.max_sessions,
+                            args.once, resolved.max_sessions,
                             plan_gate=args.plan_gate,
                             control_dir=args.control_dir)
         orch.backend = CliBackend(orch, dev_agent, dev_model, dev_effort,
-                                  review_model, codex_effort)
+                                  review_model, review_effort)
 
+    orch.log("effective-config: " + json.dumps(
+        launch_config, sort_keys=True, separators=(",", ":")))
     orch.log(f"orchestrator start: task={args.task_id} "
-             f"backend={args.backend} dev={orch.backend.describe('dev')} "
+             f"backend={resolved.backend} profile="
+             f"{resolved.profile or 'default'} "
+             f"dev={orch.backend.describe('dev')} "
              f"review={orch.backend.describe('review')} once={args.once} "
              f"plan_gate={args.plan_gate}"
              + (f" control_dir={orch.control_dir}" if orch.control_dir

@@ -1,0 +1,55 @@
+schema_version = 1
+
+[defaults]
+backend = "cc-codex"
+max_sessions = 40
+context_budget = 200000
+codex_sandbox = "danger-full-access"
+
+[defaults.cursor]
+dev_model = "claude-opus-4-8"
+dev_effort = "high"
+review_model = "gpt-5.5"
+review_effort = "medium"
+
+[defaults."cc-codex"]
+dev_agent = "claude"
+review_model = "gpt-5.5"
+review_effort = "xhigh"
+
+[defaults."cc-codex".dev.claude]
+model = "claude-opus-4-8"
+effort = "max"
+
+[defaults."cc-codex".dev.codex]
+model = "gpt-5.5"
+effort = "xhigh"
+
+# Named profiles are complete role selections for each backend. A profile's
+# cc-codex dev_agent is part of the profile; explicit CLI flags may still
+# override any individual field.
+[profiles.standard.cursor]
+dev_model = "claude-opus-4-8"
+dev_effort = "max"
+review_model = "gpt-5.5"
+review_effort = "xhigh"
+
+[profiles.standard."cc-codex"]
+dev_agent = "claude"
+dev_model = "claude-opus-4-8"
+dev_effort = "max"
+review_model = "gpt-5.5"
+review_effort = "xhigh"
+
+[profiles.excellent.cursor]
+dev_model = "claude-fable-5"
+dev_effort = "max"
+review_model = "gpt-5.6-sol"
+review_effort = "xhigh"
+
+[profiles.excellent."cc-codex"]
+dev_agent = "claude"
+dev_model = "claude-fable-5"
+dev_effort = "max"
+review_model = "gpt-5.6-sol"
+review_effort = "xhigh"
