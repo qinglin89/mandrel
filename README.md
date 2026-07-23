@@ -20,8 +20,9 @@ and use `status` to verify drift.
 - `ai_native_deployment/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
 
-The orchestrator is treated as deployment payload only in this repository. Its
-runtime behavior is intentionally not changed here.
+The orchestrator is a canonical deployment payload in this repository.
+Runtime changes are made and tested under `canonical/orchestrator/`, then
+deployed to target repositories; deployed copies should not be hand-edited.
 
 ## Deploy
 
@@ -49,8 +50,8 @@ upgrades `pip`, installs `.cursor/orchestrator/requirements.txt`, and creates
 `.cursor/orchestrator/.env` from `.env.example` only if `.env` does not already
 exist. Use `--orchestrator-python /path/to/python` if `python3.14` is not the
 right executable on the machine. Credentials and CLI logins are still local:
-set `CURSOR_API_KEY` for the default Cursor backend, or log in to `claude` and
-`codex` for `--backend cc-codex`.
+log in to `claude` and `codex` for the default `cc-codex` backend, or set
+`CURSOR_API_KEY` when explicitly using `--backend cursor`.
 
 If installed in editable mode, the same command is exposed as:
 
@@ -138,7 +139,17 @@ hooks, or repo contents.
 Future `orch-hub` tooling can consume `.registry/repos.local.json` to discover
 managed repos on this machine, then start each target repo's deployed
 `.cursor/orchestrator/orchestrator.py` as a subprocess. This repository does
-not implement orch-hub.
+not implement orch-hub. The deployed orchestrator exposes its effective
+defaults and named model/effort profiles as machine-readable JSON:
+
+```bash
+.cursor/orchestrator/.venv/bin/python \
+  .cursor/orchestrator/orchestrator.py --print-config
+```
+
+See `.cursor/orchestrator/README.md` for the resolution precedence and profile
+contract. A focused orch-hub implementation handoff is deployed as
+`.cursor/orchestrator/HANDOFF-orch-hub-config-profiles.md`.
 
 ## Temporary Global Skills Sync
 

@@ -4,6 +4,12 @@
 > SEPARATE workstream from `HANDOFF.md` (orchestrator state-machine testing —
 > still live, do not confuse or supersede). Read `README.md` in this directory
 > first if you don't know the orchestrator.
+>
+> **2026-07-23 update:** the orchestrator now implements committed defaults,
+> optional `standard`/`excellent` profiles, `--print-config` JSON, and a stable
+> `effective-config:` startup snapshot. See
+> `HANDOFF-orch-hub-config-profiles.md`; its launch-form contract supersedes
+> this handoff's older “full-flag start form” wording.
 
 ## Goal
 

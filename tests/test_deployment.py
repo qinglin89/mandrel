@@ -54,6 +54,8 @@ def make_source(tmp_path: Path) -> Path:
     )
     write(canonical / "claude" / "settings.json", "{}\n")
     write(canonical / "orchestrator" / "orchestrator.py", 'print("ok")\n')
+    write(canonical / "orchestrator" / "orchestrator.toml",
+          'schema_version = 1\n')
     write(canonical / "orchestrator" / ".env.example", "TOKEN=\n")
     write(canonical / "orchestrator" / "requirements.txt", "cursor-sdk\n")
     return root
@@ -87,6 +89,7 @@ def test_manifest_creation(tmp_path: Path) -> None:
     assert ".ai-protocol/protocols/dev.md" in saved["files"]
     assert ".ai-protocol/workflow/runbook.md" in saved["files"]
     assert ".ai-protocol/meta/taskfile.md" in saved["files"]
+    assert ".cursor/orchestrator/orchestrator.toml" in saved["files"]
 
     rendered_config = (target / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "{{REPO_ROOT}}" not in rendered_config

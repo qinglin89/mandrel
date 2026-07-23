@@ -619,7 +619,7 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     cs = o.ClaudeSession.__new__(o.ClaudeSession)
     cs.orch, cs.sid = orch, "cc-sid"
-    cs.model, cs.effort = "fable-5", "max"
+    cs.model, cs.effort = "claude-fable-5", "max"
     chunks: list[str] = []
     assert cs._handle_event(
         {"type": "assistant", "message": {
@@ -792,7 +792,7 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
     log = orch.log_file.read_text()
     assert "[tool] Bash" in log and "[text]" in log
     assert ("claude observed response model=claude-fable-5 "
-            "requested_model=fable-5 requested_effort=max") in log
+            "requested_model=claude-fable-5 requested_effort=max") in log
     assert "codex observed context model=gpt-5.5 effort=xhigh" in log
     assert "codex observed context model=gpt-5.5 effort=xhigh" \
         " requested_model=gpt-5.5 requested_effort=xhigh" \
@@ -1566,12 +1566,12 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     orch = new_orch()
 
     # -- claude argv: first turn names the orchestrator-chosen sid
-    cs = o.ClaudeSession(orch, "fable-5", "max", sid="cc-sid-1")
+    cs = o.ClaudeSession(orch, "claude-fable-5", "max", sid="cc-sid-1")
     argv = cs._argv("DO THE TASK")
     assert argv[:2] == ["claude", "-p"], argv
     assert "--session-id" in argv and "cc-sid-1" in argv, argv
     assert "--resume" not in argv, argv
-    assert argv[argv.index("--model") + 1] == "fable-5", argv
+    assert argv[argv.index("--model") + 1] == "claude-fable-5", argv
     assert argv[argv.index("--effort") + 1] == "max", argv
     assert "--dangerously-skip-permissions" in argv, argv
     assert argv[-1] == "DO THE TASK", "prompt must be the last claude arg"
@@ -1581,7 +1581,7 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     assert "--resume" in argv and "--session-id" not in argv, argv
     assert argv[argv.index("--resume") + 1] == "cc-sid-1", argv
     # blocked-resume constructs with resume=True from the first turn
-    cs2 = o.ClaudeSession(orch, "fable-5", "max", sid="cc-sid-1",
+    cs2 = o.ClaudeSession(orch, "claude-fable-5", "max", sid="cc-sid-1",
                           resume=True)
     argv = cs2._argv("HUMAN ANSWERED: use UTC")
     assert "--resume" in argv and "--session-id" not in argv, argv
@@ -1613,7 +1613,7 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "live that the resumed thread keeps gpt-5.5)"
 
     # -- CliBackend session routing (sessions.json is the truth for resume)
-    b = o.CliBackend(orch, "claude", "fable-5", "max", "gpt-5.5",
+    b = o.CliBackend(orch, "claude", "claude-fable-5", "max", "gpt-5.5",
                      "xhigh")
     fresh = b.new_session("dev")
     assert isinstance(fresh, o.ClaudeSession), \
