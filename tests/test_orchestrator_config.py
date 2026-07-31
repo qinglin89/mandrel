@@ -34,6 +34,10 @@ def test_default_config_is_visible_without_a_task_or_profile() -> None:
     config = query_config()
 
     assert config["profile"] == "default"
+    assert config["profiles"] == {
+        "dev": "default",
+        "review": "default",
+    }
     assert config["backend"] == "cc-codex"
     assert config["dev"] == {
         "agent": "claude",
@@ -56,6 +60,10 @@ def test_named_profiles_inherit_cc_codex_without_a_backend_flag() -> None:
         config = query_config("--profile", profile)
 
         assert config["profile"] == profile
+        assert config["profiles"] == {
+            "dev": profile,
+            "review": profile,
+        }
         assert config["backend"] == "cc-codex"
         assert config["dev"]["agent"] == "claude"
         assert config["review"]["agent"] == "codex"
@@ -67,7 +75,7 @@ def test_excellent_profile_uses_claude_cli_full_model_name() -> None:
 
     assert config["backend"] == "cc-codex"
     assert config["dev"]["agent"] == "claude"
-    assert config["dev"]["model"] == "claude-fable-5"
+    assert config["dev"]["model"] == "claude-opus-5"
 
 
 def test_custom_role_flags_inherit_cc_codex_without_a_backend_flag() -> None:
@@ -106,7 +114,7 @@ def test_named_profiles_resolve_backend_specific_values() -> None:
     assert standard["review"]["effort"] == "xhigh"
     assert standard["sources"]["dev.model"] == "profile:standard"
 
-    assert excellent["dev"]["model"] == "claude-fable-5"
+    assert excellent["dev"]["model"] == "claude-opus-5"
     assert excellent["dev"]["effort"] == "max"
     assert excellent["review"]["model"] == "gpt-5.6-sol"
     assert excellent["review"]["effort"] == "xhigh"
@@ -138,6 +146,81 @@ def test_resolution_precedence_is_cli_then_profile_then_env_then_config() -> Non
     assert explicit["review"]["model"] == "cli-review"
     assert explicit["review"]["effort"] == "high"
     assert explicit["sources"]["review.model"] == "cli"
+
+
+def test_role_profiles_can_be_selected_independently() -> None:
+    config = query_config(
+        "--dev-profile", "standard",
+        "--review-profile", "excellent",
+    )
+
+    assert config["profile"] == "default"
+    assert config["profiles"] == {
+        "dev": "standard",
+        "review": "excellent",
+    }
+    assert config["dev"] == {
+        "agent": "claude",
+        "model": "claude-opus-4-8",
+        "effort": "max",
+    }
+    assert config["review"] == {
+        "agent": "codex",
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+    }
+    assert config["sources"]["dev.model"] == "profile:standard"
+    assert config["sources"]["review.model"] == "profile:excellent"
+
+
+def test_role_profile_overrides_legacy_profile_for_only_that_role() -> None:
+    config = query_config(
+        "--profile", "excellent",
+        "--dev-profile", "standard",
+    )
+
+    assert config["profile"] == "excellent"
+    assert config["profiles"] == {
+        "dev": "standard",
+        "review": "excellent",
+    }
+    assert config["dev"]["model"] == "claude-opus-4-8"
+    assert config["review"]["model"] == "gpt-5.6-sol"
+
+
+def test_role_default_explicitly_clears_legacy_profile() -> None:
+    config = query_config(
+        "--profile", "excellent",
+        "--review-profile", "default",
+        env_overrides={
+            "ORCH_CODEX_MODEL": "env-review",
+            "ORCH_CODEX_EFFORT": "high",
+        },
+    )
+
+    assert config["profiles"] == {
+        "dev": "excellent",
+        "review": "default",
+    }
+    assert config["dev"]["model"] == "claude-opus-5"
+    assert config["review"]["model"] == "env-review"
+    assert config["review"]["effort"] == "high"
+    assert config["sources"]["review.model"] == "env:ORCH_CODEX_MODEL"
+
+
+def test_explicit_role_flags_override_only_the_selected_role_profile() -> None:
+    config = query_config(
+        "--dev-profile", "excellent",
+        "--review-profile", "standard",
+        "--review-model", "custom-review",
+        "--review-effort", "high",
+    )
+
+    assert config["dev"]["model"] == "claude-opus-5"
+    assert config["sources"]["dev.model"] == "profile:excellent"
+    assert config["review"]["model"] == "custom-review"
+    assert config["review"]["effort"] == "high"
+    assert config["sources"]["review.model"] == "cli"
 
 
 def test_cc_codex_dev_agent_selects_its_default_namespace() -> None:

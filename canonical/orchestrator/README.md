@@ -56,14 +56,19 @@ Runtime defaults and named profiles live in `orchestrator.toml`. All
 selection precedence is:
 
 ```text
-explicit CLI flag > named --profile > environment > orchestrator.toml
+explicit role flag > role-specific profile > named --profile
+  > environment > orchestrator.toml
 ```
 
 `--profile` is optional: existing commands with no profile keep working.
+It remains a backward-compatible shorthand that applies the same named
+profile to both roles. `--dev-profile` and `--review-profile` independently
+select a role; omitting either inherits `--profile`, while explicitly passing
+`default` restores environment/config inheritance for that role.
 `standard` resolves to Opus 4.8 @ max + GPT-5.5 @ xhigh; `excellent`
-resolves to Fable 5 @ max + GPT-5.6 Sol @ xhigh. The Excellent profile uses
-Claude Code's full model name `claude-fable-5` (`fable` is the corresponding
-CLI alias; `fable-5` is not valid). An explicit role flag overrides the
+resolves to Opus 5 @ max + GPT-5.6 Sol @ xhigh. The Excellent profile uses
+Claude Code's full model name `claude-opus-5` (`opus` is the corresponding
+CLI alias; `opus-5` is not valid). An explicit role flag overrides the
 corresponding profile field. If `--dev-agent` changes a profile from Claude
 to Codex or vice versa, both `--dev-model` and `--dev-effort` must also be
 explicit.
@@ -80,21 +85,31 @@ credentials, model-catalog call, or clean-tree check:
 .cursor/orchestrator/.venv/bin/python \
   .cursor/orchestrator/orchestrator.py --print-config \
   --backend cc-codex --profile excellent
+
+# independently select each role
+.cursor/orchestrator/.venv/bin/python \
+  .cursor/orchestrator/orchestrator.py --print-config \
+  --dev-profile standard --review-profile excellent
 ```
 
 The JSON includes `config_revision`, an `effective_revision` that also changes
-with environment/resolved values, the available profiles, every resolved
+with environment/resolved values, the available profiles, the authoritative
+per-role selections in `profiles.dev` and `profiles.review`, every resolved
 model/effort, backend/dev-agent, session/context limits, launch booleans,
 control directory, and a per-field `sources` map (`cli`, `profile:<name>`,
-`env:<name>`, or `config`). Every real run writes the same JSON on the stable
-startup log line `effective-config: {...}` so a supervisor can persist the
-actual launch snapshot.
+`env:<name>`, or `config`). The legacy top-level `profile` field remains the
+run-wide `--profile` selection (or `default`) for compatibility. Every real
+run writes the same JSON on the stable startup log line
+`effective-config: {...}` so a supervisor can persist the actual launch
+snapshot.
 
 | Flag / env | Default | Meaning |
 |---|---|---|
 | `<task-id>` | — | e.g. `2026-06-23-v1-risk-control` (file `.ai-tasks/<id>.md` must exist; trailing `.md` tolerated) |
 | `--print-config` | off | print effective launch configuration as JSON and exit; `<task-id>` is optional in this mode |
-| `--profile` | unset | optional `standard` or `excellent` named role selection; no flag means inherited defaults |
+| `--profile` | unset | backward-compatible run-wide `standard` or `excellent` selection; applies to both roles unless a role-specific profile overrides it |
+| `--dev-profile` | unset | `default`, `standard`, or `excellent` for dev; unset inherits `--profile`, while `default` explicitly inherits environment/config |
+| `--review-profile` | unset | `default`, `standard`, or `excellent` for review; unset inherits `--profile`, while `default` explicitly inherits environment/config |
 | `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
 | `--backend` / `ORCH_BACKEND` | `cc-codex` | `cursor` or `cc-codex` (see §0) |
 | `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions. Review sessions remain Codex CLI. |

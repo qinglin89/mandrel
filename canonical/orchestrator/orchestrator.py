@@ -35,6 +35,8 @@ Lifecycle the orchestrator owns (both backends):
 Usage:
     .venv/bin/python orchestrator.py <task-id> [--once] [--backend B]
         [--profile standard|excellent]
+        [--dev-profile default|standard|excellent]
+        [--review-profile default|standard|excellent]
         [--plan-gate] [--dev-agent claude|codex]
         [--dev-model ID] [--review-model ID]
         [--dev-effort E] [--review-effort E] [--max-sessions N]
@@ -360,7 +362,11 @@ CODEX_SANDBOX_SOURCE = ("env:ORCH_CODEX_SANDBOX"
 
 @dataclasses.dataclass(frozen=True)
 class ResolvedLaunchConfig:
+    # `profile` is the backward-compatible run-wide selector. The role
+    # profiles are authoritative after applying role-specific overrides.
     profile: str | None
+    dev_profile: str | None
+    review_profile: str | None
     backend: str
     dev_agent: str | None
     dev_model: str
@@ -377,6 +383,10 @@ class ResolvedLaunchConfig:
             "schema_version": CONFIG_SCHEMA_VERSION,
             "config_revision": ORCH_CONFIG_REVISION,
             "profile": self.profile or "default",
+            "profiles": {
+                "dev": self.dev_profile or "default",
+                "review": self.review_profile or "default",
+            },
             "available_profiles": sorted(ORCH_CONFIG["profiles"]),
             "backend": self.backend,
             "dev": {
@@ -431,16 +441,38 @@ def _resolved_value(*, cli_value, profile_table: dict | None,
 
 def resolve_launch_config(
         *, backend: str | None = None, profile: str | None = None,
+        dev_profile: str | None = None,
+        review_profile: str | None = None,
         dev_agent: str | None = None, dev_model: str | None = None,
         review_model: str | None = None, dev_effort: str | None = None,
         review_effort: str | None = None,
         max_sessions: int | None = None) -> ResolvedLaunchConfig:
-    """Resolve CLI > named profile > environment > TOML defaults."""
+    """Resolve CLI > role profile > run profile > env > TOML defaults."""
     profiles = ORCH_CONFIG["profiles"]
-    if profile is not None and profile not in profiles:
-        raise OrchestratorConfigError(
-            f"unknown profile {profile!r}; available: "
-            + ", ".join(sorted(profiles)))
+    for label, selected, allow_default in (
+            ("profile", profile, False),
+            ("dev profile", dev_profile, True),
+            ("review profile", review_profile, True)):
+        if (selected is not None
+                and selected not in profiles
+                and not (allow_default and selected == "default")):
+            available = sorted(profiles)
+            if allow_default:
+                available.insert(0, "default")
+            raise OrchestratorConfigError(
+                f"unknown {label} {selected!r}; available: "
+                + ", ".join(available))
+
+    # An omitted role flag inherits the legacy run-wide profile. Explicit
+    # `default` clears it for that role and restores env/config inheritance.
+    effective_dev_profile = (
+        profile if dev_profile is None
+        else None if dev_profile == "default"
+        else dev_profile)
+    effective_review_profile = (
+        profile if review_profile is None
+        else None if review_profile == "default"
+        else review_profile)
 
     effective_backend, backend_source = _resolved_value(
         cli_value=backend, profile_table=None, profile_key="backend",
@@ -455,8 +487,12 @@ def resolve_launch_config(
         raise OrchestratorConfigError(
             "ORCH_CODEX_SANDBOX must be one of "
             f"{sorted(CODEX_SANDBOX_ALLOWED)}")
-    profile_table = (profiles[profile][effective_backend]
-                     if profile is not None else None)
+    dev_profile_table = (
+        profiles[effective_dev_profile][effective_backend]
+        if effective_dev_profile is not None else None)
+    review_profile_table = (
+        profiles[effective_review_profile][effective_backend]
+        if effective_review_profile is not None else None)
     sources = {"backend": backend_source}
     sources["context_budget"] = CONTEXT_BUDGET_SOURCE
     sources["codex_sandbox"] = CODEX_SANDBOX_SOURCE
@@ -488,23 +524,30 @@ def resolve_launch_config(
                 ("review_model", review_model, "ORCH_REVIEW_MODEL"),
                 ("review_effort", review_effort,
                  "ORCH_CURSOR_REVIEW_EFFORT")):
+            role_profile = (
+                effective_dev_profile if key.startswith("dev_")
+                else effective_review_profile)
+            role_profile_table = (
+                dev_profile_table if key.startswith("dev_")
+                else review_profile_table)
             fields[key], sources[key.replace("_", ".", 1)] = _resolved_value(
-                cli_value=cli_value, profile_table=profile_table,
+                cli_value=cli_value, profile_table=role_profile_table,
                 profile_key=key, env_name=env_name,
-                config_value=CONFIG_CURSOR[key], profile_name=profile)
+                config_value=CONFIG_CURSOR[key], profile_name=role_profile)
         effective_dev_agent = None
     else:
         effective_dev_agent, agent_source = _resolved_value(
-            cli_value=dev_agent, profile_table=profile_table,
+            cli_value=dev_agent, profile_table=dev_profile_table,
             profile_key="dev_agent", env_name="ORCH_CC_DEV_AGENT",
-            config_value=CONFIG_CC["dev_agent"], profile_name=profile)
+            config_value=CONFIG_CC["dev_agent"],
+            profile_name=effective_dev_profile)
         if effective_dev_agent not in CLI_DEV_AGENTS:
             raise OrchestratorConfigError(
                 f"invalid cc-codex dev_agent {effective_dev_agent!r}; "
                 "available: claude, codex")
         sources["dev.agent"] = agent_source
-        if (profile_table is not None and dev_agent is not None
-                and dev_agent != profile_table["dev_agent"]
+        if (dev_profile_table is not None and dev_agent is not None
+                and dev_agent != dev_profile_table["dev_agent"]
                 and (dev_model is None or dev_effort is None)):
             raise OrchestratorConfigError(
                 "overriding a profile's --dev-agent also requires explicit "
@@ -524,10 +567,16 @@ def resolve_launch_config(
                  CONFIG_CC["review_model"]),
                 ("review_effort", review_effort, "ORCH_CODEX_EFFORT",
                  CONFIG_CC["review_effort"])):
+            role_profile = (
+                effective_dev_profile if key.startswith("dev_")
+                else effective_review_profile)
+            role_profile_table = (
+                dev_profile_table if key.startswith("dev_")
+                else review_profile_table)
             fields[key], sources[key.replace("_", ".", 1)] = _resolved_value(
-                cli_value=cli_value, profile_table=profile_table,
+                cli_value=cli_value, profile_table=role_profile_table,
                 profile_key=key, env_name=env_name,
-                config_value=config_value, profile_name=profile)
+                config_value=config_value, profile_name=role_profile)
 
     dev_axis = (_effort_axis(str(fields["dev_model"]))
                 if effective_backend == "cursor"
@@ -545,6 +594,8 @@ def resolve_launch_config(
 
     return ResolvedLaunchConfig(
         profile=profile,
+        dev_profile=effective_dev_profile,
+        review_profile=effective_review_profile,
         backend=str(effective_backend),
         dev_agent=(str(effective_dev_agent)
                    if effective_dev_agent is not None else None),
@@ -2926,8 +2977,20 @@ def build_parser() -> argparse.ArgumentParser:
                          "and exit without starting a task")
     ap.add_argument("--profile", choices=sorted(ORCH_CONFIG["profiles"]),
                     default=None,
-                    help="optional named model/effort profile; explicit "
-                         "role flags override profile values")
+                    help="backward-compatible run-wide named profile; "
+                         "role-specific profiles and explicit role flags "
+                         "override its values")
+    role_profile_choices = ["default", *sorted(ORCH_CONFIG["profiles"])]
+    ap.add_argument("--dev-profile", choices=role_profile_choices,
+                    default=None,
+                    help="optional dev-role profile; omitted inherits "
+                         "--profile, while 'default' explicitly restores "
+                         "environment/config inheritance for dev")
+    ap.add_argument("--review-profile", choices=role_profile_choices,
+                    default=None,
+                    help="optional review-role profile; omitted inherits "
+                         "--profile, while 'default' explicitly restores "
+                         "environment/config inheritance for review")
     ap.add_argument("--once", action="store_true",
                     help="run exactly one session, then exit")
     ap.add_argument("--backend", choices=["cursor", "cc-codex"],
@@ -2987,6 +3050,8 @@ def main(argv: list[str] | None = None) -> None:
         resolved = resolve_launch_config(
             backend=args.backend,
             profile=args.profile,
+            dev_profile=args.dev_profile,
+            review_profile=args.review_profile,
             dev_agent=args.dev_agent,
             dev_model=args.dev_model,
             review_model=args.review_model,
@@ -3040,8 +3105,9 @@ def main(argv: list[str] | None = None) -> None:
     orch.log("effective-config: " + json.dumps(
         launch_config, sort_keys=True, separators=(",", ":")))
     orch.log(f"orchestrator start: task={args.task_id} "
-             f"backend={resolved.backend} profile="
-             f"{resolved.profile or 'default'} "
+             f"backend={resolved.backend} profiles="
+             f"dev:{resolved.dev_profile or 'default'},"
+             f"review:{resolved.review_profile or 'default'} "
              f"dev={orch.backend.describe('dev')} "
              f"review={orch.backend.describe('review')} once={args.once} "
              f"plan_gate={args.plan_gate}"

@@ -42,14 +42,14 @@ review_model = "gpt-5.5"
 review_effort = "xhigh"
 
 [profiles.excellent.cursor]
-dev_model = "claude-fable-5"
+dev_model = "claude-opus-5"
 dev_effort = "max"
 review_model = "gpt-5.6-sol"
 review_effort = "xhigh"
 
 [profiles.excellent."cc-codex"]
 dev_agent = "claude"
-dev_model = "claude-fable-5"
+dev_model = "claude-opus-5"
 dev_effort = "max"
 review_model = "gpt-5.6-sol"
 review_effort = "xhigh"

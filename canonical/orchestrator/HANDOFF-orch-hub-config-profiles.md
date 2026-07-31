@@ -1,5 +1,10 @@
 # Handoff: orch-hub launch profiles and effective configuration
 
+> Superseded for the Start run UI by
+> `HANDOFF-orch-hub-split-role-profiles.md`. This document describes the
+> original single-profile integration and remains only as compatibility
+> background.
+
 ## Goal
 
 Replace the current free-form start-run flag form with a preset selector:

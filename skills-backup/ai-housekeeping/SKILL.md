@@ -25,6 +25,7 @@ Manual only. Triggers:
    - Source path
    - Proposed `<topic>/index.md` + sub-files names
    - Routing changes (`.ai/index.md` / `.ai/map.md`)
+   - Loader change, when the doc is an eager content doc (`overview` / `architecture` / `design` / `conventions`)
 
 4. **Show plan + ask confirmation per doc**. User chooses: apply, skip, defer. Process docs largest-first by default.
 
@@ -33,7 +34,8 @@ Manual only. Triggers:
    b. Spawn sub-files with frontmatter (`last-updated` today, `verified-against` from `git rev-parse HEAD`).
    c. Update parent / top-level routing as needed.
    d. Verify new sub-files within size limit; if any still over, flag for further user decision.
-   e. Commit: `chore(.ai): split <doc> into directory form per §4`.
+   e. If the doc is an eager content doc (`overview` / `architecture` / `design` / `conventions`), re-point the loader: `CLAUDE.md`'s `@.ai/<topic>.md` becomes `@.ai/<topic>/index.md`. Claude Code ignores a missing import silently, so skipping this drops the document from every Claude session with no error. Hook-driven loaders (cursor / codex) resolve the entrypoint from routing and need no edit.
+   f. Commit: `chore(.ai): split <doc> into directory form per §4`.
 
 6. **Rescan** after applying all confirmed upgrades. If clean (no remaining flagged docs):
    - Remove `.ai/.housekeeping-pending` flag file.
@@ -61,6 +63,7 @@ Format: `<path> <issue-type> <details>`. Written by `/ai-sync-v2` verify step; r
 - **No issues found**: print "no maintenance needed"; if flag file exists, remove it (stale flag).
 - **User skips all**: keep flag with remaining issues; SessionStart will continue hinting.
 - **Sub-file still over after split**: surface for further decomposition decision; don't recurse silently.
+- **Both `x.md` and `x/index.md` present**: a copy where §4 calls for a rename. Loaders then have two candidate entrypoints and resolve inconsistently — delete the stale one before finishing.
 - **`.ai-tasks/` issues**: not in scope (different file space, not snapshot).
 - **Concurrent /ai-sync-v2 running**: don't interleave; assume serialized execution per user.
 

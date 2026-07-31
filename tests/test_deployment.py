@@ -37,6 +37,75 @@ CLAUDE_MD_WITH_MEMORY_IMPORTS = """# Project protocol (loader)
 """
 
 
+EAGER_TOPICS = ("overview", "architecture", "design", "conventions")
+
+AI_ROUTER_TEMPLATE = """---
+last-updated: 2026-01-01
+verified-against: 0000000000000000000000000000000000000000
+---
+
+# AI Knowledge Router
+
+## Documents
+
+| Document | File | Use when |
+|---|---|---|
+{rows}
+| Map | map.md | cross-reference |
+"""
+
+
+def write_snapshot(
+    target: Path,
+    *,
+    directory_form: tuple[str, ...] = (),
+    router: dict[str, str] | None = None,
+) -> None:
+    """Write a `.ai/` snapshot: single-file entries by default, directory-form
+    entries for the named topics, with routing that matches. `router` overrides
+    individual routing rows to model a snapshot whose routing disagrees with
+    file shape."""
+    routes: dict[str, str] = {}
+    for topic in EAGER_TOPICS:
+        if topic in directory_form:
+            write(target / ".ai" / topic / "index.md", f"{topic} index\n")
+            routes[topic] = f"{topic}/index.md"
+        else:
+            write(target / ".ai" / f"{topic}.md", f"{topic}\n")
+            routes[topic] = f"{topic}.md"
+    routes.update(router or {})
+
+    rows = "\n".join(f"| {topic.capitalize()} | {routes[topic]} | use when |" for topic in EAGER_TOPICS)
+    write(target / ".ai" / "index.md", AI_ROUTER_TEMPLATE.format(rows=rows))
+    write(target / ".ai" / "map.md", "map\n")
+
+
+def upgrade_to_directory_form(target: Path, topic: str) -> None:
+    """Simulate the memory §4 upgrade: rename `x.md` to `x/index.md` and
+    re-point top-level routing. The loader is deliberately left untouched."""
+    flat = target / ".ai" / f"{topic}.md"
+    write(target / ".ai" / topic / "index.md", flat.read_text(encoding="utf-8"))
+    flat.unlink()
+    router_path = target / ".ai" / "index.md"
+    router_path.write_text(
+        router_path.read_text(encoding="utf-8").replace(f"| {topic}.md |", f"| {topic}/index.md |"),
+        encoding="utf-8",
+    )
+
+
+def loader_import(target: Path, topic: str) -> str:
+    """The deployed loader's eager import path for a topic. Asserts exactly one
+    import line exists for it — the loader never carries both forms."""
+    forms = {f"@.ai/{topic}.md", f"@.ai/{topic}/index.md"}
+    found = [
+        line.strip()[1:]
+        for line in (target / "CLAUDE.md").read_text(encoding="utf-8").splitlines()
+        if line.strip() in forms
+    ]
+    assert len(found) == 1, f"expected exactly one {topic} import in the loader, got {found}"
+    return found[0]
+
+
 def make_source(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     canonical = root / "canonical"
@@ -59,6 +128,12 @@ def make_source(tmp_path: Path) -> Path:
     write(canonical / "orchestrator" / ".env.example", "TOKEN=\n")
     write(canonical / "orchestrator" / "requirements.txt", "cursor-sdk\n")
     return root
+
+
+def make_loader_source(tmp_path: Path) -> Path:
+    source = make_source(tmp_path)
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
+    return source
 
 
 def deploy_to_tmp(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
@@ -235,6 +310,185 @@ def test_status_rejects_claude_md_non_topic_memory_import_variant(tmp_path: Path
 
     assert "target modified" in drift_kinds(result)
     assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
+
+
+def test_deploy_keeps_single_file_form_without_snapshot(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "design") == ".ai/design.md"
+    assert loader_import(target, "conventions") == ".ai/conventions.md"
+
+
+def test_deploy_points_loader_at_directory_form_entrypoint(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target, directory_form=("design",))
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "design") == ".ai/design/index.md"
+    assert loader_import(target, "conventions") == ".ai/conventions.md"
+
+
+def test_deploy_does_not_revert_directory_form_upgrade(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    assert loader_import(target, "design") == ".ai/design.md"
+
+    upgrade_to_directory_form(target, "design")
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "design") == ".ai/design/index.md"
+    assert deploy.check_status(target, root=source).in_sync
+
+
+def test_deploy_repairs_loader_left_on_pre_upgrade_path(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    upgrade_to_directory_form(target, "architecture")
+
+    stale = deploy.check_status(target, root=source)
+    assert "stale eager import" in drift_kinds(stale)
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "architecture") == ".ai/architecture/index.md"
+    assert deploy.check_status(target, root=source).in_sync
+
+
+def test_deploy_entrypoint_resolution_is_idempotent(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target, directory_form=("overview", "conventions"))
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    first = (target / "CLAUDE.md").read_bytes()
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert (target / "CLAUDE.md").read_bytes() == first
+    preview = deploy.preview_deploy(target, root=source)
+    assert all(change.action == "unchanged" for change in preview.changes)
+
+
+def test_deploy_follows_router_over_file_shape(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    # Both forms on disk: file shape alone is ambiguous, the router decides.
+    write_snapshot(target, router={"design": "design/index.md"})
+    write(target / ".ai" / "design" / "index.md", "design index\n")
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "design") == ".ai/design/index.md"
+
+
+def test_deploy_ignores_router_entry_escaping_the_snapshot(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target, router={"design": "../outside/design.md"})
+
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert loader_import(target, "design") == ".ai/design.md"
+
+
+def test_status_flags_stale_eager_import(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    upgrade_to_directory_form(target, "design")
+    result = deploy.check_status(target, root=source)
+
+    assert not result.in_sync
+    assert "stale eager import" in drift_kinds(result)
+    assert any(
+        drift.target_relative_path == "CLAUDE.md" and ".ai/design/index.md" in drift.detail
+        for drift in result.drifts
+    )
+    # The kind must be printable, otherwise the drift count reports with no detail.
+    assert "stale eager import" in deploy.format_status(result)
+
+
+def test_status_flags_ambiguous_entrypoint(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    write(target / ".ai" / "design" / "index.md", "design index\n")
+    result = deploy.check_status(target, root=source)
+
+    assert "ambiguous memory entrypoint" in drift_kinds(result)
+    assert "ambiguous memory entrypoint" in deploy.format_status(result)
+
+
+def test_status_flags_router_entry_outside_legal_forms(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target, router={"design": "design/principles.md"})
+    write(target / ".ai" / "design" / "principles.md", "principles\n")
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    result = deploy.check_status(target, root=source)
+
+    assert "stale eager import" in drift_kinds(result)
+    assert any(
+        drift.target_relative_path == ".ai/index.md" and "expected" in drift.detail for drift in result.drifts
+    )
+
+
+def test_status_flags_router_entry_pointing_at_missing_file(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    write_snapshot(target)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    (target / ".ai" / "design.md").unlink()
+
+    result = deploy.check_status(target, root=source)
+
+    assert any(
+        drift.kind == "stale eager import" and "does not exist" in drift.detail for drift in result.drifts
+    )
+
+
+def test_status_clean_for_target_without_snapshot(tmp_path: Path) -> None:
+    source = make_loader_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert deploy.check_status(target, root=source).in_sync
+    assert deploy.eager_import_drifts(target) == ()
+
+
+def test_resolve_memory_entrypoint_matches_hook_fallback_order(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    write_snapshot(target, directory_form=("design",))
+
+    assert deploy.resolve_memory_entrypoint(target, "design") == ".ai/design/index.md"
+    assert deploy.resolve_memory_entrypoint(target, "conventions") == ".ai/conventions.md"
+    # Unknown snapshot shape falls back to the single-file default.
+    assert deploy.resolve_memory_entrypoint(tmp_path / "empty", "design") == ".ai/design.md"
 
 
 def test_status_canonical_changed(tmp_path: Path) -> None:

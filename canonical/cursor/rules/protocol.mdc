@@ -16,10 +16,10 @@ failed), before doing any work read, in order, and follow:
 `CLAUDE.md` (the loader — carries the verb→contract mapping),
 `.ai-protocol/protocols/conduct.md`,
 `.ai-protocol/meta/taskfile.md`, `.ai-protocol/meta/memory.md`,
-`.ai/index.md`, `.ai/map.md`, `.ai/overview.md`, `.ai/architecture.md`,
-`.ai/design.md` (or `.ai/design/index.md` if upgraded),
-`.ai/conventions.md` (or `.ai/conventions/index.md` if upgraded),
-`.ai-tasks/index.md`.
+`.ai/index.md`, `.ai/map.md`, then the current entrypoint of each eager
+content doc — `overview`, `architecture`, `design`, `conventions` — which is
+`.ai/<topic>.md`, or `.ai/<topic>/index.md` when `.ai/index.md` routing
+points there, then `.ai-tasks/index.md`.
 Role contracts are not part of this set — the caller delivers them at
 invocation (loader verb→contract mapping; `/invoke` skill or paste).
 

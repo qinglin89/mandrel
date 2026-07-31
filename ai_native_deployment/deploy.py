@@ -7,6 +7,7 @@ import re
 import stat
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -49,14 +50,16 @@ GITIGNORE_BLOCK_PATTERN = re.compile(
 
 CLAUDE_MD_TARGET = "CLAUDE.md"
 NORMALIZED_SHA256_FIELD = "normalized_sha256"
-CLAUDE_MD_MEMORY_IMPORT_TOPICS = frozenset(
-    {
-        "overview",
-        "architecture",
-        "design",
-        "conventions",
-    }
+# The eager memory docs that the memory protocol allows to be upgraded to
+# directory form. Ordered, and kept in lockstep with the `add_eager_entrypoint`
+# calls in the cursor/codex session-start hooks (tests/test_hook_eager_set.py).
+CLAUDE_MD_MEMORY_IMPORT_TOPICS: tuple[str, ...] = (
+    "overview",
+    "architecture",
+    "design",
+    "conventions",
 )
+AI_ROUTER_PATH = ".ai/index.md"
 
 
 @dataclass(frozen=True)
@@ -68,10 +71,14 @@ class DeploymentItem:
     render_template: bool = False
 
     def bytes_for_target(self, target_root: Path) -> bytes:
-        if not self.render_template:
-            return self.source_path.read_bytes()
-        text = self.source_path.read_text(encoding="utf-8")
-        return text.replace("{{REPO_ROOT}}", str(target_root)).encode("utf-8")
+        if self.render_template:
+            text = self.source_path.read_text(encoding="utf-8")
+            data = text.replace("{{REPO_ROOT}}", str(target_root)).encode("utf-8")
+        else:
+            data = self.source_path.read_bytes()
+        if self.target_relative_path == CLAUDE_MD_TARGET:
+            data = _resolve_claude_md_memory_imports(data, target_root)
+        return data
 
 
 @dataclass(frozen=True)
@@ -133,35 +140,140 @@ def _venv_python_path(venv_path: Path) -> Path:
     return venv_path / "bin" / "python"
 
 
-def _normalize_claude_md_memory_imports(data: bytes) -> bytes:
-    """Treat the eager `@.ai/<topic>.md` imports in the loader (CLAUDE.md)
-    and their directory-form `@.ai/<topic>/index.md` upgrades as the same
-    content for status purposes. Applies to the four upgradeable memory
-    topics only, anywhere in the file — the loader is fully deploy-owned."""
+def memory_entrypoint_forms(topic: str) -> tuple[str, str]:
+    """The two legal entrypoint paths for an eager memory topic: the initial
+    single-file form and its directory-form upgrade."""
+    return f".ai/{topic}.md", f".ai/{topic}/index.md"
+
+
+def _memory_import_topic(stripped: str) -> str | None:
+    """Topic name when `stripped` is an eager `@.ai/<topic>` import line in
+    either legal form, else None."""
+    if not stripped.startswith("@.ai/"):
+        return None
+    path = stripped[1:]
+    for topic in CLAUDE_MD_MEMORY_IMPORT_TOPICS:
+        if path in memory_entrypoint_forms(topic):
+            return topic
+    return None
+
+
+def _rewrite_claude_md_lines(data: bytes, rewrite: Callable[[str], str | None]) -> bytes:
+    """Apply a line rewriter to the loader, preserving trailing whitespace and
+    line endings. The rewriter returns a replacement body or None to keep."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return data
 
-    lines = text.splitlines(keepends=True)
-    normalized_lines: list[str] = []
-
-    for line in lines:
+    rewritten_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
         body = line.rstrip("\r\n")
         newline = line[len(body) :]
         stripped = body.rstrip(" \t")
         trailing = body[len(stripped) :]
-        prefix = "@.ai/"
-        suffix = "/index.md"
 
-        if stripped.startswith(prefix) and stripped.endswith(suffix):
-            topic = stripped[len(prefix) : -len(suffix)]
-            if topic in CLAUDE_MD_MEMORY_IMPORT_TOPICS:
-                body = f"{prefix}{topic}.md{trailing}"
+        replacement = rewrite(stripped)
+        if replacement is not None:
+            body = f"{replacement}{trailing}"
 
-        normalized_lines.append(body + newline)
+        rewritten_lines.append(body + newline)
 
-    return "".join(normalized_lines).encode("utf-8")
+    return "".join(rewritten_lines).encode("utf-8")
+
+
+def _normalize_claude_md_memory_imports(data: bytes) -> bytes:
+    """Treat the eager `@.ai/<topic>.md` imports in the loader (CLAUDE.md)
+    and their directory-form `@.ai/<topic>/index.md` upgrades as the same
+    content for status purposes. Applies to the four upgradeable memory
+    topics only, anywhere in the file — the loader is fully deploy-owned.
+
+    This deliberately makes the content hash blind to which form is deployed,
+    so a loader left pointing at the pre-upgrade path cannot be caught by
+    hashing; `eager_import_drifts` checks that separately."""
+
+    def to_flat_form(stripped: str) -> str | None:
+        topic = _memory_import_topic(stripped)
+        if topic is None:
+            return None
+        flat, _dir_index = memory_entrypoint_forms(topic)
+        return f"@{flat}"
+
+    return _rewrite_claude_md_lines(data, to_flat_form)
+
+
+def _ai_router_entries(target_root: Path) -> dict[str, str]:
+    """Parse the `.ai/index.md` document table into {lowercased label: path},
+    matching how the session-start hooks read it: second table column is the
+    label, third is the path. First row wins."""
+    router_path = target_root / AI_ROUTER_PATH
+    if not router_path.is_file():
+        return {}
+    try:
+        text = router_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    entries: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = line.split("|")
+        if len(cells) < 3:
+            continue
+        label = cells[1].strip().lower()
+        routed = cells[2].strip().replace("`", "")
+        if label and routed and label not in entries:
+            entries[label] = routed
+    return entries
+
+
+def _routed_memory_path(router: dict[str, str], topic: str) -> str | None:
+    """The `.ai/`-relative path the router assigns to a topic, or None when the
+    topic is unrouted or the entry escapes `.ai/`."""
+    routed = router.get(topic)
+    if not routed:
+        return None
+    if routed.startswith("./"):
+        routed = routed[2:]
+    if routed.startswith("/") or ".." in PurePosixPath(routed).parts:
+        return None
+    if not routed.startswith(".ai/"):
+        routed = f".ai/{routed}"
+    return routed
+
+
+def resolve_memory_entrypoint(target_root: Path, topic: str, router: dict[str, str] | None = None) -> str:
+    """Current entrypoint for an eager memory topic in a target repo: router
+    first, then file shape, then the single-file default. Mirrors
+    `add_eager_entrypoint` in the cursor/codex session-start hooks so every
+    surface loads the same file."""
+    flat, dir_index = memory_entrypoint_forms(topic)
+    if router is None:
+        router = _ai_router_entries(target_root)
+
+    routed = _routed_memory_path(router, topic)
+    if routed in (flat, dir_index) and (target_root / routed).is_file():
+        return routed
+    if (target_root / dir_index).is_file() and not (target_root / flat).is_file():
+        return dir_index
+    return flat
+
+
+def _resolve_claude_md_memory_imports(data: bytes, target_root: Path) -> bytes:
+    """Point the loader's eager `@.ai/<topic>` imports at the entrypoint that
+    actually exists in the target's `.ai/`, so a deploy re-derives a §4
+    directory-form upgrade instead of silently reverting it. Targets without a
+    `.ai/` snapshot keep the canonical single-file form."""
+    router = _ai_router_entries(target_root)
+
+    def to_current_entrypoint(stripped: str) -> str | None:
+        topic = _memory_import_topic(stripped)
+        if topic is None:
+            return None
+        return f"@{resolve_memory_entrypoint(target_root, topic, router=router)}"
+
+    return _rewrite_claude_md_lines(data, to_current_entrypoint)
 
 
 def _status_bytes(item: DeploymentItem, data: bytes) -> bytes:
@@ -424,6 +536,68 @@ def bootstrap_orchestrator(
     )
 
 
+def eager_import_drifts(target_root: Path) -> tuple[Drift, ...]:
+    """Entrypoint checks the content hash cannot make.
+
+    `_normalize_claude_md_memory_imports` deliberately treats both entrypoint
+    forms as equal, so a loader left pointing at the pre-upgrade path — exactly
+    what a memory §4 directory-form upgrade produces until the next deploy — is
+    invisible to hash comparison. Reported explicitly instead."""
+    if not (target_root / ".ai").is_dir():
+        return ()
+
+    router = _ai_router_entries(target_root)
+    loader_imports: dict[str, str] = {}
+    loader_path = target_root / CLAUDE_MD_TARGET
+    if loader_path.is_file():
+        try:
+            loader_text = loader_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            loader_text = ""
+        for line in loader_text.splitlines():
+            stripped = line.strip()
+            topic = _memory_import_topic(stripped)
+            if topic is not None and topic not in loader_imports:
+                loader_imports[topic] = stripped[1:]
+
+    drifts: list[Drift] = []
+    for topic in CLAUDE_MD_MEMORY_IMPORT_TOPICS:
+        flat, dir_index = memory_entrypoint_forms(topic)
+
+        if (target_root / flat).is_file() and (target_root / dir_index).is_file():
+            drifts.append(
+                Drift(
+                    "ambiguous memory entrypoint",
+                    flat,
+                    f"both {flat} and {dir_index} exist; the directory-form upgrade renames, it does not duplicate",
+                )
+            )
+
+        routed = _routed_memory_path(router, topic)
+        raw_route = router.get(topic)
+        if raw_route and routed is None:
+            drifts.append(
+                Drift("stale eager import", AI_ROUTER_PATH, f"{topic} routes to {raw_route}, which escapes .ai/")
+            )
+        elif routed is not None and routed not in (flat, dir_index):
+            drifts.append(
+                Drift("stale eager import", AI_ROUTER_PATH, f"{topic} routes to {routed}; expected {flat} or {dir_index}")
+            )
+        elif routed is not None and not (target_root / routed).is_file():
+            drifts.append(
+                Drift("stale eager import", AI_ROUTER_PATH, f"{topic} routes to {routed}, which does not exist")
+            )
+
+        current = resolve_memory_entrypoint(target_root, topic, router=router)
+        imported = loader_imports.get(topic)
+        if imported is not None and imported != current:
+            drifts.append(
+                Drift("stale eager import", CLAUDE_MD_TARGET, f"imports @{imported}; current entrypoint is {current}")
+            )
+
+    return tuple(drifts)
+
+
 def check_status(target: str | Path, *, root: Path | None = None) -> StatusResult:
     root = (root or source_root()).resolve()
     target_root = Path(target).expanduser().resolve()
@@ -473,6 +647,8 @@ def check_status(target: str | Path, *, root: Path | None = None) -> StatusResul
     for target_rel in sorted(set(current_items) - {str(key) for key in manifest_files}):
         drifts.append(Drift("canonical changed", target_rel, "new canonical file not deployed"))
 
+    drifts.extend(eager_import_drifts(target_root))
+
     return StatusResult(target_root=target_root, total_files=len(manifest_files), drifts=tuple(drifts))
 
 
@@ -486,6 +662,8 @@ def format_status(result: StatusResult, label: str | None = None) -> str:
         "missing manifest",
         "target modified",
         "canonical changed",
+        "stale eager import",
+        "ambiguous memory entrypoint",
         "missing target file",
         "extra deployed file",
         "invalid manifest entry",
