@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 ---
 
 # Design Principles and Decisions
@@ -41,10 +41,11 @@ verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
 - Consequence: evolution task generation must explicitly load/cite the contract
   rather than relying on duplicated snapshot prose.
 
-### Human evaluation selection versus automatic model spending
+### Artifact eligibility versus evaluation trigger provenance
 
-- Chose human selection. orch-hub only lists already-complete L1+L2 reports;
-  evolution discovery/import never triggers evaluation.
+- Chose artifact eligibility. Evolution accepts an archived completed task only
+  when its L1+L2 artifact set is durable; how that evaluation was triggered is
+  outside the evolution contract. Discovery/import itself remains read-only.
 
 ## Patterns in Use
 

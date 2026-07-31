@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 ---
 
 # Architecture
@@ -16,7 +16,7 @@ target repo deployed payload + target-owned .ai/.ai-tasks
         ▼
 role-scoped coding sessions
 
-human-selected completed-task evaluation
+archived completed-task L1+L2 evaluation
         │ orch-hub global report feed
         ▼
 evolution runtime/import pool → frozen batch → analysis/change/canary
@@ -33,7 +33,7 @@ evolution runtime/import pool → frozen batch → analysis/change/canary
 | Deployed payload | Deployment tool | target `.ai-protocol`, agent dirs, loader, orchestrator |
 | Project memory/tasks | Target repository | target `.ai/`, `.ai-tasks/` |
 | Local inventory/runtime | Machine operator | registry, manifests, venvs, secrets |
-| Report scheduling/storage | orch-hub | human-selected L1+L2 artifacts and global feed |
+| Report scheduling/storage | orch-hub | complete L1+L2 artifacts and global feed |
 | Evolution policy/tasks | This repository | `evolution/`, `.ai-tasks/` |
 
 ## Deployment Flow

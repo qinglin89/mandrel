@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 ---
 
 # AI Knowledge Router
@@ -45,5 +45,5 @@ Load only what the current task needs.
 | Deploy manifest | Ignored target-local rendered-file receipt used by `status` |
 | Deploy lock | Portable committable canonical payload receipt |
 | Runner protocol revision | Stable protocol version governing one run |
-| Evolution report | Human-selected archived-task evaluation with complete L1+L2 artifacts |
+| Evolution report | Archived completed-task evaluation with durable complete L1+L2 artifacts |
 | Evolution batch | Immutable cohort of unique completed-task reports analyzed together |

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 ---
 
 # APIs and Interfaces
@@ -38,9 +38,10 @@ controller task.
 ## External Integration
 
 The pending orch-hub global report feed supplies globally ordered,
-human-selected, archived-task L1+L2 reports. The evolution importer will use an
-opaque cursor and protected bundle fetch; list/import operations must make no
-evaluation model call. URL/token come from `ORCH_HUB_URL` and
+archived-task reports with durable complete L1+L2 artifacts. Eligibility does
+not depend on evaluation trigger provenance. The evolution importer will use
+an opaque cursor and protected bundle fetch; list/import operations must make
+no evaluation model call. URL/token come from `ORCH_HUB_URL` and
 `ORCH_HUB_TOKEN`, never committed config.
 
 ## API Conventions

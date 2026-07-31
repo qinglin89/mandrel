@@ -12,12 +12,14 @@ letting an evaluator, scheduler, or one unusual task rewrite policy directly.
 | Surface | Owns | Must not own |
 |---|---|---|
 | Target repositories | Work, task history, project memory | Global protocol policy |
-| orch-hub | Human-selected evaluation artifacts, global report feed, scheduling | Evaluation selection, evolution admission, protocol changes |
+| orch-hub | Completed evaluation artifacts, global report feed, scheduling | Evolution admission, protocol changes |
 | `ai-native-development` | Import state, batches, analysis/change tasks, canonical protocol, releases | Target-project implementation decisions |
-| Human operator | Which tasks merit L1+L2 evaluation; evolution start; change and rollout admission | Routine evidence normalization |
+| Human operator | Evolution start; change and rollout admission | Routine evidence normalization |
 
-Orch-hub only publishes reports that a human already chose to evaluate through
-both layers. Listing or importing reports must never start an evaluation.
+Candidate eligibility is artifact-based and independent of how evaluation was
+triggered: the source task is archived/completed and the report has a durable,
+complete L1+L2 artifact set. Listing or importing reports must never start or
+complete an evaluation.
 
 ## Core invariants
 
@@ -89,7 +91,7 @@ The discovery cursor, pending pool, and processed-batch ledger are distinct:
 ## Normal workflow
 
 ```text
-human-selected target evaluations
+completed archived-task L1+L2 evaluations
   -> orch-hub global completed-report feed
   -> human `aii-2 evolution start`
   -> discover, validate, hash, deduplicate, stage

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 ---
 
 # Project Overview
@@ -29,7 +29,8 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 
 - Owning target-project `.ai/`, `.ai-tasks/`, product code, or secrets.
 - Implementing orch-hub scheduling/dashboard services.
-- Automatically selecting tasks for token-cost semantic evaluation.
+- Owning evaluation production or its trigger policy; evolution consumes
+  already-complete reports.
 - Letting evaluation reports directly mutate canonical policy.
 
 ## Tech Stack

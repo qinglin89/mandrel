@@ -5,7 +5,7 @@ kind = "orch-hub"
 url_env = "ORCH_HUB_URL"
 token_env = "ORCH_HUB_TOKEN"
 report_feed_path = "/api/evaluation/reports"
-human_selected_reports_only = true
+completed_l1_l2_only = true
 
 [batch]
 target_task_count = 20
