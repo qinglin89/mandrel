@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/ledger-record.schema.json",
+  "title": "Evolution ledger record",
+  "type": "object",
+  "required": [
+    "record_type",
+    "schema_version",
+    "recorded_at"
+  ],
+  "properties": {
+    "record_type": {
+      "enum": [
+        "workspace-initialized",
+        "report-imported",
+        "report-rejected",
+        "batch-frozen",
+        "batch-analyzed",
+        "candidate-admitted",
+        "candidate-rejected",
+        "experiment-completed",
+        "candidate-promoted",
+        "candidate-revised",
+        "candidate-reverted"
+      ]
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "report_key": {
+      "type": "string"
+    },
+    "batch_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "disposition": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

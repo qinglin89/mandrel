@@ -1,0 +1,37 @@
+schema_version = 1
+
+[source]
+kind = "orch-hub"
+url_env = "ORCH_HUB_URL"
+token_env = "ORCH_HUB_TOKEN"
+report_feed_path = "/api/evaluation/reports"
+human_selected_reports_only = true
+
+[batch]
+target_task_count = 20
+minimum_task_count = 10
+max_wait_days = 30
+count_unit = "unique-completed-task"
+maximum_open_analysis_batches = 1
+human_trigger_only = true
+
+[eligibility]
+require_archived_task = true
+require_evidence = true
+require_static_metrics = true
+require_semantic_report = true
+include_reports_without_findings = true
+deduplicate_by = "source-repo-and-task"
+
+[analysis]
+minimum_cluster_task_count = 3
+allow_no_change = true
+separate_analysis_and_implementation = true
+
+[storage]
+runtime_root = ".ai-evolution"
+imported_artifacts = ".ai-evolution/imported-artifacts"
+ledger = "evolution/ledger.jsonl"
+batches = "evolution/batches"
+cases = "evolution/cases"
+experiments = "evolution/experiments"

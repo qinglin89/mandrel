@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/evaluation-import.schema.json",
+  "title": "Imported evolution evaluation report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report_key",
+    "sequence",
+    "generated_at",
+    "source",
+    "evaluator",
+    "artifacts",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "report_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "repo_id",
+        "task_id",
+        "evaluation_id",
+        "archived",
+        "completed"
+      ],
+      "properties": {
+        "repo_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "archived": {
+          "const": true
+        },
+        "completed": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "evaluator": {
+      "type": "object",
+      "required": [
+        "backend",
+        "model",
+        "schema_version"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "rubric_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "static_metrics",
+        "semantic_report",
+        "report_markdown"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/artifact"
+        },
+        "static_metrics": {
+          "$ref": "#/$defs/artifact"
+        },
+        "semantic_report": {
+          "$ref": "#/$defs/artifact"
+        },
+        "report_markdown": {
+          "$ref": "#/$defs/artifact"
+        }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "runner_protocol_revision",
+        "deploy_lock_hash",
+        "config_revision",
+        "effective_revision",
+        "dev",
+        "review"
+      ],
+      "properties": {
+        "runner_protocol_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deploy_lock_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dev": {
+          "$ref": "#/$defs/role"
+        },
+        "review": {
+          "$ref": "#/$defs/role"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "size_bytes",
+        "media_type"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "type": "object",
+      "required": [
+        "agent",
+        "model",
+        "effort",
+        "profile"
+      ],
+      "properties": {
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

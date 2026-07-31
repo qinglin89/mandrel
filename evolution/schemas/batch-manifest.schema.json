@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/batch-manifest.schema.json",
+  "title": "Evolution batch manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "created_at",
+    "config_sha256",
+    "forced",
+    "reports"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "forced": {
+      "type": "boolean"
+    },
+    "force_justification": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runner_protocol_revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "analysis_task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "report_key",
+          "sequence",
+          "repo_id",
+          "task_id",
+          "evaluation_id",
+          "bundle_sha256"
+        ],
+        "properties": {
+          "report_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "repo_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evaluation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bundle_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

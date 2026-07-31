@@ -11,3 +11,22 @@ build/
 # Local managed-repo inventory. Canonical source code is versioned; machine
 # inventory is not.
 .registry/repos.local.json
+
+# Protocol-evolution runtime state and imported raw artifacts. Versioned
+# contracts, sanitized cases, batch manifests, and audit records live under
+# evolution/ instead.
+/.ai-evolution/
+
+# BEGIN ai-native-deployment
+/.ai-deploy-manifest.json
+/.ai-protocol/
+/.cursor/
+/.codex/
+/.claude/
+/CLAUDE.md
+/ai-coding*.md
+/.ai-tasks/
+__pycache__/
+*.py[cod]
+!/.ai-deploy-lock.json
+# END ai-native-deployment
