@@ -619,11 +619,11 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     cs = o.ClaudeSession.__new__(o.ClaudeSession)
     cs.orch, cs.sid = orch, "cc-sid"
-    cs.model, cs.effort = "claude-fable-5", "max"
+    cs.model, cs.effort = "claude-opus-5", "max"
     chunks: list[str] = []
     assert cs._handle_event(
         {"type": "assistant", "message": {
-            "model": "claude-fable-5",
+            "model": "claude-opus-5",
             "usage": {"input_tokens": 10, "output_tokens": 2},
             "content": [
                 {"type": "tool_use", "name": "Bash",
@@ -791,8 +791,8 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
 
     log = orch.log_file.read_text()
     assert "[tool] Bash" in log and "[text]" in log
-    assert ("claude observed response model=claude-fable-5 "
-            "requested_model=claude-fable-5 requested_effort=max") in log
+    assert ("claude observed response model=claude-opus-5 "
+            "requested_model=claude-opus-5 requested_effort=max") in log
     assert "codex observed context model=gpt-5.5 effort=xhigh" in log
     assert "codex observed context model=gpt-5.5 effort=xhigh" \
         " requested_model=gpt-5.5 requested_effort=xhigh" \
@@ -810,18 +810,18 @@ def scenario_8_cursor_effort_selection(repo: Path) -> None:
     """CursorBackend maps --dev-effort/--review-effort onto the right
     ModelSelection param axis; unset effort keeps the bare model id."""
     orch = new_orch()
-    b = o.CursorBackend(orch, "claude-fable-5", "gpt-5.5", api_key=None,
+    b = o.CursorBackend(orch, "claude-opus-5", "gpt-5.5", api_key=None,
                         dev_effort="max", review_effort="xhigh")
     assert b._model_selection("dev") == {
-        "id": "claude-fable-5",
+        "id": "claude-opus-5",
         "params": [{"id": "effort", "value": "max"}]}
     assert b._model_selection("review") == {
         "id": "gpt-5.5",
         "params": [{"id": "reasoning", "value": "extra-high"}]}, \
         "canonical xhigh must translate to cursor's extra-high"
-    assert b.describe("dev") == "cursor:claude-fable-5@max"
-    b2 = o.CursorBackend(orch, "claude-fable-5", "gpt-5.5", api_key=None)
-    assert b2._model_selection("dev") == "claude-fable-5", \
+    assert b.describe("dev") == "cursor:claude-opus-5@max"
+    b2 = o.CursorBackend(orch, "claude-opus-5", "gpt-5.5", api_key=None)
+    assert b2._model_selection("dev") == "claude-opus-5", \
         "no effort → bare id → catalog default variant"
     assert b2.describe("review") == "cursor:gpt-5.5"
     # codex adapter accepts the cursor spelling too
@@ -1566,12 +1566,12 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     orch = new_orch()
 
     # -- claude argv: first turn names the orchestrator-chosen sid
-    cs = o.ClaudeSession(orch, "claude-fable-5", "max", sid="cc-sid-1")
+    cs = o.ClaudeSession(orch, "claude-opus-5", "max", sid="cc-sid-1")
     argv = cs._argv("DO THE TASK")
     assert argv[:2] == ["claude", "-p"], argv
     assert "--session-id" in argv and "cc-sid-1" in argv, argv
     assert "--resume" not in argv, argv
-    assert argv[argv.index("--model") + 1] == "claude-fable-5", argv
+    assert argv[argv.index("--model") + 1] == "claude-opus-5", argv
     assert argv[argv.index("--effort") + 1] == "max", argv
     assert "--dangerously-skip-permissions" in argv, argv
     assert argv[-1] == "DO THE TASK", "prompt must be the last claude arg"
@@ -1581,7 +1581,7 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     assert "--resume" in argv and "--session-id" not in argv, argv
     assert argv[argv.index("--resume") + 1] == "cc-sid-1", argv
     # blocked-resume constructs with resume=True from the first turn
-    cs2 = o.ClaudeSession(orch, "claude-fable-5", "max", sid="cc-sid-1",
+    cs2 = o.ClaudeSession(orch, "claude-opus-5", "max", sid="cc-sid-1",
                           resume=True)
     argv = cs2._argv("HUMAN ANSWERED: use UTC")
     assert "--resume" in argv and "--session-id" not in argv, argv
@@ -1613,7 +1613,7 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "live that the resumed thread keeps gpt-5.5)"
 
     # -- CliBackend session routing (sessions.json is the truth for resume)
-    b = o.CliBackend(orch, "claude", "claude-fable-5", "max", "gpt-5.5",
+    b = o.CliBackend(orch, "claude", "claude-opus-5", "max", "gpt-5.5",
                      "xhigh")
     fresh = b.new_session("dev")
     assert isinstance(fresh, o.ClaudeSession), \

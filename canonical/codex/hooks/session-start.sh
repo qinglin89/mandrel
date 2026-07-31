@@ -23,10 +23,9 @@
 #      .ai-protocol/meta/taskfile.md, .ai-protocol/meta/memory.md.
 #      Role contracts (protocols/dev-*, review, plan) are NOT eager — the
 #      caller delivers them at invocation.
-#   4. Eager memory set: .ai/index.md .ai/map.md .ai/overview.md
-#      .ai/architecture.md current design/conventions entrypoints
-#      (resolved from .ai/index.md routing; .md vs /index.md fallback)
-#      .ai-tasks/index.md.
+#   4. Eager memory set: .ai/index.md .ai/map.md, the current
+#      overview/architecture/design/conventions entrypoints (resolved from
+#      .ai/index.md routing; .md vs /index.md fallback), .ai-tasks/index.md.
 #   5. Housekeeping reminder when .ai/.housekeeping-pending exists.
 #
 # Fail-open: missing files are skipped; jq failure exits 0 with no output.
@@ -58,8 +57,6 @@ EAGER_FILES=(
   .ai-protocol/meta/memory.md
   .ai/index.md
   .ai/map.md
-  .ai/overview.md
-  .ai/architecture.md
 )
 
 resolve_ai_router_path() {
@@ -110,6 +107,11 @@ add_eager_entrypoint() {
   fi
 }
 
+# Every eager content doc the memory protocol allows to be upgraded to
+# directory form. Kept in lockstep with CLAUDE_MD_MEMORY_IMPORT_TOPICS in
+# ai_native_deployment/deploy.py (tests/test_hook_eager_set.py).
+add_eager_entrypoint "Overview" ".ai/overview.md" ".ai/overview/index.md"
+add_eager_entrypoint "Architecture" ".ai/architecture.md" ".ai/architecture/index.md"
 add_eager_entrypoint "Design" ".ai/design.md" ".ai/design/index.md"
 add_eager_entrypoint "Conventions" ".ai/conventions.md" ".ai/conventions/index.md"
 EAGER_FILES+=(.ai-tasks/index.md)

@@ -7,6 +7,10 @@ Target repositories should receive copies from this repository. Deployed files
 should not be hand-edited in target repos; edit canonical files here, redeploy,
 and use `status` to verify drift.
 
+For the whole chain — source of truth → deploy → target layout → the three IDE
+surfaces → what actually ends up in the context window — see
+[ARCHITECTURE.md](ARCHITECTURE.md). This README is the operational reference.
+
 ## Repository Layout
 
 - `canonical/repo-root/` deploys to the target repo root.
@@ -105,15 +109,37 @@ Status reads the target `.ai-deploy-manifest.json` and reports:
 - `in sync`
 - `target modified`
 - `canonical changed`
+- `stale eager import`
+- `ambiguous memory entrypoint`
 - `missing target file`
 - `extra deployed file`
 
 Drift returns a nonzero exit code.
 
-For `CLAUDE.md` only, status treats memory topic imports as equivalent when
-they differ only by single-file versus directory entrypoint form, e.g.
-`@.ai/design.md` and `@.ai/design/index.md`. Other files and other edits
-remain exact hash checks.
+### Memory entrypoints in `CLAUDE.md`
+
+`CLAUDE.md` is deploy-owned, but which file each eager memory topic
+(`overview`, `architecture`, `design`, `conventions`) lives in is target state:
+the memory protocol upgrades a doc from `.ai/design.md` to
+`.ai/design/index.md` once it outgrows the size limit. Deploy therefore
+resolves each import against the target's own `.ai/` — `.ai/index.md` routing
+first, then file shape — using the same order as the cursor and codex
+session-start hooks, so all three surfaces load the same file. A directory-form
+upgrade survives the next deploy instead of being reverted, and a loader left
+on the pre-upgrade path is repaired by it.
+
+For `CLAUDE.md` only, status treats the two entrypoint forms as equivalent for
+hashing. Because that makes the hash blind to which form is deployed, the two
+entrypoint checks are reported separately:
+
+- `stale eager import` — the loader imports a path that is no longer the
+  current entrypoint (Claude Code ignores missing imports silently, so the
+  document just goes absent), or `.ai/index.md` routes a topic somewhere that
+  is neither entrypoint form.
+- `ambiguous memory entrypoint` — both `x.md` and `x/index.md` exist. The
+  upgrade renames; it does not duplicate.
+
+Other files and other edits remain exact hash checks.
 
 The manifest is target-local state: it includes rendered file hashes and local
 absolute paths, so it should remain ignored. The lockfile is portable: it
@@ -149,7 +175,7 @@ defaults and named model/effort profiles as machine-readable JSON:
 
 See `.cursor/orchestrator/README.md` for the resolution precedence and profile
 contract. A focused orch-hub implementation handoff is deployed as
-`.cursor/orchestrator/HANDOFF-orch-hub-config-profiles.md`.
+`.cursor/orchestrator/HANDOFF-orch-hub-split-role-profiles.md`.
 
 ## Temporary Global Skills Sync
 
