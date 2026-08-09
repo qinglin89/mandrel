@@ -81,7 +81,9 @@ fi
 CLEAN_HOWTO="make the working tree clean (\`git status --porcelain\` empty) — each modified file committed, and each untracked file handled by its nature: real work committed; an unwanted scratch file removed; a run-time artifact covered by a gitignore rule for its category (not ignored file-by-file)."
 
 # How the agent invokes /ai-sync-v2 (Agent Skill / SKILL.md, not slash command).
-SYNC_SKILL="${HOME}/.claude/skills/ai-sync-v2/SKILL.md"
+# Repo-relative: the skills are deploy-owned payload, and this hook has already
+# cd'd to the repo root (and self-gated on the .ai-protocol/ marker above).
+SYNC_SKILL=".claude/skills/ai-sync-v2/SKILL.md"
 
 # Locate the active task: a file in .ai-tasks/ whose claimed-by matches.
 shopt -s nullglob

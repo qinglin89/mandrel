@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from pathlib import Path
 
 from ai_native_deployment import cli, deploy, hashing, lockfile, manifest
@@ -122,6 +123,10 @@ def make_source(tmp_path: Path) -> Path:
         'command = "{{REPO_ROOT}}/.codex/hooks/session-start.sh"\n',
     )
     write(canonical / "claude" / "settings.json", "{}\n")
+    # Workflow skills are ordinary payload in a nested directory; they exercise
+    # the rglob recursion that carries them into the manifest and the lock.
+    write(canonical / "claude" / "skills" / "demo-skill" / "SKILL.md", "---\nname: demo-skill\n---\n")
+    write(canonical / "claude" / "skills" / "demo-skill" / "scan.sh", "#!/bin/sh\n").chmod(0o755)
     write(canonical / "orchestrator" / "orchestrator.py", 'print("ok")\n')
     write(canonical / "orchestrator" / "orchestrator.toml",
           'schema_version = 1\n')
@@ -187,6 +192,30 @@ def test_manifest_creation(tmp_path: Path) -> None:
     assert config_lock_record["canonical_sha256"] == hashing.sha256_file(
         source / "canonical" / "codex" / "config.toml.template"
     )
+
+
+def test_deploy_places_skills_in_target_manifest_and_lock(tmp_path: Path) -> None:
+    """Workflow skills deploy per repository like any other canonical file, so
+    the manifest and the lock cover them — the receipt hole the machine-global
+    sync command used to leave."""
+    source, target, deployed = deploy_to_tmp(tmp_path)
+    skill = ".claude/skills/demo-skill/SKILL.md"
+    script = ".claude/skills/demo-skill/scan.sh"
+
+    assert (target / skill).is_file()
+    assert stat.S_IMODE((target / script).stat().st_mode) == 0o755
+
+    saved = manifest.read_manifest(target)
+    assert skill in saved["files"]
+    assert saved["files"][skill]["canonical_relative_path"] == "canonical/claude/skills/demo-skill/SKILL.md"
+    assert saved["files"][skill]["sha256"] == hashing.sha256_file(target / skill)
+
+    lock = lockfile.read_lock(target)
+    lock_record = next(item for item in lock["deployed_files"] if item["target_relative_path"] == skill)
+    assert lock_record["canonical_sha256"] == hashing.sha256_file(
+        source / "canonical" / "claude" / "skills" / "demo-skill" / "SKILL.md"
+    )
+    assert {skill, script} <= {item["target_relative_path"] for item in lock["deployed_files"]}
 
 
 def test_deploy_preview_does_not_write(tmp_path: Path) -> None:
@@ -438,6 +467,86 @@ def test_status_flags_ambiguous_entrypoint(tmp_path: Path) -> None:
 
     assert "ambiguous memory entrypoint" in drift_kinds(result)
     assert "ambiguous memory entrypoint" in deploy.format_status(result)
+
+
+def personal_skill(root: Path, name: str) -> Path:
+    """A discoverable personal-level skill: agent tools look for
+    `<root>/<name>/SKILL.md`."""
+    return write(root / name / "SKILL.md", f"---\nname: {name}\n---\n")
+
+
+def test_deployed_skill_names_reads_directory_names_under_the_skills_root() -> None:
+    assert deploy.deployed_skill_names(
+        [
+            ".claude/skills/demo-skill/SKILL.md",
+            ".claude/skills/demo-skill/scan.sh",
+            ".claude/skills/other/reference/deep.md",
+            ".claude/settings.json",
+            ".claude/skills",
+            "CLAUDE.md",
+        ]
+    ) == ("demo-skill", "other")
+
+
+def test_status_flags_shadowed_skill(tmp_path: Path) -> None:
+    """The hash says in sync and it is — but a personal-level copy of the same
+    name is what actually runs, so the deployed contract is not the executed
+    one."""
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    user_skills = tmp_path / "home-skills"
+    personal_skill(user_skills, "demo-skill")
+
+    result = deploy.check_status(target, root=source, user_skills_root=user_skills)
+
+    assert not result.in_sync
+    assert "shadowed skill" in drift_kinds(result)
+    assert any(
+        drift.target_relative_path == ".claude/skills/demo-skill"
+        and str(user_skills / "demo-skill" / "SKILL.md") in drift.detail
+        for drift in result.drifts
+    )
+    # The kind must be printable, otherwise the drift count reports with no detail.
+    assert "shadowed skill" in deploy.format_status(result)
+
+
+def test_status_silent_when_personal_skills_do_not_collide(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    user_skills = tmp_path / "home-skills"
+    personal_skill(user_skills, "something-else")
+
+    assert deploy.check_status(target, root=source, user_skills_root=user_skills).in_sync
+
+
+def test_status_silent_without_a_personal_skills_root(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+
+    result = deploy.check_status(target, root=source, user_skills_root=tmp_path / "absent")
+
+    assert result.in_sync
+    assert deploy.shadowed_skill_drifts(["demo-skill"], user_skills_root=tmp_path / "absent") == ()
+
+
+def test_status_silent_for_personal_directory_that_is_not_a_skill(tmp_path: Path) -> None:
+    """A bare directory is not discoverable as a skill, so it shadows nothing;
+    reporting it would train operators to ignore the check."""
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    user_skills = tmp_path / "home-skills"
+    (user_skills / "demo-skill").mkdir(parents=True)
+
+    assert deploy.check_status(target, root=source, user_skills_root=user_skills).in_sync
+
+
+def test_status_cli_exits_nonzero_for_shadowed_skill(tmp_path: Path, monkeypatch, capsys) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    user_skills = tmp_path / "home-skills"
+    personal_skill(user_skills, "demo-skill")
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT", str(user_skills))
+
+    exit_code = cli.main(["status", str(target)])
+
+    assert exit_code == 1
+    assert "shadowed skill" in capsys.readouterr().out
 
 
 def test_status_flags_router_entry_outside_legal_forms(tmp_path: Path) -> None:

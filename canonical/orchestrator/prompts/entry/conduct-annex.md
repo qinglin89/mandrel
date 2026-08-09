@@ -39,6 +39,11 @@ not a replacement for the procedure.
 
 - Do exactly the invoked work for exactly the named task. No opportunistic
   side work (conduct: scope discipline).
-- Never edit `.ai-protocol/**`, `ai-coding-*.md` (legacy), `CLAUDE.md`,
-  `.claude/**`, or `~/.claude/**`.
+- Never edit `.ai-protocol/**`, `ai-coding-*.md` (legacy), `CLAUDE.md`, or
+  `.claude/**` — the deployed skills under `.claude/skills/**` included. All of
+  it is deploy-owned payload: a change belongs in the protocol repo's
+  `canonical/`, never in the deployed copy.
+- Never write outside the repository, `~/.claude/**` and the other agent home
+  directories included. They hold machine-local config and hook logs, not
+  protocol payload.
 - Do not edit `.ai/` mid-task (snapshot writes happen only at close-out).

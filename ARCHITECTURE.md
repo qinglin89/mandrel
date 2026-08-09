@@ -93,6 +93,7 @@ any finding:
 | `extra deployed file` | tracked in the manifest but gone from `canonical/` |
 | `stale eager import` | the loader points at a memory doc that is no longer the current entrypoint, or routing points somewhere illegal |
 | `ambiguous memory entrypoint` | both `x.md` and `x/index.md` exist for one topic |
+| `shadowed skill` | a deployed skill name also exists personal-level, where it takes precedence |
 | `invalid manifest entry` | malformed manifest record |
 
 ---
@@ -148,10 +149,15 @@ Notes that matter in practice:
 - **`AI_ORCH=1` disables the Cursor hook.** Orchestrated sessions
   (`.cursor/orchestrator/`) assemble their own context and own the lifecycle;
   double injection would fight them.
-- **Skills ship on a separate channel.** `aii-2 skills sync-claude-global`
-  copies `skills-backup/` into `~/.claude/skills/` — machine-global, not part of
-  any target repo, not in the manifest. It is explicitly a temporary
-  compatibility path for the current hook model.
+- **Skills ship on the ordinary channel.** `canonical/claude/skills/` deploys
+  to `<target>/.claude/skills/` with everything else, so the manifest and the
+  lock cover them and each target's skills match its protocol revision. Claude
+  Code finds them by native discovery; Cursor and Codex are pointed at
+  `.claude/skills/<name>/SKILL.md` by their rule/injection text. A leftover
+  `~/.claude/skills/<name>/` copy overrides the deployed one and no content
+  hash can detect it, so `status` checks the personal skills root by name and
+  reports `shadowed skill` — the same shape as `ambiguous memory entrypoint`:
+  two legal locations present, the wrong one winning.
 
 ---
 
@@ -231,7 +237,6 @@ single-file — a directory-form `map/index.md` is drift, and status says so.
 ./aii-2 deploy ../target-repo --dry-run  # preview, writes nothing
 ./aii-2 status ../target-repo            # drift check, nonzero exit on drift
 ./aii-2 status --all                     # sweep every registered target
-./aii-2 skills sync-claude-global        # refresh ~/.claude/skills
 scripts/boundary-lint.sh                 # charter + reference invariants
 python -m pytest tests/ -q               # deploy, hook-consistency, orchestrator
 ```

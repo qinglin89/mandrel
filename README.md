@@ -19,7 +19,8 @@ surfaces → what actually ends up in the context window — see
 - `canonical/meta/` deploys to target `.ai-protocol/meta/` (taskfile schema, memory protocol, init).
 - `canonical/cursor/` deploys to target `.cursor/`.
 - `canonical/codex/` deploys to target `.codex/`.
-- `canonical/claude/` deploys to target `.claude/`.
+- `canonical/claude/` deploys to target `.claude/`, including the workflow
+  skills under `canonical/claude/skills/`.
 - `canonical/orchestrator/` deploys to target `.cursor/orchestrator/`.
 - `ai_native_deployment/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
@@ -111,6 +112,7 @@ Status reads the target `.ai-deploy-manifest.json` and reports:
 - `canonical changed`
 - `stale eager import`
 - `ambiguous memory entrypoint`
+- `shadowed skill`
 - `missing target file`
 - `extra deployed file`
 
@@ -140,6 +142,22 @@ entrypoint checks are reported separately:
   upgrade renames; it does not duplicate.
 
 Other files and other edits remain exact hash checks.
+
+### Shadowed skills
+
+The same blind spot in the other direction: every deployed skill file can hash
+correctly and still not be the one that runs. Agent tools resolve same-named
+skills personal-level over project-level, so a leftover
+`~/.claude/skills/<name>/SKILL.md` wins over the deployed copy — silently, and
+no content comparison can see it.
+
+- `shadowed skill` — a deployed skill name also exists as a personal-level
+  skill. The detail names the file that takes precedence; removing it restores
+  the deployed contract.
+
+The check reads the personal skills root and writes nothing. It looks under
+`~/.claude/skills`; set `AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT` if the agent
+home is relocated. See [One-time operator cleanup](#one-time-operator-cleanup).
 
 The manifest is target-local state: it includes rendered file hashes and local
 absolute paths, so it should remain ignored. The lockfile is portable: it
@@ -177,29 +195,73 @@ See `.cursor/orchestrator/README.md` for the resolution precedence and profile
 contract. A focused orch-hub implementation handoff is deployed as
 `.cursor/orchestrator/HANDOFF-orch-hub-split-role-profiles.md`.
 
-## Temporary Global Skills Sync
+## Skills
 
-The current tested Claude/Cursor/Codex workflow still uses global Claude skills
-as the operational skill source:
+Workflow skills are ordinary canonical payload. They live in
+`canonical/claude/skills/<name>/` and deploy to:
 
 ```text
-~/.claude/skills/<name>/SKILL.md
+<target>/.claude/skills/<name>/SKILL.md
 ```
 
-This repository keeps a parked copy in `skills-backup/`. That directory is not
-part of target repo deployment. To refresh the global Claude skill directory
-from the parked backup, use the temporary compatibility command:
+Like every other deployed file they are hashed into `.ai-deploy-manifest.json`
+and `.ai-deploy-lock.json`, so a target's protocol revision covers its skills
+too. Claude Code discovers them natively; the Cursor rule and the Codex
+SessionStart injection point at the same repo-relative path.
+
+Deployed set: `ai-housekeeping`, `ai-init`, `ai-load`, `ai-sync-v2`,
+`ctd-tasks`, `intake-task`, `invoke`.
+
+`ai-sync` and `session-ai-audit` were retired on 2026-08-09. `ai-sync`
+duplicated `ai-sync-v2`'s job against a task layout this protocol no longer
+uses, and its description advertised an auto-trigger for `.ai/` writes that
+the memory contract's closeout-only invariant forbids; `session-ai-audit`
+drove a `scripts/session_ai_audit.py` that this repository has never carried,
+so it could not run in any target. Deploy does not prune, so targets deployed
+before that date keep both copies — see the cleanup below.
+
+### One-time operator cleanup
+
+These skills used to be installed machine-globally under `~/.claude/skills/` by
+an `aii-2 skills sync-claude-global` command that no longer exists. **Remove the
+leftover global copies**, because personal-level skills override project-level
+ones ([skill precedence](https://code.claude.com/docs/en/skills)): a stale
+global copy silently wins over the deployed one, and no content hash can see
+it — deploy succeeds, the manifest and lock record the skills as deployed, and
+`status` reports `in sync`.
+
+**Redeploy every managed target first.** A target still on a pre-migration
+payload has no project-level copy, so deleting the global one leaves it with
+neither — and the stop hooks on all three backends point at `ai-sync-v2` for
+task closeout. Order matters:
 
 ```bash
-./aii-2 skills sync-claude-global --dry-run
-./aii-2 skills sync-claude-global
+./aii-2 status --all                      # find targets reporting canonical changed
+./aii-2 deploy <each-target>              # project-level copies land first
+
+ls ~/.claude/skills                       # review before deleting
+rm -rf ~/.claude/skills/{ai-housekeeping,ai-init,ai-load,ai-sync,ai-sync-v2}
+rm -rf ~/.claude/skills/{ctd-tasks,intake-task,invoke,session-ai-audit}
+
+# the retired pair also has project-level copies to remove
+rm -rf <each-target>/.claude/skills/{ai-sync,session-ai-audit}
 ```
 
-The command copies only the managed skills listed in `skills-backup/README.md`
-from `skills-backup/` to `~/.claude/skills/`. It does not delete extra global
-skills, does not write a manifest, and does not update target repo manifests or
-lockfiles. It exists to preserve the current tested hook model until skills are
-migrated to repo-local deployment in a separate task.
+The retired `ai-sync` and `session-ai-audit` stay in the personal-level
+deletion above and get a project-level deletion of their own: they must go
+from **both** roots. Redeploying replaces the other seven project-level
+copies, but writes nothing for a name that has left the payload, and the
+fresh manifest simply stops mentioning it — so `status` reports `in sync`
+over a target that still has the orphan. Claude Code finds skills by scanning
+`.claude/skills/`, not by reading the manifest, so an orphaned copy keeps
+running.
+
+Skills you added yourself that are not in the deployed or retired sets are
+unaffected; delete only the names above.
+
+`status` reports any name still shadowing a deployed skill as `shadowed skill`,
+so a target that has not had this cleanup done says so instead of reporting
+`in sync`.
 
 ## Not Copied
 
@@ -219,11 +281,90 @@ Do not place credentials or machine-local state in `canonical/`.
 
 ## Development
 
-Run tests with:
+### Bootstrap
 
 ```bash
-python -m pytest
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
 ```
 
-The test suite uses temporary source and target repos, so it does not modify
+The `dev` extra is the complete tool set the verification gate needs — pytest,
+ruff, shellcheck (via `shellcheck-py`), and the build backend. Nothing else has
+to be installed by hand; the gate refuses to run rather than skip a check whose
+tool is missing, and its error names the command above.
+
+### One command
+
+```bash
+scripts/check.sh
+```
+
+This is the repository's only verification entrypoint. It runs from any working
+directory, runs every check even after one fails, exits nonzero if any failed,
+and leaves the working tree byte-identical (its last check asserts exactly
+that). It runs:
+
+| Check | What it covers |
+|---|---|
+| `whitespace` | trailing whitespace, CR line endings, final newline in tracked text files |
+| `ruff` | Python lint (pyflakes plus the pycodestyle error rules) |
+| `shellcheck` | every tracked shell script, found by extension or shebang |
+| `boundary-lint` | `scripts/boundary-lint.sh` — canonical protocol boundaries |
+| `pytest` | the `tests/` suite |
+| `orchestrator-mock-loop` | `canonical/orchestrator/test_loop_mock.py` scenarios |
+| `package-build` | wheel build, offline install into a throwaway venv, CLI starts |
+| `tree-unchanged` | the run mutated no tracked file |
+
+The interpreter is `.venv/bin/python` when present, otherwise `python3`; set
+`AII_PYTHON` to override.
+
+`canonical/orchestrator/test_loop_mock.py` is deliberately outside pytest's
+`testpaths` — it is a standalone script with its own `main()`, and the gate is
+the only thing that runs it. The same is true of the two shell checks. That is
+what `tests/test_verification_gate.py` guards: it asserts the gate still
+carries every required check, that every mock-loop scenario is wired into
+`main()`, and that CI has not grown a copy of any check.
+
+The suites use temporary source and target repos, so they do not modify
 `../quantx`.
+
+### Optional Git hook
+
+```bash
+scripts/install-git-hooks.sh
+```
+
+Installs a `pre-push` hook that calls `scripts/check.sh` and nothing else.
+`git push --no-verify` skips it; deleting `.git/hooks/pre-push` uninstalls it.
+
+Rerunning the installer over the hook it wrote changes nothing. Any other
+`pre-push` hook is left untouched and reported, including one of your own that
+calls the gate alongside its own commands — ownership is decided by the file's
+full contents, so a hook is replaced only when it is exactly what the installer
+writes. To adopt the managed hook, move the existing one aside first.
+
+### CI
+
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual
+dispatch. It installs the `dev` extra and calls `scripts/check.sh` on Python
+3.11 (the `requires-python` floor) and 3.14 (the orchestrator runtime). It
+needs no repository secrets and requests only `contents: read`.
+
+**Branch protection is a repository setting, not a file in this repo.** Until
+the `gate (Python 3.11)` and `gate (Python 3.14)` checks are marked required
+for `main` under Settings → Branches, a red run can still be merged. Adding the
+workflow does not enable the gate; marking the checks required does.
+
+`.github/workflows/smoke.yml` is the non-default counterpart: a manual
+`workflow_dispatch` run of `canonical/orchestrator/smoke_hooks.py`, which drives
+a live Cursor SDK agent to observe whether the deployed hooks fire. It needs
+`CURSOR_API_KEY`, costs money, and reports observations rather than a verdict,
+so it is classified out of the merge gate on purpose.
+
+### Adding a check
+
+Add a `check_*` function and one `run_check` line to the CHECKS section of
+`scripts/check.sh`. CI and the Git hook call that script and never re-list its
+steps, so a check added there is enforced everywhere at once. Do not add a
+second entrypoint; if a new check needs a tool, declare it in the `dev` extra
+so the preflight can fail closed on it.

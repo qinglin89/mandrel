@@ -12,7 +12,7 @@ CANONICAL_DIRNAME = "canonical"
 MANIFEST_FILENAME = ".ai-deploy-manifest.json"
 LOCK_FILENAME = ".ai-deploy-lock.json"
 REGISTRY_RELATIVE_PATH = Path(".registry") / "repos.local.json"
-SKILLS_BACKUP_DIRNAME = "skills-backup"
+CLAUDE_USER_SKILLS_RELATIVE_PATH = Path(".claude") / "skills"
 
 GITIGNORE_BEGIN = "# BEGIN ai-native-deployment"
 GITIGNORE_END = "# END ai-native-deployment"
@@ -31,14 +31,6 @@ def canonical_root(root: Path | None = None) -> Path:
     return (root or source_root()) / CANONICAL_DIRNAME
 
 
-def skills_backup_root(root: Path | None = None) -> Path:
-    return (root or source_root()) / SKILLS_BACKUP_DIRNAME
-
-
-def claude_global_skills_root() -> Path:
-    return Path.home() / ".claude" / "skills"
-
-
 def manifest_path(target_root: Path) -> Path:
     return target_root / MANIFEST_FILENAME
 
@@ -52,3 +44,15 @@ def registry_path(root: Path | None = None) -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return (root or source_root()) / REGISTRY_RELATIVE_PATH
+
+
+def claude_user_skills_root() -> Path:
+    """Personal-level skill root. Read-only here: nothing in this package
+    writes to it — status reads it because a personal-level skill overrides a
+    same-named deployed one. The override exists for tests and for a relocated
+    agent home."""
+
+    override = os.environ.get("AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / CLAUDE_USER_SKILLS_RELATIVE_PATH

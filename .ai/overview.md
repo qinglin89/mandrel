@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-09
+verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 ---
 
 # Project Overview
@@ -21,7 +21,10 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 
 - Versioned protocol, workflow, loader/hook, and orchestrator payloads.
 - `aii-2` deploy, dry-run, drift status, local registry, orchestrator bootstrap,
-  portable lock receipts, and temporary global Claude-skill synchronization.
+  portable lock receipts, and repository-local workflow skills with
+  personal-skill precedence detection.
+- One deterministic regression entrypoint shared by local runs, CI, and the
+  optional pre-push hook; credentialed live probes remain manual.
 - Project-specific evolution workspace for evidence-batched changes to this
   canonical suite.
 
@@ -35,7 +38,8 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 
 ## Tech Stack
 
-- Python 3.11+ package and standard library; pytest test dependency.
+- Python 3.11+ package and standard library; pytest, ruff, shellcheck, and
+  package-build verification toolchain.
 - Python 3.14 orchestrator virtualenv with optional `cursor-sdk`.
 - Markdown/TOML/JSON contracts; Bash hooks/linting.
 - Git-backed canonical and memory history; machine-local manifests/registry.
@@ -45,10 +49,9 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 | Path | Purpose |
 |---|---|
 | `canonical/` | Deploy-owned source payload |
-| `ai_native_deployment/` | Deployment/status/registry/skills Python package |
-| `tests/` | Deployment, hook, orchestrator-config, and skills tests |
-| `scripts/` | Boundary/invariant checks |
-| `skills-backup/` | Parked global Claude workflow-skill source |
+| `ai_native_deployment/` | Deployment/status/registry Python package |
+| `tests/` | Deployment, hook, closeout-path, and orchestrator-config tests |
+| `scripts/` | Unified regression gate, optional hook installer, boundary checks |
 | `evolution/` | Normative protocol-evolution contract and sanitized audit |
 | `.ai/` | This repository's descriptive agent snapshot |
 | `.ai-tasks/` | Local active evolution/maintenance work pool |

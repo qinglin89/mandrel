@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+last-updated: 2026-08-09
+verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 ---
 
 # Conventions
@@ -35,12 +35,18 @@ verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
 
 ## Testing
 
-- Primary suite: `.venv/bin/pytest -q`.
+- Primary suite: `scripts/check.sh` after `pip install -e '.[dev]'`; it is
+  working-directory-independent and includes pytest, mock-loop scenarios,
+  boundary/whitespace/static lint, package build/install, and non-mutation.
+- Add deterministic checks only through `scripts/check.sh`; CI and optional
+  Git hooks invoke that entrypoint rather than duplicate its commands.
+- Keep credentialed/network-dependent probes outside the required gate and on
+  explicit manual workflows.
 - Deployment tests use temporary source/target roots.
 - Cover dry-run/non-mutation, idempotency, failure boundaries, and recovery for
   filesystem workflows.
 - Orchestrator config changes require CLI-level resolution/precedence tests.
-- Run `git diff --check` before commit.
+- Run `scripts/check.sh` before commit.
 
 ## Git and Deployment
 

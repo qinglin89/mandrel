@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+# shellcheck disable=SC1007  # `CDPATH=` empties CDPATH for this cd only, so a
+# user's CDPATH cannot make cd print a different directory. Not a typo.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROG_NAME=${0##*/}
 

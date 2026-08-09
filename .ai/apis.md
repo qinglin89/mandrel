@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-09
+verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 ---
 
 # APIs and Interfaces
@@ -10,12 +10,11 @@ verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 | Command | Behavior |
 |---|---|
 | `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Preview or deploy canonical payload; optional venv bootstrap |
-| `status <target>` | Compare manifest, target, canonical source, eager entrypoints |
+| `status <target>` | Compare current manifest entries, target, canonical source, eager entrypoints, and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
 | `status --all` | Check every local registry entry |
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
 | `registry remove <name-or-path>` | Remove local tracking only |
-| `skills sync-claude-global [--dry-run]` | Temporary non-deleting backup-to-home skill sync |
 
 Evolution commands are not implemented yet. The initialized contract reserves
 human-triggered `evolution list|sync|start|status` behavior for the active

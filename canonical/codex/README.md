@@ -17,8 +17,9 @@ touches none of the shared or other-tool files.
 The workflow itself (protocol docs, `.ai/`, `.ai-tasks/`, skills) is shared and
 unchanged. Skills are **bridged, not copied**: the SessionStart injection maps
 slash-command names (`/ai-sync-v2`, `/intake-task`, `/ai-init`,
-`/ai-housekeeping`, `/ctd-tasks`) to `~/.claude/skills/<name>/SKILL.md`, exactly
-as the Cursor adaptation does.
+`/ai-housekeeping`, `/ctd-tasks`) to the deployed `.claude/skills/<name>/SKILL.md`,
+exactly as the Cursor adaptation does. The skills are ordinary deploy-owned
+payload; Codex reads them by path rather than by native discovery.
 
 ## One-time setup (trust the hooks)
 
@@ -79,8 +80,9 @@ entries in this project `config.toml`, and trust the user-scope hooks via
 
 ## Isolation (Constraint #0)
 
-- Never edit `CLAUDE.md`, `.claude/**`, `~/.claude/skills/**`, the shared
-  `.ai-protocol/**` docs, or `.cursor/**`. This adaptation touches none of them.
+- Never edit `CLAUDE.md`, `.claude/**` (deployed skills included), the shared
+  `.ai-protocol/**` docs, or `.cursor/**`. This adaptation reads the skills
+  under `.claude/skills/` but edits none of these.
 - No repo-root `AGENTS.md` is created: Codex **and** Cursor both read `AGENTS.md`
   (walking up to the repo root), so it would leak between tools. Context is
   injected via the `SessionStart` hook instead — the same choice made for Cursor.

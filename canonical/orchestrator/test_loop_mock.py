@@ -175,6 +175,13 @@ def patch_module(repo: Path) -> None:
     fake_sdk.LocalAgentOptions = FakeOptions
     sys.modules.setdefault("cursor_sdk", fake_sdk)
 
+    # Re-point before o.REPO is overwritten, so the relative_to() also asserts
+    # the shape of the imported constant: the close-out skill must resolve
+    # inside the repository (deployed .claude/skills/). A home-rooted path
+    # would send the close-out session to the retired personal-level copy.
+    assert o.SYNC_SKILL.is_relative_to(o.REPO), \
+        f"close-out skill must be REPO-anchored, got {o.SYNC_SKILL}"
+    o.SYNC_SKILL = repo / o.SYNC_SKILL.relative_to(o.REPO)
     o.REPO = repo
     o.TASKS_DIR = repo / ".ai-tasks"
     o.ARCHIVE_DIR = repo / ".ai-tasks" / "archive"
@@ -311,7 +318,7 @@ def scenario_3_budget_escalation(repo: Path) -> None:
     append_review(repo, "rev-2", DEV_SID, "changes-requested", DEV_SID,
                   "in_progress")
     p.write_text(p.read_text() + (
-        f"\n### 2026-01-03 / dev-bbbb-2222 / (in_progress → in_progress)\n"
+        "\n### 2026-01-03 / dev-bbbb-2222 / (in_progress → in_progress)\n"
         "- Done: attempted fix\n- Next: re-review\n- Open: none\n"))
 
     def third_round(agent: FakeAgent, prompt: str) -> None:
@@ -1098,6 +1105,11 @@ claimed-by: dev-ffff-0001@2026-01-10T00:00:00Z
 
     def closes_out(agent: FakeAgent, prompt: str) -> None:
         assert "/ai-sync-v2" in prompt
+        # The skill path handed to the close-out session is the deployed
+        # repository-local one, not a personal-level (home) copy: that set is
+        # retired, so a home-rooted path reads nothing.
+        assert str(repo / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md") \
+            in prompt, prompt
         (repo / ".ai-tasks" / "archive").mkdir(exist_ok=True)
         p.rename(repo / ".ai-tasks" / "archive" / p.name)
         idx.write_text("\n".join(

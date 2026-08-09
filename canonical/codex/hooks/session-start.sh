@@ -129,8 +129,9 @@ Use this ID wherever the protocol calls for \$CLAUDE_CODE_SESSION_ID (the
   The referenced files are already included below; ignore the \`@file\` lines.
 - Skill / slash-command invocations (\`/invoke\`, \`/ai-sync-v2\`,
   \`/intake-task\`, \`/ai-init\`, \`/ai-housekeeping\`, \`/ctd-tasks\`) map to
-  skills: read \`~/.claude/skills/<name>/SKILL.md\` and follow it. (Codex can
-  also load these as native skills; see .codex/config.toml.)
+  skills: read \`.claude/skills/<name>/SKILL.md\` and follow it — they are
+  deployed with the rest of the protocol payload, so the path is repo-relative
+  like every other protocol path above.
 - The verb→contract mapping is in the loader (CLAUDE.md, included below);
   the caller delivers role contract text at invocation (\`/invoke\` skill or
   paste). For \`review <id>\` sessions the review contract is also reachable

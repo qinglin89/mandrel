@@ -2,6 +2,7 @@
 # Boundary lint — mechanical enforcement of the CHARTER.md litmus tests and
 # the post-cut reference invariants (AUDIT-protocol-cut.md §9) over the
 # canonical suite. Run from anywhere: scripts/boundary-lint.sh
+# Also runs as one check of the unified gate, scripts/check.sh.
 #
 # Checks:
 #   1. required canonical layout files exist
@@ -14,11 +15,12 @@
 #      arrays and the CLAUDE.md import block carry no protocols/ contract
 #      other than conduct.md
 #   4. every `.ai-protocol/<path>.md` reference resolves to a canonical file
+#   4b. no home-rooted skill paths: skills deploy per repository
 #   5. orchestrator prompt templates + postcheck contract validate
 #      (prompts_error() startup check)
 
 set -u
-cd "$(cd "$(dirname "$0")/.." && pwd)"
+cd "$(cd "$(dirname "$0")/.." && pwd)" || exit 1
 fail=0
 err() { printf 'boundary-lint: %s\n' "$*" >&2; fail=1; }
 
@@ -38,9 +40,7 @@ done
 
 # --- 2. dead doc names -------------------------------------------------------
 dead=$(grep -rnI --exclude-dir=__pycache__ --exclude=boundary-lint.sh 'ai-coding-' \
-         canonical ai_native_deployment tests scripts \
-         skills-backup/ai-init skills-backup/ai-sync-v2 skills-backup/ai-load \
-         skills-backup/ai-housekeeping skills-backup/intake-task 2>/dev/null \
+         canonical ai_native_deployment tests scripts 2>/dev/null \
        | grep -v 'HANDOFF-orch-hub.md' \
        | grep -v 'legacy' \
        | grep -v 'ai-coding\*\.md' || true)
@@ -99,13 +99,24 @@ if [ -n "$bad" ]; then
 fi
 
 # --- 4. .ai-protocol path references resolve ---------------------------------
-refs=$(grep -rhoI --exclude-dir=__pycache__ '\.ai-protocol/[A-Za-z0-9/_-]*\.md' canonical skills-backup 2>/dev/null | sort -u)
+refs=$(grep -rhoI --exclude-dir=__pycache__ '\.ai-protocol/[A-Za-z0-9/_-]*\.md' canonical 2>/dev/null | sort -u)
 for ref in $refs; do
   [ -f "canonical/${ref#.ai-protocol/}" ] || err "dangling reference: $ref"
 done
 
+# --- 4b. no home-rooted skill paths ------------------------------------------
+# Skills are deploy-owned repository payload. A personal-level path in the
+# payload points at a copy deploy neither writes nor versions — and since
+# personal-level skills override project-level ones, the wrong copy wins
+# silently. Home-rooted *log* paths are unaffected: they are runtime state.
+home_skills=$(grep -rnIE --exclude-dir=__pycache__ '(\$\{HOME\}|\$HOME|~)/\.[a-z]+/skills' canonical 2>/dev/null || true)
+if [ -n "$home_skills" ]; then
+  err "home-rooted skill paths in canonical (skills deploy per repository):"
+  printf '%s\n' "$home_skills" >&2
+fi
+
 # --- 5. prompt templates validate --------------------------------------------
-if ! python3 - <<'EOF'
+if ! "${AII_PYTHON:-python3}" - <<'EOF'
 import sys
 sys.path.insert(0, "canonical/orchestrator")
 import orchestrator as o

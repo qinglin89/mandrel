@@ -14,7 +14,10 @@ Infrastructure must already be in place (deployed externally, e.g., by a setup s
 - `.claude/hooks/stop-context-check.sh` and `.claude/hooks/session-start-housekeeping-check.sh` installed and executable
 - `.claude/settings.json` registers Stop + SessionStart hooks
 - `.gitignore` excludes `.ai-tasks/`
-- User-level skills available: `/intake-task`, `/ai-sync-v2`, `/ai-housekeeping`
+- Workflow skills deployed with the payload under `.claude/skills/`:
+  `intake-task`, `ai-sync-v2`, `ai-housekeeping`. They are repository-local
+  payload; a personal-level copy is not the thing to check for (and, since
+  personal-level shadows project-level, is drift to remove)
 
 If any piece is missing, abort and tell the user which — suggest re-running the infrastructure deploy script.
 

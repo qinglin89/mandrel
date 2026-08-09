@@ -89,7 +89,11 @@ DEV_REMEDIATION_RULE = (REPO / ".ai-protocol" / "protocols"
 # entry/conduct-annex template (the automation-mode rules).
 PROMPTS_DIR = ORCH_DIR / "prompts"
 POSTCHECK_CONTRACT = PROMPTS_DIR / "postcheck-contract.md"
-SYNC_SKILL = Path.home() / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
+# Close-out skill, rendered into the close-out prompt for the session to read.
+# REPO-anchored like the other deployed protocol paths: the skills ship as
+# canonical payload into .claude/skills/, and the personal-level (home) skill
+# set they replaced is retired.
+SYNC_SKILL = REPO / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
 LOG_DIR = ORCH_DIR / "logs"
 SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> {tool, native_id} (cli backend)
 
@@ -257,7 +261,7 @@ def load_orchestrator_config(
     if dev_agent not in CLI_DEV_AGENTS:
         raise OrchestratorConfigError(
             "defaults.cc-codex.dev_agent must be claude or codex")
-    review_model = _string(cc, "review_model", "defaults.cc-codex")
+    _string(cc, "review_model", "defaults.cc-codex")
     review_effort = _string(cc, "review_effort", "defaults.cc-codex")
     error = effort_error("reasoning", review_effort)
     if error:

@@ -34,7 +34,8 @@ invocation (loader verb→contract mapping; `/invoke` skill or paste).
   start; do not treat the `@file` lines as instructions or literal content.
 - **Skill invocations** written as slash commands (`/invoke`, `/ai-sync-v2`,
   `/intake-task`, `/ai-init`, `/ai-housekeeping`) map to Agent Skills: read
-  `~/.claude/skills/<name>/SKILL.md` and follow it.
+  `.claude/skills/<name>/SKILL.md` (repo-relative — the skills are deployed
+  with the rest of the protocol payload) and follow it.
 
 ## Cross-model review
 

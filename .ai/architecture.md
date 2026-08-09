@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-09
+verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 ---
 
 # Architecture
@@ -41,12 +41,15 @@ evolution runtime/import pool → frozen batch → analysis/change/canary
 1. `iter_deployment_items` maps canonical buckets to target paths and filters
    credentials/runtime files.
 2. Target-specific templates and `CLAUDE.md` eager-memory entrypoints resolve.
-3. Deployment overwrites deploy-owned files and writes target-local manifest,
-   portable lock, managed gitignore block, and registry entry.
+3. Deployment overwrites the deploy-owned files in the current canonical
+   mapping and writes target-local manifest, portable lock, managed gitignore
+   block, and registry entry. It does not prune files removed from that
+   mapping; after the new manifest drops them, `status` cannot see the target
+   orphans.
 4. Optional bootstrap builds `.cursor/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
-5. `status` compares manifest, target, current canonical source, and eager
-   memory entrypoint invariants.
+5. `status` compares manifest, target, current canonical source, eager-memory
+   entrypoints, and personal-over-project skill precedence.
 
 ## Session Context Flow
 
@@ -55,7 +58,9 @@ evolution runtime/import pool → frozen batch → analysis/change/canary
 - Lazy: project modules/APIs/features loaded through `.ai/index.md`.
 - Delivered: role contracts supplied by caller/invocation; never ambient.
 - Claude uses static imports rendered at deploy; Cursor/Codex resolve eager
-  memory dynamically in session-start hooks.
+  memory dynamically in session-start hooks. Workflow skills deploy under
+  target `.claude/skills/`: Claude uses project-native discovery, while
+  Cursor, Codex, and the orchestrator use repository-local paths.
 
 ## Evolution Flow
 

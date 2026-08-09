@@ -161,10 +161,12 @@ The settled contract below supersedes the earlier sketch.
   `.claude/{hooks,settings.json}`, orchestrator CODE
   (`orchestrator.py`, `automation-mode.md`, `README.md`, `test_loop_mock.py`,
   `requirements.txt`, `.env.example`), repo-level `.claude/skills/` +
-  `scripts/` agent-infra, AND the user-level `~/.claude/skills/` set
-  (ai-sync-v2, intake-task, ai-init, ai-housekeeping) deployed to home —
-  completes the cross-machine story. (User listed `.cursor/` wholesale;
-  treating orchestrator code as in-scope is an inference — confirm.)
+  `scripts/` agent-infra, AND the workflow skill set (ai-sync-v2, intake-task,
+  ai-init, ai-housekeeping, …) — completes the cross-machine story. (User
+  listed `.cursor/` wholesale; treating orchestrator code as in-scope is an
+  inference — confirm.) **Resolved 2026-08-08:** the workflow skills are
+  canonical payload deployed per repository into `.claude/skills/`, not a
+  user-level set deployed to home.
 - `aii` (user's EXISTING local command — next session: ask where it lives,
   read it before extending):
   - `aii deploy <repo>`: copy + render `.codex/config.toml` `{{REPO_ROOT}}`
@@ -236,8 +238,9 @@ The settled contract below supersedes the earlier sketch.
 - No web/remote logic inside the orchestrator or the protocol docs; the
   protocol must keep working standalone for manual interactive sessions.
 - Terminal output stays status-level; verbosity goes to log files.
-- Never edit `~/.claude/skills/**` in place… until ai-native-deployment
-  becomes their canonical home (then: edit there, deploy home).
+- Never edit the deployed skills under `.claude/skills/**` in place —
+  ai-native-deployment is their canonical home: edit `canonical/claude/skills/`
+  there and redeploy.
 
 ## Reference paths
 
@@ -246,5 +249,5 @@ The settled contract below supersedes the earlier sketch.
 - Protocol files in each managed target repo root: `ai-coding-*.md`, `CLAUDE.md`
 - Hooks/configs: `.cursor/hooks{,.json}`, `.cursor/rules/`, `.codex/hooks` +
   `.codex/config.toml`, `.claude/hooks` + `.claude/settings.json`
-- User-level skills remain outside target repos unless a future canonical deploy
-  path explicitly manages them.
+- Workflow skills in each managed target repo: `.claude/skills/<name>/SKILL.md`,
+  deployed from `canonical/claude/skills/` like any other payload.

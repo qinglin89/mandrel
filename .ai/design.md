@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-09
+verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 ---
 
 # Design Principles and Decisions
@@ -17,6 +17,8 @@ verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 - Machine-local inventory, credentials, raw evidence, and runtime state stay
   outside Git; portable hashes/receipts and sanitized decisions may enter Git.
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
+- Deterministic verification is single-sourced in `scripts/check.sh`; CI and
+  optional Git hooks invoke it without restating individual checks.
 - Protocol evolution uses repeated unique-task evidence, immutable cohorts,
   separate analysis/change tasks, stable runner revisions, and human gates.
 
@@ -33,6 +35,14 @@ verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 
 - Chose two receipts: manifest contains rendered hashes/machine paths for
   status; lock contains canonical hashes/source commit for version control.
+
+### Repository-local skills versus personal-level compatibility
+
+- Chose canonical per-target deployment under `.claude/skills/`; the manifest
+  and lock version skills with the rest of each target's protocol revision.
+- Consequence: `status` separately detects same-named personal skills because
+  native precedence can shadow a hash-correct project copy; operators redeploy
+  targets before removing legacy personal copies.
 
 ### Evolution contract versus `.ai/` snapshot
 
@@ -56,6 +66,8 @@ verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 - Config/schema version fields on persisted machine contracts.
 - Fail closed on malformed state, unsafe paths, unsupported config, or missing
   provenance required for a decision.
+- Content equality, not marker/prose matching, proves ownership before an
+  optional Git-hook installer treats an existing hook as managed.
 
 ## Anti-Patterns to Avoid
 

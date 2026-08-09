@@ -1,0 +1,50 @@
+name: verify
+
+# The deterministic gate. Everything it runs lives in scripts/check.sh — this
+# workflow installs dependencies and calls that one entrypoint, so a check
+# added to the gate is enforced here without editing this file. Do not inline
+# a check command below; tests/test_verification_gate.py fails if you do.
+#
+# Needs no repository secrets. The credentialed live probe is a separate,
+# manual workflow: .github/workflows/smoke.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor from pyproject `requires-python`, and the runtime the
+        # orchestrator venv is built on (.ai/overview.md).
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install verification dependencies
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+
+      - name: Verify
+        env:
+          # Pin the gate to the matrix interpreter rather than whatever
+          # `python3` resolves to on the runner.
+          AII_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: scripts/check.sh

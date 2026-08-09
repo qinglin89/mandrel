@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-09
+verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 ---
 
 # Features
@@ -8,13 +8,14 @@ verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
 | Feature | Status | Key modules/interfaces |
 |---|---|---|
 | Canonical payload deployment | implemented | deploy, manifest, lock, canonical buckets |
-| Dry-run and drift status | implemented | preview/status; eager entrypoint checks |
+| Dry-run and drift status | implemented; removed-file orphan detection pending | preview/status; eager-entrypoint and personal-skill-precedence checks |
 | Managed repo registry | implemented | registry CLI and local JSON |
 | Orchestrator bootstrap | implemented | Python 3.14 venv, requirements, non-overwriting env |
 | Split role launch profiles | implemented | dev/review profiles, legacy profile compatibility, print-config |
 | Cross-agent context loading | implemented | Claude imports, Cursor/Codex hooks, eager/lazy/delivered contract |
 | Protocol boundary enforcement | implemented | charter layout/reference/eager/prompt lint |
-| Temporary global Claude skills | implemented compatibility | parked backup + guarded sync |
+| Unified regression/CI gate | implemented | `scripts/check.sh`; deterministic lint/test/build matrix; optional pre-push hook; manual live probe |
+| Repository-local workflow skills | implemented | canonical Claude skill payload; manifest/lock coverage; cross-backend closeout pointers |
 | Evolution normative workspace | initialized | README, config, schemas, ledger, batch/case/experiment dirs |
 | Evolution report feed | pending in orch-hub | globally ordered archived-task reports with complete L1+L2 artifacts |
 | Evolution import/pending pool | pending | active evolution controller task |

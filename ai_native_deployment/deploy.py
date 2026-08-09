@@ -7,12 +7,19 @@ import re
 import stat
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from . import hashing, lockfile, manifest, registry
-from .paths import GITIGNORE_BEGIN, GITIGNORE_END, canonical_root, registry_path, source_root
+from .paths import (
+    GITIGNORE_BEGIN,
+    GITIGNORE_END,
+    canonical_root,
+    claude_user_skills_root,
+    registry_path,
+    source_root,
+)
 
 PAYLOADS: tuple[tuple[str, str], ...] = (
     ("repo-root", ""),
@@ -60,6 +67,10 @@ CLAUDE_MD_MEMORY_IMPORT_TOPICS: tuple[str, ...] = (
     "conventions",
 )
 AI_ROUTER_PATH = ".ai/index.md"
+# Where the claude payload bucket puts workflow skills in a target, and the
+# file an agent tool needs to find to treat a directory there as a skill.
+DEPLOYED_SKILLS_ROOT = PurePosixPath(".claude/skills")
+SKILL_MANIFEST_FILENAME = "SKILL.md"
 
 
 @dataclass(frozen=True)
@@ -598,7 +609,55 @@ def eager_import_drifts(target_root: Path) -> tuple[Drift, ...]:
     return tuple(drifts)
 
 
-def check_status(target: str | Path, *, root: Path | None = None) -> StatusResult:
+def deployed_skill_names(target_relative_paths: Iterable[str]) -> tuple[str, ...]:
+    """Skill names a deployed payload carries: the directory names directly
+    under the target's skills root."""
+    depth = len(DEPLOYED_SKILLS_ROOT.parts)
+    names = set()
+    for raw in target_relative_paths:
+        parts = PurePosixPath(str(raw)).parts
+        if len(parts) > depth and parts[:depth] == DEPLOYED_SKILLS_ROOT.parts:
+            names.add(parts[depth])
+    return tuple(sorted(names))
+
+
+def shadowed_skill_drifts(
+    skill_names: Iterable[str],
+    *,
+    user_skills_root: Path | None = None,
+) -> tuple[Drift, ...]:
+    """Precedence checks the content hash cannot make.
+
+    Agent tools resolve same-named skills personal-level over project-level, so
+    a leftover personal copy silently wins over the deployed one: the deploy
+    succeeded, the manifest and the lock record the deployed file, and every
+    hash matches — while the skill that actually executes is the stale one.
+    Same blind spot as `ambiguous memory entrypoint`: two legal locations
+    present, the wrong one winning, and no content comparison can see it."""
+    root = claude_user_skills_root() if user_skills_root is None else Path(user_skills_root)
+    if not root.is_dir():
+        return ()
+
+    drifts: list[Drift] = []
+    for name in skill_names:
+        shadow = root / name / SKILL_MANIFEST_FILENAME
+        if shadow.is_file():
+            drifts.append(
+                Drift(
+                    "shadowed skill",
+                    str(DEPLOYED_SKILLS_ROOT / name),
+                    f"{shadow} takes precedence; the deployed skill does not run until it is removed",
+                )
+            )
+    return tuple(drifts)
+
+
+def check_status(
+    target: str | Path,
+    *,
+    root: Path | None = None,
+    user_skills_root: Path | None = None,
+) -> StatusResult:
     root = (root or source_root()).resolve()
     target_root = Path(target).expanduser().resolve()
     try:
@@ -648,6 +707,12 @@ def check_status(target: str | Path, *, root: Path | None = None) -> StatusResul
         drifts.append(Drift("canonical changed", target_rel, "new canonical file not deployed"))
 
     drifts.extend(eager_import_drifts(target_root))
+    drifts.extend(
+        shadowed_skill_drifts(
+            deployed_skill_names(str(key) for key in manifest_files),
+            user_skills_root=user_skills_root,
+        )
+    )
 
     return StatusResult(target_root=target_root, total_files=len(manifest_files), drifts=tuple(drifts))
 
@@ -664,6 +729,7 @@ def format_status(result: StatusResult, label: str | None = None) -> str:
         "canonical changed",
         "stale eager import",
         "ambiguous memory entrypoint",
+        "shadowed skill",
         "missing target file",
         "extra deployed file",
         "invalid manifest entry",

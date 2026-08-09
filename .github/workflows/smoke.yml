@@ -1,0 +1,63 @@
+name: live-smoke
+
+# NOT a merge gate. This is the credentialed, network-dependent half of the
+# check inventory: canonical/orchestrator/smoke_hooks.py drives a real Cursor
+# SDK agent to observe whether the deployed sessionStart/stop hooks fire. It
+# needs CURSOR_API_KEY, costs money per run, and reports observations rather
+# than a pass/fail verdict — so it runs only when a human dispatches it, and
+# the deterministic gate (.github/workflows/ci.yml) never invokes it.
+#
+# Read the job log: the probe prints
+# `VERDICT: sessionStart-injection-seen-by-agent=... hook-scripts-executed=...`
+# for each of its two setting-source modes. A green job means the probe ran,
+# not that the hooks fired.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Cursor model id for the probe
+        required: false
+        default: composer-2.5
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    name: cursor hook probe
+    runs-on: ubuntu-latest
+    environment: live-smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Require the credential
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "${CURSOR_API_KEY}" ]; then
+            echo "::error::CURSOR_API_KEY is not available to this workflow." \
+                 "Add it to the 'live-smoke' environment in repository settings."
+            exit 1
+          fi
+
+      - name: Install the SDK and the deployment tool
+        run: |
+          python -m pip install --disable-pip-version-check .
+          python -m pip install --disable-pip-version-check \
+            -r canonical/orchestrator/requirements.txt
+
+      - name: Deploy the payload into this checkout
+        # The hooks the probe observes are deploy-owned and gitignored, so a
+        # fresh checkout has none of them until the repository deploys itself.
+        run: python -m ai_native_deployment.cli deploy .
+
+      - name: Probe the hooks
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: python canonical/orchestrator/smoke_hooks.py "${{ inputs.model }}"

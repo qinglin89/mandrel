@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
+last-updated: 2026-08-09
+verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 ---
 
 # Project Map
@@ -17,7 +17,8 @@ verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
 | Context delivery | canonical loader, Claude/Cursor/Codex hooks | imports, sessionStart/Stop hooks |
 | Workflow lifecycle | canonical protocols/workflow/meta | role contracts, runbook, task/memory schemas |
 | Boundary assurance | boundary lint, deployment/hook tests | shell lint, pytest |
-| Skill compatibility | skills module, skills-backup | `skills sync-claude-global` |
+| Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
+| Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned files; no executable CLI yet |
 | Evolution controller | pending Python module/CLI | planned `evolution list|sync|start|status` |
 | Report publication | external orch-hub | pending global report feed/export |
@@ -27,8 +28,10 @@ verified-against: 1cc444eefee5e7d41cd94f7c01b661bf94c75152
 | Change | Check/update |
 |---|---|
 | Canonical file/path | payload mapping, boundary lint, deploy/status tests, targets |
+| Workflow skill | manifest/lock coverage, backend pointers, personal-shadow status, operator deploy-before-cleanup order |
 | Eager memory topic | loader rendering, both hooks, entrypoint drift tests |
 | Persisted receipt/schema | reader compatibility, schema version, recovery tests |
 | Orchestrator profile/config | README, print-config JSON, precedence tests, orch-hub contract |
+| Repository check/tool | `scripts/check.sh`, `dev` extra, structural gate tests; CI/hooks call only the gate |
 | Evolution admission/state | evolution contract/config/schema, ledger/batch invariants, `.ai` feature/API snapshot |
 | orch-hub report contract | import schema/client fixtures and task acceptance |

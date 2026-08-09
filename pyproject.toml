@@ -12,13 +12,38 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+# Everything scripts/check.sh needs, so one install makes the whole gate
+# runnable. The lint and build tools are pinned: their output decides
+# pass/fail, and an unpinned upgrade would change the verdict without a commit.
+dev = [
+    "pytest>=8,<10",
+    "ruff==0.16.2",
+    "shellcheck-py==0.11.0.1",
+    "build==1.5.0",
+    "setuptools>=68",
+    # Only setuptools >= 70.1 builds wheels without it, and the gate runs
+    # `build --no-isolation` against whatever setuptools the interpreter has.
+    "wheel",
+]
 
 [project.scripts]
 aii-2 = "ai_native_deployment.cli:main"
 
 [tool.pytest.ini_options]
+# canonical/orchestrator/test_loop_mock.py is named like a pytest module but is
+# a standalone script with its own main(); it stays outside testpaths and is run
+# by scripts/check.sh instead.
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+extend-exclude = [".venv", "canonical/orchestrator/logs"]
+
+[tool.ruff.lint]
+# Ruff's default rules: pyflakes plus the pycodestyle errors that flag real
+# defects. Style-only rules stay off — this gate exists to catch bugs, not to
+# reformat a codebase that has its own conventions (.ai/conventions.md).
+select = ["E4", "E7", "E9", "F"]
 
 [tool.setuptools.packages.find]
 include = ["ai_native_deployment*"]
