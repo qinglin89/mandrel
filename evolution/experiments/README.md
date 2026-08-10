@@ -20,10 +20,13 @@ base revision, frozen by the batch's first experiment, because alternatives
 built on different sources are not alternatives. Only one experiment is open at
 a time, and only a promotion ends the batch; the rest stay as evidence.
 
-Rounds are the unit replay evidence names. Revising an experiment closes the
-open round with its candidate revision pinned and opens the next, so evidence
-gathered for an earlier round goes on naming that round rather than silently
-being read as describing the current candidate.
+Rounds are the unit replay evidence names. Sealing a round records that every
+task admitted into it was observed complete and pins the ref tip as that round's
+candidate revision — the round is then candidate-ready, and that pinned revision
+is the only thing replay or a promotion may name. Revising opens the next round
+from an already-sealed one, so evidence gathered for an earlier round goes on
+naming that round rather than silently being read as describing the current
+candidate.
 
 An implementation task is not evidence of improvement; promotion depends on a
 completed replay or canary record naming the base revision, the experiment, and

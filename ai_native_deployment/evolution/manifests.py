@@ -1,8 +1,17 @@
-"""Committed batch content: the immutable manifest, and the closure record.
+"""Committed batch content: the manifest, and the records that end its stages.
 
-The read side of a frozen batch — membership, versioning, and whether its
-analysis has finished. `batches.py` owns the writes, the way it already owns
-`_write_manifest` against this module's `read_manifest`.
+The read side of a frozen batch — membership, versioning, whether its analysis
+has finished, whether the batch itself has. `batches.py` owns the writes, the
+way it already owns `_write_manifest` against this module's `read_manifest`.
+
+Three records sit beside the manifest and none of them substitutes for another.
+`analysis-complete.json` ends the analysis stage; `outcome.json` ends the batch
+(contract invariant 14), which is a later and different moment — admission, the
+experiments, and their rounds all happen between the two;
+`rejected-drafts.json` ends nothing but is what keeps a declined proposal from
+waiting at the admission gate forever. All three are committed for the same
+reason: `.ai-tasks/` and `.ai-evolution/` are machine-local, so a conclusion
+that lived only there would be unreadable on every other clone.
 
 Split out of `batches.py` because two layers need it and neither may import the
 other: `state.py` checks a processed report against the batch that claims it,
@@ -29,6 +38,8 @@ from .config import (
     BATCH_SCHEMA_FILENAME,
     BATCH_SCHEMA_V1_FILENAME,
     CLOSURE_SCHEMA_FILENAME,
+    OUTCOME_SCHEMA_FILENAME,
+    REJECTED_DRAFTS_SCHEMA_FILENAME,
     EvolutionConfig,
     batch_id_number,
     format_batch_id,
@@ -39,8 +50,15 @@ from .schema import load_schema, validate_or_raise
 MANIFEST_FILENAME = "manifest.json"
 FINDINGS_FILENAME = "findings.md"
 CLOSURE_FILENAME = "analysis-complete.json"
+OUTCOME_FILENAME = "outcome.json"
+REJECTED_DRAFTS_FILENAME = "rejected-drafts.json"
 
 CLOSURE_SCHEMA_VERSION = 1
+OUTCOME_SCHEMA_VERSION = 1
+REJECTED_DRAFTS_SCHEMA_VERSION = 1
+
+OUTCOME_PROMOTED = "promoted"
+OUTCOME_NO_CHANGE = "no-change"
 
 # What a freeze writes.
 BATCH_SCHEMA_VERSION = 2
@@ -81,6 +99,14 @@ class Batch:
     @property
     def closure_path(self) -> Path:
         return self.directory / CLOSURE_FILENAME
+
+    @property
+    def outcome_path(self) -> Path:
+        return self.directory / OUTCOME_FILENAME
+
+    @property
+    def rejected_drafts_path(self) -> Path:
+        return self.directory / REJECTED_DRAFTS_FILENAME
 
     @property
     def schema_version(self) -> int | None:
@@ -187,25 +213,16 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     """
 
     path = batch.closure_path
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"unreadable batch closure record {path}: {exc}") from exc
-    if not isinstance(record, dict):
-        raise BatchError(f"batch closure record is not a JSON object: {path}")
-
-    validate_or_raise(
-        record,
-        load_schema(config.schema_path(CLOSURE_SCHEMA_FILENAME)),
-        description=f"batch closure record {path}",
+    record = read_batch_record(
+        config,
+        batch,
+        path,
+        schema_filename=CLOSURE_SCHEMA_FILENAME,
+        description="batch closure record",
+        foreign="one batch's completion cannot close another",
     )
-    if record["batch_id"] != batch.batch_id:
-        raise BatchError(
-            f"{path}: closure record names batch {record['batch_id']!r} but sits in {batch.batch_id!r}; "
-            "one batch's completion cannot close another"
-        )
+    if record is None:
+        return None
     named = batch.analysis_task_id
     if named is None:
         # Unrepresentable from this controller: it publishes a closure only from
@@ -223,6 +240,125 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
         raise BatchError(
             f"{path}: closure record attests to task {record['analysis_task_id']!r}, but "
             f"{batch.manifest_path} names {named!r} as this batch's analysis task"
+        )
+    return record
+
+
+def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | None:
+    """The batch's terminal outcome record, or None while the batch is current.
+
+    Presence is the whole answer to "is this batch still current" (invariant
+    14), so this reader is the gate on the next cohort and refuses anything it
+    cannot read as one unambiguous conclusion.
+
+    The two outcomes carry different fields, and the pairing is checked here
+    because the implemented JSON Schema subset cannot express it. A `no-change`
+    record naming a promotion revision is the fabrication invariant 7 forbids,
+    and a `promoted` record naming neither an experiment nor a revision ends the
+    batch while saying nothing about what reached the source line — either way
+    the batch is over and the trail is wrong, which is exactly the state that
+    must not load.
+    """
+
+    path = batch.outcome_path
+    record = read_batch_record(
+        config,
+        batch,
+        path,
+        schema_filename=OUTCOME_SCHEMA_FILENAME,
+        description="batch outcome record",
+        foreign="one batch's conclusion cannot end another",
+    )
+    if record is None:
+        return None
+
+    promoted = record["outcome"] == OUTCOME_PROMOTED
+    named = {key: record[key] for key in ("experiment_id", "promotion_revision") if record[key] is not None}
+    if promoted and len(named) != 2:
+        raise BatchError(
+            f"{path}: a {OUTCOME_PROMOTED!r} outcome states the experiment it promoted and the source-line "
+            f"revision that carries it; this one states {sorted(named) or 'neither'}"
+        )
+    if not promoted and named:
+        raise BatchError(
+            f"{path}: a {record['outcome']!r} outcome fabricates no candidate, promotion, or revision "
+            f"(invariant 7), but this one names {sorted(named)}"
+        )
+    return record
+
+
+def read_rejected_drafts(config: EvolutionConfig, batch: Batch) -> tuple[Mapping[str, Any], ...]:
+    """Every draft a human declined at this batch's admission gate.
+
+    Empty covers both "the record exists and lists nothing" and "no record yet":
+    a batch nobody has declined anything in is the ordinary starting state, and
+    the two are the same fact about the gate.
+
+    A draft id appearing twice is refused rather than deduplicated. Declining is
+    terminal for a proposal, so a second entry for one id is either two decisions
+    about the same bytes or one decision recorded twice, and the record does not
+    say which — while re-proposing the idea legitimately means a new id, which
+    never collides.
+    """
+
+    record = read_batch_record(
+        config,
+        batch,
+        batch.rejected_drafts_path,
+        schema_filename=REJECTED_DRAFTS_SCHEMA_FILENAME,
+        description="rejected-drafts record",
+        foreign="one batch's admission gate cannot decline another's proposals",
+    )
+    if record is None:
+        return ()
+
+    rejected = tuple(record["rejected"])
+    seen: set[str] = set()
+    for entry in rejected:
+        draft_id = entry["draft_id"]
+        if draft_id in seen:
+            raise BatchError(
+                f"{batch.rejected_drafts_path}: draft {draft_id!r} is declined twice; declining is terminal "
+                "for a proposal, so a re-proposal is a new draft id rather than a second entry"
+            )
+        seen.add(draft_id)
+    return rejected
+
+
+def read_batch_record(
+    config: EvolutionConfig,
+    batch: Batch,
+    path: Path,
+    *,
+    schema_filename: str,
+    description: str,
+    foreign: str,
+) -> Mapping[str, Any] | None:
+    """One committed record from a batch directory, or None when it is absent.
+
+    Absence is a legal answer for all three of them — a stage or a batch that
+    has not ended yet — while an unreadable or foreign one is not: every caller
+    here is deciding whether something has finished, and a record that cannot be
+    read as this batch's finishes it just as effectively as a valid one.
+    """
+
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BatchError(f"unreadable {description} {path}: {exc}") from exc
+    if not isinstance(record, dict):
+        raise BatchError(f"{description} is not a JSON object: {path}")
+
+    validate_or_raise(
+        record,
+        load_schema(config.schema_path(schema_filename)),
+        description=f"{description} {path}",
+    )
+    if record["batch_id"] != batch.batch_id:
+        raise BatchError(
+            f"{path}: {description} names batch {record['batch_id']!r} but sits in {batch.batch_id!r}; {foreign}"
         )
     return record
 

@@ -29,6 +29,9 @@ BATCH_SCHEMA_FILENAME = "batch-manifest.schema.json"
 # was written against; `manifests.py` picks between them by declared version.
 BATCH_SCHEMA_V1_FILENAME = "batch-manifest-v1.schema.json"
 CLOSURE_SCHEMA_FILENAME = "batch-closure.schema.json"
+OUTCOME_SCHEMA_FILENAME = "batch-outcome.schema.json"
+REJECTED_DRAFTS_SCHEMA_FILENAME = "rejected-drafts.schema.json"
+EXPERIMENT_SCHEMA_FILENAME = "experiment.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
 STATE_FILENAME = "state.json"
@@ -163,6 +166,10 @@ class EvolutionConfig:
     @property
     def batches_root(self) -> Path:
         return self.repo_root / self.storage.batches
+
+    @property
+    def experiments_root(self) -> Path:
+        return self.repo_root / self.storage.experiments
 
     @property
     def state_path(self) -> Path:

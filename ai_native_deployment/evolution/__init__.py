@@ -12,9 +12,10 @@ promotion stay human gates (contract invariant 9). Automation prepares evidence
 and pending analysis tasks; a human triggers the freeze and admits every
 proposed canonical change.
 
-The names below are the package's stable surface. Two things are reached
+The names below are the package's stable surface. Three things are reached
 through their modules rather than re-exported, because the bare name says
-nothing on its own: `phase.describe` (the derived lifecycle status) and the
+nothing on its own: `phase.describe` (the derived lifecycle status),
+`lineage.describe` (the derived batch/experiment lineage), and the
 `render.format_*` functions (operator-facing text for the CLI).
 """
 
@@ -48,6 +49,7 @@ from .feed import DirectoryFeed, FeedPage, ReportFeed
 from .hub import OrchHubFeed, feed_from_config
 from .importer import Candidate, ListResult, SyncResult, list_candidates, sync
 from .ledger import append_records, build_record, read_records
+from .lineage import BatchLineage, Experiment, Lineage, RefState
 from .phase import BatchView, LifecycleStatus
 from .reports import NormalizedReport, Rejection, normalize
 from .revisions import Revision, Revisions, describe_revisions, release_line_revision
@@ -58,6 +60,7 @@ __all__ = [
     "AnalysisTaskSpec",
     "Batch",
     "BatchError",
+    "BatchLineage",
     "BatchView",
     "Candidate",
     "ConfigError",
@@ -65,17 +68,20 @@ __all__ = [
     "EvolutionConfig",
     "EvolutionError",
     "EvolutionState",
+    "Experiment",
     "FeedError",
     "FeedPage",
     "FreezeResult",
     "LedgerError",
     "LifecycleStatus",
+    "Lineage",
     "ListResult",
     "LockError",
     "NormalizedReport",
     "OrchHubFeed",
     "PoolEntry",
     "Rejection",
+    "RefState",
     "ReportFeed",
     "ReportRef",
     "Revision",

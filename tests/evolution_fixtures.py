@@ -175,6 +175,159 @@ def write_closure(
     return path
 
 
+def write_outcome(
+    batches_root: Path,
+    batch_id: str,
+    *,
+    outcome: str = "no-change",
+    reason: str = "no cluster reached the minimum unique-task count",
+    experiment_id: str | None = None,
+    promotion_revision: str | None = None,
+    decided_at: str = "2026-08-09T09:00:00Z",
+) -> Path:
+    """The terminal record that ends a batch, for tests that need a batch whose
+    change cycle is over."""
+
+    return _write_json(
+        batches_root / batch_id / "outcome.json",
+        {
+            "schema_version": 1,
+            "batch_id": batch_id,
+            "outcome": outcome,
+            "decided_at": decided_at,
+            "reason": reason,
+            "experiment_id": experiment_id,
+            "promotion_revision": promotion_revision,
+        },
+    )
+
+
+def write_rejected_drafts(batches_root: Path, batch_id: str, rejected: list[dict]) -> Path:
+    """The drafts a human declined at this batch's admission gate."""
+
+    return _write_json(
+        batches_root / batch_id / "rejected-drafts.json",
+        {"schema_version": 1, "batch_id": batch_id, "rejected": rejected},
+    )
+
+
+def rejection(draft_id: str, *, reason: str = "one report is not recurrence", sha: str | None = None) -> dict:
+    return {
+        "draft_id": draft_id,
+        "draft_sha256": sha or draft_sha256(draft_id),
+        "rejected_at": "2026-08-02T09:00:00Z",
+        "reason": reason,
+    }
+
+
+def write_draft(batches_root: Path, batch_id: str, draft_id: str, body: str | None = None) -> Path:
+    """One change-task draft waiting in a batch's `proposed-tasks/` directory."""
+
+    path = batches_root / batch_id / "proposed-tasks" / f"{draft_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body if body is not None else _draft_body(draft_id), encoding="utf-8")
+    return path
+
+
+def draft_sha256(draft_id: str) -> str:
+    return hashlib.sha256(_draft_body(draft_id).encode("utf-8")).hexdigest()
+
+
+def admitted_task(draft_id: str, *, task_id: str | None = None, complete: bool = True) -> dict:
+    return {
+        "task_id": task_id or f"2026-08-01-{draft_id}",
+        "draft_id": draft_id,
+        "draft_sha256": draft_sha256(draft_id),
+        "admitted_at": "2026-08-01T09:00:00Z",
+        "completion_observed_at": "2026-08-03T08:00:00Z" if complete else None,
+    }
+
+
+def experiment_round(
+    number: int,
+    *,
+    tasks: list[dict] | None = None,
+    candidate_revision: str | None = None,
+    reason: str = "grouped admission of the loader dispositions",
+    opened_at: str = "2026-08-01T09:00:00Z",
+    sealed_at: str = "2026-08-03T09:00:00Z",
+) -> dict:
+    """One round. `candidate_revision` seals it — which is what makes it
+    candidate-ready, and the only state anything may measure."""
+
+    return {
+        "round": number,
+        "opened_at": opened_at,
+        "reason": reason,
+        "tasks": tasks if tasks is not None else [admitted_task("loader-fallback")],
+        "seal": None
+        if candidate_revision is None
+        else {"sealed_at": sealed_at, "candidate_revision": candidate_revision},
+    }
+
+
+def experiment_decision(
+    outcome: str,
+    *,
+    reason: str = "the approach needs a loader change this batch cannot justify",
+    superseded_by: str | None = None,
+    promotion_revision: str | None = None,
+    decided_at: str = "2026-08-05T09:00:00Z",
+) -> dict:
+    return {
+        "outcome": outcome,
+        "decided_at": decided_at,
+        "reason": reason,
+        "superseded_by": superseded_by,
+        "promotion_revision": promotion_revision,
+    }
+
+
+def write_experiment(
+    experiments_root: Path,
+    experiment_id: str,
+    *,
+    batch_id: str | None = None,
+    base_revision: str = "a" * 40,
+    base_release_ref: str | None = "v2.2.0",
+    rounds: list[dict] | None = None,
+    decision: dict | None = None,
+    created_at: str = "2026-08-01T09:00:00Z",
+    ref: str | None = None,
+    **overrides,
+) -> Path:
+    """One experiment record on disk, in its own directory.
+
+    `batch_id` defaults to the batch half of the id, so the ordinary case states
+    the identity once and the mismatch cases state it twice on purpose.
+    """
+
+    record = {
+        "schema_version": 1,
+        "experiment_id": experiment_id,
+        "batch_id": batch_id if batch_id is not None else experiment_id.split("-exp-")[0],
+        "created_at": created_at,
+        "base_revision": base_revision,
+        "base_release_ref": base_release_ref,
+        "ref": ref if ref is not None else f"refs/evolution/experiments/{experiment_id}",
+        "rounds": rounds if rounds is not None else [experiment_round(1)],
+        "decision": decision,
+        **overrides,
+    }
+    _write_json(experiments_root / experiment_id / "experiment.json", record)
+    return experiments_root / experiment_id
+
+
+def _draft_body(draft_id: str) -> str:
+    return f"---\nid: 2026-08-01-{draft_id}\nstatus: pending\n---\n\n# {draft_id}\n"
+
+
+def _write_json(path: Path, record: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | None = None) -> feed_module.DirectoryFeed:
     (root / feed_module.REPORTS_DIRNAME).mkdir(parents=True, exist_ok=True)
     for record in records:
@@ -191,6 +344,9 @@ def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | No
     return feed_module.DirectoryFeed(root)
 
 
+GIT_IDENTITY = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
+
+
 def git_repo(root: Path, *, tag: str | None) -> Path:
     """A work tree with one commit, and — when `tag` is given — a release tag
     plus one commit on top of it.
@@ -200,17 +356,49 @@ def git_repo(root: Path, *, tag: str | None) -> Path:
     """
 
     root.mkdir(parents=True, exist_ok=True)
-    run = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
     (root / "file.txt").write_text("one\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "first"], check=True)
+    subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", "first"], check=True)
     if tag is not None:
         subprocess.run(["git", "-C", str(root), "tag", tag], check=True)
         (root / "file.txt").write_text("two\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "candidate work"], check=True)
+        subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", "candidate work"], check=True)
     return root
+
+
+def git_commit(root: Path, message: str) -> str:
+    """One more commit on the current branch, and its sha.
+
+    Stages only `file.txt`, never the whole tree: the evolution records a test
+    writes are the untracked state under examination, and committing them would
+    make a later `git checkout` delete them.
+    """
+
+    path = root / "file.txt"
+    path.write_text(f"{path.read_text(encoding='utf-8')}{message}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "--", "file.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
+    return git_rev(root, "HEAD")
+
+
+def git_rev(root: Path, revision: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", f"{revision}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def git_update_ref(root: Path, ref: str, revision: str) -> None:
+    subprocess.run(["git", "-C", str(root), "update-ref", ref, revision], check=True)
+
+
+def git_checkout(root: Path, revision: str) -> None:
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", revision], check=True)
 
 
 def snapshot(root: Path) -> dict[str, bytes]:
