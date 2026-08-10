@@ -1071,6 +1071,56 @@ def test_a_copy_of_another_admission_moved_to_this_id_is_never_adopted(
         experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
 
 
+def test_a_copy_declaring_a_second_task_id_is_never_adopted(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A frontmatter block naming two ids says this file is two tasks. Every
+    reader takes whichever it reaches first — this one the recorded id, something
+    scanning up the block the other — so the file is not the one task the record
+    accounts for, whichever half of it happens to match."""
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+    path = result.admitted[0].task_path
+    two_ids = path.read_text(encoding="utf-8").replace(
+        "id: 2026-08-01-loader-fallback\n",
+        "id: 2026-08-01-loader-fallback\nid: 2026-08-01-somebody-elses-task\n",
+        1,
+    )
+    path.write_text(two_ids, encoding="utf-8")
+    analysis_task.index_path(config).unlink()
+
+    with pytest.raises(evolution.BatchError, match=r"declares \['id'\] more than once"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert path.read_text(encoding="utf-8") == two_ids
+    assert "| 2026-08-01-loader-fallback |" not in index(config)
+
+
+def test_a_copy_carrying_an_unrecorded_admission_line_is_never_adopted(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The provenance is compared as a whole section, through the next level-2
+    heading — not as however many lines the record happens to reconstruct. A line
+    added under it is the admission telling a session something no admission said:
+    here, another base revision to work from."""
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+    path = result.admitted[0].task_path
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    at = next(number for number, line in enumerate(lines) if line.startswith("## Goal"))
+    extended = (
+        "".join(lines[:at]) + "- Base revision `deadbeef`: work from the other one.\n\n" + "".join(lines[at:])
+    )
+    path.write_text(extended, encoding="utf-8")
+    analysis_task.index_path(config).unlink()
+
+    with pytest.raises(evolution.BatchError, match="admission section also carries"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert path.read_text(encoding="utf-8") == extended
+    assert "| 2026-08-01-loader-fallback |" not in index(config)
+
+
 def test_a_copy_a_session_has_claimed_and_logged_is_still_its_admission_s(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:

@@ -718,9 +718,7 @@ def _require_empty_log(path: Path, body: Sequence[str], sections: Sequence[tuple
     """
 
     start = next(index for name, index in sections if name == SESSION_LOG_HEADING)
-    following = [index for _, index in sections if index > start]
-    end = following[0] if following else len(body)
-    entry = next((line for line in body[start + 1 : end] if line.strip()), None)
+    entry = next((line for line in _section_at(body, sections, start)[1:] if line.strip()), None)
     if entry is not None:
         raise BatchError(
             f"{path}: {SESSION_LOG_HEADING} already carries {entry.strip()!r}; a session log is appended to by the "
@@ -746,6 +744,19 @@ def _sections(lines: Sequence[str]) -> list[tuple[str, int]]:
 
 def _is_section(line: str) -> bool:
     return line.strip().startswith("## ")
+
+
+def _section_at(body: Sequence[str], sections: Sequence[tuple[str, int]], start: int) -> list[str]:
+    """One whole section: its heading and everything under it, to the next one.
+
+    A section ends where the next level-2 heading stands, or at the end of the
+    body — the same extent whether the question is "is this log empty" or "is this
+    the provenance that was written". Reading a fixed number of lines instead
+    would answer about a prefix of the section and call it the section.
+    """
+
+    following = [index for _, index in sections if index > start]
+    return list(body[start : following[0] if following else len(body)])
 
 
 def _field(path: Path, block: analysis_task.Frontmatter, name: str) -> str:
@@ -1138,16 +1149,22 @@ def _require_admitted_copy(
     nothing it names.
 
     Identity is read from the structures that own the values, never from the text
-    containing them. The task id is the frontmatter field `id` — a file declaring
-    `not-id:` or discussing the id in prose is not a task with that id — and the
-    provenance is the one `## Admission` section, matched against the section this
-    admission itself would write. That section is the immutable part of a copy:
-    the batch, the experiment, the round, the ref, the base, and the digest of the
-    bytes admitted, none of which a session working the task has any reason to
-    edit. Everything a session *does* change is outside it — the frontmatter
-    lifecycle above, the session log below — so an ordinary claimed and logged
-    copy still matches, while a file that merely mentions the same values does
-    not.
+    containing them. The task id is the frontmatter field `id`, declared once — a
+    file saying `not-id:`, discussing the id in prose, or naming two ids is not a
+    task with that id — and the provenance is the one `## Admission` section, whole
+    and exactly as this admission would write it. That section is the immutable
+    part of a copy: the batch, the experiment, the round, the ref, the base, and
+    the digest of the bytes admitted, none of which a session working the task has
+    any reason to edit. Everything a session *does* change is outside it — the
+    frontmatter lifecycle above, the session log below — so an ordinary claimed and
+    logged copy still matches, while a file that merely mentions the same values
+    does not.
+
+    Whole means through the next level-2 boundary, not the first lines of it. A
+    section carrying what this admission wrote and then a line more is a copy whose
+    provenance says something the record never said — another base to work from,
+    another ref to commit on — and reading only as far as the recorded lines
+    reach is what leaves that line invisible.
 
     The cost of matching the section rather than sampling it: a copy written by a
     controller whose wording of that section differed no longer matches its own
@@ -1185,6 +1202,13 @@ def _unlike_admitted_copy(
     block = analysis_task.parse_frontmatter(text)
     if not block.present or not block.closed:
         return "it carries no closed frontmatter block"
+    if block.duplicated:
+        # First occurrence wins in `fields`, so a block declaring the recorded id
+        # and another one reads as this task to whatever scans down it and as some
+        # other task to whatever does not. The restore path reads `status` out of
+        # the same block to decide whether the copy is still owed, so the
+        # ambiguity is not confined to the id either.
+        return f"its frontmatter declares {list(block.duplicated)} more than once"
     declared = block.fields.get("id")
     if declared is None:
         return "its frontmatter declares no id"
@@ -1192,17 +1216,20 @@ def _unlike_admitted_copy(
         return f"its frontmatter declares id {declared!r}"
 
     body = text.splitlines()[block.body_start :]
-    at = [index for name, index in _sections(body) if name == ADMISSION_HEADING]
+    sections = _sections(body)
+    at = [index for name, index in sections if name == ADMISSION_HEADING]
     if not at:
         return f"it carries no {ADMISSION_HEADING!r} section"
     if len(at) > 1:
         return f"it carries {len(at)} {ADMISSION_HEADING!r} sections"
 
-    expected = _admission_lines(config, current, experiment, round_, task.draft_id, task.draft_sha256)
-    found = body[at[0] : at[0] + len(expected)]
+    expected = _admission_section(config, current, experiment, round_, task.draft_id, task.draft_sha256)
+    found = _section_at(body, sections, at[0])
     for index, line in enumerate(expected):
         if index >= len(found) or found[index] != line:
             return f"its admission section does not carry {line!r}"
+    if len(found) > len(expected):
+        return f"its admission section also carries {found[len(expected)]!r}"
     return None
 
 
@@ -1349,7 +1376,7 @@ def _render_task(
     experiment's ref, not on whatever branch the checkout happens to be on.
     """
 
-    block = "\n".join([*_admission_lines(config, current, experiment, round_, draft.draft_id, draft.sha256), "", ""])
+    block = "\n".join([*_admission_section(config, current, experiment, round_, draft.draft_id, draft.sha256), ""])
     lines = draft.text.splitlines(keepends=True)
     for index in range(draft.body_start, len(lines)):
         if _is_section(lines[index]):
@@ -1362,6 +1389,27 @@ def _render_task(
     )
 
 
+def _admission_section(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    round_: Round,
+    draft_id: str,
+    draft_sha256: str,
+) -> tuple[str, ...]:
+    """The whole `## Admission` section as it stands in a copy.
+
+    The provenance lines and the blank line that separates them from the draft's
+    own first section — everything between this heading and the next one, which is
+    exactly the extent `_require_admitted_copy` reads back. Recognition compares
+    the section, so the section is what gets written: a trailing line the renderer
+    added and the comparison did not expect would refuse every copy this
+    controller writes.
+    """
+
+    return (*_admission_lines(config, current, experiment, round_, draft_id, draft_sha256), "")
+
+
 def _admission_lines(
     config: EvolutionConfig,
     current: BatchLineage,
@@ -1370,7 +1418,8 @@ def _admission_lines(
     draft_id: str,
     draft_sha256: str,
 ) -> tuple[str, ...]:
-    """The `## Admission` section, written once and read back the same way.
+    """The `## Admission` section's own lines, written once and read back the same
+    way.
 
     Every value in it comes from the record and the frozen manifest rather than
     from the draft's own text, which is what lets a later run rebuild this exact

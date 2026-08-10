@@ -482,21 +482,26 @@ stops a fresh admission stops the resumed one too.
 Recognition is identity, not position — and identity is read from the structures
 that own the values, never from text containing them. A file standing at an
 admitted task's id is that admission's copy when its own frontmatter declares
-that id and it carries the one `## Admission` section that admission wrote: the
-batch, the experiment and round, the ref, the base revision, and the digest of
-the proposal it implements. That section is the immutable part of a copy, and
-everything a session changes lies outside it — the lifecycle above, the log
-below — so an ordinary claimed and logged task is still recognised, while a file
-that merely mentions the same values in prose, or a real copy of a different
-proposal renamed into this one's place, is not. An unrelated file there stops
-the redo instead of being adopted, listed as this experiment's work, and
-dispatched. A task the record already shows completed is not rewritten by that
-repair; close-out archived it, and recreating it would reopen work that
-finished. So is one that has finished before the record observed it: the
-completion observation is a later operation, and between the two, a task
+that id once, and the whole of its one `## Admission` section is the section that
+admission wrote: the batch, the experiment and round, the ref, the base revision,
+and the digest of the proposal it implements, through to the next heading and
+with nothing else under it. Both halves are structural. A block declaring a
+second id says the file is two tasks, and every reader takes whichever it reaches
+first; a line added under the provenance is the admission naming something no
+admission recorded — another base to work from, another ref to commit on — which
+reading only as far as the recorded lines reach would never see. That section is
+the immutable part of a copy, and everything a session changes lies outside it —
+the lifecycle above, the log below — so an ordinary claimed and logged task is
+still recognised, while a file that merely mentions the same values in prose, or
+a real copy of a different proposal renamed into this one's place, is not. An
+unrelated file there stops the redo instead of being adopted, listed as this
+experiment's work, and dispatched. A task the record already shows completed is
+not rewritten by that repair; close-out archived it, and recreating it would
+reopen work that finished. So is one that has finished before the record observed
+it: the completion observation is a later operation, and between the two, a task
 archived or `completed` in place belongs to close-out rather than to the active
-pool a restored row would put it back in. Any state they cannot
-account for — a second current batch, a second open experiment, an experiment
+pool a restored row would put it back in. Any state they cannot account for —
+a second current batch, a second open experiment, an experiment
 left open under a later one, a gap or a second spelling in the batch's ordinals,
 an experiment whose base is not the batch's, a candidate revision that does not
 descend from the one pinned before it, a ref that is not where its record says or
