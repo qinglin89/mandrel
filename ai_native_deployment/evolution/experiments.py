@@ -92,8 +92,18 @@ _TASK_ID = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*\Z", 
 # What an inert proposal looks like. A draft carrying anything else has been
 # worked on where nothing dispatches it.
 DRAFT_STATUS = "pending"
-SESSION_LOG_HEADING = "## Session log"
+# `session-est: 0/<total>`: a dev session increments the current count as part of
+# its claim (taskfile schema §4), so a draft nobody has worked on is still at 0
+# — and a total of zero sessions is an estimate for no work at all.
+_UNCONSUMED_SESSION_EST = re.compile(r"\A0/[1-9][0-9]*\Z", re.ASCII)
+EMPTY_BLOCKERS = "[]"
 ADMISSION_HEADING = "## Admission"
+
+# The body a task file carries: what the work is, what it covers, how it is
+# recognised as done, and where it records itself. The intake contract writes all
+# four for a pending task, and the dev and review contracts each read one of them
+# — an admitted copy joins the same pool and is worked by the same sessions.
+REQUIRED_SECTIONS = ("## Goal", "## Scope", "## Acceptance", "## Session log")
 
 # Bound on the index-row summary lifted out of the draft's own title. The active
 # index is a list, not a description.
@@ -137,6 +147,10 @@ class RejectionResult:
     batch_id: str
     declined: tuple[str, ...]
     record_path: Path
+    # False when this run wrote nothing because the decision was already on
+    # record: the same selection redone after an interruption. The drafts are
+    # declined either way, and only the caller reporting it needs the difference.
+    recorded: bool = True
 
 
 def create(
@@ -169,10 +183,14 @@ def create(
 
         open_experiment = current.open_experiment
         if open_experiment is not None:
-            # Before the redo, not after it: a resumed admission still has a base,
-            # and an operator naming a different one is asking for something this
-            # is not about to do.
+            # Both before the redo, not after it: a resumed admission still has a
+            # base, and an operator naming a different one is asking for something
+            # this is not about to do — and a redo writes, so it is as guarded as
+            # the admission it finishes. The copies it writes tell their sessions
+            # to commit on a ref, and a ref standing off the history the record
+            # pins is not one to send work to.
             _require_requested_base(config, current, open_experiment.base_revision, base)
+            _require_consistent_ref(current)
             return _redo_create(config, current, open_experiment, requested)
 
         base_revision, base_release_ref = _base_revision(config, current, base)
@@ -308,6 +326,11 @@ def reject(
         current = _current_cycle(config, now=moment)
         batch = current.batch
         requested = _requested(draft_ids)
+        recorded = {entry["draft_id"]: entry for entry in read_rejected_drafts(config, batch)}
+        already = sorted(requested & set(recorded))
+        if already:
+            return _redo_reject(batch, requested, already, recorded, text)
+
         drafts = _collect(config, current, requested, for_tasks=False)
         stamp = format_rfc3339(moment)
 
@@ -315,7 +338,7 @@ def reject(
             "schema_version": REJECTED_DRAFTS_SCHEMA_VERSION,
             "batch_id": batch.batch_id,
             "rejected": [
-                *(dict(entry) for entry in read_rejected_drafts(config, batch)),
+                *(dict(entry) for entry in recorded.values()),
                 *(
                     {
                         "draft_id": draft.draft_id,
@@ -351,6 +374,51 @@ def reject(
             declined=tuple(draft.draft_id for draft in drafts),
             record_path=batch.rejected_drafts_path,
         )
+
+
+def _redo_reject(
+    batch: Batch,
+    requested: set[str],
+    already: list[str],
+    recorded: Mapping[str, Mapping[str, Any]],
+    reason: str,
+) -> RejectionResult:
+    """The same rejection run again, or a refusal naming the decision on record.
+
+    The record is what makes a rejection real — the audit line after it is not —
+    so this exact selection, declined for this exact reason, *is* this operation,
+    already done. Saying so is what makes the operation redoable at all: the run
+    that published the record and then failed would otherwise have left its own
+    retry permanently refused by the work it had already finished.
+
+    Nothing is written, the ledger included. The interruption cost those lines,
+    and re-appending them would claim a second decision about a proposal that was
+    declined once — the rule a redone admission already follows.
+
+    Anything else is a different decision about a spent proposal: declining is
+    terminal, a second reason does not replace the one on record, and re-proposing
+    the idea means a new draft id.
+    """
+
+    if set(already) != requested:
+        raise BatchError(
+            f"draft(s) {already} were already declined at {batch.batch_id}'s gate; declining is terminal for a "
+            "proposal, so redo the same selection to finish an interrupted rejection, or decline only the drafts "
+            "still waiting"
+        )
+    differing = sorted(draft_id for draft_id in already if recorded[draft_id]["reason"] != reason)
+    if differing:
+        raise BatchError(
+            f"draft(s) {differing} were declined at {batch.batch_id}'s gate for a different reason "
+            f"({recorded[differing[0]]['reason']!r}); declining is terminal for a proposal, so the reason on "
+            "record stands — re-proposing the idea means a new draft id whose own bytes say what changed"
+        )
+    return RejectionResult(
+        batch_id=batch.batch_id,
+        declined=tuple(sorted(requested)),
+        record_path=batch.rejected_drafts_path,
+        recorded=False,
+    )
 
 
 # --- the guarded preamble ----------------------------------------------------
@@ -453,6 +521,10 @@ class _Draft:
     draft_id: str
     path: Path
     text: str
+    # Where the body starts, read from the frontmatter rather than by looking for
+    # something that resembles a section: the admission block goes into the body,
+    # and a `## ` line inside an unterminated frontmatter block is not one.
+    body_start: int
     sha256: str
     task_id: str
     title: str
@@ -518,42 +590,101 @@ def _read_draft(batch: Batch, draft_id: str, *, for_tasks: bool) -> _Draft:
     except UnicodeDecodeError as exc:
         raise BatchError(f"{path} is not UTF-8 text; a change-task draft is a task file: {exc}") from exc
 
-    fields = analysis_task.frontmatter(text)
-    task_id = fields.get("id", "")
-    if not for_tasks:
-        return _Draft(
-            draft_id=draft_id,
-            path=path,
-            text=text,
-            sha256=sha256_bytes(raw),
-            task_id=task_id,
-            title=_title(text, draft_id),
+    block = analysis_task.parse_frontmatter(text)
+    if for_tasks:
+        _require_task_file(path, text, block)
+    return _Draft(
+        draft_id=draft_id,
+        path=path,
+        text=text,
+        body_start=block.body_start,
+        sha256=sha256_bytes(raw),
+        task_id=block.fields.get("id", ""),
+        title=_title(text, draft_id, start=block.body_start),
+    )
+
+
+def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) -> None:
+    """Refuse a draft that is not the inert task file the gate decides about.
+
+    Admission is a copy, so what is checked here is what the copy becomes: a
+    pending task in the active pool, claimed by a session that increments its
+    estimate, worked from its scope, and reviewed against its acceptance. A
+    proposal that is a task file in name only reaches that pool as one anyway —
+    nothing downstream re-reads it as a proposal — so the whole shape is checked
+    at the one point where refusing it costs nothing but a redraft.
+
+    The frontmatter block is checked before its fields for a reason of this
+    module's own: an unterminated one has no body, and the admission provenance
+    goes into the body. A file whose sections are all still inside its
+    frontmatter would take the block in there with them.
+    """
+
+    if not block.present:
+        raise BatchError(
+            f"{path}: no frontmatter block; a draft is a schema-conforming task file, and the lifecycle its copy "
+            "is dispatched under — the id it takes, the status the gate decides about — is what that block carries"
+        )
+    if not block.closed:
+        raise BatchError(
+            f"{path}: the frontmatter block is never closed by a '---' line; everything below an unterminated one "
+            "is still frontmatter, so this file declares no lifecycle to claim and has no body to admit"
+        )
+    if block.duplicated:
+        raise BatchError(
+            f"{path}: frontmatter declares {list(block.duplicated)} more than once; a field stated twice says two "
+            "things about one task, and every reader takes whichever it reaches first"
         )
 
+    task_id = _field(path, block, "id")
     if not _TASK_ID.match(task_id):
         raise BatchError(
             f"{path}: frontmatter id {task_id!r} is not a date-prefixed task slug; admission copies the draft to "
             "the task id it declares, and that id is also the file name the copy takes"
         )
-    status = fields.get("status")
+    status = _field(path, block, "status")
     if status != DRAFT_STATUS:
         raise BatchError(
             f"{path}: a draft waiting at the gate carries status {DRAFT_STATUS!r}, not {status!r}; a proposal "
             "worked on where nothing dispatches it is not the inert draft the gate decides about"
         )
-    if SESSION_LOG_HEADING not in text:
+    estimate = _field(path, block, "session-est")
+    if not _UNCONSUMED_SESSION_EST.match(estimate):
         raise BatchError(
-            f"{path}: no {SESSION_LOG_HEADING!r} section; a draft is a schema-conforming task file, and the "
-            "session log is where the work it becomes records itself"
+            f"{path}: session-est {estimate!r} is not '0/<total>'; a session claims a task by incrementing that "
+            "count, so a draft nobody has worked on yet is at zero of an estimate it does state"
         )
-    return _Draft(
-        draft_id=draft_id,
-        path=path,
-        text=text,
-        sha256=sha256_bytes(raw),
-        task_id=task_id,
-        title=_title(text, draft_id),
-    )
+    blockers = _field(path, block, "blockers")
+    if blockers != EMPTY_BLOCKERS:
+        raise BatchError(
+            f"{path}: blockers {blockers!r} is not {EMPTY_BLOCKERS!r}; a proposal that is already waiting on "
+            "something is not work the gate can admit, and a blocked task in the active pool blocks nothing"
+        )
+    claimed = _field(path, block, "claimed-by")
+    if claimed:
+        raise BatchError(
+            f"{path}: claimed-by {claimed!r} names a session; a draft is claimed by the session that picks its "
+            "copy up out of the active pool, which is a thing that has not happened to a proposal"
+        )
+
+    body = text.splitlines()[block.body_start :]
+    missing = [heading for heading in REQUIRED_SECTIONS if not any(line.strip() == heading for line in body)]
+    if missing:
+        raise BatchError(
+            f"{path}: no {missing} section(s); an admitted copy is worked from its scope and reviewed against its "
+            "acceptance, and the session log is where each session records what it did"
+        )
+
+
+def _field(path: Path, block: analysis_task.Frontmatter, name: str) -> str:
+    """One frontmatter field of a draft, or a refusal naming what is missing."""
+
+    if name not in block.fields:
+        raise BatchError(
+            f"{path}: frontmatter carries no {name!r}; a draft is a schema-conforming task file, and its copy is "
+            "dispatched as one the moment it is admitted"
+        )
+    return block.fields[name]
 
 
 def _require_free_task_ids(config: EvolutionConfig, current: BatchLineage, drafts: tuple[_Draft, ...]) -> None:
@@ -592,10 +723,14 @@ def _require_free_task_ids(config: EvolutionConfig, current: BatchLineage, draft
             )
 
 
-def _title(text: str, draft_id: str) -> str:
-    """The draft's own heading, for the one line the active index shows."""
+def _title(text: str, draft_id: str, *, start: int = 0) -> str:
+    """The draft's own heading, for the one line the active index shows.
 
-    for line in text.splitlines():
+    Read from the body: a frontmatter value that happens to look like a heading
+    is a field, not a title.
+    """
+
+    for line in text.splitlines()[start:]:
         if line.startswith("# "):
             title = " ".join(line[2:].split())
             if title:
@@ -848,25 +983,34 @@ def _restore_task(
 ) -> Admitted:
     """Write the copy of one already-recorded admission, if it is not there.
 
-    Only for a task the record says is still owed. A task observed complete has
-    been archived by close-out, and recreating it as pending would reopen work
-    that finished; a task whose file is present is left exactly as it is, since
-    it may already carry a session log — only its index row is made good, which
-    is the step an interruption can drop on its own.
+    Only for a task the record says is still owed, and only where what is there
+    is that copy. Three states, and each of them is ordinary:
 
-    The draft is re-read and re-hashed against what the record admitted: the copy
-    has to be made from the bytes that were admitted, and a draft edited since is
-    a state this controller cannot account for rather than one it should quietly
-    copy.
+    - the file is this experiment's copy and still in flight: left exactly as it
+      is, since it may already carry a session log, and only its index row is
+      made good — the step an interruption can drop on its own;
+    - it has finished, whether the record has observed that yet or not: archived
+      by close-out or `completed` in place, and either way it belongs to the
+      close-out, not to the active pool a `pending` row would put it back in;
+    - it is not here at all: written from the draft, which is re-read and
+      re-hashed against what the record admitted, because the copy has to be made
+      from the bytes that were admitted and a draft edited since is a state this
+      controller cannot account for rather than one it should quietly copy.
+
+    A task the record already shows complete is never recreated even when its
+    file is gone: close-out archived it, and recreating it as pending would
+    reopen work that finished.
     """
 
     existing = analysis_task.existing_task_path(config, task.task_id)
-    if task.complete:
-        return _already(task, existing or analysis_task.task_path(config, task.task_id))
     if existing is not None:
-        summary = _summary(experiment, task.draft_id, _title_of(existing, task.draft_id))
-        analysis_task.append_row(config, task.task_id, summary)
+        _require_admitted_copy(existing, experiment, task)
+        if not (task.complete or analysis_task.task_finished(config, task.task_id)):
+            summary = _summary(experiment, task.draft_id, _title_of(existing, task.draft_id))
+            analysis_task.append_row(config, task.task_id, summary)
         return _already(task, existing)
+    if task.complete:
+        return _already(task, analysis_task.task_path(config, task.task_id))
 
     draft = _read_draft(current.batch, task.draft_id, for_tasks=True)
     if draft.sha256 != task.draft_sha256:
@@ -902,6 +1046,48 @@ def _already(task: AdmittedTask, path: Path) -> Admitted:
         task_id=task.task_id,
         draft_sha256=task.draft_sha256,
         task_path=path,
+    )
+
+
+def _require_admitted_copy(path: Path, experiment: Experiment, task: AdmittedTask) -> None:
+    """Refuse to treat an unrelated file at this task id as the admitted copy.
+
+    A redo that finds the file present declares that copy done, so what is at
+    that path decides whether the admission has its task at all. Adopting an
+    unrelated one lists somebody else's work as this experiment's, puts a
+    `pending` row on it, and hands the record a task whose bytes implement
+    nothing it names.
+
+    The markers are the ones a working session keeps: the task's own id, the
+    admission section, the experiment that admitted it, and the digest of the
+    proposal it implements. A claimed and logged copy passes — its frontmatter
+    lifecycle moves and its session log grows, neither of which is a marker.
+
+    Nothing is repaired. The file may already carry a session log, and rewriting
+    one to satisfy a redo would destroy the record it exists to keep.
+    """
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BatchError(f"cannot read the admitted task {path}: {exc}") from exc
+    missing = [marker for marker in _copy_markers(experiment, task) if marker not in text]
+    if missing:
+        raise BatchError(
+            f"{path} is not the copy {experiment.experiment_id} admitted as {task.task_id!r} (missing {missing}); "
+            "an admission never overwrites a task file, and a file this record cannot identify is not the work it "
+            "accounts for — resolve what is at that id"
+        )
+
+
+def _copy_markers(experiment: Experiment, task: AdmittedTask) -> tuple[str, ...]:
+    """What `_render_task` puts in every admitted copy and a session keeps."""
+
+    return (
+        f"id: {task.task_id}",
+        ADMISSION_HEADING,
+        f"`{experiment.experiment_id}`",
+        f"`{task.draft_sha256}`",
     )
 
 
@@ -1076,8 +1262,8 @@ def _render_task(
         ]
     )
     lines = draft.text.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        if line.startswith("## "):
+    for index in range(draft.body_start, len(lines)):
+        if lines[index].startswith("## "):
             head = "".join(lines[:index])
             separator = "" if head.endswith("\n\n") or not head else "\n"
             return head + separator + block + "".join(lines[index:])

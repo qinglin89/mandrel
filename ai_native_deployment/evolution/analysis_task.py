@@ -30,7 +30,7 @@ from pathlib import Path
 from .config import EvolutionConfig
 from .errors import EvolutionError
 from .schema import format_rfc3339
-from .state import atomic_write_text
+from .state import atomic_create_text, atomic_write_text
 
 TASKS_DIRNAME = ".ai-tasks"
 INDEX_FILENAME = "index.md"
@@ -151,8 +151,62 @@ def task_status(path: Path) -> str | None:
     return frontmatter(text).get("status") or None
 
 
+def task_finished(config: EvolutionConfig, task_id: str) -> bool:
+    """Whether this machine's copy of the task has finished.
+
+    An archived task counts as finished by location: close-out moves a task to
+    `archive/` only after it reaches `completed` (taskfile schema §7-8), and the
+    active file is gone by then. False for a task that is not here at all —
+    `.ai-tasks/` is machine-local, so absence is not evidence of anything, and
+    every caller has its own reading of what a missing task means.
+    """
+
+    if existing_task_path(config, task_id) is None:
+        return False
+    active = task_path(config, task_id)
+    if active.is_file():
+        return task_status(active) == STATUS_COMPLETED
+    return True
+
+
+@dataclass(frozen=True)
+class Frontmatter:
+    """A task file's frontmatter block, read strictly enough to validate one.
+
+    `fields` alone answers "what does this file say its status is", which is all
+    a lifecycle reading needs. Admitting a draft is the other kind of question —
+    is this a task file at all — and the two facts that answer it are exactly the
+    ones a field mapping cannot carry: whether the block was ever closed, and
+    where the body starts.
+    """
+
+    fields: dict[str, str]
+    # Keys the block declares more than once. First occurrence wins in `fields`,
+    # which is what a reader scanning down sees; a validator has to know the file
+    # said two things.
+    duplicated: tuple[str, ...]
+    # Whether the file opens with a `---` line at all. Separate from `closed`
+    # because the two are different damage: no block is a file that is not a task
+    # file, an unclosed one is a task file someone truncated.
+    present: bool
+    # Whether the opening `---` has a closing one. An unterminated block has no
+    # body at all: everything below it is still frontmatter as far as the shape
+    # goes, however much it looks like sections.
+    closed: bool
+    # Line index the body starts at — 0 when the file carries no block, so a
+    # caller that inserts or scans "in the body" of a shapeless file works on the
+    # whole of it rather than on nothing.
+    body_start: int
+
+
 def frontmatter(text: str) -> dict[str, str]:
-    """The task file's frontmatter fields, or empty when it carries none.
+    """The task file's frontmatter fields, or empty when it carries none."""
+
+    return parse_frontmatter(text).fields
+
+
+def parse_frontmatter(text: str) -> Frontmatter:
+    """Read the frontmatter block, and how well-formed it is.
 
     A flat `key: value` reading, which is all the taskfile schema's frontmatter
     is and all any caller here needs — the lifecycle status, and the id an
@@ -162,15 +216,34 @@ def frontmatter(text: str) -> dict[str, str]:
 
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}
+        return Frontmatter(fields={}, duplicated=(), present=False, closed=False, body_start=0)
     fields: dict[str, str] = {}
-    for line in lines[1:]:
+    duplicated: list[str] = []
+    for offset, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            break
+            return Frontmatter(
+                fields=fields,
+                duplicated=tuple(duplicated),
+                present=True,
+                closed=True,
+                body_start=offset + 1,
+            )
         key, separator, value = line.partition(":")
-        if separator:
-            fields.setdefault(key.strip(), value.strip())
-    return fields
+        if not separator:
+            continue
+        name = key.strip()
+        if name in fields:
+            if name not in duplicated:
+                duplicated.append(name)
+            continue
+        fields[name] = value.strip()
+    return Frontmatter(
+        fields=fields,
+        duplicated=tuple(duplicated),
+        present=True,
+        closed=False,
+        body_start=len(lines),
+    )
 
 
 def completion(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool | None:
@@ -202,10 +275,7 @@ def completion(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool | None:
     if existing_task_path(config, spec.task_id) is None:
         return None
     assert_generated(config, spec)
-    active = task_path(config, spec.task_id)
-    if active.is_file():
-        return task_status(active) == STATUS_COMPLETED
-    return True
+    return task_finished(config, spec.task_id)
 
 
 def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:
@@ -248,16 +318,17 @@ def publish_task(config: EvolutionConfig, task_id: str, text: str, *, descriptio
     """Create one task file under `.ai-tasks/`, published whole.
 
     Never overwrites: an existing file may already carry a session log, and
-    neither a freeze nor an admission has any business replacing one. Written
-    through a temporary file and renamed into place, so an interruption leaves no
+    neither a freeze nor an admission has any business replacing one. The
+    creation is what checks — looking first and writing second leaves a window,
+    and a task file created in it is precisely the one this refuses to destroy.
+    The content lands through a temporary file, so an interruption leaves no
     partial task behind for a later run to accept as complete.
     """
 
     path = task_path(config, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+    if not atomic_create_text(path, text):
         raise EvolutionError(f"{description} already exists: {path}")
-    atomic_write_text(path, text)
     return path
 
 
@@ -376,7 +447,12 @@ justified is a valid outcome (invariant 7).
 - Draft each accepted `protocol-candidate` (and any other change task this
   analysis concludes is warranted) as a schema-conforming task file at
   `{spec.proposed_tasks_relative_path}/<draft-id>.md`, where `<draft-id>` is a
-  kebab-case slug and is that proposal's identity. Drafts are inert until a
+  kebab-case slug and is that proposal's identity. Admission copies the draft
+  into the active pool as it stands, so it is a whole task file and the gate
+  checks it as one: frontmatter opened and closed, declaring its own
+  date-prefixed `id`, `status: pending`, `session-est: 0/<total>`,
+  `blockers: []` and an empty `claimed-by`; then `## Goal`, `## Scope`,
+  `## Acceptance`, and an empty `## Session log`. Drafts are inert until a
   human admits a group of them into an experiment, which copies each into
   `.ai-tasks/` and adds its index row; writing one straight into `.ai-tasks/`
   as `pending` would put it in the dispatch pool and bypass the human admission

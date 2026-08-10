@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     admitted_task,
+    draft_body,
     draft_sha256,
     experiment_round,
     experiment_decision,
@@ -438,27 +439,139 @@ def test_admitting_one_new_draft_beside_a_consumed_one_is_refused(
 # --- task provenance ---------------------------------------------------------
 
 
+def malformed(**fields: str | None) -> str:
+    """A draft one frontmatter field away from admissible. `None` drops a field."""
+
+    head = {
+        "id": "2026-08-01-malformed",
+        "status": "pending",
+        "session-est": "0/1",
+        "blockers": "[]",
+        "claimed-by": "",
+    }
+    head.update(fields)
+    return draft_body(
+        "malformed",
+        frontmatter="".join(f"{key}: {value}\n" for key, value in head.items() if value is not None),
+    )
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        ("---\nid: not-a-date\nstatus: pending\n---\n\n## Session log\n", "not a date-prefixed task slug"),
-        ("---\nid: 2026-08-01-x\nstatus: in_progress\n---\n\n## Session log\n", "carries status 'pending'"),
-        ("---\nid: 2026-08-01-x\nstatus: pending\n---\n\n# X\n", "no '## Session log' section"),
-        ("# X\n\n## Session log\n", "not a date-prefixed task slug"),
+        (malformed(id="not-a-date"), "not a date-prefixed task slug"),
+        (malformed(status="in_progress"), "carries status 'pending'"),
+        (malformed(**{"session-est": "1/3"}), r"session-est '1/3' is not '0/<total>'"),
+        (malformed(**{"session-est": "0/0"}), r"session-est '0/0' is not '0/<total>'"),
+        (malformed(blockers="[external:awaiting the spec]"), r"is not '\[\]'"),
+        (malformed(**{"claimed-by": "019feb-a-session@2026-08-04T09:00:00Z"}), "names a session"),
+        (malformed(**{"session-est": None}), "carries no 'session-est'"),
+        (malformed(blockers=None), "carries no 'blockers'"),
+        (malformed(**{"claimed-by": None}), "carries no 'claimed-by'"),
+        (malformed(id=None), "carries no 'id'"),
+        (draft_body("malformed", closed=False), "never closed by a '---' line"),
+        ("# Malformed\n\n## Session log\n", "no frontmatter block"),
+        (draft_body("malformed", sections=("Goal", "Session log")), r"\['## Scope', '## Acceptance'\] section"),
+        (draft_body("malformed", sections=("Goal", "Scope", "Acceptance")), r"\['## Session log'\] section"),
     ],
-    ids=["unsafe-id", "already-worked-on", "not-a-task-file", "no-frontmatter"],
+    ids=[
+        "unsafe-id",
+        "already-worked-on",
+        "session-already-consumed",
+        "estimate-of-no-work",
+        "already-blocked",
+        "already-claimed",
+        "no-estimate",
+        "no-blockers",
+        "no-claim-field",
+        "no-id",
+        "unterminated-frontmatter",
+        "no-frontmatter",
+        "no-scope-or-acceptance",
+        "no-session-log",
+    ],
 )
 def test_a_draft_that_is_not_an_inert_task_file_is_refused(
     config: evolution.EvolutionConfig, batch: Path, body: str, message: str
 ) -> None:
-    """The copy takes the id the draft declares, so the draft has to be a task
-    file: an id that is also a safe file name, the inert `pending` status the gate
-    decides about, and the session log the work it becomes records itself in."""
+    """Admission is a copy, so what the gate checks is what the copy becomes: a
+    pending task in the pool turn selection dispatches from, claimed by a session
+    that increments its estimate, worked from its scope, reviewed against its
+    acceptance, and recording itself in its session log. Nothing downstream ever
+    reads it as a proposal again, so a proposal that is a task file in name only
+    is one here or nowhere."""
 
     write_draft(config.batches_root, BATCH_ID, "malformed", body=body)
 
     with pytest.raises(evolution.BatchError, match=message):
         experiments.create(config, ["malformed"], now=NOW)
+
+    assert not analysis_task.tasks_root(config).exists()
+
+
+def test_a_field_declared_twice_never_reaches_the_active_pool(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A file saying `pending` at the top and `completed` further down says two
+    things about one task, and every reader takes whichever it reaches first."""
+
+    write_draft(
+        config.batches_root,
+        BATCH_ID,
+        "malformed",
+        body=malformed().replace("blockers: []\n", "blockers: []\nstatus: completed\n"),
+    )
+
+    with pytest.raises(evolution.BatchError, match="declares \\['status'\\] more than once"):
+        experiments.create(config, ["malformed"], now=NOW)
+
+
+def test_an_unterminated_frontmatter_never_takes_the_admission_block_into_itself(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """What the shape check is protecting, stated as the failure it prevents: the
+    provenance goes above the first `## ` line, and in a file whose block is
+    never closed, that line is inside the frontmatter."""
+
+    write_draft(config.batches_root, BATCH_ID, "malformed", body=draft_body("malformed", closed=False))
+
+    with pytest.raises(evolution.BatchError, match="has no body to admit"):
+        experiments.create(config, ["malformed"], now=NOW)
+
+    assert not (config.experiments_root / EXP_01).exists()
+    assert analysis_task.existing_task_path(config, "2026-08-01-malformed") is None
+
+
+def test_the_analysis_task_this_controller_generates_would_pass_its_own_gate(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """One shape, checked from both ends. The gate's idea of an inert pending task
+    is meant to be the taskfile schema's, and the nearest thing to a second
+    opinion about that is the task this same package writes for a freeze — if the
+    two ever disagree, one of them is wrong about the schema."""
+
+    generated = analysis_task.render(
+        analysis_task.AnalysisTaskSpec(
+            task_id="2026-08-05-evolution-batch-0001-analysis",
+            batch_id=BATCH_ID,
+            manifest_relative_path=f"evolution/batches/{BATCH_ID}/manifest.json",
+            proposed_tasks_relative_path=f"evolution/batches/{BATCH_ID}/proposed-tasks",
+            findings_relative_path=f"evolution/batches/{BATCH_ID}/findings.md",
+            closure_relative_path=f"evolution/batches/{BATCH_ID}/analysis-complete.json",
+            artifacts_root=".ai-evolution/artifacts",
+            task_count=3,
+            report_count=4,
+            runner_protocol_revision="v2.2.0",
+            config_sha256="0" * 64,
+            forced=False,
+            force_justification=None,
+        )
+    )
+    write_draft(config.batches_root, BATCH_ID, "generated-shape", body=generated)
+
+    result = experiments.create(config, ["generated-shape"], now=NOW)
+
+    assert result.admitted[0].task_id == "2026-08-05-evolution-batch-0001-analysis"
 
 
 def test_a_task_already_in_flight_is_never_overwritten(
@@ -493,9 +606,8 @@ def test_two_drafts_declaring_one_task_id_are_refused(
     """One of them would take the other's file, and the record could name
     neither: which bytes did that task implement?"""
 
-    body = "---\nid: 2026-08-01-shared\nstatus: pending\n---\n\n# Shared\n\n## Session log\n"
-    write_draft(config.batches_root, BATCH_ID, "first-idea", body=body)
-    write_draft(config.batches_root, BATCH_ID, "second-idea", body=body)
+    write_draft(config.batches_root, BATCH_ID, "first-idea", body=draft_body("shared", task_id="2026-08-01-shared"))
+    write_draft(config.batches_root, BATCH_ID, "second-idea", body=draft_body("shared", task_id="2026-08-01-shared"))
 
     with pytest.raises(evolution.BatchError, match="both declare task id"):
         experiments.create(config, ["first-idea", "second-idea"], now=NOW)
@@ -509,8 +621,12 @@ def test_a_task_id_this_batch_already_admitted_is_refused(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
-    body = "---\nid: 2026-08-01-loader-fallback\nstatus: pending\n---\n\n# Again\n\n## Session log\n"
-    write_draft(config.batches_root, BATCH_ID, "loader-fallback-v2", body=body)
+    write_draft(
+        config.batches_root,
+        BATCH_ID,
+        "loader-fallback-v2",
+        body=draft_body("loader-fallback-v2", task_id="2026-08-01-loader-fallback"),
+    )
 
     with pytest.raises(evolution.BatchError, match="already admitted by"):
         experiments.create(config, ["loader-fallback-v2"], now=NOW)
@@ -778,6 +894,144 @@ def test_a_task_already_seen_through_is_never_recreated(
     assert analysis_task.existing_task_path(config, "2026-08-01-loader-fallback") is None
 
 
+def test_a_task_the_record_observed_complete_is_never_relisted(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The observation is enough on its own. The copy is not owed, so nothing
+    about it goes back into the active list — whatever the file left behind on
+    this machine happens to say about itself."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    rounds = record(config, EXP_01)["rounds"]
+    rounds[0]["tasks"][0]["completion_observed_at"] = "2026-08-06T09:00:00Z"
+    rewrite(config, EXP_01, rounds=rounds)
+    analysis_task.index_path(config).unlink()
+
+    again = experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert again.restored == ()
+    assert index(config) == ""
+
+
+def test_a_ref_off_its_recorded_history_stops_the_redo_of_a_create(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A redo writes — the copies the interrupted run never made — so it is
+    guarded exactly as the admission it is finishing. Those copies tell their
+    sessions which ref to commit on, and a ref standing off the history the record
+    pins is not one to send work to."""
+
+    monkeypatch.setattr(
+        experiments,
+        "_write_tasks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    with pytest.raises(OSError):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+    monkeypatch.undo()
+    git_update_ref(
+        config.repo_root,
+        lineage.experiment_ref(EXP_01),
+        git_unrelated_commit(config.repo_root, "a history of its own"),
+    )
+
+    with pytest.raises(evolution.BatchError, match="not on the history of"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert analysis_task.existing_task_path(config, "2026-08-01-loader-fallback") is None
+
+
+def test_an_unrelated_task_at_the_admitted_id_is_never_adopted(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding the file present is what makes a redo declare that copy done, so
+    what is at the path decides whether the admission has its task at all.
+    Adopting whatever is there lists somebody else's work as this experiment's,
+    puts a `pending` row on it, and hands the record a task implementing bytes it
+    never admitted."""
+
+    monkeypatch.setattr(
+        experiments,
+        "_write_tasks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    with pytest.raises(OSError):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+    monkeypatch.undo()
+    unrelated = "---\nid: 2026-08-01-loader-fallback\nstatus: in_progress\n---\n\n# Someone else's work\n"
+    analysis_task.publish_task(config, "2026-08-01-loader-fallback", unrelated, description="task")
+
+    with pytest.raises(evolution.BatchError, match="is not the copy"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == unrelated
+    assert "| 2026-08-01-loader-fallback |" not in index(config)
+
+
+def test_a_task_finished_before_the_record_observed_it_is_left_to_close_out(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Close-out archives a finished task and drops its index row; the completion
+    observation that records it is a later operation. Between the two, a redo that
+    reads "no active file" as "copy still owed" puts finished work back in the pool
+    turn selection dispatches from."""
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+    archived = analysis_task.archived_task_path(config, "2026-08-01-loader-fallback")
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    result.admitted[0].task_path.rename(archived)
+    analysis_task.index_path(config).unlink()
+
+    again = experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert again.restored == ()
+    assert again.admitted[0].task_path == archived
+    assert analysis_task.task_path(config, "2026-08-01-loader-fallback").exists() is False
+    assert index(config) == ""
+
+
+def test_a_task_completed_in_place_is_not_listed_as_pending_again(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The same rule one step earlier: the task has finished and close-out has not
+    moved it yet."""
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+    path = result.admitted[0].task_path
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("status: pending", "status: completed"),
+        encoding="utf-8",
+    )
+    analysis_task.index_path(config).unlink()
+
+    again = experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert again.restored == ()
+    assert index(config) == ""
+
+
+def test_a_task_created_in_the_window_a_publisher_leaves_open_is_not_overwritten(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication is one operation, not a look followed by a write. The other
+    session here arrives exactly in the window a look-then-write publisher leaves
+    open — and the file it creates is the one the check exists to protect."""
+
+    write = analysis_task.atomic_create_text
+    other = "---\nid: 2026-08-01-loader-fallback\nstatus: in_progress\n---\n\n### a session was already here\n"
+
+    def racing(path: Path, text: str) -> bool:
+        path.write_text(other, encoding="utf-8")
+        return write(path, text)
+
+    monkeypatch.setattr(analysis_task, "atomic_create_text", racing)
+
+    with pytest.raises(evolution.EvolutionError, match="already exists"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == other
+
+
 def test_a_missing_index_row_is_restored_without_touching_the_task(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
@@ -832,11 +1086,71 @@ def test_declining_appends_to_the_record(config: evolution.EvolutionConfig, batc
     assert [entry["draft_id"] for entry in written["rejected"]] == ["not-worth-it", "hook-side-loader"]
 
 
-def test_declining_is_terminal_for_a_proposal(config: evolution.EvolutionConfig, batch: Path) -> None:
+def test_a_second_reason_never_replaces_the_one_on_record(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Declining is terminal for a proposal, so this is not a correction: the
+    reason travels with the batch, and re-proposing means a new draft id whose own
+    bytes say what changed."""
+
     experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="was declined at"):
+    with pytest.raises(evolution.BatchError, match="for a different reason"):
         experiments.reject(config, ["not-worth-it"], reason="still not worth it", now=NOW)
+
+    written = json.loads((batch / "rejected-drafts.json").read_text(encoding="utf-8"))
+    assert [entry["reason"] for entry in written["rejected"]] == ["one report is not recurrence"]
+
+
+def test_the_same_rejection_again_finishes_an_interrupted_one(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every guarded mutation is safe to redo, and this one publishes its record
+    before its audit line. A retry that refused on the strength of its own
+    recorded work would leave the operator with the one state the contract says
+    cannot happen: a decision that is real, and a command that can never finish."""
+
+    monkeypatch.setattr(
+        experiments,
+        "append_records",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    with pytest.raises(OSError):
+        experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
+    monkeypatch.undo()
+
+    result = experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
+
+    assert result.declined == ("not-worth-it",)
+    # Declined either way; the caller reporting it is the one that needs to know
+    # this run found the decision rather than made it.
+    assert result.recorded is False
+    written = json.loads(result.record_path.read_text(encoding="utf-8"))
+    assert [entry["draft_id"] for entry in written["rejected"]] == ["not-worth-it"]
+    assert lineage.describe(config).current.gate.declined == ("not-worth-it",)
+    # The audit line the interrupted run never appended is not appended now: it
+    # would claim a second decision about a proposal declined once, and nothing
+    # derives state from the ledger.
+    assert ledger_types(config) == []
+
+
+def test_a_rejection_redo_names_the_drafts_already_declined(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A partial repeat says two things at once — finish that decision, and make
+    a new one — and the record cannot hold both readings."""
+
+    experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
+
+    with pytest.raises(evolution.BatchError, match=r"\['not-worth-it'\] were already declined"):
+        experiments.reject(
+            config,
+            ["not-worth-it", "hook-side-loader"],
+            reason="one report is not recurrence",
+            now=NOW,
+        )
+
+    assert lineage.describe(config).current.gate.waiting == ("hook-side-loader", "loader-fallback")
 
 
 @pytest.mark.parametrize("reason", ["", "   ", "\n"], ids=["empty", "blank", "newline"])

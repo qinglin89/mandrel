@@ -319,26 +319,50 @@ def write_experiment(
 
 
 def _draft_body(draft_id: str) -> str:
-    """A draft as the analysis session writes it: a schema-conforming task file,
-    inert under `proposed-tasks/`, declaring the task id its admitted copy takes."""
+    """The default draft, kept as its own name because `draft_sha256` hashes it:
+    what a fixture writes and what a record says was admitted are one string."""
 
-    return (
-        "---\n"
-        f"id: 2026-08-01-{draft_id}\n"
-        "status: pending\n"
-        "session-est: 0/1\n"
-        "blockers: []\n"
-        "claimed-by:\n"
-        "---\n"
-        "\n"
-        f"# Change {draft_id}\n"
-        "\n"
-        "## Goal\n"
-        "\n"
-        f"Implement the {draft_id} disposition of this batch.\n"
-        "\n"
-        "## Session log\n"
-    )
+    return draft_body(draft_id)
+
+
+DRAFT_SECTIONS = ("Goal", "Scope", "Acceptance", "Session log")
+
+_SECTION_TEXT = {
+    "Goal": "Implement the {draft_id} disposition of this batch.",
+    "Scope": "The canonical files that disposition names, and nothing else.",
+    "Acceptance": "The disposition is implemented and the suite passes.",
+}
+
+
+def draft_body(
+    draft_id: str,
+    *,
+    task_id: str | None = None,
+    frontmatter: str | None = None,
+    sections: tuple[str, ...] = DRAFT_SECTIONS,
+    closed: bool = True,
+) -> str:
+    """A draft as the analysis session writes it — a schema-conforming pending
+    task file — or one field, section, or delimiter short of it, which is what
+    the admission gate decides about."""
+
+    head = frontmatter
+    if head is None:
+        head = (
+            f"id: {task_id or f'2026-08-01-{draft_id}'}\n"
+            "status: pending\n"
+            "session-est: 0/1\n"
+            "blockers: []\n"
+            "claimed-by:\n"
+        )
+    closer = "---\n" if closed else ""
+    body = ""
+    for name in sections:
+        body += f"## {name}\n\n"
+        text = _SECTION_TEXT.get(name)
+        if text:
+            body += text.format(draft_id=draft_id) + "\n\n"
+    return f"---\n{head}{closer}\n# Change {draft_id}\n\n{body}".rstrip("\n") + "\n"
 
 
 def _write_json(path: Path, record: dict) -> Path:

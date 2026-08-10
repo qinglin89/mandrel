@@ -250,9 +250,15 @@ draft that had moved out of the batch would leave nothing behind saying what was
 proposed or which experiment took it.
 
 A draft is a task file, so the copy takes the task id the draft itself declares,
-and that id is checked at the gate as much as the proposal is: a date-prefixed
+and the gate checks the whole shape rather than that id alone: a frontmatter
+block that is opened, closed, and says each thing once, declaring a date-prefixed
 slug — which is also the file name the copy takes — the inert `pending` status,
-and the session log the work will record itself in. An id already in flight,
+an estimate no session has consumed, nothing blocking it and nobody claiming it;
+and the body a session works from, which is its goal, its scope, its acceptance,
+and the session log it will record itself in. The check belongs here because
+admission is a copy into the pool turn selection dispatches from: nothing
+downstream ever reads that file as a proposal again, so a proposal that is a task
+file in name only is refused at the gate or nowhere. An id already in flight,
 already archived, or already admitted by this batch stops the admission instead
 of overwriting a task file or leaving two admissions answering for one task.
 
@@ -462,16 +468,31 @@ record already names — never a task in the active pool that no experiment
 accounts for, which is work a turn selection would dispatch with nothing behind
 it. Redoing the same operation with the same selection is how it finishes: it
 recognises its own recorded work and writes what is missing, rather than
-admitting anything a second time. A task the record already shows completed is
+admitting anything a second time — a rejection whose record landed and whose
+audit line did not is finished by declining the same drafts for the same reason,
+and a redo is as guarded as the operation it completes, so the ref check that
+stops a fresh admission stops the resumed one too.
+
+Recognition is identity, not position. A file standing at an admitted task's id
+is that admission's copy only when it says so — its own id, its admission
+section, the experiment that admitted it, and the digest of the proposal it
+implements — and an ordinary claimed and logged task still says all four. An
+unrelated file there stops the redo instead of being adopted, listed as this
+experiment's work, and dispatched. A task the record already shows completed is
 not rewritten by that repair; close-out archived it, and recreating it would
-reopen work that finished. Any state they cannot
+reopen work that finished. So is one that has finished before the record observed
+it: the completion observation is a later operation, and between the two, a task
+archived or `completed` in place belongs to close-out rather than to the active
+pool a restored row would put it back in. Any state they cannot
 account for — a second current batch, a second open experiment, an experiment
 left open under a later one, a gap or a second spelling in the batch's ordinals,
 an experiment whose base is not the batch's, a candidate revision that does not
 descend from the one pinned before it, a ref that is not where its record says or
 that has moved past a candidate-ready round, a round sealed with no candidate or
 carrying a candidate nobody sealed, a task admitted into a sealed round with no
-completion observation, a draft already consumed, a task id admitted twice, a
+completion observation, a draft already consumed, a draft that is not the inert
+task file described above, a task id admitted twice, a file at an admitted task's
+id that is not its copy, a second decision about a proposal already declined, a
 `superseded` decision naming anything but the successor it created, an outcome
 that disagrees with the experiments about a promotion, an unreadable record —
 stops the operation with what it found, instead of picking one reading and

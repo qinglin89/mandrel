@@ -452,6 +452,36 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+def atomic_create_text(path: Path, text: str) -> bool:
+    """Write `text` at `path` only if nothing is there. False when something is.
+
+    For the files that must never be overwritten — a task file may already carry
+    a session log — where `atomic_write_text` is the wrong tool by definition:
+    `os.replace` overwrites, so a caller that looks first and replaces second has
+    a window between the two, and the file that appears in it is the one the
+    check existed to protect.
+
+    `os.link` closes that window: it is the check, refusing atomically when the
+    target exists. The content still lands through a temporary file, so an
+    interruption leaves no partial file for a later run to accept as whole.
+    """
+
+    handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def _lock_holder(path: Path) -> str:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
