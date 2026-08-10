@@ -150,6 +150,18 @@ def test_config_fails_closed_on_policy_it_cannot_honour(repo: Path, old: str, ne
         evolution.load_config(repo)
 
 
+def rewrite_config(repo: Path, edits: list[tuple[str, str]]) -> None:
+    path = repo / "evolution" / "config.toml"
+    text = path.read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in text
+        text = text.replace(old, new)
+    path.write_text(text, encoding="utf-8")
+
+
+ARTIFACTS_SETTING = 'imported_artifacts = ".ai-evolution/imported-artifacts"'
+
+
 @pytest.mark.parametrize(
     "edits",
     [
@@ -157,12 +169,12 @@ def test_config_fails_closed_on_policy_it_cannot_honour(repo: Path, old: str, ne
         pytest.param(
             [
                 ('runtime_root = ".ai-evolution"', 'runtime_root = "evolution/cases"'),
-                ('imported_artifacts = ".ai-evolution/imported-artifacts"', 'imported_artifacts = "evolution/cases/raw"'),
+                (ARTIFACTS_SETTING, 'imported_artifacts = "evolution/cases/raw"'),
             ],
             id="runtime-root-in-the-versioned-tree",
         ),
         pytest.param(
-            [('imported_artifacts = ".ai-evolution/imported-artifacts"', 'imported_artifacts = "evolution/cases"')],
+            [(ARTIFACTS_SETTING, 'imported_artifacts = "evolution/cases"')],
             id="artifacts-outside-the-runtime-root",
         ),
         pytest.param(
@@ -182,12 +194,44 @@ def test_config_refuses_storage_that_crosses_the_ownership_boundary(repo: Path, 
     """Repository containment is not the invariant. Ignored runtime state and
     committed sanitized records own separate trees (contract invariant 11), and
     a config that mixes them writes raw evidence into Git."""
-    path = repo / "evolution" / "config.toml"
-    text = path.read_text(encoding="utf-8")
-    for old, new in edits:
-        assert old in text
-        text = text.replace(old, new)
-    path.write_text(text, encoding="utf-8")
+    rewrite_config(repo, edits)
+
+    with pytest.raises(evolution.ConfigError):
+        evolution.load_config(repo)
+
+
+@pytest.mark.parametrize(
+    "edits",
+    [
+        # Staging here creates `state.json` as a directory, and the atomic state
+        # commit that ends every page then fails against it.
+        pytest.param(
+            [(ARTIFACTS_SETTING, 'imported_artifacts = ".ai-evolution/state.json/raw"')],
+            id="artifacts-below-the-state-file",
+        ),
+        pytest.param(
+            [(ARTIFACTS_SETTING, 'imported_artifacts = ".ai-evolution/state.json"')],
+            id="artifacts-are-the-state-file",
+        ),
+        # The lock is taken before the first bundle is staged, so the directory
+        # cannot be created at all.
+        pytest.param(
+            [(ARTIFACTS_SETTING, 'imported_artifacts = ".ai-evolution/lock/raw"')],
+            id="artifacts-below-the-lock",
+        ),
+        pytest.param(
+            [('ledger = "evolution/ledger.jsonl"', 'ledger = "evolution/config.toml"')],
+            id="ledger-is-the-policy-file",
+        ),
+        pytest.param([('batches = "evolution/batches"', 'batches = "evolution/schemas"')], id="batches-are-the-schemas"),
+    ],
+)
+def test_config_refuses_storage_that_claims_a_fixed_controller_path(repo: Path, edits: list[tuple[str, str]]) -> None:
+    """Each tree holds paths the controller writes by fixed name. A configurable
+    location that lands on one is a config that loads and then cannot run, or —
+    for the versioned side — one that appends audit lines over its own
+    contract."""
+    rewrite_config(repo, edits)
 
     with pytest.raises(evolution.ConfigError):
         evolution.load_config(repo)
@@ -579,8 +623,19 @@ def valid_state() -> dict:
                 "reruns": [],
             }
         ],
-        "rejected": {},
+        "rejected": {"r9": a_rejection()},
         "processed": {},
+    }
+
+
+def a_rejection(**overrides) -> dict:
+    """The record `_record_rejection` writes for a refused report."""
+
+    return {
+        "reason": reports.REASON_NOT_ARCHIVED,
+        "detail": "source task is not archived",
+        "recorded_at": "2026-07-30T10:00:02Z",
+        **overrides,
     }
 
 
@@ -615,6 +670,23 @@ def corrupt(mutate) -> str:
         corrupt(lambda data: data["pending"][0]["primary"].update(generated_at="30 July 2026")),
         corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="../../etc")),
         corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="/etc/passwd")),
+        # Repository-relative but outside the configured bundle root: a
+        # reference the importer could not have written, aiming a later evidence
+        # read at committed content.
+        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="evolution/cases")),
+        # A sibling whose name merely starts the same way is not a child.
+        corrupt(
+            lambda data: data["pending"][0]["primary"].update(
+                artifacts_path=".ai-evolution/imported-artifacts-elsewhere/r1"
+            )
+        ),
+        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path=".ai-evolution/imported-artifacts")),
+        # Reruns hold references too, and are checked the same way.
+        corrupt(
+            lambda data: data["pending"][0]["reruns"].append(
+                {**other_report(key="r2", sequence=2), "artifacts_path": "evolution/cases"}
+            )
+        ),
         corrupt(lambda data: data["pending"][0].update(first_imported_at="yesterday")),
         # A rerun outranking `primary` would report a superseded evaluation as
         # the current one; the same report twice would double-count provenance.
@@ -622,6 +694,15 @@ def corrupt(mutate) -> str:
         corrupt(lambda data: data["pending"][0]["reruns"].append(other_report(key="r1", sequence=2))),
         corrupt(lambda data: data["rejected"].update(r1={"reason": "schema-invalid"})),
         corrupt(lambda data: data["rejected"].update(r9="schema-invalid")),
+        # A rejection that kept its key and lost its evidence: the report stays
+        # skipped forever with nothing left to say why it was refused.
+        corrupt(lambda data: data["rejected"].update(r9={})),
+        corrupt(lambda data: data["rejected"].update(r9={k: v for k, v in a_rejection().items() if k != "detail"})),
+        corrupt(lambda data: data["rejected"].update(r9=a_rejection(reason="a-code-this-build-never-writes"))),
+        corrupt(lambda data: data["rejected"].update(r9=a_rejection(recorded_at="yesterday"))),
+        corrupt(lambda data: data["rejected"].update(r9=a_rejection(note="extra"))),
+        # Nothing in this build claims a report for a batch.
+        corrupt(lambda data: data["processed"].update(r8={"batch_id": "b1"})),
     ],
 )
 def test_corrupt_state_is_reported_never_silently_reset(
@@ -644,6 +725,30 @@ def test_the_complete_state_shape_loads(config: evolution.EvolutionConfig) -> No
     assert loaded.cursor is None
     assert [entry.dedup_key for entry in loaded.pending] == [("repo-alpha", "2026-07-01-task")]
     assert loaded.to_json() == valid_state()
+
+
+def test_a_damaged_rejection_is_refused_instead_of_skipping_the_report_forever(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """A rejection is evidence: the reason, the diagnostic, and when it was
+    decided. An entry that keeps only the key still removes the report from
+    discovery on the next cursor rewind, so a loader that accepts one has thrown
+    the evidence away and hidden that it did."""
+    record = make_record(key="bad", sequence=1)
+    record["source"]["archived"] = False
+    feed = write_feed(tmp_path / "feed", [record])
+    evolution.sync(config, feed)
+
+    # What the importer writes is exactly what the loader requires; this round
+    # trip is what keeps the two in step.
+    assert set(evolution.load_state(config).rejected["bad"]) == set(a_rejection())
+
+    damaged = json.loads(config.state_path.read_text(encoding="utf-8"))
+    damaged["rejected"]["bad"] = {}
+    config.state_path.write_text(json.dumps(damaged), encoding="utf-8")
+
+    with pytest.raises(evolution.StateError):
+        evolution.load_state(config)
 
 
 def test_state_round_trips_through_disk(config: evolution.EvolutionConfig, tmp_path: Path) -> None:

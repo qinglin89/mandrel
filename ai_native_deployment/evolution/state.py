@@ -29,14 +29,14 @@ import socket
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from ..hashing import sha256_bytes
 from ..manifest import utc_timestamp
 from .config import EvolutionConfig
 from .errors import LockError, StateError
-from .reports import NormalizedReport, canonical_json
+from .reports import REJECTION_REASONS, NormalizedReport, canonical_json
 from .schema import is_rfc3339_date_time
 
 STATE_SCHEMA_VERSION = 1
@@ -49,6 +49,8 @@ _POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "prim
 _REPORT_REF_FIELDS = frozenset(
     {"report_key", "sequence", "evaluation_id", "generated_at", "bundle_sha256", "artifacts_path"}
 )
+# Exactly what `importer._record_rejection` writes.
+_REJECTION_FIELDS = frozenset({"reason", "detail", "recorded_at"})
 
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z", re.ASCII)
 
@@ -81,7 +83,7 @@ class ReportRef:
         }
 
     @classmethod
-    def from_json(cls, data: Any, where: str) -> "ReportRef":
+    def from_json(cls, data: Any, where: str, *, artifacts_root: str) -> "ReportRef":
         """Rebuild one reference, checking what it means and not merely its
         Python types: a sequence of 0, an unparseable timestamp, or a digest
         that is not a digest is corruption, and corruption that loads is
@@ -100,7 +102,7 @@ class ReportRef:
             evaluation_id=_require_str(data, "evaluation_id", where),
             generated_at=_require_timestamp(data, "generated_at", where),
             bundle_sha256=_require_digest(data, "bundle_sha256", where),
-            artifacts_path=_require_relative_path(data, "artifacts_path", where),
+            artifacts_path=_require_artifacts_path(data, "artifacts_path", where, artifacts_root=artifacts_root),
         )
 
 
@@ -137,7 +139,7 @@ class PoolEntry:
         }
 
     @classmethod
-    def from_json(cls, data: Any, where: str) -> "PoolEntry":
+    def from_json(cls, data: Any, where: str, *, artifacts_root: str) -> "PoolEntry":
         if not isinstance(data, dict):
             raise StateError(f"{where}: pool entry must be an object")
         unexpected = set(data) - _POOL_ENTRY_FIELDS
@@ -149,9 +151,12 @@ class PoolEntry:
         entry = cls(
             repo_id=_require_str(data, "repo_id", where),
             task_id=_require_str(data, "task_id", where),
-            primary=ReportRef.from_json(data.get("primary"), f"{where}.primary"),
+            primary=ReportRef.from_json(data.get("primary"), f"{where}.primary", artifacts_root=artifacts_root),
             first_imported_at=_require_timestamp(data, "first_imported_at", where),
-            reruns=[ReportRef.from_json(item, f"{where}.reruns[{i}]") for i, item in enumerate(reruns)],
+            reruns=[
+                ReportRef.from_json(item, f"{where}.reruns[{i}]", artifacts_root=artifacts_root)
+                for i, item in enumerate(reruns)
+            ],
         )
 
         keys = [entry.primary.report_key] + [ref.report_key for ref in entry.reruns]
@@ -205,7 +210,7 @@ class EvolutionState:
         }
 
     @classmethod
-    def from_json(cls, data: Any, path: Path) -> "EvolutionState":
+    def from_json(cls, data: Any, path: Path, *, artifacts_root: str) -> "EvolutionState":
         """Load a complete version-1 state, or refuse.
 
         Every field is required, absent included. A file that has lost its
@@ -213,6 +218,10 @@ class EvolutionState:
         the gap as "nothing yet" is exactly the silent reset this module exists
         to prevent: the cursor rewinds, the pool empties, and the run looks
         successful.
+
+        `artifacts_root` is the repository-relative bundle root from the config
+        governing this run; staged references are checked against it, so state
+        cannot point later evidence reads anywhere else in the tree.
         """
 
         if not isinstance(data, dict):
@@ -237,15 +246,18 @@ class EvolutionState:
         pending = data["pending"]
         if not isinstance(pending, list):
             raise StateError(f"{path}: pending must be a list")
-        entries = [PoolEntry.from_json(item, f"{path}: pending[{i}]") for i, item in enumerate(pending)]
+        entries = [
+            PoolEntry.from_json(item, f"{path}: pending[{i}]", artifacts_root=artifacts_root)
+            for i, item in enumerate(pending)
+        ]
         seen: set[tuple[str, str]] = set()
         for entry in entries:
             if entry.dedup_key in seen:
                 raise StateError(f"{path}: pending holds {entry.repo_id}/{entry.task_id} twice")
             seen.add(entry.dedup_key)
 
-        rejected = _require_decision_map(data, "rejected", path)
-        processed = _require_decision_map(data, "processed", path)
+        rejected = _require_rejections(data, path)
+        processed = _require_processed(data, path)
         # One report has one decision. The same key in two of these means the
         # state contradicts itself about what was already done with it, and
         # `known_report_keys` would flatten the contradiction away.
@@ -266,7 +278,7 @@ def load_state(config: EvolutionConfig) -> EvolutionState:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise StateError(f"unreadable evolution state {path}: {exc}") from exc
-    return EvolutionState.from_json(data, path)
+    return EvolutionState.from_json(data, path, artifacts_root=config.storage.imported_artifacts)
 
 
 def save_state(config: EvolutionConfig, state: EvolutionState) -> Path:
@@ -403,27 +415,75 @@ def _require_digest(data: Mapping[str, Any], key: str, where: str) -> str:
     return value
 
 
-def _require_relative_path(data: Mapping[str, Any], key: str, where: str) -> str:
-    """Staged bundles are addressed relative to the repository root. An
-    absolute or upward path in state is a read (and later a delete) somewhere
-    this controller has no business going."""
+def _require_artifacts_path(data: Mapping[str, Any], key: str, where: str, *, artifacts_root: str) -> str:
+    """A staged bundle lives at `<artifacts_root>/<directory name>` and nowhere
+    else — that is the only form `stage_artifacts` can produce.
+
+    Repository-relative is too weak a check to hold the ownership boundary: it
+    admits `evolution/cases`, so corrupted state could aim a later evidence read
+    at versioned repository content. The comparison is against the root of the
+    config governing this run, written out in full so a sibling directory whose
+    name merely starts the same way (`imported-artifacts-x`) is not mistaken for
+    a child.
+    """
 
     value = _require_str(data, key, where)
-    parts = PurePosixPath(value).parts
-    if PurePosixPath(value).is_absolute() or ".." in parts:
-        raise StateError(f"{where}: {key} must be a repository-relative path, got {value!r}")
+    prefix = f"{artifacts_root}/"
+    name = value[len(prefix) :] if value.startswith(prefix) else ""
+    if not name or "/" in name or name in {".", ".."}:
+        raise StateError(f"{where}: {key} must name one directory directly under {artifacts_root}/, got {value!r}")
     return value
 
 
-def _require_decision_map(data: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
-    value = data[key]
+def _require_rejections(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    """Rejections are evidence: the reason an operator acts on, the diagnostic
+    that quotes the feed, and when it was decided.
+
+    A shapeless entry — `{}` at the extreme — would still contribute its report
+    key to `known_report_keys`, so the report is skipped forever while the three
+    things worth keeping about it are gone. The reason must be one of the codes
+    `reports.py` authors, because that bounded vocabulary is what the ledger's
+    publishable line is derived from.
+    """
+
+    value = data["rejected"]
     if not isinstance(value, dict):
-        raise StateError(f"{path}: {key} must be an object")
+        raise StateError(f"{path}: rejected must be an object")
     for report_key, entry in value.items():
+        where = f"{path}: rejected[{report_key!r}]"
         if not report_key:
-            raise StateError(f"{path}: {key} has an empty report key")
+            raise StateError(f"{path}: rejected has an empty report key")
         if not isinstance(entry, dict):
-            raise StateError(f"{path}: {key}[{report_key!r}] must be an object")
+            raise StateError(f"{where}: must be an object")
+        unexpected = set(entry) - _REJECTION_FIELDS
+        if unexpected:
+            raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
+        reason = _require_str(entry, "reason", where)
+        if reason not in REJECTION_REASONS:
+            raise StateError(f"{where}: reason {reason!r} is not one of the codes this controller records")
+        _require_str(entry, "detail", where)
+        _require_timestamp(entry, "recorded_at", where)
+    return value
+
+
+def _require_processed(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    """`processed` records the reports a frozen batch has claimed.
+
+    Nothing in this build freezes a batch, so it has no writer and no record
+    shape yet — and a shape invented ahead of its writer is a second source of
+    truth waiting to drift. Until batch freeze lands and defines it, a non-empty
+    map can only be corruption or state from another build, and both are refused
+    rather than trusted with the report keys they would remove from discovery.
+    """
+
+    value = data["processed"]
+    if not isinstance(value, dict):
+        raise StateError(f"{path}: processed must be an object")
+    if value:
+        raise StateError(
+            f"{path}: processed holds {len(value)} record(s), but nothing in this build claims a report "
+            "for a batch; the record shape is defined when batch freeze lands"
+        )
     return value
 
 

@@ -43,6 +43,17 @@ VERSIONED_ROOT = CONFIG_RELATIVE_PATH.parent.as_posix()
 SUPPORTED_RUNTIME_ROOT = ".ai-evolution"
 VERSIONED_STORAGE_KEYS = ("ledger", "batches", "cases", "experiments")
 
+# Paths inside those two trees that the controller addresses by fixed name.
+# None of them can also be a configurable storage location, in either
+# direction: a location that contains one, equals one, or sits inside one takes
+# a path away from the code that writes it by name.
+FIXED_PATHS = (
+    (f"{SUPPORTED_RUNTIME_ROOT}/{STATE_FILENAME}", "the runtime state file"),
+    (f"{SUPPORTED_RUNTIME_ROOT}/{LOCK_FILENAME}", "the single-writer lock"),
+    (CONFIG_RELATIVE_PATH.as_posix(), "this policy file"),
+    (SCHEMAS_RELATIVE_PATH.as_posix(), "the versioned schemas every validator loads"),
+)
+
 # Settings whose only legal value is `true`, and the reason. Turning one off
 # does not configure a laxer controller — it describes one that cannot exist,
 # either because the versioned import schema hard-requires the same thing or
@@ -278,8 +289,9 @@ def _check_storage(path: Path, storage: StorageConfig) -> None:
     Repository containment is not enough: `evolution/cases` is inside the
     repository and is also tracked, so a runtime root pointed there would write
     raw fetched bundles straight into Git (invariant 11). Each location must
-    therefore sit on the correct side of the boundary, and the two sides must
-    not overlap.
+    therefore sit on the correct side of the boundary, the two sides must not
+    overlap, and no configurable location may claim a path the controller
+    already addresses by fixed name.
     """
 
     if storage.runtime_root != SUPPORTED_RUNTIME_ROOT:
@@ -313,6 +325,22 @@ def _check_storage(path: Path, storage: StorageConfig) -> None:
                 raise ConfigError(
                     f"{path}: [storage].{key} and [storage].{other} overlap; each versioned location "
                     "owns its own path"
+                )
+
+    # Being on the correct side of the boundary is still not enough: each tree
+    # holds paths this controller writes by fixed name, and a configurable
+    # location that lands on one of them is a config that loads and then cannot
+    # run. Staging under `.ai-evolution/state.json/` creates the state file as a
+    # directory, so the atomic commit at the end of the page fails; a ledger
+    # pointed at `evolution/config.toml` appends audit lines over the policy
+    # this loader just read.
+    for key in ("imported_artifacts",) + VERSIONED_STORAGE_KEYS:
+        value = getattr(storage, key)
+        for fixed, owner in FIXED_PATHS:
+            if _overlaps(value, fixed):
+                raise ConfigError(
+                    f"{path}: [storage].{key} {value!r} collides with {fixed} — {owner}, "
+                    "and the fixed paths of each tree are not configurable"
                 )
 
 
