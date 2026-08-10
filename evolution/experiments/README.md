@@ -40,7 +40,10 @@ from an already-sealed one, so evidence gathered for an earlier round goes on
 naming that round rather than silently being read as describing the current
 candidate. A revised round opens with nothing admitted into it and is filled by
 a later admission, so work resumes as soon as the revision is decided rather
-than when the next proposals happen to be written.
+than when the next proposals happen to be written. Both transitions are recorded
+while the ref is held where they read it — a commit arriving in between would be
+pinned unasked or counted as the new round's work, and this record is the only
+thing that could have said otherwise.
 
 An implementation task is not evidence of improvement; promotion depends on a
 completed replay or canary record naming the base revision, the experiment, and

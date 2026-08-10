@@ -44,6 +44,14 @@ class FeedError(EvolutionError):
     """The report feed is unavailable or returned an unusable page."""
 
 
+class RefHoldError(EvolutionError):
+    """An experiment ref cannot be held where it was observed, so an operation
+    about to record a transition of it has nothing to record from.
+
+    Raised at the Git boundary and translated by the operation, which is what
+    knows why that ref had to stay still."""
+
+
 class BatchError(EvolutionError):
     """A batch cannot be read or frozen: a manifest under `evolution/batches/`
     contradicts itself or the pool, an id is already taken, or the requested

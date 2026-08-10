@@ -486,6 +486,20 @@ lock as import and freeze, they write in an order where the durable record is
 what makes the operation real, and every step is safe to redo, so an interrupted
 operation is finished by the next run rather than repaired by hand.
 
+That lock covers this package's own runs, and the two round transitions need
+more than it. Both are decided from one reading of where the experiment ref
+stands — the tip a seal pins, the pinned revision a revision opens the next round
+from — while what ordinarily advances that ref is a fetch, a push, or an
+operator's own `update-ref`. A commit arriving between that reading and the
+record would be pinned as a candidate whose ancestry nothing asked about, or
+taken up as the new round's work, which leaves a commit made under a round that
+had already been measured indistinguishable from one made after it — the very
+ordering that lets replay evidence name one pinned tree. Reading again afterwards
+recovers neither, since the records that would disagree are the ones being
+written. So a seal and a revision are recorded under Git's own lock on that ref,
+held at the revision they read; one that cannot be held there records nothing and
+is decided again from where the ref now stands.
+
 That order is the same throughout. The experiment ref goes first, because it is
 the one thing that must never be created twice or restored afterwards: a clone
 without `refs/evolution/*` is the ordinary state, and a repair that recreated the
@@ -536,7 +550,9 @@ left open under a later one, a gap or a second spelling in the batch's ordinals,
 an experiment whose base is not the batch's, a candidate revision that does not
 descend from the one pinned before it, a ref that is not where its record says or
 that has moved past a candidate-ready round, a tip this checkout cannot show to
-descend from the revision pinned before it, a round sealed with no candidate or
+descend from the revision pinned before it, a ref that moved out from under a
+transition since the reading that transition was decided from, a round sealed
+with no candidate or
 carrying a candidate nobody sealed, a round sealed with nothing admitted into it,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with

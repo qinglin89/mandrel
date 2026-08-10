@@ -34,6 +34,7 @@ from evolution_fixtures import (
     git_delete_ref,
     git_repo,
     git_rev,
+    git_try_update_ref,
     git_unrelated_commit,
     git_update_ref,
     make_repo,
@@ -1802,6 +1803,161 @@ def test_a_revised_round_takes_its_own_tasks_and_seals_from_them(
     assert derived.ref is not None
     assert derived.ref.chain is True
     assert derived.ref.consistent is True
+
+
+# --- a ref that moves while a round transition is being written --------------
+
+
+def arrives_after_the_derivation(monkeypatch, config: evolution.EvolutionConfig, ref: str) -> list[str]:
+    """One commit landing on the experiment ref in the gap the operation reasons
+    across: after the lineage read where that ref stood, before the record
+    saying so is written.
+
+    Injected at the reading itself, because that is where the gap opens. The
+    commit is an ordinary external Git update — a fetch, a push, an operator's
+    own `update-ref` — which the evolution single-writer lock has never covered.
+    """
+
+    derive = experiments.describe_lineage
+    landed: list[str] = []
+
+    def observe(*args, **kwargs):
+        described = derive(*args, **kwargs)
+        if not landed:
+            landed.append(advance(config, ref))
+        return described
+
+    monkeypatch.setattr(experiments, "describe_lineage", observe)
+    return landed
+
+
+def test_sealing_refuses_a_ref_that_moved_since_it_was_read(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch
+) -> None:
+    """The pin is the tip whose ancestry was checked. A tip that arrived after
+    that check has been asked nothing, so the seal is not recorded from it — nor
+    from the revision it replaced, which is no longer where the ref stands."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    checked = advance(config, admission.ref)
+    landed = arrives_after_the_derivation(monkeypatch, config, admission.ref)
+
+    with pytest.raises(evolution.BatchError, match="a seal is decided from where that ref stood"):
+        experiments.seal_round(config, now=LATER)
+
+    assert landed[0] != checked
+    assert record(config, EXP_01)["rounds"][0]["seal"] is None
+    assert "round-sealed" not in ledger_types(config)
+
+
+def test_revising_refuses_a_ref_that_moved_since_it_was_read(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch
+) -> None:
+    """The worse half of the same gap. A commit arriving while round 1 is
+    candidate-ready is work done under a round that was already measured; had
+    round 2 opened over it, it would have become ordinary round-2 work and the
+    lineage would have read as consistent — the ordering that makes replay
+    evidence name one pinned tree, lost with nothing left saying so."""
+
+    pinned = seal(config, ["loader-fallback"])
+    landed = arrives_after_the_derivation(monkeypatch, config, experiments.experiment_ref(EXP_01))
+
+    with pytest.raises(evolution.BatchError, match="a revision is decided from where that ref stood"):
+        experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    assert len(record(config, EXP_01)["rounds"]) == 1
+    assert "experiment-revised" not in ledger_types(config)
+
+    # And it stays visible: the commit under a measured round is what the next
+    # run refuses on, rather than something the new round has absorbed.
+    derived = lineage.describe(config).current
+    assert derived.ref is not None
+    assert derived.ref.tip == landed[0] != pinned
+    assert derived.ref.consistent is False
+    with pytest.raises(evolution.BatchError, match="moved past a candidate-ready round|not on the history"):
+        experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+
+def test_nothing_outside_can_move_the_ref_while_a_seal_is_written(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch
+) -> None:
+    """The other side of the same guarantee: while the seal is deciding and
+    writing, Git itself refuses the update that would open the gap."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    revision = advance(config, admission.ref)
+
+    observe = experiments._observe_completions
+    refused: list[str | None] = []
+
+    def probe(*args, **kwargs):
+        arriving = git_commit(config.repo_root, "work arriving mid-seal")
+        refused.append(git_try_update_ref(config.repo_root, admission.ref, arriving))
+        return observe(*args, **kwargs)
+
+    monkeypatch.setattr(experiments, "_observe_completions", probe)
+    result = experiments.seal_round(config, now=LATER)
+
+    assert refused[0] is not None and "cannot lock ref" in refused[0]
+    assert result.candidate_revision == revision
+    assert git_rev(config.repo_root, admission.ref) == revision
+
+
+def test_nothing_outside_can_move_the_ref_while_a_revision_is_written(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch
+) -> None:
+    """Same guarantee at the instant the round is appended."""
+
+    pinned = seal(config, ["loader-fallback"])
+    ref = experiments.experiment_ref(EXP_01)
+
+    write = experiments._write_record
+    refused: list[str | None] = []
+
+    def probe(*args, **kwargs):
+        arriving = git_commit(config.repo_root, "work arriving mid-revision")
+        refused.append(git_try_update_ref(config.repo_root, ref, arriving))
+        return write(*args, **kwargs)
+
+    monkeypatch.setattr(experiments, "_write_record", probe)
+    result = experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    assert refused[0] is not None and "cannot lock ref" in refused[0]
+    assert result.round_number == 2
+    assert git_rev(config.repo_root, ref) == pinned
+
+
+def test_the_ref_is_let_go_once_the_transition_is_recorded(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Held for the transition, not beyond it: the work the next round does
+    lands on that ref the moment the record naming the round is there."""
+
+    seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    ref = experiments.experiment_ref(EXP_01)
+    assert git_try_update_ref(config.repo_root, ref, git_commit(config.repo_root, "next round")) is None
+
+
+def test_a_checkout_without_the_ref_holds_it_against_appearing(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An absent `refs/evolution/*` is the ordinary state of a clone that never
+    fetched the namespace, and a revision is still recorded there. What is held
+    is then the absence, so a ref arriving mid-transition is the same
+    interleaving refused from the other side."""
+
+    seal(config, ["loader-fallback"])
+    ref = experiments.experiment_ref(EXP_01)
+    git_delete_ref(config.repo_root, ref)
+
+    result = experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    assert result.opened is True
+    assert len(record(config, EXP_01)["rounds"]) == 2
 
 
 # --- the rest of the controller ----------------------------------------------

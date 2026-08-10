@@ -62,16 +62,17 @@ import os
 import re
 import shutil
 import tempfile
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from ..hashing import sha256_bytes
 from . import analysis_task
 from .batches import awaiting_analysis, record_closures
 from .config import EXPERIMENT_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, RefHoldError
 from .ledger import append_records, build_record
 from .lineage import (
     EXPERIMENT_FILENAME,
@@ -89,7 +90,7 @@ from .lineage import (
 from .lineage import describe as describe_lineage
 from .config import REJECTED_DRAFTS_SCHEMA_FILENAME
 from .manifests import REJECTED_DRAFTS_SCHEMA_VERSION, Batch, read_rejected_drafts
-from .revisions import create_ref, ref_tip, release_ref, resolve_commit
+from .revisions import create_ref, held_at, ref_tip, release_ref, resolve_commit
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
@@ -522,25 +523,29 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
             )
 
         stamp = format_rfc3339(moment)
-        tasks, observed = _observe_completions(config, current, experiment, round_, observed_at=stamp)
         candidate = _pinnable_tip(experiment, current.ref)
-        sealed = replace(round_, tasks=tasks, seal=Seal(sealed_at=stamp, candidate_revision=candidate))
-        updated = replace(experiment, rounds=experiment.rounds[:-1] + (sealed,))
+        # Every ref question this seal depends on is answered before the hold,
+        # and the pin is what the hold is taken at: what was checked is then what
+        # is still there when the record naming it lands.
+        with _unmoved(config, experiment, candidate, "seal"):
+            tasks, observed = _observe_completions(config, current, experiment, round_, observed_at=stamp)
+            sealed = replace(round_, tasks=tasks, seal=Seal(sealed_at=stamp, candidate_revision=candidate))
+            updated = replace(experiment, rounds=experiment.rounds[:-1] + (sealed,))
 
-        _write_record(config, updated)
-        append_records(
-            config,
-            [
-                build_record(
-                    RECORD_ROUND_SEALED,
-                    recorded_at=stamp,
-                    batch_id=current.batch_id,
-                    experiment_id=experiment.experiment_id,
-                    round=round_.number,
-                    revision=candidate,
-                )
-            ],
-        )
+            _write_record(config, updated)
+            append_records(
+                config,
+                [
+                    build_record(
+                        RECORD_ROUND_SEALED,
+                        recorded_at=stamp,
+                        batch_id=current.batch_id,
+                        experiment_id=experiment.experiment_id,
+                        round=round_.number,
+                        revision=candidate,
+                    )
+                ],
+            )
         return SealResult(
             batch_id=current.batch_id,
             experiment_id=experiment.experiment_id,
@@ -587,20 +592,26 @@ def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None)
         opened = Round(number=last.number + 1, opened_at=stamp, reason=text, tasks=(), seal=None)
         updated = replace(experiment, rounds=experiment.rounds + (opened,))
 
-        _write_record(config, updated)
-        append_records(
-            config,
-            [
-                build_record(
-                    RECORD_EXPERIMENT_REVISED,
-                    recorded_at=stamp,
-                    batch_id=current.batch_id,
-                    experiment_id=experiment.experiment_id,
-                    round=opened.number,
-                    revision=last.seal.candidate_revision,
-                )
-            ],
-        )
+        # Held where the check above found it, which for a candidate-ready round
+        # is the pinned revision itself — or nothing, in a checkout without the
+        # namespace. A commit arriving between the two would be adopted as the
+        # new round's work, and a commit made under a round that was already
+        # measured is the one thing this record must not be able to absorb.
+        with _unmoved(config, experiment, current.ref.tip if current.ref is not None else None, "revision"):
+            _write_record(config, updated)
+            append_records(
+                config,
+                [
+                    build_record(
+                        RECORD_EXPERIMENT_REVISED,
+                        recorded_at=stamp,
+                        batch_id=current.batch_id,
+                        experiment_id=experiment.experiment_id,
+                        round=opened.number,
+                        revision=last.seal.candidate_revision,
+                    )
+                ],
+            )
         return ReviseResult(
             batch_id=current.batch_id,
             experiment_id=experiment.experiment_id,
@@ -738,6 +749,50 @@ def _pinnable_tip(experiment: Experiment, ref: RefState | None) -> str:
             "later piece of evidence names it, so it is pinned from a history Git can answer for"
         )
     return ref.tip
+
+
+@contextmanager
+def _unmoved(
+    config: EvolutionConfig,
+    experiment: Experiment,
+    revision: str | None,
+    transition: str,
+) -> Iterator[None]:
+    """The experiment's ref, held where this operation read it, until its record
+    says the same thing.
+
+    Both round transitions are decided from one reading of the ref and recorded
+    afterwards, and the gap between is not this package's to schedule: the
+    single-writer lock covers evolution runs, while what advances an experiment
+    ref is ordinary Git. A commit arriving in that gap costs a seal the property
+    the seal exists for — the pin would name a tree whose ancestry was never the
+    one asked about — and costs a revision more than that: the arriving commit
+    becomes the new round's work, so a commit made under a round that had
+    already been measured is left indistinguishable from one made after,
+    which is exactly the ordering invariant 16 gives replay evidence.
+
+    Neither is recoverable by re-reading afterwards, because the records that
+    would disagree are the ones being written. So the ref is held: it either
+    stands where it was read for as long as the record takes to land, or this
+    refuses and nothing is written from a reading that has already expired.
+
+    An admission is not held this way, and should not be: it records no
+    revision, the round it adds to is open, and a ref moving under an open round
+    is the work itself proceeding — holding it there would block the very
+    commits the admitted task is being written to make.
+    """
+
+    holding = ExitStack()
+    try:
+        holding.enter_context(held_at(config.repo_root, experiment.ref, revision))
+    except RefHoldError as exc:
+        raise BatchError(
+            f"{experiment.experiment_id}: {exc}; a {transition} is decided from where that ref stood and pins or "
+            "opens a round around it, so it is recorded while the ref is held there rather than from a reading "
+            "that may already be stale — read the ref as it now stands and decide again"
+        ) from exc
+    with holding:
+        yield
 
 
 # --- the guarded preamble ----------------------------------------------------

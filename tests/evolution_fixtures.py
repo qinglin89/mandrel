@@ -471,6 +471,23 @@ def git_update_ref(root: Path, ref: str, revision: str) -> None:
     subprocess.run(["git", "-C", str(root), "update-ref", ref, revision], check=True)
 
 
+def git_try_update_ref(root: Path, ref: str, revision: str) -> str | None:
+    """Move a ref the way anything outside this package would, reporting instead
+    of raising: None when it moved, and Git's own complaint when it did not.
+
+    What an operation holding that ref looks like from the other side — the side
+    a fetch, a push, or an operator's `git update-ref` is on.
+    """
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "update-ref", ref, revision],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return None if result.returncode == 0 else " ".join((result.stderr or result.stdout).split())
+
+
 def git_delete_ref(root: Path, ref: str) -> None:
     """Drop a ref, which is what every clone that never fetched
     `refs/evolution/*` looks like from inside this package."""
