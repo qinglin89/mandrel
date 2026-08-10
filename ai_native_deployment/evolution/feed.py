@@ -24,6 +24,12 @@ from .errors import FeedError
 REPORTS_DIRNAME = "reports"
 ARTIFACTS_DIRNAME = "artifacts"
 
+# One record's place in the directory feed's total order.
+_Position = tuple[int, str, str]
+# Valid sequences start at 1, so this precedes every record — including the
+# sequence-0 ones a malformed fixture produces.
+_START: _Position = (-1, "", "")
+
 
 @dataclass(frozen=True)
 class FeedPage:
@@ -57,9 +63,16 @@ class DirectoryFeed:
     <root>/artifacts/<report_key>/<artifact-name>  the bodies
     ```
 
-    Ordering is by the records' own `sequence`, which is the global order the
-    real feed promises. The cursor is that sequence rendered as text; nothing
-    outside this class relies on that.
+    Ordering starts from the records' own `sequence`, which is the global order
+    the real feed promises, and is made **total** by the report key and the
+    file the record came from. Sequence alone is not a position: two records
+    the schema would reject collapse to the same unusable sequence, and so do
+    two records that simply repeat one. A cursor built on a non-unique position
+    silently drops every record sharing it — the importer would advance past
+    reports it never saw and never recorded.
+
+    The cursor is that ordering triple as JSON. Nothing outside this class
+    reads it; the importer stores it and hands it back unread.
     """
 
     def __init__(self, root: Path) -> None:
@@ -68,15 +81,15 @@ class DirectoryFeed:
     def fetch_page(self, cursor: str | None, limit: int) -> FeedPage:
         if limit < 1:
             raise FeedError(f"page limit must be positive, got {limit}")
-        records = self._records()
+        ordered = self._records()
         after = self._decode_cursor(cursor)
-        remaining = [record for record in records if _sequence_of(record) > after]
+        remaining = [entry for entry in ordered if entry[0] > after]
         items = remaining[:limit]
         if not items:
             return FeedPage(items=(), cursor=cursor, exhausted=True)
         return FeedPage(
-            items=tuple(items),
-            cursor=str(_sequence_of(items[-1])),
+            items=tuple(record for _, record in items),
+            cursor=_encode_cursor(items[-1][0]),
             exhausted=len(remaining) == len(items),
         )
 
@@ -102,11 +115,11 @@ class DirectoryFeed:
             raise FeedError(f"report_key escapes the artifact root: {report_key!r}")
         return candidate
 
-    def _records(self) -> list[Mapping[str, Any]]:
+    def _records(self) -> list[tuple[_Position, Mapping[str, Any]]]:
         directory = self.root / REPORTS_DIRNAME
         if not directory.is_dir():
             raise FeedError(f"feed directory has no {REPORTS_DIRNAME}/: {self.root}")
-        records: list[Mapping[str, Any]] = []
+        entries: list[tuple[_Position, Mapping[str, Any]]] = []
         for path in sorted(directory.glob("*.json")):
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
@@ -114,26 +127,50 @@ class DirectoryFeed:
                 raise FeedError(f"unreadable feed record {path}: {exc}") from exc
             if not isinstance(record, dict):
                 raise FeedError(f"feed record is not a JSON object: {path}")
-            records.append(record)
+            entries.append((_position_of(record, path.name), record))
         # A record whose sequence is unusable is still served: rejecting it is
-        # the importer's decision to record, not the transport's to hide.
-        return sorted(records, key=lambda record: (_sequence_of(record), str(record.get("report_key", ""))))
+        # the importer's decision to record, not the transport's to hide. The
+        # file name keeps two such records apart, so both are served.
+        return sorted(entries, key=lambda entry: entry[0])
 
     @staticmethod
-    def _decode_cursor(cursor: str | None) -> int:
-        # Valid sequences start at 1, so -1 means "nothing consumed yet" and
-        # still serves the sequence-0 records a malformed fixture produces.
+    def _decode_cursor(cursor: str | None) -> _Position:
         if cursor is None:
-            return -1
+            return _START
         try:
-            return int(cursor)
-        except ValueError as exc:
-            raise FeedError(f"invalid cursor for a directory feed: {cursor!r}") from exc
+            decoded = json.loads(cursor)
+        except json.JSONDecodeError:
+            decoded = None
+        if (
+            not isinstance(decoded, list)
+            or len(decoded) != 3
+            or not isinstance(decoded[0], int)
+            or isinstance(decoded[0], bool)
+            or not all(isinstance(part, str) for part in decoded[1:])
+        ):
+            raise FeedError(
+                f"invalid cursor for a directory feed: {cursor!r}; expected the "
+                "[sequence, report_key, file] position this feed issues"
+            )
+        return (decoded[0], decoded[1], decoded[2])
+
+
+def _position_of(record: Mapping[str, Any], name: str) -> _Position:
+    """Total order for one record: usable sequence, then report key, then the
+    file it came from — which is unique within the directory, so no two records
+    ever share a position."""
+
+    key = record.get("report_key")
+    return (_sequence_of(record), key if isinstance(key, str) else "", name)
+
+
+def _encode_cursor(position: _Position) -> str:
+    return json.dumps(list(position), separators=(",", ":"), ensure_ascii=False)
 
 
 def _sequence_of(record: Mapping[str, Any]) -> int:
-    """Sort key only. Anything the import schema would reject collapses to 0 so
-    it is served once, on the first page, and recorded as a rejection."""
+    """Sort component only. Anything the import schema would reject collapses
+    to 0, so such records sort first and are served before the valid ones."""
 
     value = record.get("sequence")
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:

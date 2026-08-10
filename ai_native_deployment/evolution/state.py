@@ -14,20 +14,22 @@ questions and collapsing them loses the answer to one of them:
 | `rejected` | which reports were seen and refused, and why   |
 | `processed`| which reports a frozen batch already claimed   |
 
-Malformed state is never repaired silently. A reset cursor re-imports; a
-dropped pool loses evidence that the feed may no longer serve.
+Malformed state is never repaired silently, and an incomplete file is
+malformed: a missing field is damage, not a default. A reset cursor re-imports;
+a dropped pool loses evidence that the feed may no longer serve.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 
 from ..hashing import sha256_bytes
@@ -35,8 +37,20 @@ from ..manifest import utc_timestamp
 from .config import EvolutionConfig
 from .errors import LockError, StateError
 from .reports import NormalizedReport, canonical_json
+from .schema import is_rfc3339_date_time
 
 STATE_SCHEMA_VERSION = 1
+
+# The complete version-1 shape. Both directions use it: `to_json` writes these
+# fields, `from_json` requires exactly them.
+_STATE_FIELDS = ("cursor", "pending", "rejected", "processed")
+_STATE_KEYS = frozenset(_STATE_FIELDS) | {"schema_version"}
+_POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "primary", "reruns"})
+_REPORT_REF_FIELDS = frozenset(
+    {"report_key", "sequence", "evaluation_id", "generated_at", "bundle_sha256", "artifacts_path"}
+)
+
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z", re.ASCII)
 
 REPORT_JSON_FILENAME = "report.json"
 ARTIFACTS_SUBDIR = "artifacts"
@@ -68,15 +82,25 @@ class ReportRef:
 
     @classmethod
     def from_json(cls, data: Any, where: str) -> "ReportRef":
+        """Rebuild one reference, checking what it means and not merely its
+        Python types: a sequence of 0, an unparseable timestamp, or a digest
+        that is not a digest is corruption, and corruption that loads is
+        corruption the controller will act on."""
+
         if not isinstance(data, dict):
             raise StateError(f"{where}: report reference must be an object")
+        unexpected = set(data) - _REPORT_REF_FIELDS
+        if unexpected:
+            raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
         return cls(
             report_key=_require_str(data, "report_key", where),
-            sequence=_require_int(data, "sequence", where),
+            # The import schema pins `sequence` to minimum 1, so 0 or negative
+            # here is state that no import path could have written.
+            sequence=_require_int(data, "sequence", where, minimum=1),
             evaluation_id=_require_str(data, "evaluation_id", where),
-            generated_at=_require_str(data, "generated_at", where),
-            bundle_sha256=_require_str(data, "bundle_sha256", where),
-            artifacts_path=_require_str(data, "artifacts_path", where),
+            generated_at=_require_timestamp(data, "generated_at", where),
+            bundle_sha256=_require_digest(data, "bundle_sha256", where),
+            artifacts_path=_require_relative_path(data, "artifacts_path", where),
         )
 
 
@@ -116,16 +140,33 @@ class PoolEntry:
     def from_json(cls, data: Any, where: str) -> "PoolEntry":
         if not isinstance(data, dict):
             raise StateError(f"{where}: pool entry must be an object")
-        reruns = data.get("reruns", [])
+        unexpected = set(data) - _POOL_ENTRY_FIELDS
+        if unexpected:
+            raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
+        reruns = data.get("reruns")
         if not isinstance(reruns, list):
             raise StateError(f"{where}: reruns must be a list")
-        return cls(
+        entry = cls(
             repo_id=_require_str(data, "repo_id", where),
             task_id=_require_str(data, "task_id", where),
             primary=ReportRef.from_json(data.get("primary"), f"{where}.primary"),
-            first_imported_at=_require_str(data, "first_imported_at", where),
+            first_imported_at=_require_timestamp(data, "first_imported_at", where),
             reruns=[ReportRef.from_json(item, f"{where}.reruns[{i}]") for i, item in enumerate(reruns)],
         )
+
+        keys = [entry.primary.report_key] + [ref.report_key for ref in entry.reruns]
+        if len(set(keys)) != len(keys):
+            raise StateError(f"{where}: the same report appears twice on this entry")
+        # `primary` is defined as the latest evaluation seen for the task; an
+        # entry whose rerun outranks it would report a superseded evaluation as
+        # current for every batch decision made from this pool.
+        for ref in entry.reruns:
+            if ref.sequence > entry.primary.sequence:
+                raise StateError(
+                    f"{where}: rerun {ref.report_key} has sequence {ref.sequence}, "
+                    f"above primary {entry.primary.report_key} at {entry.primary.sequence}"
+                )
+        return entry
 
 
 @dataclass
@@ -165,6 +206,15 @@ class EvolutionState:
 
     @classmethod
     def from_json(cls, data: Any, path: Path) -> "EvolutionState":
+        """Load a complete version-1 state, or refuse.
+
+        Every field is required, absent included. A file that has lost its
+        `cursor` or its `pending` array is a file that was damaged, and reading
+        the gap as "nothing yet" is exactly the silent reset this module exists
+        to prevent: the cursor rewinds, the pool empties, and the run looks
+        successful.
+        """
+
         if not isinstance(data, dict):
             raise StateError(f"{path}: state must be a JSON object")
         version = data.get("schema_version")
@@ -172,10 +222,19 @@ class EvolutionState:
             raise StateError(
                 f"{path}: unsupported state schema_version {version!r}; this build supports {STATE_SCHEMA_VERSION}"
             )
-        cursor = data.get("cursor")
+        unexpected = set(data) - _STATE_KEYS
+        if unexpected:
+            raise StateError(f"{path}: unexpected state fields {sorted(unexpected)}")
+        for name in _STATE_FIELDS:
+            if name not in data:
+                raise StateError(
+                    f"{path}: incomplete state, {name!r} is missing; version {STATE_SCHEMA_VERSION} requires it"
+                )
+
+        cursor = data["cursor"]
         if cursor is not None and not isinstance(cursor, str):
             raise StateError(f"{path}: cursor must be a string or null")
-        pending = data.get("pending", [])
+        pending = data["pending"]
         if not isinstance(pending, list):
             raise StateError(f"{path}: pending must be a list")
         entries = [PoolEntry.from_json(item, f"{path}: pending[{i}]") for i, item in enumerate(pending)]
@@ -184,12 +243,15 @@ class EvolutionState:
             if entry.dedup_key in seen:
                 raise StateError(f"{path}: pending holds {entry.repo_id}/{entry.task_id} twice")
             seen.add(entry.dedup_key)
-        return cls(
-            cursor=cursor,
-            pending=entries,
-            rejected=_require_map(data, "rejected", path),
-            processed=_require_map(data, "processed", path),
-        )
+
+        rejected = _require_decision_map(data, "rejected", path)
+        processed = _require_decision_map(data, "processed", path)
+        # One report has one decision. The same key in two of these means the
+        # state contradicts itself about what was already done with it, and
+        # `known_report_keys` would flatten the contradiction away.
+        _require_disjoint_keys(entries, rejected, processed, path=path)
+
+        return cls(cursor=cursor, pending=entries, rejected=rejected, processed=processed)
 
 
 def load_state(config: EvolutionConfig) -> EvolutionState:
@@ -318,15 +380,67 @@ def _require_str(data: Mapping[str, Any], key: str, where: str) -> str:
     return value
 
 
-def _require_int(data: Mapping[str, Any], key: str, where: str) -> int:
+def _require_int(data: Mapping[str, Any], key: str, where: str, *, minimum: int | None = None) -> int:
     value = data.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
         raise StateError(f"{where}: {key} must be an integer")
+    if minimum is not None and value < minimum:
+        raise StateError(f"{where}: {key} must be at least {minimum}, got {value}")
     return value
 
 
-def _require_map(data: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
-    value = data.get(key, {})
+def _require_timestamp(data: Mapping[str, Any], key: str, where: str) -> str:
+    value = _require_str(data, key, where)
+    if not is_rfc3339_date_time(value):
+        raise StateError(f"{where}: {key} must be an RFC 3339 timestamp, got {value!r}")
+    return value
+
+
+def _require_digest(data: Mapping[str, Any], key: str, where: str) -> str:
+    value = _require_str(data, key, where)
+    if _SHA256.match(value) is None:
+        raise StateError(f"{where}: {key} must be a sha256 digest")
+    return value
+
+
+def _require_relative_path(data: Mapping[str, Any], key: str, where: str) -> str:
+    """Staged bundles are addressed relative to the repository root. An
+    absolute or upward path in state is a read (and later a delete) somewhere
+    this controller has no business going."""
+
+    value = _require_str(data, key, where)
+    parts = PurePosixPath(value).parts
+    if PurePosixPath(value).is_absolute() or ".." in parts:
+        raise StateError(f"{where}: {key} must be a repository-relative path, got {value!r}")
+    return value
+
+
+def _require_decision_map(data: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
+    value = data[key]
     if not isinstance(value, dict):
         raise StateError(f"{path}: {key} must be an object")
+    for report_key, entry in value.items():
+        if not report_key:
+            raise StateError(f"{path}: {key} has an empty report key")
+        if not isinstance(entry, dict):
+            raise StateError(f"{path}: {key}[{report_key!r}] must be an object")
     return value
+
+
+def _require_disjoint_keys(
+    entries: list[PoolEntry],
+    rejected: Mapping[str, Any],
+    processed: Mapping[str, Any],
+    *,
+    path: Path,
+) -> None:
+    seen: dict[str, str] = {}
+    groups: list[tuple[str, Any]] = [("rejected", rejected), ("processed", processed)]
+    for entry in entries:
+        groups.append((f"pending {entry.repo_id}/{entry.task_id}", entry.report_keys()))
+    for where, keys in groups:
+        for report_key in keys:
+            previous = seen.get(report_key)
+            if previous is not None:
+                raise StateError(f"{path}: report {report_key} appears in both {previous} and {where}")
+            seen[report_key] = where

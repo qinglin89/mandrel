@@ -39,6 +39,23 @@ REASON_SCHEMA_INVALID = "schema-invalid"
 REASON_ARTIFACT_BYTES_MISSING = "artifact-bytes-unavailable"
 REASON_ARTIFACT_HASH_MISMATCH = "artifact-hash-mismatch"
 
+# The complete bounded vocabulary. A `Rejection.detail` quotes the feed and so
+# stays in ignored runtime state; only the reason code is safe to publish, and
+# only because it is one of these — see `ledger.py`.
+REJECTION_REASONS = frozenset(
+    {
+        REASON_MALFORMED,
+        REASON_UNSUPPORTED_SCHEMA_VERSION,
+        REASON_NOT_ARCHIVED,
+        REASON_NOT_COMPLETED,
+        REASON_MISSING_ARTIFACT,
+        REASON_SCHEMA_INVALID,
+        REASON_ARTIFACT_BYTES_MISSING,
+        REASON_ARTIFACT_HASH_MISMATCH,
+    }
+)
+UNKNOWN_REASON = "unspecified-reason"
+
 
 @dataclass(frozen=True)
 class Artifact:
@@ -50,7 +67,12 @@ class Artifact:
 
 @dataclass(frozen=True)
 class Rejection:
-    """A candidate that will not enter the pool, and why."""
+    """A candidate that will not enter the pool, and why.
+
+    `reason` is one of the bounded codes above. `detail` is the diagnostic an
+    operator reads, and it quotes the offending feed value verbatim — which is
+    why it belongs only in ignored runtime state.
+    """
 
     reason: str
     detail: str
@@ -77,6 +99,17 @@ class NormalizedReport:
         an evaluator rerun would multiply."""
 
         return (self.repo_id, self.task_id)
+
+
+def publishable_reason(reason: str | None) -> str:
+    """The part of a rejection that may be committed.
+
+    Anything outside the bounded vocabulary is a code this package did not
+    author, so it degrades to a placeholder rather than carrying whatever it is
+    into a versioned file.
+    """
+
+    return reason if reason in REJECTION_REASONS else UNKNOWN_REASON
 
 
 def canonical_json(value: Any) -> bytes:

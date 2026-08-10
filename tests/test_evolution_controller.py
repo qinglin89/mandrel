@@ -150,6 +150,49 @@ def test_config_fails_closed_on_policy_it_cannot_honour(repo: Path, old: str, ne
         evolution.load_config(repo)
 
 
+@pytest.mark.parametrize(
+    "edits",
+    [
+        # Inside the repository, and tracked: raw bundles would land in Git.
+        pytest.param(
+            [
+                ('runtime_root = ".ai-evolution"', 'runtime_root = "evolution/cases"'),
+                ('imported_artifacts = ".ai-evolution/imported-artifacts"', 'imported_artifacts = "evolution/cases/raw"'),
+            ],
+            id="runtime-root-in-the-versioned-tree",
+        ),
+        pytest.param(
+            [('imported_artifacts = ".ai-evolution/imported-artifacts"', 'imported_artifacts = "evolution/cases"')],
+            id="artifacts-outside-the-runtime-root",
+        ),
+        pytest.param(
+            [('ledger = "evolution/ledger.jsonl"', 'ledger = ".ai-evolution/ledger.jsonl"')],
+            id="audit-outside-the-versioned-tree",
+        ),
+        pytest.param([('batches = "evolution/batches"', 'batches = "batches"')], id="batches-outside-the-versioned-tree"),
+        pytest.param([('runtime_root = ".ai-evolution"', 'runtime_root = "."')], id="runtime-root-is-the-repository"),
+        pytest.param([('cases = "evolution/cases"', 'cases = "evolution/batches"')], id="two-locations-overlap"),
+        pytest.param(
+            [('runtime_root = ".ai-evolution"', 'runtime_root = "evolution/../.ai-evolution"')],
+            id="path-that-does-not-mean-what-it-says",
+        ),
+    ],
+)
+def test_config_refuses_storage_that_crosses_the_ownership_boundary(repo: Path, edits: list[tuple[str, str]]) -> None:
+    """Repository containment is not the invariant. Ignored runtime state and
+    committed sanitized records own separate trees (contract invariant 11), and
+    a config that mixes them writes raw evidence into Git."""
+    path = repo / "evolution" / "config.toml"
+    text = path.read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in text
+        text = text.replace(old, new)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(evolution.ConfigError):
+        evolution.load_config(repo)
+
+
 # --- schema validation -------------------------------------------------------
 
 
@@ -191,6 +234,55 @@ def test_validator_refuses_a_keyword_it_does_not_implement() -> None:
 
 def test_validator_rejects_a_boolean_where_an_integer_is_required() -> None:
     assert schema.validate(True, {"type": "integer"})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-30T10:00:00Z",
+        "2026-07-30t10:00:00z",
+        "2026-07-30T10:00:00.123456+02:00",
+        "2026-07-30T10:00:00-05:30",
+    ],
+)
+def test_rfc3339_timestamps_are_accepted(value: str) -> None:
+    assert schema.is_rfc3339_date_time(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-30 10:00:00Z",  # space separator: ISO 8601, not RFC 3339
+        "2026-W31-4T10:00:00Z",  # week date
+        "2026-07-30T10:00:00+00:00:30",  # offset carrying seconds
+        "20260730T100000Z",  # basic format
+        "2026-07-30T10:00:00",  # no offset at all
+        "2026-07-30",
+        "2026-13-30T10:00:00Z",  # grammatical, impossible
+        "2026-07-30T10:00:00+99:00",
+        "2026-07-30T10:00:00Z ",
+        "",
+    ],
+)
+def test_non_rfc3339_timestamps_are_refused(value: str) -> None:
+    """`datetime.fromisoformat` accepts several of these. A timestamp the
+    versioned schema calls `date-time` and cannot be compared as one would skew
+    every age and ordering decision built on it."""
+    assert not schema.is_rfc3339_date_time(value)
+    assert schema.validate(value, {"type": "string", "format": "date-time"})
+
+
+def test_a_report_whose_timestamp_is_not_rfc3339_never_enters_the_pool(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    record = make_record(key="bad", sequence=1)
+    record["generated_at"] = "2026-07-30 10:00:00Z"
+    feed = write_feed(tmp_path / "feed", [record])
+
+    result = evolution.sync(config, feed)
+
+    assert result.rejected == (("bad", reports.REASON_SCHEMA_INVALID),)
+    assert result.pool_size == 0
 
 
 # --- listing is read-only ----------------------------------------------------
@@ -257,7 +349,8 @@ def test_sync_imports_verified_reports_into_the_pending_pool(
     assert result.imported == ("r1", "r2")
     assert result.pool_size == 2
     assert result.exhausted
-    assert result.cursor_before is None and result.cursor_after == "2"
+    assert result.cursor_before is None
+    assert json.loads(result.cursor_after) == [2, "r2", "r2.json"]
 
     pool = evolution.load_state(config).pending
     entry = pool[0]
@@ -350,11 +443,12 @@ def test_ineligible_reports_are_recorded_and_kept_out_of_the_pool(
     assert result.pool_size == 0
     persisted = evolution.load_state(config)
     assert persisted.rejected["bad"]["reason"] == reason
-    assert persisted.cursor == "1", "an inspected report still advances discovery"
+    assert json.loads(persisted.cursor) == [1, "bad", "bad.json"], "an inspected report still advances discovery"
 
     audit = ledger.read_records(config)
     assert audit[-1]["record_type"] == importer.RECORD_REJECTED
     assert audit[-1]["report_key"] == "bad"
+    assert audit[-1]["detail"] == reason
 
 
 def test_a_rejected_report_is_not_re_examined_after_a_cursor_rewind(
@@ -398,7 +492,7 @@ def test_a_feed_failure_leaves_the_cursor_where_the_last_page_committed(
         evolution.sync(config, FailsOnSecondPage(tmp_path / "feed"), page_size=1)
 
     persisted = evolution.load_state(config)
-    assert persisted.cursor == "1"
+    assert json.loads(persisted.cursor) == [1, "r1", "r1.json"]
     assert len(persisted.pending) == 1
     assert not config.lock_path.exists(), "the lock is released even when a run fails"
 
@@ -407,7 +501,97 @@ def test_a_feed_failure_leaves_the_cursor_where_the_last_page_committed(
     assert finished.pool_size == 2
 
 
+# --- feed paging -------------------------------------------------------------
+
+
+def test_records_sharing_a_sequence_are_all_served(config: evolution.EvolutionConfig, tmp_path: Path) -> None:
+    """Sequence alone is not a position. Two records that repeat one would sit
+    at the same cursor, and everything after the first would be skipped while
+    the cursor advanced past it — reports dropped with no rejection recorded."""
+    feed = write_feed(
+        tmp_path / "feed",
+        [
+            make_record(key="r1", sequence=7),
+            make_record(key="r2", sequence=7, repo_id="repo-beta", task_id="2026-07-02-task"),
+        ],
+    )
+
+    result = evolution.sync(config, feed, page_size=1)
+
+    assert sorted(result.imported) == ["r1", "r2"]
+    assert result.pool_size == 2
+    assert result.exhausted
+
+
+def test_unusable_sequences_do_not_collapse_onto_one_position(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """Every record the schema rejects has sequence 0 for ordering purposes, so
+    a whole page of them must still be served one by one and each rejection
+    recorded."""
+    first = make_record(key="bad-a", sequence=1)
+    second = make_record(key="bad-b", sequence=1, task_id="2026-07-02-task")
+    first["sequence"] = "not-a-sequence"
+    second["sequence"] = 0
+    feed = write_feed(tmp_path / "feed", [first, second])
+
+    result = evolution.sync(config, feed, page_size=1)
+
+    assert [key for key, _ in result.rejected] == ["bad-a", "bad-b"]
+    assert result.exhausted
+    assert set(evolution.load_state(config).rejected) == {"bad-a", "bad-b"}
+
+
+def test_a_cursor_this_feed_never_issued_is_refused(tmp_path: Path) -> None:
+    """Silently reinterpreting a foreign cursor is how a run resumes from a
+    position that means something else."""
+    feed = write_feed(tmp_path / "feed", [make_record(key="r1", sequence=1)])
+
+    for cursor in ("1", '"1"', "[1,2,3]", "not json"):
+        with pytest.raises(evolution.FeedError):
+            feed.fetch_page(cursor, 10)
+
+
 # --- state and lock ----------------------------------------------------------
+
+
+def valid_state() -> dict:
+    """The smallest complete version-1 state. Written out rather than produced
+    by a sync so each corruption case below differs in exactly one way."""
+
+    reference = {
+        "report_key": "r1",
+        "sequence": 4,
+        "evaluation_id": "eval-r1",
+        "generated_at": "2026-07-30T10:00:00Z",
+        "bundle_sha256": "a" * 64,
+        "artifacts_path": ".ai-evolution/imported-artifacts/r1-0123456789abcdef",
+    }
+    return {
+        "schema_version": 1,
+        "cursor": None,
+        "pending": [
+            {
+                "repo_id": "repo-alpha",
+                "task_id": "2026-07-01-task",
+                "first_imported_at": "2026-07-30T10:00:01Z",
+                "primary": reference,
+                "reruns": [],
+            }
+        ],
+        "rejected": {},
+        "processed": {},
+    }
+
+
+def other_report(*, key: str, sequence: int) -> dict:
+    return {**valid_state()["pending"][0]["primary"], "report_key": key, "sequence": sequence}
+
+
+def corrupt(mutate) -> str:
+    data = valid_state()
+    mutate(data)
+    return json.dumps(data)
 
 
 @pytest.mark.parametrize(
@@ -417,6 +601,27 @@ def test_a_feed_failure_leaves_the_cursor_where_the_last_page_committed(
         json.dumps({"schema_version": 2, "cursor": None}),
         json.dumps({"schema_version": 1, "pending": [{"repo_id": "a"}]}),
         json.dumps({"schema_version": 1, "pending": "everything"}),
+        # A state file reduced to its version header: every field that carries
+        # evidence is gone, and reading the gaps as empty is the silent reset.
+        json.dumps({"schema_version": 1}),
+        corrupt(lambda data: data.pop("cursor")),
+        corrupt(lambda data: data.pop("pending")),
+        corrupt(lambda data: data.pop("rejected")),
+        corrupt(lambda data: data.pop("processed")),
+        corrupt(lambda data: data.update(unknown_field=1)),
+        # Shapes that are the right Python types and still cannot be true.
+        corrupt(lambda data: data["pending"][0]["primary"].update(sequence=0)),
+        corrupt(lambda data: data["pending"][0]["primary"].update(bundle_sha256="not-a-digest")),
+        corrupt(lambda data: data["pending"][0]["primary"].update(generated_at="30 July 2026")),
+        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="../../etc")),
+        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="/etc/passwd")),
+        corrupt(lambda data: data["pending"][0].update(first_imported_at="yesterday")),
+        # A rerun outranking `primary` would report a superseded evaluation as
+        # the current one; the same report twice would double-count provenance.
+        corrupt(lambda data: data["pending"][0]["reruns"].append(other_report(key="r2", sequence=9))),
+        corrupt(lambda data: data["pending"][0]["reruns"].append(other_report(key="r1", sequence=2))),
+        corrupt(lambda data: data["rejected"].update(r1={"reason": "schema-invalid"})),
+        corrupt(lambda data: data["rejected"].update(r9="schema-invalid")),
     ],
 )
 def test_corrupt_state_is_reported_never_silently_reset(
@@ -427,6 +632,18 @@ def test_corrupt_state_is_reported_never_silently_reset(
 
     with pytest.raises(evolution.StateError):
         evolution.load_state(config)
+
+
+def test_the_complete_state_shape_loads(config: evolution.EvolutionConfig) -> None:
+    """Guards the corruption cases above from passing vacuously."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    config.state_path.write_text(json.dumps(valid_state()), encoding="utf-8")
+
+    loaded = evolution.load_state(config)
+
+    assert loaded.cursor is None
+    assert [entry.dedup_key for entry in loaded.pending] == [("repo-alpha", "2026-07-01-task")]
+    assert loaded.to_json() == valid_state()
 
 
 def test_state_round_trips_through_disk(config: evolution.EvolutionConfig, tmp_path: Path) -> None:
@@ -511,6 +728,37 @@ def test_sync_touches_only_the_ledger_inside_the_versioned_tree(
     after = snapshot(repo / "evolution")
     assert set(after) == set(before)
     assert [path for path in after if after[path] != before[path]] == ["ledger.jsonl"]
+
+
+def test_no_rejected_feed_value_reaches_the_versioned_ledger(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """A rejection diagnostic quotes the value that caused it, and the feed is
+    not this repository's to publish (invariant 11). The ledger gets the
+    bounded reason code; the diagnostic stays in ignored runtime state, where
+    the operator can still read it."""
+    record = make_record(key="r1", sequence=1)
+    record["artifacts"]["evidence"]["sha256"] = "SECRET-TOKEN-abc123"
+    feed = write_feed(tmp_path / "feed", [record])
+
+    evolution.sync(config, feed)
+
+    assert b"SECRET-TOKEN" not in config.ledger_path.read_bytes()
+    assert "SECRET-TOKEN" in evolution.load_state(config).rejected["r1"]["detail"]
+    audit = ledger.read_records(config)
+    assert audit[-1]["detail"] == reports.REASON_SCHEMA_INVALID
+
+
+def test_an_import_record_carries_only_locally_authored_detail(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    feed = write_feed(tmp_path / "feed", [make_record(key="r1", sequence=1, repo_id="repo-alpha")])
+
+    evolution.sync(config, feed)
+
+    audit = ledger.read_records(config)
+    assert audit[-1]["detail"] == importer.STATUS_NEW
+    assert reports.publishable_reason("invented-by-nobody") == reports.UNKNOWN_REASON
 
 
 def test_no_report_body_reaches_the_versioned_ledger(config: evolution.EvolutionConfig, tmp_path: Path) -> None:

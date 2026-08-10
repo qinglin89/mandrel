@@ -33,6 +33,16 @@ SUPPORTED_SOURCE_KIND = "orch-hub"
 SUPPORTED_COUNT_UNIT = "unique-completed-task"
 SUPPORTED_DEDUPLICATION = "source-repo-and-task"
 
+# The two storage ownerships of the contract's Data layout. Everything the
+# controller writes belongs to exactly one of them: ignored machine-local
+# runtime state under the runtime root, sanitized versioned records under the
+# evolution workspace. The runtime root is pinned because it is the path this
+# repository's .gitignore covers — a config that moves it does not relocate
+# runtime state, it publishes raw evidence.
+VERSIONED_ROOT = CONFIG_RELATIVE_PATH.parent.as_posix()
+SUPPORTED_RUNTIME_ROOT = ".ai-evolution"
+VERSIONED_STORAGE_KEYS = ("ledger", "batches", "cases", "experiments")
+
 # Settings whose only legal value is `true`, and the reason. Turning one off
 # does not configure a laxer controller — it describes one that cannot exist,
 # either because the versioned import schema hard-requires the same thing or
@@ -206,7 +216,7 @@ def load_config(repo_root: Path | None = None, *, config_path: Path | None = Non
         experiments=_contained(data, "storage", "experiments", path, root),
     )
 
-    _check_supported(path, source, batch, eligibility, analysis)
+    _check_supported(path, source, batch, eligibility, analysis, storage)
 
     return EvolutionConfig(
         repo_root=root,
@@ -226,6 +236,7 @@ def _check_supported(
     batch: BatchConfig,
     eligibility: EligibilityConfig,
     analysis: AnalysisConfig,
+    storage: StorageConfig,
 ) -> None:
     sections = {"source": source, "batch": batch, "eligibility": eligibility, "analysis": analysis}
     for (section, key), reason in REQUIRED_TRUE.items():
@@ -257,6 +268,63 @@ def _check_supported(
         )
     if analysis.minimum_cluster_task_count < 1:
         raise ConfigError(f"{path}: [analysis].minimum_cluster_task_count must be at least 1")
+
+    _check_storage(path, storage)
+
+
+def _check_storage(path: Path, storage: StorageConfig) -> None:
+    """Hold the ownership boundary the contract's Data layout draws.
+
+    Repository containment is not enough: `evolution/cases` is inside the
+    repository and is also tracked, so a runtime root pointed there would write
+    raw fetched bundles straight into Git (invariant 11). Each location must
+    therefore sit on the correct side of the boundary, and the two sides must
+    not overlap.
+    """
+
+    if storage.runtime_root != SUPPORTED_RUNTIME_ROOT:
+        raise ConfigError(
+            f"{path}: [storage].runtime_root must be {SUPPORTED_RUNTIME_ROOT!r}, got {storage.runtime_root!r} — "
+            "invariant 11 keeps raw imported artifacts out of Git, and that is the path this repository ignores"
+        )
+    if not _inside(storage.imported_artifacts, storage.runtime_root):
+        raise ConfigError(
+            f"{path}: [storage].imported_artifacts must live under [storage].runtime_root "
+            f"({storage.runtime_root}/), got {storage.imported_artifacts!r} — raw fetched bundles are runtime data"
+        )
+
+    for key in VERSIONED_STORAGE_KEYS:
+        value = getattr(storage, key)
+        if not _inside(value, VERSIONED_ROOT):
+            raise ConfigError(
+                f"{path}: [storage].{key} must live under {VERSIONED_ROOT}/, got {value!r} — "
+                "the versioned workspace is where sanitized, committable records belong"
+            )
+
+    if _overlaps(storage.runtime_root, VERSIONED_ROOT):
+        raise ConfigError(
+            f"{path}: [storage].runtime_root {storage.runtime_root!r} overlaps the versioned workspace "
+            f"{VERSIONED_ROOT}/ — ignored runtime state and committed records never share a tree"
+        )
+
+    for index, key in enumerate(VERSIONED_STORAGE_KEYS):
+        for other in VERSIONED_STORAGE_KEYS[index + 1 :]:
+            if _overlaps(getattr(storage, key), getattr(storage, other)):
+                raise ConfigError(
+                    f"{path}: [storage].{key} and [storage].{other} overlap; each versioned location "
+                    "owns its own path"
+                )
+
+
+def _inside(child: str, parent: str) -> bool:
+    """True when `child` lies strictly inside `parent`. Both are normalized
+    repository-relative POSIX paths, so a prefix test is exact."""
+
+    return child.startswith(parent + "/")
+
+
+def _overlaps(first: str, second: str) -> bool:
+    return first == second or _inside(first, second) or _inside(second, first)
 
 
 def _section(data: dict[str, object], section: str, path: Path) -> dict[str, object]:
@@ -303,6 +371,11 @@ def _contained(data: dict[str, object], section: str, key: str, path: Path, root
     candidate = Path(raw)
     if candidate.is_absolute():
         raise ConfigError(f"{path}: [{section}].{key} must be repository-relative, got {raw!r}")
+    # Rejected rather than resolved away: `evolution/../elsewhere` stays inside
+    # the repository but lands outside the tree its name claims, and every
+    # ownership comparison below is a comparison of these strings.
+    if ".." in candidate.parts:
+        raise ConfigError(f"{path}: [{section}].{key} must not contain '..', got {raw!r}")
     resolved = (root / candidate).resolve()
     if resolved != root and root not in resolved.parents:
         raise ConfigError(f"{path}: [{section}].{key} escapes the repository: {raw!r}")

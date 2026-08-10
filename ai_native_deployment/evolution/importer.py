@@ -26,7 +26,14 @@ from ..manifest import utc_timestamp
 from .config import EvolutionConfig
 from .feed import ReportFeed
 from .ledger import append_records, build_record
-from .reports import NormalizedReport, Rejection, load_import_schema, normalize, verify_artifact_bytes
+from .reports import (
+    NormalizedReport,
+    Rejection,
+    load_import_schema,
+    normalize,
+    publishable_reason,
+    verify_artifact_bytes,
+)
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock, stage_artifacts
 
 DEFAULT_PAGE_SIZE = 50
@@ -158,11 +165,16 @@ def sync(
                 known.add(outcome.report_key or "")
                 if outcome.status == STATUS_REJECTED:
                     rejected.append((outcome.report_key or "", outcome.reason or ""))
+                    # The reason code only. `outcome.detail` quotes the feed —
+                    # a malformed digest, a rejected field value — and the
+                    # ledger is committed (invariant 11). The full diagnostic
+                    # is kept in `state.rejected`, which is ignored runtime
+                    # data, so nothing an operator needs is lost.
                     audit.append(
                         build_record(
                             RECORD_REJECTED,
                             report_key=outcome.report_key,
-                            detail=f"{outcome.reason}: {outcome.detail}",
+                            detail=publishable_reason(outcome.reason),
                         )
                     )
                     continue
@@ -172,7 +184,7 @@ def sync(
                         RECORD_IMPORTED,
                         report_key=outcome.report_key,
                         task_id=outcome.task_id,
-                        detail=f"{outcome.status} report for {outcome.repo_id}",
+                        detail=outcome.status,
                     )
                 )
 

@@ -46,6 +46,13 @@ SUPPORTED_KEYWORDS = frozenset(
 
 SUPPORTED_FORMATS = frozenset({"date-time"})
 
+# RFC 3339 §5.6, the grammar JSON Schema's `date-time` format names. `re.ASCII`
+# keeps `\d` to 0-9: Unicode decimal digits parse as a date nowhere downstream.
+_RFC3339 = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})\Z",
+    re.ASCII,
+)
+
 MAX_REPORTED_ERRORS = 5
 
 
@@ -136,7 +143,7 @@ def _validate_string(instance: str, schema: Mapping[str, Any], path: str) -> lis
     if fmt is not None:
         if fmt not in SUPPORTED_FORMATS:
             raise SchemaError(f"unimplemented format at {path}: {fmt}")
-        if not _is_date_time(instance):
+        if not is_rfc3339_date_time(instance):
             errors.append(f"{path}: {instance!r} is not an RFC 3339 date-time")
     return errors
 
@@ -217,10 +224,24 @@ def _type_name(value: Any) -> str:
     return type(value).__name__
 
 
-def _is_date_time(value: str) -> bool:
+def is_rfc3339_date_time(value: str) -> bool:
+    """True when `value` is an RFC 3339 timestamp carrying an explicit offset.
+
+    Grammar first, then calendar. The pattern alone would accept month 13 or a
+    25-hour offset; `datetime.fromisoformat` alone accepts ISO 8601 forms
+    RFC 3339 excludes — week dates, a space separator, offsets carrying seconds
+    — which would let a malformed `generated_at` through the versioned schema
+    and skew every later age and ordering decision.
+
+    Leap seconds (`:60`) are refused: Python cannot represent one, so accepting
+    the string would only defer the failure to whoever parses it.
+    """
+
+    if _RFC3339.match(value) is None:
+        return False
     candidate = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
     try:
-        parsed = datetime.fromisoformat(candidate)
+        datetime.fromisoformat(candidate)
     except ValueError:
         return False
-    return parsed.tzinfo is not None
+    return True
