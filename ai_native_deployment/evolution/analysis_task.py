@@ -64,6 +64,7 @@ class AnalysisTaskSpec:
     manifest_relative_path: str
     proposed_tasks_relative_path: str
     findings_relative_path: str
+    closure_relative_path: str
     artifacts_root: str
     task_count: int
     report_count: int
@@ -149,6 +150,28 @@ def task_status(path: Path) -> str | None:
         key, separator, value = line.partition(":")
         if separator and key.strip() == "status":
             return value.strip() or None
+    return None
+
+
+def completion(config: EvolutionConfig, task_id: str) -> bool | None:
+    """Whether this machine's copy of the task says the work finished.
+
+    Three answers, and the third is the one that matters: None means this
+    machine does not have the task at all. `.ai-tasks/` is machine-local and
+    ignored, so that is the ordinary state of every other clone — it is not
+    evidence either way, and a caller that reads it as "finished" concludes
+    from a missing file that work it never saw is done.
+
+    An archived task counts as finished by location: close-out moves a task to
+    `archive/` only after it reaches `completed` (taskfile schema §7-8), and the
+    active file is gone by then.
+    """
+
+    active = task_path(config, task_id)
+    if active.is_file():
+        return task_status(active) == STATUS_COMPLETED
+    if archived_task_path(config, task_id).is_file():
+        return True
     return None
 
 
@@ -297,7 +320,12 @@ justified is a valid outcome (invariant 7).
   contract's triage table, and record task count, repository/task-type
   coverage, recurrence, counterexamples, confidence, affected revisions,
   expected benefit, and regression risk.
-- Write the disposition record to `{spec.findings_relative_path}`.
+- Write the disposition record to `{spec.findings_relative_path}`. It does not
+  close the batch by existing: this batch stays open — and no later batch can
+  form (invariant 12) — until this task reaches `completed`, at which point the
+  next `aii-2 evolution` run publishes `{spec.closure_relative_path}` from that
+  status. Never write that record by hand; it attests to a lifecycle, not to a
+  file.
 - Draft each accepted `protocol-candidate` (and any other change task this
   analysis concludes is warranted) as a schema-conforming task file under
   `{spec.proposed_tasks_relative_path}/`. Drafts are inert until a human moves

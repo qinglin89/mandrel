@@ -207,7 +207,12 @@ def sync_locked(
             )
 
         # One commit per page: state first (it is the truth), audit after.
+        # Where discovery stopped and whether that was the end of the feed are
+        # committed together — a cursor that outlived the knowledge of why it
+        # stopped there is what lets a later, separate freeze mistake a prefix
+        # of the feed for the whole eligible set.
         state.cursor = cursor
+        state.feed_exhausted = page.exhausted
         save_state(config, state)
         append_records(config, audit)
 

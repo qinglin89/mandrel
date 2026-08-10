@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/batch-closure.schema.json",
+  "title": "Evolution batch closure record",
+  "description": "Committed proof that a batch's analysis task completed. Written by the controller from the completed task's own lifecycle status, never by hand, and committed so every clone reads the same answer: `.ai-tasks/` is machine-local, so task absence says nothing about completion. Its presence is what releases the next batch (contract invariant 12); findings.md alone is a draft an unfinished analysis has already written.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "analysis_task_id",
+    "closed_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}$"
+    },
+    "analysis_task_id": {
+      "description": "The task whose completion this record attests to; it must be the analysis task the batch manifest names.",
+      "type": "string",
+      "minLength": 1
+    },
+    "closed_at": {
+      "description": "When the controller observed the completion, not when the analysis concluded.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

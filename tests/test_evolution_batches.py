@@ -25,6 +25,7 @@ from evolution_fixtures import (
     make_record,
     make_repo,
     snapshot,
+    write_closure,
     write_feed,
     write_manifest,
 )
@@ -110,10 +111,16 @@ def record_findings(config: evolution.EvolutionConfig, batch_id: str) -> Path:
 
 
 def complete_analysis_task(config: evolution.EvolutionConfig, task_id: str) -> None:
-    """Finish the analysis task the way close-out does: archive the file and
-    drop its row from the active index."""
+    """Finish the analysis task the way close-out does: set the terminal status,
+    archive the file, and drop its row from the active index."""
 
     source = analysis_task.task_path(config, task_id)
+    text = source.read_text(encoding="utf-8")
+    for status in ("pending", "in_progress", "final_review"):
+        if f"status: {status}" in text:
+            text = text.replace(f"status: {status}", "status: completed", 1)
+            break
+    source.write_text(text, encoding="utf-8")
     target = analysis_task.archived_task_path(config, task_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     source.rename(target)
@@ -132,15 +139,20 @@ def set_task_status(config: evolution.EvolutionConfig, task_id: str, status: str
 
 def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -> None:
     """Move a frozen batch to another id, the way a hand-repair would have to:
-    directory, manifest, and the runtime claims naming it. A processed claim is
-    resolved against the manifests, so leaving the claims on the old id is
-    corruption rather than a relabel."""
+    directory, manifest, closure record, and the runtime claims naming it. Both
+    the claims and the closure record are resolved against the manifest they
+    refer to, so leaving either on the old id is corruption rather than a
+    relabel."""
 
     manifest = json.loads((config.batches_root / old_id / batches.MANIFEST_FILENAME).read_text(encoding="utf-8"))
     (config.batches_root / old_id).rename(config.batches_root / new_id)
     (config.batches_root / new_id / batches.MANIFEST_FILENAME).write_text(
         json.dumps({**manifest, "batch_id": new_id}), encoding="utf-8"
     )
+    closure = config.batches_root / new_id / batches.CLOSURE_FILENAME
+    if closure.is_file():
+        record = json.loads(closure.read_text(encoding="utf-8"))
+        closure.write_text(json.dumps({**record, "batch_id": new_id}), encoding="utf-8")
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
     for claim in raw["processed"].values():
         if claim["batch_id"] == old_id:
@@ -149,15 +161,29 @@ def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -
 
 
 def close_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
-    """Close a batch the way the contract does: the analysis task completes, and
-    its dispositions are committed as findings. Draft findings beside a task
-    that has not completed are not closure — `test_draft_findings_...` covers
-    that case."""
+    """Close a batch the way the contract does: the analysis task completes, its
+    dispositions are committed as findings, and the next controller run
+    publishes the closure record from that completed status. Draft findings
+    beside a task that has not completed are not closure — the
+    `test_draft_findings_...` cases cover that, here and on another machine."""
 
     batch = next(item for item in evolution.load_batches(config) if item.batch_id == batch_id)
     record_findings(config, batch_id)
     if batch.analysis_task_id:
         complete_analysis_task(config, batch.analysis_task_id)
+    freeze(config)
+    assert (config.batches_root / batch_id / batches.CLOSURE_FILENAME).is_file()
+
+
+def closed_elsewhere(config: evolution.EvolutionConfig, batch_id: str, report_keys: list[str], **overrides) -> str:
+    """A batch analyzed on another machine: a committed manifest, its findings,
+    and the closure record — and none of the machine-local task files."""
+
+    task_id = f"2026-07-31-{batch_id}-analysis"
+    write_manifest(config.batches_root, batch_id, report_keys, analysis_task_id=task_id, **overrides)
+    record_findings(config, batch_id)
+    write_closure(config.batches_root, batch_id, analysis_task_id=task_id)
+    return task_id
 
 
 # --- admission policy --------------------------------------------------------
@@ -178,7 +204,15 @@ def test_a_pool_below_the_minimum_creates_no_batch(
     assert len(evolution.load_state(config).pending) == MINIMUM - 1
 
 
-def test_an_empty_pool_is_not_a_batch(config: evolution.EvolutionConfig) -> None:
+def test_an_empty_pool_is_not_a_batch(config: evolution.EvolutionConfig, feed_root: Path) -> None:
+    """A drained feed that offered nothing is an empty pool. A repository that
+    has never synced has not measured one at all, and says so instead."""
+    unmeasured = freeze(config)
+
+    assert not unmeasured.frozen
+    assert unmeasured.decision.reason == batches.REASON_POOL_INCOMPLETE
+
+    evolution.sync(config, write_feed(feed_root, []))
     result = freeze(config)
 
     assert not result.frozen
@@ -716,6 +750,40 @@ def test_a_bounded_partial_drain_freezes_nothing(
     assert evolution.load_batches(config)[0].task_count == TARGET + 1
 
 
+def test_a_bounded_sync_still_blocks_a_separate_freeze(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """`sync` and `freeze` are separate commands, so the drain bound has to
+    outlive the run that hit it. A cursor alone does not say why discovery
+    stopped where it did, and a freeze told nothing would take its denominator
+    from the page limit — here, exactly the target, which is the case that
+    freezes silently."""
+    records = [
+        make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
+        for index in range(1, TARGET + 2)
+    ]
+    feed = write_feed(feed_root, records)
+
+    bounded = evolution.sync(config, feed, page_size=TARGET, max_pages=1)
+
+    assert not bounded.exhausted
+    assert bounded.pool_size == TARGET, "the pool has reached the target, but only a prefix of the feed was seen"
+    assert evolution.load_state(config).feed_exhausted is False
+
+    blocked = freeze(config)
+
+    assert not blocked.frozen
+    assert blocked.decision.reason == batches.REASON_POOL_INCOMPLETE
+    assert evolution.load_batches(config) == []
+
+    # Draining the feed is what makes the count a denominator.
+    evolution.sync(config, feed)
+
+    assert evolution.load_state(config).feed_exhausted is True
+    assert freeze(config).frozen
+    assert evolution.load_batches(config)[0].task_count == TARGET + 1
+
+
 def test_an_open_batch_is_reconciled_before_the_feed_is_contacted(
     config: evolution.EvolutionConfig, feed_root: Path, monkeypatch
 ) -> None:
@@ -831,8 +899,7 @@ def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
     result = freeze(config)
     keys = sorted(evolution.load_batches(config)[0].report_keys)
     # A closed batch that also names the report, so the state below still loads.
-    write_manifest(config.batches_root, "evolution-batch-0002", keys)
-    record_findings(config, "evolution-batch-0002")
+    closed_elsewhere(config, "evolution-batch-0002", keys)
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
     raw["processed"][keys[0]]["batch_id"] = "evolution-batch-0002"
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -843,20 +910,30 @@ def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
     assert read_manifest(result)["batch_id"] == "evolution-batch-0001"
 
 
+@pytest.mark.parametrize("lost", ["one", "all"])
 def test_a_manifest_member_missing_from_the_pool_stops_the_reconcile(
-    config: evolution.EvolutionConfig, feed_root: Path
+    config: evolution.EvolutionConfig, feed_root: Path, lost: str
 ) -> None:
     """Claiming it anyway would turn lost evidence into a state that looks
-    consistent with the manifest."""
+    consistent with the manifest.
+
+    Total loss is loss too. Judging the gap against the rest of the batch made
+    the largest hole the one that passed: a state file that kept its cursor and
+    lost every claim read as a machine that had never staged the batch, and the
+    reconcile recreated the whole membership as if the history were intact."""
     fill_pool(config, feed_root, TARGET)
     freeze(config)
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
-    orphaned = sorted(raw["processed"])[0]
-    del raw["processed"][orphaned]
+    claimed = sorted(raw["processed"])
+    for report_key in claimed[:1] if lost == "one" else claimed:
+        del raw["processed"][report_key]
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
+    assert raw["cursor"] is not None, "the state is this machine's own record, not an absent one"
 
     with pytest.raises(evolution.BatchError, match="neither pending nor claimed"):
         freeze(config)
+
+    assert json.loads(config.state_path.read_text(encoding="utf-8"))["processed"] == raw["processed"]
 
 
 @pytest.mark.parametrize("status", ["pending", "in_progress", "final_review"])
@@ -902,18 +979,121 @@ def test_a_completed_analysis_task_closes_its_batch_before_it_is_archived(
     assert batches.open_batch(config) is None
 
 
-def test_findings_alone_close_a_batch_on_a_machine_without_the_task(
-    config: evolution.EvolutionConfig, feed_root: Path
+@pytest.mark.parametrize("status", ["pending", "in_progress", "final_review"])
+def test_draft_findings_do_not_close_a_batch_on_another_machine_either(
+    config: evolution.EvolutionConfig, feed_root: Path, status: str
 ) -> None:
-    """`.ai-tasks/` is machine-local and ignored, so a fresh clone has none of
-    it. Closure has to travel with the repository, or every past batch would
-    read as open and the guard would deadlock."""
+    """`.ai-tasks/` is machine-local and ignored, so on every machine but one
+    the analysis lifecycle cannot be read at all. Reading that absence as
+    completion — as this controller once did — let committed draft findings
+    release the next cohort from any fresh clone, while the analysis they came
+    from was still pending review."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
+    if status != "pending":
+        set_task_status(config, first.analysis_task_id or "", status)
     record_findings(config, first.batch_id or "")
     shutil.rmtree(analysis_task.tasks_root(config))
 
+    unfinished = batches.open_batch(config)
+
+    assert unfinished is not None and unfinished.batch_id == first.batch_id
+    assert not (config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME).exists()
+
+
+def test_a_completed_analysis_closes_its_batch_on_every_machine(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The other half: closure has to travel with the repository, or every past
+    batch would read as open elsewhere and the guard would deadlock. What
+    travels is the record the controller publishes from the completed task, not
+    the findings the task wrote while it was still being reviewed."""
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    record_findings(config, first.batch_id or "")
+    complete_analysis_task(config, first.analysis_task_id or "")
+
+    published = freeze(config)
+
+    assert published.closed_batch_ids == (first.batch_id,)
+    closure = json.loads((config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME).read_text())
+    assert closure == {
+        "schema_version": 1,
+        "batch_id": first.batch_id,
+        "analysis_task_id": first.analysis_task_id,
+        "closed_at": "2026-08-01T12:00:00Z",
+    }
     assert batches.open_batch(config) is None
+    analyzed = [record for record in ledger.read_records(config) if record["record_type"] == "batch-analyzed"]
+    assert analyzed == [
+        {
+            "record_type": "batch-analyzed",
+            "schema_version": 1,
+            "recorded_at": "2026-08-01T12:00:00Z",
+            "batch_id": first.batch_id,
+            "task_id": first.analysis_task_id,
+        }
+    ]
+
+    # And the next machine, which has none of the task files, agrees.
+    shutil.rmtree(analysis_task.tasks_root(config))
+    assert batches.open_batch(config) is None
+    assert freeze(config).closed_batch_ids == (), "the record is published once, not on every run"
+
+
+def test_an_unfinished_local_task_holds_a_batch_open_against_its_closure_record(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Local lifecycle may contradict the committed record only by being more
+    conservative than it: every machine agrees a batch is closed, or is the one
+    still working on it."""
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    record_findings(config, first.batch_id or "")
+    write_closure(
+        config.batches_root,
+        first.batch_id or "",
+        analysis_task_id=first.analysis_task_id or "",
+    )
+    set_task_status(config, first.analysis_task_id or "", "in_progress")
+
+    unfinished = batches.open_batch(config)
+
+    assert unfinished is not None and unfinished.batch_id == first.batch_id
+
+
+def test_a_closure_record_that_contradicts_its_manifest_is_refused(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The record is what every other machine trusts, so one that names another
+    batch or another task releases the next cohort on evidence of something
+    else entirely."""
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    shutil.rmtree(analysis_task.tasks_root(config))
+    record_findings(config, first.batch_id or "")
+    path = config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME
+
+    for record, message in (
+        ({"batch_id": "evolution-batch-0009"}, "cannot close another"),
+        ({"analysis_task_id": "2026-01-01-something-else"}, "names"),
+        ({"closed_at": "1 August 2026"}, "does not match its schema"),
+        ({"schema_version": 2}, "does not match its schema"),
+    ):
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "batch_id": first.batch_id,
+                    "analysis_task_id": first.analysis_task_id,
+                    "closed_at": "2026-08-01T12:00:00Z",
+                    **record,
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(evolution.EvolutionError, match=message):
+            batches.open_batch(config)
 
 
 def test_an_open_batch_that_names_no_analysis_task_is_reported(
@@ -1048,8 +1228,7 @@ def test_a_version_1_manifest_keeps_its_read_path(
     too. Version 2 added the cohort provenance invariants 4 and 5 need; a
     version-1 manifest cannot grow those fields, so it keeps its own schema and
     stays readable rather than becoming a batch nothing can load."""
-    write_manifest(config.batches_root, "evolution-batch-0001", ["old1", "old2"], version=1)
-    record_findings(config, "evolution-batch-0001")
+    closed_elsewhere(config, "evolution-batch-0001", ["old1", "old2"], version=1)
 
     loaded = evolution.load_batches(config)
 
@@ -1067,10 +1246,10 @@ def test_a_version_1_manifest_keeps_its_read_path(
 
 
 def test_a_version_1_manifest_still_guards_the_open_batch(
-    config: evolution.EvolutionConfig, feed_root: Path
+    config: evolution.EvolutionConfig,
 ) -> None:
     """Also the fresh-clone shape: the committed manifest is here and the
-    ignored runtime pool it was frozen from is not, which is a batch this
+    ignored runtime state it was frozen from is not, which is a batch this
     machine never staged rather than one whose evidence it lost."""
     write_manifest(
         config.batches_root,
@@ -1079,7 +1258,7 @@ def test_a_version_1_manifest_still_guards_the_open_batch(
         version=1,
         analysis_task_id="2026-07-31-evolution-batch-0001-analysis",
     )
-    fill_pool(config, feed_root, TARGET)
+    assert not config.state_path.exists()
 
     result = freeze(config)
 

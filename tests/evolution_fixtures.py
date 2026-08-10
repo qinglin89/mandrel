@@ -144,6 +144,36 @@ def write_manifest(
     return directory
 
 
+def write_closure(
+    batches_root: Path,
+    batch_id: str,
+    *,
+    analysis_task_id: str,
+    closed_at: str = "2026-07-31T12:00:00Z",
+) -> Path:
+    """The closure record the controller publishes from a completed analysis
+    task, for tests that need a batch already analyzed elsewhere — the ordinary
+    case on any machine that did not run the analysis."""
+
+    path = batches_root / batch_id / "analysis-complete.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "batch_id": batch_id,
+                "analysis_task_id": analysis_task_id,
+                "closed_at": closed_at,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | None = None) -> feed_module.DirectoryFeed:
     (root / feed_module.REPORTS_DIRNAME).mkdir(parents=True, exist_ok=True)
     for record in records:

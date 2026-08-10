@@ -8,14 +8,15 @@ This is the step where evidence becomes a cohort. Three things make it safe:
   directory rename, and never edited afterwards — a late report belongs to a
   later batch.
 - **One open batch at a time** (invariant 12). A batch is open until its
-  analysis has completed and recorded `findings.md`; while one is open, `start`
-  completes it rather than starting a second.
+  analysis task has completed and its findings are recorded; while one is open,
+  `start` completes it rather than starting a second.
 
-**What may be frozen.** Only a pool that is the whole eligible set. `start`
-admits from the pool its own sync produced, so a sync that stopped at its page
-bound without draining the feed leaves a pool that is a prefix — and a cohort
+**What may be frozen.** Only a pool that is the whole eligible set — a cohort
 frozen from a prefix has a denominator set by a local pagination limit rather
-than by the evidence (invariants 1 and 2).
+than by the evidence (invariants 1 and 2). Discovery records whether it drained
+the feed (`state.feed_exhausted`), because the freeze it would mislead need not
+be in the same run: `sync` and `freeze` are separate commands, and a cursor
+alone does not say why discovery stopped where it did.
 
 **Interruption.** A freeze commits in four steps, in this order: the manifest
 (the durable membership statement), the state transition that moves the batched
@@ -42,18 +43,21 @@ from typing import Any, Mapping
 from ..hashing import sha256_bytes
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
-from .config import BATCH_SCHEMA_FILENAME, EvolutionConfig
+from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
 from .manifests import (
     BATCH_SCHEMA_VERSION,
+    CLOSURE_FILENAME,
+    CLOSURE_SCHEMA_VERSION,
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
     Batch,
     load_batches,
     next_batch_id,
+    read_closure,
 )
 from .reports import (
     NormalizedReport,
@@ -75,9 +79,11 @@ from .state import (
     load_state,
     save_state,
     single_writer_lock,
+    state_exists,
 )
 
 RECORD_BATCH_FROZEN = "batch-frozen"
+RECORD_BATCH_ANALYZED = "batch-analyzed"
 
 # Why a batch was frozen. Locally authored, bounded, and safe to publish — the
 # ledger's `detail` carries one of these and nothing else.
@@ -124,6 +130,8 @@ class FreezeResult:
     analysis_task_path: Path | None = None
     open_batch_id: str | None = None
     completed: tuple[str, ...] = ()
+    # Batches whose completed analysis this run published as a closure record.
+    closed_batch_ids: tuple[str, ...] = ()
 
     @property
     def frozen(self) -> bool:
@@ -141,41 +149,109 @@ class StartResult:
 def is_open(config: EvolutionConfig, batch: Batch) -> bool:
     """Whether this batch still awaits its analysis.
 
-    Two signals, and the asymmetry between them is the point:
+    Closure is a completed analysis task, never a file that exists. Two things
+    can show one, and they are checked in that order of authority:
 
-    - `findings.md` is the committed disposition record, and the only signal
-      that can *close* a batch. It travels with the repository, so a fresh clone
-      reads a long-finished batch as closed. Closure that depended on
-      machine-local files would leave every past batch open on any other
-      machine, and the guard below would deadlock.
-    - The generated analysis task, on a machine that has it, can only *hold a
-      batch open*. The contract closes a batch after its analysis task
-      "completes successfully" (Data layout), and that task writes its findings
-      while it is still being developed and reviewed — so draft findings beside
-      a task that is still pending, in progress, or in final review are not a
-      completed analysis, and treating them as one lets a second cohort form
-      while the first is still being analyzed.
+    - The analysis task itself, on the machine that has it
+      (`analysis_task.completion`). This is the primary reading, and the only
+      one anything is derived from: the contract closes a batch after its
+      analysis task "completes successfully" (Data layout).
+    - The committed closure record, everywhere else. `.ai-tasks/` is
+      machine-local and ignored, so on a fresh clone the lifecycle simply
+      cannot be read; the record is what the controller publishes from the
+      completed task so closure travels with the repository instead of
+      deadlocking every other checkout on a batch it cannot see finish.
 
-    So local task state can hold open what the committed record calls closed,
-    never the reverse: every machine agrees a batch is closed, or is more
-    conservative than the machine doing the work. A task file that cannot be
-    read counts as in flight (`analysis_task.task_status`) — an unreadable
-    lifecycle has not been shown to have finished.
+    `findings.md` gates both, and closes nothing by itself. The analysis task
+    writes its dispositions while it is still being developed and reviewed, so
+    draft findings beside a pending, in-progress, or in-final-review task are
+    not a completed analysis — reading them as one lets a second cohort form
+    while the first is still being analyzed, on this machine or any other.
+
+    A task that is present and unfinished holds the batch open even against a
+    closure record: local lifecycle can contradict the committed record only by
+    being more conservative than it. A task file that cannot be read counts as
+    in flight — an unreadable lifecycle has not been shown to have finished.
     """
 
     if not batch.findings_recorded:
         return True
     task_id = batch.analysis_task_id
-    if task_id is None:
-        # Nothing to consult: the manifest names no task, so the committed
-        # record is all there is. `_complete_freeze` reports the missing field
-        # for any batch that is still open.
-        return False
-    active = analysis_task.task_path(config, task_id)
-    if not active.is_file():
-        # Archived at close-out, or never present on this machine.
-        return False
-    return analysis_task.task_status(active) != analysis_task.STATUS_COMPLETED
+    if task_id is not None:
+        local = analysis_task.completion(config, task_id)
+        if local is not None:
+            return not local
+    # No lifecycle to read here — the ordinary case on every machine but one,
+    # and also a manifest that names no task at all. The committed record is
+    # then the only thing that can answer.
+    return read_closure(config, batch) is None
+
+
+def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ...]:
+    """Publish the closure record for every batch this machine can prove done.
+
+    The write that makes `is_open`'s second reading possible. It runs on this
+    machine because this is where the analysis task lives; it writes into the
+    versioned batch directory because every other machine needs the answer and
+    has no way to derive it. Only completion observed from the task's own
+    lifecycle is published — nothing here infers closure from a file's
+    existence.
+
+    Idempotent by the record's presence, and safe to run over every batch: a
+    batch whose analysis finished before this record existed is closed by the
+    next run that sees its completed task.
+    """
+
+    recorded: list[tuple[str, str]] = []
+    for batch in load_batches(config):
+        task_id = batch.analysis_task_id
+        if task_id is None or not batch.findings_recorded:
+            continue
+        if analysis_task.completion(config, task_id) is not True:
+            continue
+        if read_closure(config, batch) is not None:
+            continue
+        _write_closure(config, batch, task_id=task_id, now=now)
+        recorded.append((batch.batch_id, task_id))
+
+    append_records(
+        config,
+        [
+            build_record(
+                RECORD_BATCH_ANALYZED,
+                recorded_at=format_rfc3339(now),
+                batch_id=batch_id,
+                task_id=task_id,
+            )
+            for batch_id, task_id in recorded
+        ],
+    )
+    return tuple(batch_id for batch_id, _ in recorded)
+
+
+def _write_closure(config: EvolutionConfig, batch: Batch, *, task_id: str, now: datetime) -> Path:
+    """Write one closure record, validated before it is published.
+
+    Committed content, so it is validated against its versioned schema on the
+    way out as well as on the way in, and written atomically: a half-written
+    record is one `read_closure` would refuse, which would leave a finished
+    batch reading as open on every machine but this one.
+    """
+
+    record = {
+        "schema_version": CLOSURE_SCHEMA_VERSION,
+        "batch_id": batch.batch_id,
+        "analysis_task_id": task_id,
+        "closed_at": format_rfc3339(now),
+    }
+    validate_or_raise(
+        record,
+        load_schema(config.schema_path(CLOSURE_SCHEMA_FILENAME)),
+        description=f"batch closure record for {batch.batch_id}",
+    )
+    path = batch.closure_path
+    atomic_write_text(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def open_batch(config: EvolutionConfig) -> Batch | None:
@@ -202,18 +278,17 @@ def evaluate_admission(
     now: datetime,
     forced: bool = False,
     open_batch_id: str | None = None,
-    pool_complete: bool = True,
 ) -> AdmissionDecision:
     """Apply the configured admission policy to the pending pool.
 
     Pure, and the only place that decides. The order of the tests is the policy:
 
     1. An open batch dominates everything (invariant 12).
-    2. The pool must be the whole eligible set. `pool_complete` is false when
-       the discovery that fed this decision stopped before the feed was
-       drained; the count is then a prefix, and every threshold below would be
-       measured against a number a page limit chose. Not an error — the next
-       run continues from the cursor and admits the complete pool.
+    2. The pool must be the whole eligible set. `state.feed_exhausted` is false
+       when discovery stopped before the feed was drained — or has never run;
+       the count is then a prefix, and every threshold below would be measured
+       against a number a page limit chose. Not an error — the next run
+       continues from the cursor and admits the complete pool.
     3. The target forms a batch on its own — a `--force` alongside it changes
        nothing, so the batch is not recorded as forced.
     4. The configured minimum is a floor no path crosses. `--force` waives the
@@ -227,8 +302,10 @@ def evaluate_admission(
        away.
     6. Otherwise a human may force it, with a justification.
 
-    `pool_complete` defaults to true because a bare `freeze` contacts no feed:
-    it admits from what is already imported, which is complete by construction.
+    Read from the state rather than passed in by the caller, because the caller
+    may not be the run that discovered anything: `sync` and `freeze` are
+    separate commands, and a `freeze` told nothing would have to assume the
+    pool is whole — which is exactly the assumption a bounded sync invalidates.
     """
 
     task_count = len(state.pending)
@@ -252,7 +329,7 @@ def evaluate_admission(
 
     if open_batch_id is not None:
         return decision(freeze=False, reason=REASON_OPEN_BATCH)
-    if not pool_complete:
+    if not state.feed_exhausted:
         return decision(freeze=False, reason=REASON_POOL_INCOMPLETE)
     if task_count == 0:
         return decision(freeze=False, reason=REASON_POOL_EMPTY)
@@ -299,22 +376,25 @@ def start(
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> StartResult:
-    """The human-triggered entry point: repair, import, then admit.
+    """The human-triggered entry point: close, repair, import, then admit.
 
-    One lock covers all three, so the pool admission measures is exactly the
-    pool the import produced. A feed failure aborts before any admission
-    decision — an unreachable feed means the pool's completeness is unknown, and
-    freezing an unknown pool is precisely what invariant 3 forbids.
+    One lock covers all four, so the pool admission measures is exactly the pool
+    the import produced. A feed failure aborts before any admission decision —
+    an unreachable feed means the pool's completeness is unknown, and freezing
+    an unknown pool is precisely what invariant 3 forbids.
 
-    Repair runs *first*, and touches no feed. An open batch whose state
-    transition or analysis task never landed is a frozen manifest with no way to
-    be analyzed; making that repair wait for a reachable feed would leave the
-    repository stuck on an outage that has nothing to do with it.
+    Closing and repair run *first*, and touch no feed. A batch whose analysis
+    finished is still recorded open until this machine publishes that fact, and
+    an open batch whose state transition or analysis task never landed is a
+    frozen manifest with no way to be analyzed; making either wait for a
+    reachable feed would leave the repository stuck on an outage that has
+    nothing to do with it.
     """
 
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
     with single_writer_lock(config):
+        closed = _record_closures(config, now=moment)
         repaired = _reconcile_locked(config, now=moment)
         imported = sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
         admitted = freeze_locked(
@@ -323,12 +403,13 @@ def start(
             forced=forced,
             justification=justification,
             runner_revision=runner_revision,
-            pool_complete=imported.exhausted,
         )
     if repaired is not None:
         # The freeze above reconciled again and found nothing left; the steps
         # this run actually completed are the ones the first pass did.
         admitted = replace(admitted, completed=tuple(dict.fromkeys(repaired.completed + admitted.completed)))
+    if closed:
+        admitted = replace(admitted, closed_batch_ids=tuple(dict.fromkeys(closed + admitted.closed_batch_ids)))
     return StartResult(sync=imported, freeze=admitted)
 
 
@@ -339,21 +420,21 @@ def freeze_locked(
     forced: bool = False,
     justification: str | None = None,
     runner_revision: str | None = None,
-    pool_complete: bool = True,
 ) -> FreezeResult:
     """`freeze` without acquiring the lock, for a caller that already holds it."""
 
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
 
+    closed = _record_closures(config, now=moment)
     repaired = _reconcile_locked(config, now=moment)
     if repaired is not None:
-        return repaired
+        return replace(repaired, closed_batch_ids=closed)
 
     state = load_state(config)
-    decision = evaluate_admission(config, state, now=moment, forced=forced, pool_complete=pool_complete)
+    decision = evaluate_admission(config, state, now=moment, forced=forced)
     if not decision.freeze:
-        return FreezeResult(decision=decision)
+        return FreezeResult(decision=decision, closed_batch_ids=closed)
 
     revision = runner_revision if runner_revision is not None else release_line_revision(config.repo_root)
     batches = load_batches(config)
@@ -410,6 +491,7 @@ def freeze_locked(
         manifest_path=directory / MANIFEST_FILENAME,
         analysis_task_id=task_id,
         analysis_task_path=task_file,
+        closed_batch_ids=closed,
     )
 
 
@@ -425,8 +507,9 @@ def _reconcile_locked(config: EvolutionConfig, *, now: datetime) -> FreezeResult
     if unfinished is None:
         return None
 
+    present = state_exists(config)
     state = load_state(config)
-    completed = _complete_freeze(config, unfinished, state, now=now)
+    completed = _complete_freeze(config, unfinished, state, now=now, state_present=present)
     return FreezeResult(
         decision=evaluate_admission(config, state, now=now, open_batch_id=unfinished.batch_id),
         open_batch_id=unfinished.batch_id,
@@ -702,6 +785,7 @@ def _complete_freeze(
     state: EvolutionState,
     *,
     now: datetime,
+    state_present: bool,
 ) -> tuple[str, ...]:
     """Finish an interrupted freeze of the open batch, and report what was left.
 
@@ -719,12 +803,12 @@ def _complete_freeze(
     if task_id is None:
         raise BatchError(
             f"{batch.manifest_path}: the open batch names no analysis_task_id, so this controller cannot tell "
-            "which task is meant to analyze it; record its findings.md to close the batch, or restore the field"
+            "which task is meant to analyze it — and nothing can show that analysis completed; restore the field"
         )
     spec = _task_spec(config, batch.manifest, task_id=task_id, batch_id=batch.batch_id)
 
     completed: list[str] = []
-    _require_consistent_claims(config, batch, state)
+    _require_consistent_claims(config, batch, state, state_present=state_present)
     # A key in `processed` is never also pending — state that claimed both would
     # not load — so the reports still owed to this batch are exactly these.
     outstanding = batch.report_keys - set(state.processed)
@@ -744,34 +828,45 @@ def _complete_freeze(
     return tuple(completed)
 
 
-def _require_consistent_claims(config: EvolutionConfig, batch: Batch, state: EvolutionState) -> None:
+def _require_consistent_claims(
+    config: EvolutionConfig,
+    batch: Batch,
+    state: EvolutionState,
+    *,
+    state_present: bool,
+) -> None:
     """The manifest's members must be accounted for: pending, or claimed by this
     batch and no other.
 
     A claim naming a different batch means two cohorts believe they own one
     report, and this controller cannot arbitrate which manifest is right.
 
-    A member the state does not mention at all is judged against the rest of the
-    batch. If the state knows *some* of this batch's reports and not others, the
-    pool has lost entries the manifest was frozen from, and finishing the freeze
-    over the gap would have `_claim_reports` manufacture the missing claims —
-    turning lost evidence into a state that reads as consistent. If it knows
-    none of them, this machine simply never staged this batch: `.ai-evolution/`
-    is ignored runtime state, so a fresh clone carries every committed manifest
-    and no pool at all, and refusing there would deadlock a checkout on a batch
-    it could not possibly have staged.
+    A member the state does not mention at all is a gap, and the discriminator
+    is whether there is a state file at all — not how much of the batch it
+    happens to mention. `.ai-evolution/` is ignored runtime state, so a fresh
+    clone carries every committed manifest and no state whatsoever; refusing
+    there would deadlock a checkout on a batch it could not possibly have
+    staged. But a state file that exists is this machine's own record of what
+    it staged, and a hole in it is lost evidence however large the hole is —
+    finishing the freeze over one would have `_claim_reports` manufacture the
+    missing claims, turning the loss into a state that reads as consistent with
+    the manifest. Judging the gap against the rest of the batch, as this once
+    did, made *total* loss the one size of hole that passed.
     """
 
+    if not state_present:
+        return
+
     pending = {report_key for entry in state.pending for report_key in entry.report_keys()}
-    recorded = {key for key in batch.report_keys if key in pending or key in state.processed}
     for report_key in sorted(batch.report_keys):
         claim = state.processed.get(report_key)
         if claim is None:
-            if report_key not in pending and recorded:
+            if report_key not in pending:
                 raise BatchError(
                     f"report {report_key} is named by {batch.manifest_path} but is neither pending nor claimed in "
-                    f"{config.state_path}, while {sorted(recorded)} still are; the pool lost part of the evidence "
-                    "this batch was frozen from — restore the runtime state rather than freezing over the gap"
+                    f"{config.state_path}; this machine's runtime state does not account for the batch's evidence — "
+                    "restore the state rather than freezing over the gap, or, if this machine never staged this "
+                    "batch, import the reports again before completing it here"
                 )
             continue
         owner = claim.get("batch_id")
@@ -801,6 +896,7 @@ def _task_spec(
         manifest_relative_path=f"{directory}/{MANIFEST_FILENAME}",
         proposed_tasks_relative_path=f"{directory}/{analysis_task.PROPOSED_TASKS_DIRNAME}",
         findings_relative_path=f"{directory}/{FINDINGS_FILENAME}",
+        closure_relative_path=f"{directory}/{CLOSURE_FILENAME}",
         artifacts_root=config.storage.imported_artifacts,
         task_count=len({(report["repo_id"], report["task_id"]) for report in reports}),
         report_count=len(reports),

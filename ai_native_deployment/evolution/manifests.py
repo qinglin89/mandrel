@@ -1,4 +1,8 @@
-"""The immutable batch manifest: reading, versioning, and membership.
+"""Committed batch content: the immutable manifest, and the closure record.
+
+The read side of a frozen batch — membership, versioning, and whether its
+analysis has finished. `batches.py` owns the writes, the way it already owns
+`_write_manifest` against this module's `read_manifest`.
 
 Split out of `batches.py` because two layers need it and neither may import the
 other: `state.py` checks a processed report against the batch that claims it,
@@ -24,6 +28,7 @@ from typing import Any, Mapping
 from .config import (
     BATCH_SCHEMA_FILENAME,
     BATCH_SCHEMA_V1_FILENAME,
+    CLOSURE_SCHEMA_FILENAME,
     EvolutionConfig,
     batch_id_number,
     format_batch_id,
@@ -33,6 +38,9 @@ from .schema import load_schema, validate_or_raise
 
 MANIFEST_FILENAME = "manifest.json"
 FINDINGS_FILENAME = "findings.md"
+CLOSURE_FILENAME = "analysis-complete.json"
+
+CLOSURE_SCHEMA_VERSION = 1
 
 # What a freeze writes.
 BATCH_SCHEMA_VERSION = 2
@@ -64,10 +72,15 @@ class Batch:
 
         Necessary for a batch to be closed, and never sufficient on its own —
         the task writes this file while it is still being developed. What turns
-        it into closure is `batches.py`, which owns the guard.
+        it into closure is the record beside it (`closure_path`), which the
+        controller writes only from a completed analysis task.
         """
 
         return self.findings_path.is_file()
+
+    @property
+    def closure_path(self) -> Path:
+        return self.directory / CLOSURE_FILENAME
 
     @property
     def schema_version(self) -> int | None:
@@ -155,6 +168,50 @@ def claimed_reports(config: EvolutionConfig) -> dict[str, set[str]]:
         for report_key in batch.report_keys:
             owners.setdefault(report_key, set()).add(batch.batch_id)
     return owners
+
+
+def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | None:
+    """The batch's committed closure record, or None when it has none.
+
+    This is the portable half of the closure guard. `.ai-tasks/` is
+    machine-local and ignored, so the analysis task's lifecycle can be read on
+    at most one machine; the record travels with the repository, which is what
+    lets every other clone tell a finished analysis from a draft. Reading task
+    *absence* as completion, as this controller once did, gives the opposite
+    answer everywhere the task never existed.
+
+    Validated, and cross-checked against the manifest it sits beside: a record
+    naming another batch or another task is corruption, and corruption that
+    loads here releases the next cohort early.
+    """
+
+    path = batch.closure_path
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BatchError(f"unreadable batch closure record {path}: {exc}") from exc
+    if not isinstance(record, dict):
+        raise BatchError(f"batch closure record is not a JSON object: {path}")
+
+    validate_or_raise(
+        record,
+        load_schema(config.schema_path(CLOSURE_SCHEMA_FILENAME)),
+        description=f"batch closure record {path}",
+    )
+    if record["batch_id"] != batch.batch_id:
+        raise BatchError(
+            f"{path}: closure record names batch {record['batch_id']!r} but sits in {batch.batch_id!r}; "
+            "one batch's completion cannot close another"
+        )
+    named = batch.analysis_task_id
+    if named is not None and record["analysis_task_id"] != named:
+        raise BatchError(
+            f"{path}: closure record attests to task {record['analysis_task_id']!r}, but "
+            f"{batch.manifest_path} names {named!r} as this batch's analysis task"
+        )
+    return record
 
 
 def read_manifest(config: EvolutionConfig, path: Path) -> Mapping[str, Any]:

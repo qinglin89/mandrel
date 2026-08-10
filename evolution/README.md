@@ -72,7 +72,8 @@ evolution/
   ledger.jsonl                      append-only sanitized audit
   schemas/                          import, batch, and ledger contracts
   batches/<batch-id>/manifest.json  immutable report membership
-  batches/<batch-id>/findings.md    completed analysis disposition
+  batches/<batch-id>/findings.md    analysis disposition record
+  batches/<batch-id>/analysis-complete.json  reviewed-completion record; closes the batch
   batches/<batch-id>/proposed-tasks/ change-task drafts awaiting human admission
   cases/                            curated sanitized regression cases
   experiments/                      canary/replay definitions and outcomes
@@ -85,9 +86,17 @@ evolution/
 
 The discovery cursor, pending pool, and processed-batch ledger are distinct:
 
-- Advancing discovery records that a feed item was inspected.
+- Advancing discovery records that a feed item was inspected. Whether that
+  discovery reached the end of the feed is recorded with it: a pool left as a
+  prefix by a page bound is not a denominator (invariants 1 and 2).
 - A pending report remains eligible until assigned to a frozen batch.
 - A batch is processed only after its analysis task completes successfully.
+  `findings.md` is the disposition record and is written while that task is
+  still being developed and reviewed, so it does not by itself close a batch.
+  Completion is read from the analysis task's own lifecycle status, and the
+  controller then records `analysis-complete.json` in the batch directory.
+  That record is committed because `.ai-tasks/` is machine-local: without it,
+  no other clone can tell a finished analysis from a draft.
 
 ## Normal workflow
 

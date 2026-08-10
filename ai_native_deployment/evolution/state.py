@@ -4,15 +4,22 @@ Everything here is ignored by Git by design (contract invariant 11): the
 discovery cursor, the pending pool, and the raw imported bundles are runtime
 data, not repository content.
 
-Four things are kept deliberately separate, because they answer four different
+Five things are kept deliberately separate, because they answer five different
 questions and collapsing them loses the answer to one of them:
 
-| Field      | Answers                                        |
-|------------|------------------------------------------------|
-| `cursor`   | how far the feed has been *inspected*          |
-| `pending`  | which unique tasks are *eligible and unbatched* |
-| `rejected` | which reports were seen and refused, and why   |
-| `processed`| which reports a frozen batch already claimed   |
+| Field           | Answers                                             |
+|-----------------|-----------------------------------------------------|
+| `cursor`        | how far the feed has been *inspected*               |
+| `feed_exhausted`| whether that inspection reached the *end* of it     |
+| `pending`       | which unique tasks are *eligible and unbatched*     |
+| `rejected`      | which reports were seen and refused, and why        |
+| `processed`     | which reports a frozen batch already claimed        |
+
+`feed_exhausted` is separate from the cursor because a cursor says only where
+discovery stopped, never why. Discovery that stopped at its page bound leaves
+a pool that is a prefix of the feed, and that fact has to outlive the run that
+learned it: the freeze it would mislead may be a separate command (`batches.py`,
+admission).
 
 Malformed state is never repaired silently, and an incomplete file is
 malformed: a missing field is damage, not a default. A reset cursor re-imports;
@@ -40,12 +47,19 @@ from .manifests import claimed_reports
 from .reports import REJECTION_REASONS, NormalizedReport, canonical_json
 from .schema import is_rfc3339_date_time
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
-# The complete version-1 shape. Both directions use it: `to_json` writes these
-# fields, `from_json` requires exactly them.
-_STATE_FIELDS = ("cursor", "pending", "rejected", "processed")
-_STATE_KEYS = frozenset(_STATE_FIELDS) | {"schema_version"}
+# The complete shape of every version this build reads. `to_json` writes the
+# current one; `from_json` requires exactly the fields of the version the file
+# declares. Version 1 is the shape written before discovery recorded whether it
+# had drained the feed; it is upgraded on read rather than refused, because
+# this state is a machine's own runtime record and losing its cursor and pool
+# would re-import evidence the feed may no longer serve.
+_STATE_FIELDS = {
+    1: ("cursor", "pending", "rejected", "processed"),
+    2: ("cursor", "feed_exhausted", "pending", "rejected", "processed"),
+}
+_STATE_KEYS = {version: frozenset(fields) | {"schema_version"} for version, fields in _STATE_FIELDS.items()}
 _POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "primary", "reruns"})
 _REPORT_REF_FIELDS = frozenset(
     {"report_key", "sequence", "evaluation_id", "generated_at", "bundle_sha256", "artifacts_path"}
@@ -180,6 +194,11 @@ class PoolEntry:
 @dataclass
 class EvolutionState:
     cursor: str | None = None
+    # False until a discovery pass reports the feed drained. The default is the
+    # honest reading of a repository that has never synced: nobody has shown
+    # the pool is the whole eligible set, and admission needs that shown, not
+    # assumed (contract invariants 1 and 2).
+    feed_exhausted: bool = False
     pending: list[PoolEntry] = field(default_factory=list)
     rejected: dict[str, dict[str, Any]] = field(default_factory=dict)
     processed: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -204,6 +223,7 @@ class EvolutionState:
         return {
             "schema_version": STATE_SCHEMA_VERSION,
             "cursor": self.cursor,
+            "feed_exhausted": self.feed_exhausted,
             "pending": [
                 entry.to_json()
                 for entry in sorted(self.pending, key=lambda entry: (entry.primary.sequence, entry.repo_id, entry.task_id))
@@ -221,13 +241,19 @@ class EvolutionState:
         artifacts_root: str,
         claimed: Mapping[str, set[str]],
     ) -> "EvolutionState":
-        """Load a complete version-1 state, or refuse.
+        """Load a complete state of a version this build reads, or refuse.
 
-        Every field is required, absent included. A file that has lost its
-        `cursor` or its `pending` array is a file that was damaged, and reading
-        the gap as "nothing yet" is exactly the silent reset this module exists
-        to prevent: the cursor rewinds, the pool empties, and the run looks
-        successful.
+        Every field of the declared version is required, absent included. A
+        file that has lost its `cursor` or its `pending` array is a file that
+        was damaged, and reading the gap as "nothing yet" is exactly the silent
+        reset this module exists to prevent: the cursor rewinds, the pool
+        empties, and the run looks successful.
+
+        A version-1 file is upgraded here instead: it predates `feed_exhausted`,
+        so it cannot say whether its discovery drained the feed, and the
+        upgrade assumes it did not. That is the same answer a fresh state
+        gives, and it costs one sync to correct — where refusing the file would
+        cost the cursor and the pool behind it.
 
         `artifacts_root` is the repository-relative bundle root from the config
         governing this run; staged references are checked against it, so state
@@ -244,22 +270,25 @@ class EvolutionState:
         if not isinstance(data, dict):
             raise StateError(f"{path}: state must be a JSON object")
         version = data.get("schema_version")
-        if version != STATE_SCHEMA_VERSION:
+        if version not in _STATE_FIELDS:
             raise StateError(
-                f"{path}: unsupported state schema_version {version!r}; this build supports {STATE_SCHEMA_VERSION}"
+                f"{path}: unsupported state schema_version {version!r}; this build reads {sorted(_STATE_FIELDS)}"
             )
-        unexpected = set(data) - _STATE_KEYS
+        unexpected = set(data) - _STATE_KEYS[version]
         if unexpected:
             raise StateError(f"{path}: unexpected state fields {sorted(unexpected)}")
-        for name in _STATE_FIELDS:
+        for name in _STATE_FIELDS[version]:
             if name not in data:
-                raise StateError(
-                    f"{path}: incomplete state, {name!r} is missing; version {STATE_SCHEMA_VERSION} requires it"
-                )
+                raise StateError(f"{path}: incomplete state, {name!r} is missing; version {version} requires it")
 
         cursor = data["cursor"]
         if cursor is not None and not isinstance(cursor, str):
             raise StateError(f"{path}: cursor must be a string or null")
+        # Version 1 never recorded it, and the safe reading of "unknown" is
+        # "not drained": the next sync says so for certain.
+        feed_exhausted = data["feed_exhausted"] if version >= 2 else False
+        if not isinstance(feed_exhausted, bool):
+            raise StateError(f"{path}: feed_exhausted must be a boolean")
         pending = data["pending"]
         if not isinstance(pending, list):
             raise StateError(f"{path}: pending must be a list")
@@ -280,7 +309,26 @@ class EvolutionState:
         # `known_report_keys` would flatten the contradiction away.
         _require_disjoint_keys(entries, rejected, processed, path=path)
 
-        return cls(cursor=cursor, pending=entries, rejected=rejected, processed=processed)
+        return cls(
+            cursor=cursor,
+            feed_exhausted=feed_exhausted,
+            pending=entries,
+            rejected=rejected,
+            processed=processed,
+        )
+
+
+def state_exists(config: EvolutionConfig) -> bool:
+    """Whether this machine holds runtime state at all.
+
+    The difference between "no file" and "a file that says nothing about X" is
+    load-bearing above: `.ai-evolution/` is ignored, so a fresh clone has no
+    state and never staged anything, while a state file that exists is this
+    machine's own record and a gap in it is a gap in evidence
+    (`batches._require_consistent_claims`).
+    """
+
+    return config.state_path.is_file()
 
 
 def load_state(config: EvolutionConfig) -> EvolutionState:

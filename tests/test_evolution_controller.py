@@ -529,8 +529,9 @@ def test_a_cursor_this_feed_never_issued_is_refused(tmp_path: Path) -> None:
 
 
 def valid_state() -> dict:
-    """The smallest complete version-1 state. Written out rather than produced
-    by a sync so each corruption case below differs in exactly one way."""
+    """The smallest complete current-version state. Written out rather than
+    produced by a sync so each corruption case below differs in exactly one
+    way."""
 
     reference = {
         "report_key": "r1",
@@ -541,8 +542,9 @@ def valid_state() -> dict:
         "artifacts_path": ".ai-evolution/imported-artifacts/r1-0123456789abcdef",
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "cursor": None,
+        "feed_exhausted": True,
         "pending": [
             {
                 "repo_id": "repo-alpha",
@@ -592,17 +594,22 @@ def corrupt(mutate) -> str:
     "content",
     [
         "{ not json",
-        json.dumps({"schema_version": 2, "cursor": None}),
-        json.dumps({"schema_version": 1, "pending": [{"repo_id": "a"}]}),
-        json.dumps({"schema_version": 1, "pending": "everything"}),
+        json.dumps({"schema_version": 3, "cursor": None}),
+        json.dumps({"schema_version": 2, "pending": [{"repo_id": "a"}]}),
+        json.dumps({"schema_version": 2, "pending": "everything"}),
         # A state file reduced to its version header: every field that carries
         # evidence is gone, and reading the gaps as empty is the silent reset.
-        json.dumps({"schema_version": 1}),
+        json.dumps({"schema_version": 2}),
         corrupt(lambda data: data.pop("cursor")),
+        corrupt(lambda data: data.pop("feed_exhausted")),
         corrupt(lambda data: data.pop("pending")),
         corrupt(lambda data: data.pop("rejected")),
         corrupt(lambda data: data.pop("processed")),
         corrupt(lambda data: data.update(unknown_field=1)),
+        corrupt(lambda data: data.update(feed_exhausted="yes")),
+        # Version 1 has its own complete shape; `feed_exhausted` is not part of
+        # it, and a file mixing the two says nothing certain about either.
+        corrupt(lambda data: data.update(schema_version=1)),
         # Shapes that are the right Python types and still cannot be true.
         corrupt(lambda data: data["pending"][0]["primary"].update(sequence=0)),
         corrupt(lambda data: data["pending"][0]["primary"].update(bundle_sha256="not-a-digest")),
@@ -674,8 +681,34 @@ def test_the_complete_state_shape_loads(config: evolution.EvolutionConfig) -> No
     loaded = evolution.load_state(config)
 
     assert loaded.cursor is None
+    assert loaded.feed_exhausted is True
     assert [entry.dedup_key for entry in loaded.pending] == [("repo-alpha", "2026-07-01-task")]
     assert loaded.to_json() == valid_state()
+
+
+def test_a_version_1_state_is_upgraded_rather_than_refused(config: evolution.EvolutionConfig) -> None:
+    """Version 1 predates `feed_exhausted`, so it cannot say whether its
+    discovery drained the feed. The upgrade assumes it did not — one sync
+    corrects that, where refusing the file would cost the cursor and the pool
+    behind it, and re-import evidence the feed may no longer serve."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    version_1 = {key: value for key, value in valid_state().items() if key != "feed_exhausted"}
+    version_1["schema_version"] = 1
+    version_1["cursor"] = '[7, "r1", "r1.json"]'
+    config.state_path.write_text(json.dumps(version_1), encoding="utf-8")
+
+    loaded = evolution.load_state(config)
+
+    assert loaded.cursor == '[7, "r1", "r1.json"]'
+    assert loaded.feed_exhausted is False
+    assert [entry.dedup_key for entry in loaded.pending] == [("repo-alpha", "2026-07-01-task")]
+    # Rewritten at the current version on the next save, with nothing lost.
+    evolution.save_state(config, loaded)
+    assert json.loads(config.state_path.read_text(encoding="utf-8")) == {
+        **version_1,
+        "schema_version": 2,
+        "feed_exhausted": False,
+    }
 
 
 def test_a_processed_claim_loads_only_when_a_manifest_names_the_report(
