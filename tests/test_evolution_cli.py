@@ -21,7 +21,6 @@ import contextlib
 import io
 import json
 import shutil
-import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -31,7 +30,29 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from evolution_fixtures import ARTIFACT_BODIES, git_repo, make_record, make_repo, snapshot, write_feed
+from evolution_fixtures import (
+    ARTIFACT_BODIES,
+    admitted_task,
+    experiment_decision,
+    experiment_round,
+    git_checkout,
+    git_commit,
+    git_repo,
+    git_rev,
+    git_unrelated_commit,
+    git_update_ref,
+    make_record,
+    make_repo,
+    rejection,
+    snapshot,
+    write_closure,
+    write_draft,
+    write_experiment,
+    write_feed,
+    write_manifest,
+    write_outcome,
+    write_rejected_drafts,
+)
 
 from ai_native_deployment import cli, evolution
 from ai_native_deployment.evolution import (
@@ -39,10 +60,10 @@ from ai_native_deployment.evolution import (
     batches,
     hub,
     importer,
+    lineage,
     phase,
     render,
     reports,
-    revisions,
 )
 
 TARGET = 2
@@ -51,6 +72,12 @@ MINIMUM = 1
 NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
 BASE_URL = "https://orch-hub.example"
 TOKEN = "s3cret-token"
+
+# The revisions an experiment record pins. Opaque here on purpose: the lineage
+# is read from the records, so nothing about it depends on this checkout holding
+# these objects (contract: What is derived).
+BASE = "a" * 40
+CANDIDATE = "b" * 40
 
 
 # --- fixtures ----------------------------------------------------------------
@@ -132,26 +159,39 @@ def close_batch(config: evolution.EvolutionConfig, batch_id: str, task_id: str) 
     assert (config.batches_root / batch_id / batches.CLOSURE_FILENAME).is_file()
 
 
-def draft(config: evolution.EvolutionConfig, batch_id: str, name: str) -> Path:
+def draft(config: evolution.EvolutionConfig, batch_id: str, draft_id: str) -> Path:
     """A change-task draft, as an analysis session writes one: inert until a
-    human moves it into `.ai-tasks/` (contract: Change admission)."""
+    human admits it into an experiment (contract: Change admission)."""
 
-    path = config.batches_root / batch_id / analysis_task.PROPOSED_TASKS_DIRNAME / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\nid: {Path(name).stem}\nstatus: pending\n---\n\n# Proposal\n\nEvidence: {batch_id}.\n",
-        encoding="utf-8",
+    return write_draft(config.batches_root, batch_id, draft_id)
+
+
+def experiment(
+    config: evolution.EvolutionConfig,
+    batch_id: str,
+    *,
+    ordinal: int = 1,
+    rounds: list[dict] | None = None,
+    decision: dict | None = None,
+) -> Path:
+    """One experiment record for `batch_id`, on that batch's frozen base."""
+
+    return write_experiment(
+        config.experiments_root,
+        f"{batch_id}-exp-{ordinal:02d}",
+        base_revision=BASE,
+        rounds=rounds,
+        decision=decision,
     )
-    return path
 
 
-def admit(config: evolution.EvolutionConfig, path: Path) -> Path:
-    """The human admission gate: move the draft into the active pool."""
+def copy_into_tasks(config: evolution.EvolutionConfig, path: Path) -> Path:
+    """A draft copied into the active pool, as grouped admission does — the file
+    alone, with no experiment record behind it."""
 
     target = analysis_task.tasks_root(config) / path.name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    path.unlink()
     return target
 
 
@@ -159,49 +199,6 @@ def run(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str, 
     code = cli.main(argv)
     captured = capsys.readouterr()
     return code, captured.out, captured.err
-
-
-# --- revisions ---------------------------------------------------------------
-
-
-def test_both_revisions_are_reported_when_work_sits_on_top_of_a_release(tmp_path: Path) -> None:
-    """The baseline is the release line; the tip on top of it is the candidate
-    (invariants 8 and 10)."""
-    root = git_repo(tmp_path / "tagged", tag="v2.2.0")
-
-    pair = revisions.describe_revisions(root)
-
-    assert pair.baseline is not None and pair.baseline.ref == "v2.2.0"
-    assert pair.candidate is not None and pair.candidate.sha != pair.baseline.sha
-    assert pair.candidate.ref not in (None, "HEAD")
-
-
-def test_a_checkout_sitting_on_the_release_line_has_no_candidate(tmp_path: Path) -> None:
-    root = git_repo(tmp_path / "at-release", tag=None)
-    subprocess.run(["git", "-C", str(root), "tag", "v1.0.0"], check=True)
-
-    pair = revisions.describe_revisions(root)
-
-    assert pair.baseline is not None and pair.baseline.ref == "v1.0.0"
-    assert pair.candidate is None
-
-
-def test_an_untagged_checkout_has_a_candidate_but_no_baseline(tmp_path: Path) -> None:
-    """Nothing to measure against is a fact about the repository, not a reason
-    to hide what a run would execute."""
-    pair = revisions.describe_revisions(git_repo(tmp_path / "untagged", tag=None))
-
-    assert pair.baseline is None
-    assert pair.candidate is not None
-
-
-def test_a_directory_inside_another_repository_reports_no_revisions(tmp_path: Path) -> None:
-    """Otherwise a temporary directory under someone's checkout silently
-    acquires that checkout's baseline and tip."""
-    inner = git_repo(tmp_path / "outer", tag="v9.9.9") / "nested"
-    inner.mkdir()
-
-    assert revisions.describe_revisions(inner) == revisions.Revisions()
 
 
 # --- lifecycle phase ---------------------------------------------------------
@@ -253,17 +250,18 @@ def test_a_frozen_batch_holds_the_lifecycle_at_batch_frozen(
     status = phase.describe(config, now=NOW)
 
     assert status.phase == phase.PHASE_BATCH_FROZEN
-    assert status.open_batch is not None
-    assert status.open_batch.batch_id == result.batch_id
-    assert status.open_batch.findings_recorded is False
-    assert status.open_batch.evidence_local == status.open_batch.report_count
-    assert status.decision.reason == batches.REASON_OPEN_BATCH
+    assert status.current_batch is not None
+    assert status.current_batch.batch_id == result.batch_id
+    assert status.current_batch.findings_recorded is False
+    assert status.current_batch.analysis_complete is False
+    assert status.current_batch.evidence_local == status.current_batch.report_count
+    assert status.decision.reason == batches.REASON_CURRENT_BATCH
 
 
-def test_recorded_dispositions_move_the_phase_without_closing_the_batch(
+def test_recorded_dispositions_move_the_phase_without_ending_the_analysis(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """`findings.md` is the disposition record and closes nothing on its own; the
+    """`findings.md` is the disposition record and ends nothing on its own; the
     phase distinguishes the two so an operator can see analysis in progress."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
@@ -272,70 +270,294 @@ def test_recorded_dispositions_move_the_phase_without_closing_the_batch(
     status = phase.describe(config, now=NOW)
 
     assert status.phase == phase.PHASE_DISPOSITIONS_READY
-    assert status.open_batch is not None and status.open_batch.batch_id == result.batch_id
+    assert status.current_batch is not None and status.current_batch.batch_id == result.batch_id
+    assert status.current_batch.analysis_complete is False
 
 
-def test_drafts_left_by_a_closed_analysis_are_the_admission_gate(
+def test_a_completed_analysis_leaves_its_batch_current_at_the_admission_gate(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
+    """The analysis stage ends; the batch does not (invariant 14). What is
+    waiting is the human admission gate, and the batch goes on holding the next
+    cohort back while it waits."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
     close_batch(config, result.batch_id or "", result.analysis_task_id or "")
-    draft(config, result.batch_id or "", "2026-08-02-tighten-contract.md")
+    draft(config, result.batch_id or "", "tighten-contract")
 
     status = phase.describe(config, now=NOW)
 
     assert status.phase == phase.PHASE_PROPOSALS_PENDING
-    assert status.summary == "proposals-pending (1 draft)"
-    assert status.proposals[0].drafts == ("2026-08-02-tighten-contract.md",)
-    assert status.open_batch is None
+    assert status.summary == f"proposals-pending {result.batch_id} (1 draft)"
+    assert status.current_batch is not None
+    assert status.current_batch.analysis_complete is True
+    assert status.gate is not None and status.gate.waiting == ("tighten-contract",)
+    assert status.decision.reason == batches.REASON_CURRENT_BATCH
 
 
-def test_an_admitted_change_task_reports_implementing(
+def test_an_admitted_draft_stops_waiting_at_the_gate(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """Admission moves the draft into `.ai-tasks/`, and the task cites its batch
-    — the citation the contract's task requirements already demand."""
+    """Admission copies the draft and leaves it in place, so the directory keeps
+    every proposal ever made. What makes it spent is the experiment record that
+    took it — and a declined one is spent too."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
-    close_batch(config, result.batch_id or "", result.analysis_task_id or "")
-    admit(config, draft(config, result.batch_id or "", "2026-08-02-tighten-contract.md"))
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    for draft_id in ("tighten-contract", "loader-fallback", "widen-scan"):
+        draft(config, batch_id, draft_id)
+    experiment(config, batch_id, rounds=[experiment_round(1, tasks=[admitted_task("tighten-contract")])])
+    write_rejected_drafts(config.batches_root, batch_id, [rejection("widen-scan")])
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.gate is not None
+    assert status.gate.waiting == ("loader-fallback",)
+    assert status.gate.consumed == {"tighten-contract": f"{batch_id}-exp-01"}
+    assert status.gate.declined == ("widen-scan",)
+    assert (config.batches_root / batch_id / analysis_task.PROPOSED_TASKS_DIRNAME / "tighten-contract.md").is_file()
+
+
+def test_an_open_round_reports_the_tasks_it_is_still_waiting_on(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    draft(config, batch_id, "tighten-contract")
+    experiment(
+        config,
+        batch_id,
+        rounds=[
+            experiment_round(
+                1,
+                tasks=[
+                    admitted_task("tighten-contract", task_id="2026-08-02-tighten-contract", complete=False),
+                    admitted_task("loader-fallback", complete=True),
+                ],
+            )
+        ],
+    )
 
     status = phase.describe(config, now=NOW)
 
     assert status.phase == phase.PHASE_IMPLEMENTING
     assert status.implementation_tasks == ("2026-08-02-tighten-contract",)
-    assert not status.proposals
+    assert status.summary == f"implementing {batch_id}-exp-01 round 1 (1 task left)"
+    assert "implementing 2026-08-02-tighten-contract" in render.format_status(status)
 
 
-def test_a_completed_change_task_no_longer_counts_as_implementing(
+def test_a_round_whose_tasks_are_all_observed_complete_is_ready_to_seal(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Still an open round: what pins its candidate is the seal, and nothing may
+    be measured before that (invariant 16)."""
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(config, batch_id, rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])])
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.phase == phase.PHASE_IMPLEMENTING
+    assert status.implementation_tasks == ()
+    assert status.summary == f"implementing {batch_id}-exp-01 round 1 (ready to seal)"
+    assert status.revisions.round_candidate is None
+
+
+def test_a_sealed_round_is_candidate_ready_and_names_the_revision_it_pinned(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
-    close_batch(config, result.batch_id or "", result.analysis_task_id or "")
-    admitted = admit(config, draft(config, result.batch_id or "", "2026-08-02-tighten-contract.md"))
-    admitted.write_text(
-        admitted.read_text(encoding="utf-8").replace("status: pending", "status: completed"), encoding="utf-8"
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(config, batch_id, rounds=[experiment_round(1, candidate_revision=CANDIDATE)])
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.phase == phase.PHASE_CANDIDATE_READY
+    assert status.summary == f"candidate-ready {batch_id}-exp-01 round 1"
+    assert status.revisions.base is not None and status.revisions.base.sha == BASE
+    assert status.revisions.round_candidate is not None
+    assert status.revisions.round_candidate.sha == CANDIDATE
+    # No ref in this checkout, which says nothing about the record's pins — and
+    # is reported once, as the missing tip, rather than also as a finding.
+    assert status.revisions.candidate_tip is None
+    rendered = render.format_status(status)
+    assert "tip          none — the experiment ref is not in this checkout" in rendered
+    assert "cannot confirm the pinned history" not in rendered
+
+
+def test_a_candidate_that_does_not_descend_from_the_frozen_base_is_named(
+    tmp_path: Path
+) -> None:
+    """Invariant 15 read back: the whole chain is checked, so an attempt built
+    on a history the batch never froze is reported with the pair that broke it
+    rather than as a ref resting where its record says."""
+    root = git_repo(make_repo(tmp_path), tag="v2.2.0")
+    config = evolution.load_config(root)
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], analysis_task_id="2026-07-31-analysis")
+    record_findings(config, "evolution-batch-0001")
+    write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-analysis")
+    stranded = git_unrelated_commit(root, "an attempt on a history of its own")
+    write_experiment(
+        config.experiments_root,
+        "evolution-batch-0001-exp-01",
+        base_revision=git_rev(root, "HEAD"),
+        rounds=[experiment_round(1, candidate_revision=stranded)],
+    )
+    git_update_ref(root, "refs/evolution/experiments/evolution-batch-0001-exp-01", stranded)
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.ref is not None
+    assert status.ref.state == lineage.REF_AT_PIN
+    assert status.ref.consistent is False
+    assert status.ref.chain_break == (git_rev(root, "HEAD"), stranded)
+    assert "the pinned history is broken" in render.format_status(status)
+
+
+def test_terminal_experiments_are_history_and_block_no_alternative(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A batch carrying two dropped attempts and one open alternative is an
+    ordinary state, and the lifecycle reads from the open one."""
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(
+        config,
+        batch_id,
+        ordinal=1,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")], candidate_revision=CANDIDATE)],
+        decision=experiment_decision("superseded", superseded_by=f"{batch_id}-exp-02"),
+    )
+    experiment(
+        config,
+        batch_id,
+        ordinal=2,
+        rounds=[experiment_round(1, tasks=[admitted_task("widen-scan")])],
+        decision=experiment_decision("abandoned"),
+    )
+    experiment(
+        config,
+        batch_id,
+        ordinal=3,
+        rounds=[experiment_round(1, tasks=[admitted_task("tighten-contract", complete=False)])],
     )
 
     status = phase.describe(config, now=NOW)
 
-    assert status.implementation_tasks == ()
-    assert status.phase == phase.PHASE_IDLE
+    assert status.phase == phase.PHASE_IMPLEMENTING
+    assert status.experiment is not None and status.experiment.experiment_id == f"{batch_id}-exp-03"
+    assert [item.experiment_id for item in status.history] == [f"{batch_id}-exp-01", f"{batch_id}-exp-02"]
+    assert status.current_batch is not None and status.current_batch.experiment_count == 3
+    assert f"{batch_id}-exp-01 superseded" in render.format_status(status)
 
 
-def test_the_batch_analysis_task_is_not_counted_as_an_implementation(
+def test_a_batch_with_nothing_open_and_nothing_waiting_awaits_its_conclusion(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """It cites its batch by construction; counting it would report
-    `implementing` for a batch that is merely being analyzed."""
+    """The `no-change` case: analysis justified no change, so there is no draft
+    to admit and no experiment to run, and what the batch needs is the outcome
+    that says so (invariant 7)."""
     fill_pool(config, feed_root, TARGET)
-    freeze(config)
+    result = freeze(config)
+    close_batch(config, result.batch_id or "", result.analysis_task_id or "")
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.phase == phase.PHASE_CONCLUSION_PENDING
+    assert status.summary == f"conclusion-pending {result.batch_id}"
+    assert status.gate is not None and status.gate.waiting == ()
+
+
+def test_a_concluded_batch_stops_being_current_and_reports_its_promotion(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(
+        config,
+        batch_id,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=experiment_decision("promoted", promotion_revision="c" * 40),
+    )
+    write_outcome(
+        config.batches_root,
+        batch_id,
+        outcome="promoted",
+        reason="the candidate held across the replay cohort",
+        experiment_id=f"{batch_id}-exp-01",
+        promotion_revision="c" * 40,
+    )
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.current_batch is None
+    assert status.phase == phase.PHASE_IDLE
+    assert status.experiment is None and status.history == ()
+    assert status.last_promotion is not None
+    assert status.last_promotion.revision == "c" * 40
+    assert status.last_promotion.experiment_id == f"{batch_id}-exp-01"
+    assert status.decision.current_batch_id is None
+    assert "promoted" in render.format_status(status)
+
+
+def test_a_task_file_citing_the_batch_is_not_what_makes_it_admitted(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """`.ai-tasks/` is machine-local and close-out archives tasks away, so the
+    old citation scan found nothing on a fresh clone and less as time passed.
+    The experiment record names its own tasks; a file with no record behind it
+    admits nothing (contract: What is derived)."""
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    copy_into_tasks(config, draft(config, batch_id, "tighten-contract"))
 
     status = phase.describe(config, now=NOW)
 
     assert status.implementation_tasks == ()
+    assert status.phase == phase.PHASE_PROPOSALS_PENDING
+    assert status.gate is not None and status.gate.waiting == ("tighten-contract",)
+
+
+def test_the_lineage_outlives_a_checkout_and_a_lost_task_pool(
+    tmp_path: Path, feed_root: Path
+) -> None:
+    """The acceptance the derivation exists for: another branch, another
+    revision, and no `.ai-tasks/` at all still derive one lifecycle."""
+    root = make_repo(tmp_path)
+    git_repo(root, tag="v2.2.0")
+    config = evolution.load_config(root)
+    fill_pool(config, feed_root, 1)
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], analysis_task_id="2026-07-31-analysis")
+    record_findings(config, "evolution-batch-0001")
+    write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-analysis")
+    experiment(config, "evolution-batch-0001", rounds=[experiment_round(1, candidate_revision=CANDIDATE)])
+    before = phase.describe(config, now=NOW)
+
+    first = git_rev(root, "HEAD~1")
+    git_commit(root, "unrelated work")
+    git_checkout(root, first)
+    shutil.rmtree(analysis_task.tasks_root(config), ignore_errors=True)
+
+    after = phase.describe(config, now=NOW)
+
+    assert before.phase == after.phase == phase.PHASE_CANDIDATE_READY
+    assert after.revisions.round_candidate is not None
+    assert after.revisions.round_candidate.sha == CANDIDATE
+    assert after.experiment is not None
+    assert after.experiment.experiment_id == "evolution-batch-0001-exp-01"
 
 
 def test_a_batch_whose_evidence_was_staged_elsewhere_is_shown_not_failed(
@@ -349,10 +571,40 @@ def test_a_batch_whose_evidence_was_staged_elsewhere_is_shown_not_failed(
 
     status = phase.describe(config, now=NOW)
 
-    assert status.open_batch is not None
-    assert status.open_batch.evidence_local == 0
+    assert status.current_batch is not None
+    assert status.current_batch.evidence_local == 0
     assert "evidence on this machine: 0/" in render.format_status(status)
     assert result.batch_id in render.format_status(status)
+
+
+def test_an_experiment_ref_that_moved_past_its_seal_is_reported_not_hidden(
+    tmp_path: Path, feed_root: Path
+) -> None:
+    """A reader names it; the guarded operations are what refuse (invariant 16).
+    Refusing to describe the lifecycle is not how an operator finds out."""
+    root = git_repo(make_repo(tmp_path), tag="v2.2.0")
+    config = evolution.load_config(root)
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], analysis_task_id="2026-07-31-analysis")
+    record_findings(config, "evolution-batch-0001")
+    write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-analysis")
+    sealed = git_rev(root, "HEAD")
+    write_experiment(
+        config.experiments_root,
+        "evolution-batch-0001-exp-01",
+        base_revision=git_rev(root, "HEAD~1"),
+        rounds=[experiment_round(1, candidate_revision=sealed)],
+    )
+    git_update_ref(root, "refs/evolution/experiments/evolution-batch-0001-exp-01", git_commit(root, "late work"))
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.phase == phase.PHASE_CANDIDATE_READY
+    assert status.ref is not None
+    assert status.ref.state == lineage.REF_AHEAD
+    assert status.ref.consistent is False
+    assert status.revisions.round_candidate is not None and status.revisions.round_candidate.sha == sealed
+    assert status.revisions.candidate_tip is not None and status.revisions.candidate_tip.sha != sealed
+    assert "is not at the revision the record pins" in render.format_status(status)
 
 
 def test_status_writes_nothing(config: evolution.EvolutionConfig, feed_root: Path, repo: Path) -> None:
@@ -365,7 +617,7 @@ def test_status_writes_nothing(config: evolution.EvolutionConfig, feed_root: Pat
     assert snapshot(repo) == before
 
 
-def test_the_status_json_carries_the_phase_and_both_revisions(
+def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
     tmp_path: Path, feed_root: Path
 ) -> None:
     root = make_repo(tmp_path)
@@ -375,7 +627,7 @@ def test_the_status_json_carries_the_phase_and_both_revisions(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 2
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -386,8 +638,40 @@ def test_the_status_json_carries_the_phase_and_both_revisions(
         "waited_days": payload["pool"]["waited_days"],
         "max_wait_days": 30,
     }
-    assert payload["revisions"]["baseline"]["ref"] == "v2.2.0"
-    assert payload["revisions"]["candidate"]["sha"] != payload["revisions"]["baseline"]["sha"]
+    assert payload["batches"] == {"total": 0, "current": None}
+    assert payload["gate"] is None
+    assert payload["experiments"] == {"open": None, "history": []}
+    assert payload["revisions"] == {"base": None, "candidate_tip": None, "round_candidate": None}
+    assert payload["last_promotion"] is None
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_the_status_json_names_the_five_revisions_apart(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Base, pinned candidate, and promotion are three different commits, and an
+    evidence trail that substitutes one for another measures nothing (contract:
+    Revisions in play). The deployed effective revision is per target and is not
+    a property of this repository."""
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(config, batch_id, rounds=[experiment_round(1, candidate_revision=CANDIDATE)])
+
+    payload = phase.describe(config, now=NOW).to_json()
+
+    assert payload["revisions"]["base"] == {"sha": BASE, "ref": "v2.2.0"}
+    assert payload["revisions"]["round_candidate"] == {"sha": CANDIDATE, "ref": None}
+    assert payload["revisions"]["candidate_tip"] is None
+    assert payload["experiments"]["open"]["round"] == {
+        "number": 1,
+        "state": phase.ROUND_CANDIDATE_READY,
+        "opened_at": "2026-08-01T09:00:00Z",
+        "candidate_revision": CANDIDATE,
+        "tasks": [{"task_id": "2026-08-01-loader-fallback", "draft_id": "loader-fallback", "complete": True}],
+    }
+    assert payload["experiments"]["open"]["ref"]["state"] == lineage.REF_ABSENT
     assert json.loads(json.dumps(payload)) == payload
 
 
@@ -705,19 +989,18 @@ def test_status_prints_the_phase(tmp_path: Path, capsys: pytest.CaptureFixture[s
 
     assert code == 0
     assert out.startswith("evolution: idle")
-    assert "baseline" in out and "candidate" in out
 
 
-def test_status_says_a_plain_directory_has_no_revisions_at_all(
+def test_status_reports_no_revisions_in_play_before_any_experiment(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Two absent revisions and no repository are different facts; reporting
-    "at the release line" for a directory with no release line is a lie."""
+    """A checkout is not a candidate. Before an experiment freezes a base there
+    is nothing in play, whatever branch the operator happens to be on."""
     code, out, _ = run(["evolution", "status", "--repo", str(repo)], capsys)
 
     assert code == 0
-    assert "revisions    none — not a git work tree root" in out
-    assert "baseline" not in out
+    assert "revisions    none in play — no experiment has frozen a base" in out
+    assert "candidate" not in out
 
 
 def test_status_json_is_the_same_shape(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -786,7 +1069,7 @@ def test_a_second_start_creates_no_second_batch(
     code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     assert code == 0
-    assert "still open for analysis" in out
+    assert "is still current" in out
     assert len(evolution.load_batches(evolution.load_config(repo))) == 1
 
 

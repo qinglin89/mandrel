@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .config import (
     BATCH_SCHEMA_FILENAME,
@@ -176,6 +176,53 @@ def next_batch_id(batches: list[Batch]) -> str:
 
     highest = max((batch_id_number(batch.batch_id) or 0 for batch in batches), default=0)
     return format_batch_id(highest + 1)
+
+
+def is_current(config: EvolutionConfig, batch: Batch) -> bool:
+    """Whether this batch's change cycle is still running (invariant 14).
+
+    Current from the freeze of its manifest until its outcome is recorded —
+    through analysis, the admission gate, every experiment and round, and the
+    decision that follows. Analysis completion is a stage inside that span, not
+    the end of it: reading the closure record as the end is what would release
+    the next cohort while this one is still being changed.
+    """
+
+    return read_outcome(config, batch) is None
+
+
+def current_batch(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
+    """The one batch whose change cycle is still running, if any.
+
+    `batches` lets a caller that has already loaded and validated the manifests
+    reuse them, so a reader deriving several facts at once cannot end up
+    applying a second definition of "current".
+    """
+
+    known = load_batches(config) if batches is None else batches
+    running = [batch for batch in known if is_current(config, batch)]
+    require_one_current([batch.batch_id for batch in running])
+    return running[0] if running else None
+
+
+def require_one_current(batch_ids: Sequence[str]) -> None:
+    """Invariant 14: one batch is current at a time.
+
+    Stated once, for the two readers that reach it from different directions —
+    the freeze path, which asks the batch directories, and the lineage
+    derivation, which already holds every outcome record it read. A second
+    current batch is refused rather than arbitrated: whichever of the two a
+    reader picks, the experiments and evidence it goes on to collect belong to
+    the other.
+    """
+
+    if len(batch_ids) > 1:
+        raise BatchError(
+            "more than one current batch: "
+            + ", ".join(batch_ids)
+            + " — invariant 14 allows one at a time; record the earlier batch's outcome "
+            "(promoted or no-change) before the next cohort continues"
+        )
 
 
 def claimed_reports(config: EvolutionConfig) -> dict[str, set[str]]:

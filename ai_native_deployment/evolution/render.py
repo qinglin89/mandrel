@@ -16,8 +16,8 @@ from pathlib import Path
 
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
-from .phase import LifecycleStatus
-from .revisions import Revisions
+from .lineage import REF_ABSENT, Gate
+from .phase import ROUND_CANDIDATE_READY, ROUND_OPEN, LifecycleRevisions, LifecycleStatus
 
 FIELD_WIDTH = 13
 
@@ -71,8 +71,10 @@ def format_freeze(result: FreezeResult, repo_root: Path) -> str:
         lines.append("a human admits any change task this analysis proposes; the analysis itself edits no canonical file")
         return "\n".join(lines)
 
-    if result.open_batch_id:
-        lines.append(f"freeze: no batch — {result.open_batch_id} is still open for analysis")
+    if result.current_batch_id:
+        lines.append(
+            f"freeze: no batch — {result.current_batch_id} is still current; its outcome has not been recorded"
+        )
         if result.analysis_task_id:
             lines.append(_field("analysis", result.analysis_task_id))
     else:
@@ -106,43 +108,137 @@ def format_status(status: LifecycleStatus) -> str:
     else:
         lines.append(_field("admission", f"no batch — {decision.reason}"))
 
-    open_batch = status.open_batch
-    open_note = f"open {open_batch.batch_id}" if open_batch else "none open"
-    lines.append(_field("batches", f"{status.batch_count} frozen, {open_note}"))
-    if open_batch is not None:
-        lines.append(_field("", f"analysis task {open_batch.analysis_task_id or '<none named>'}"))
-        lines.append(
-            _field("", "dispositions recorded" if open_batch.findings_recorded else "dispositions not yet recorded")
-        )
-        if not open_batch.evidence_complete:
+    current = status.current_batch
+    note = f"current {current.batch_id}" if current else "none current"
+    lines.append(_field("batches", f"{status.batch_count} frozen, {note}"))
+    if current is not None:
+        lines.append(_field("", f"analysis task {current.analysis_task_id or '<none named>'}"))
+        lines.append(_field("", _analysis_note(current.analysis_complete, current.findings_recorded)))
+        if not current.evidence_complete:
             lines.append(
                 _field(
                     "",
-                    f"evidence on this machine: {open_batch.evidence_local}/{open_batch.report_count} bundle(s) — "
+                    f"evidence on this machine: {current.evidence_local}/{current.report_count} bundle(s) — "
                     "the rest were staged elsewhere",
                 )
             )
 
-    for batch in status.proposals:
-        lines.append(_field("proposals", f"{batch.batch_id}: {', '.join(batch.drafts)} — awaiting human admission"))
-    if status.implementation_tasks:
-        lines.append(_field("implementing", ", ".join(status.implementation_tasks)))
-
+    lines.extend(_gate_lines(status.gate))
+    lines.extend(_experiment_lines(status))
     lines.extend(_revision_lines(status.revisions))
+    if status.last_promotion is not None:
+        promotion = status.last_promotion
+        lines.append(
+            _field(
+                "promoted",
+                f"{promotion.revision[:12]} from {promotion.experiment_id} ({promotion.batch_id})",
+            )
+        )
     return "\n".join(lines)
 
 
-def _revision_lines(pair: Revisions) -> list[str]:
-    """Two Nones mean something different from either None alone: no baseline is
-    a checkout with no release tag, no candidate is a checkout sitting on the
-    release line, and both together is a directory that is not a work-tree root
-    at all — which has no revisions to report rather than two absent ones."""
+def _analysis_note(complete: bool, findings_recorded: bool) -> str:
+    if complete:
+        return "analysis complete — its dispositions are at the admission gate"
+    return "dispositions recorded" if findings_recorded else "dispositions not yet recorded"
 
-    if pair.baseline is None and pair.candidate is None:
-        return [_field("revisions", "none — not a git work tree root")]
+
+def _gate_lines(gate: Gate | None) -> list[str]:
+    """The admission gate, which is derived rather than read off the directory:
+    admission copies a draft and leaves it in place, so what is present is every
+    proposal ever made rather than the ones still to decide."""
+
+    if gate is None:
+        return []
+    lines: list[str] = []
+    if gate.waiting:
+        lines.append(_field("proposals", f"{', '.join(gate.waiting)} — awaiting human admission"))
+    if gate.consumed:
+        lines.append(_field("admitted", ", ".join(f"{draft} → {owner}" for draft, owner in gate.consumed.items())))
+    if gate.declined:
+        lines.append(_field("declined", ", ".join(gate.declined)))
+    if gate.missing:
+        lines.append(_field("", f"decided draft(s) no longer on disk: {', '.join(gate.missing)}"))
+    if gate.unusable:
+        lines.append(_field("", f"file(s) under proposed-tasks/ that are not drafts: {', '.join(gate.unusable)}"))
+    return lines
+
+
+def _experiment_lines(status: LifecycleStatus) -> list[str]:
+    lines: list[str] = []
+    experiment = status.experiment
+    if experiment is not None:
+        # The round's own state, not the phase's: the phase can be held at an
+        # earlier label by something else, and this line has to keep saying what
+        # the record says.
+        round_ = experiment.last_round
+        state = ROUND_OPEN if experiment.open_round is not None else ROUND_CANDIDATE_READY
+        lines.append(_field("experiment", f"{experiment.experiment_id}, round {round_.number} ({state})"))
+        if status.implementation_tasks:
+            lines.append(_field("implementing", ", ".join(status.implementation_tasks)))
+        lines.extend(_ref_lines(status))
+    if status.history:
+        lines.append(
+            _field(
+                "history",
+                ", ".join(
+                    f"{item.experiment_id} {item.decision.outcome if item.decision else '<no decision>'}"
+                    for item in status.history
+                ),
+            )
+        )
+    return lines
+
+
+def _ref_lines(status: LifecycleStatus) -> list[str]:
+    """The ref is only reported when it disagrees or cannot be checked.
+
+    A ref sitting exactly where the record pins it is the ordinary state and
+    says nothing an operator has to act on. Neither does an absent one: a clone
+    that never fetched `refs/evolution/*` is the ordinary case everywhere but
+    the machine the work happened on, and the `tip` line below already reports
+    that this checkout does not hold it. A broken pin chain outranks everything
+    else — it says which revision stopped leading to the next, which is what an
+    operator can act on.
+    """
+
+    ref = status.ref
+    if ref is None or ref.consistent is True:
+        return []
+    if ref.chain_break is not None:
+        earlier, later = ref.chain_break
+        return [
+            _field("", f"{ref.ref}: {later[:12]} does not descend from {earlier[:12]} — the pinned history is broken")
+        ]
+    if ref.state == REF_ABSENT:
+        return []
+    if ref.consistent is None:
+        return [_field("", f"{ref.ref}: {ref.state} — this checkout cannot confirm the pinned history")]
+    return [_field("", f"{ref.ref}: {ref.state} — it is not at the revision the record pins ({ref.pinned[:12]})")]
+
+
+def _revision_lines(revisions: LifecycleRevisions) -> list[str]:
+    """The base is what the other two hang off — a batch with no experiment has
+    no revisions in play at all, rather than three absent ones. The three are
+    never collapsed into one line: substituting one for another is what an
+    evidence trail must not do (contract: Revisions in play)."""
+
+    if revisions.base is None:
+        return [_field("revisions", "none in play — no experiment has frozen a base")]
     return [
-        _field("baseline", pair.baseline.describe() if pair.baseline else "none — no release tag"),
-        _field("candidate", pair.candidate.describe() if pair.candidate else "none — at the release line"),
+        _field("base", revisions.base.describe()),
+        _field(
+            "candidate",
+            revisions.round_candidate.describe()
+            if revisions.round_candidate
+            else "none pinned — the open round has not been sealed",
+        ),
+        _field(
+            "tip",
+            revisions.candidate_tip.describe()
+            if revisions.candidate_tip
+            else "none — the experiment ref is not in this checkout",
+        ),
     ]
 
 

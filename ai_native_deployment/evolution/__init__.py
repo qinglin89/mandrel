@@ -27,10 +27,11 @@ from .batches import (
     Batch,
     FreezeResult,
     StartResult,
+    batch_awaiting_analysis,
+    current_batch,
     evaluate_admission,
     freeze,
     load_batches,
-    open_batch,
     start,
 )
 from .config import EvolutionConfig, load_config
@@ -49,10 +50,10 @@ from .feed import DirectoryFeed, FeedPage, ReportFeed
 from .hub import OrchHubFeed, feed_from_config
 from .importer import Candidate, ListResult, SyncResult, list_candidates, sync
 from .ledger import append_records, build_record, read_records
-from .lineage import BatchLineage, Experiment, Lineage, RefState
+from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState
 from .phase import BatchView, LifecycleStatus
 from .reports import NormalizedReport, Rejection, normalize
-from .revisions import Revision, Revisions, describe_revisions, release_line_revision
+from .revisions import Revision, release_line_revision
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock
 
 __all__ = [
@@ -72,6 +73,7 @@ __all__ = [
     "FeedError",
     "FeedPage",
     "FreezeResult",
+    "Gate",
     "LedgerError",
     "LifecycleStatus",
     "Lineage",
@@ -85,15 +87,15 @@ __all__ = [
     "ReportFeed",
     "ReportRef",
     "Revision",
-    "Revisions",
     "SchemaError",
     "StartResult",
     "StateError",
     "SyncResult",
     "ValidationError",
     "append_records",
+    "batch_awaiting_analysis",
     "build_record",
-    "describe_revisions",
+    "current_batch",
     "evaluate_admission",
     "feed_from_config",
     "freeze",
@@ -102,7 +104,6 @@ __all__ = [
     "load_config",
     "load_state",
     "normalize",
-    "open_batch",
     "read_records",
     "release_line_revision",
     "save_state",

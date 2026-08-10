@@ -7,9 +7,12 @@ This is the step where evidence becomes a cohort. Three things make it safe:
 - **The manifest is immutable** (invariant 3). It is written once, by an atomic
   directory rename, and never edited afterwards — a late report belongs to a
   later batch.
-- **One open batch at a time** (invariant 12). A batch is open until its
-  analysis task has completed and its findings are recorded; while one is open,
-  `start` completes it rather than starting a second.
+- **One current batch at a time** (invariant 14). A batch is current from its
+  freeze until its outcome is recorded — through analysis, admission, and every
+  experiment its evidence justified. While one is current, `start` finishes
+  whatever that batch's freeze left undone rather than forming a second cohort;
+  the pool goes on accumulating in the meantime, which is where the next one
+  comes from.
 
 **What may be frozen.** Only a pool that is the whole eligible set — a cohort
 frozen from a prefix has a denominator set by a local pagination limit rather
@@ -55,6 +58,8 @@ from .manifests import (
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
     Batch,
+    current_batch,
+    is_current,
     load_batches,
     next_batch_id,
     read_closure,
@@ -92,7 +97,7 @@ TRIGGER_MAX_WAIT = "max-wait-days-elapsed"
 TRIGGER_FORCED = "human-forced-below-target"
 
 # Why it was not.
-REASON_OPEN_BATCH = "open-analysis-batch"
+REASON_CURRENT_BATCH = "current-batch"
 REASON_POOL_INCOMPLETE = "pool-incomplete"
 REASON_POOL_EMPTY = "pool-empty"
 REASON_BELOW_MINIMUM = "pool-below-minimum"
@@ -118,7 +123,9 @@ class AdmissionDecision:
     oldest_pending_at: str | None = None
     waited_days: int | None = None
     max_wait_days: int | None = None
-    open_batch_id: str | None = None
+    # The batch whose change cycle is still running, when one is what refused
+    # the freeze (invariant 14) — not only one still awaiting its analysis.
+    current_batch_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,7 +135,7 @@ class FreezeResult:
     manifest_path: Path | None = None
     analysis_task_id: str | None = None
     analysis_task_path: Path | None = None
-    open_batch_id: str | None = None
+    current_batch_id: str | None = None
     completed: tuple[str, ...] = ()
     # Batches whose completed analysis this run published as a closure record.
     closed_batch_ids: tuple[str, ...] = ()
@@ -146,30 +153,36 @@ class StartResult:
     freeze: FreezeResult
 
 
-def is_open(config: EvolutionConfig, batch: Batch) -> bool:
+def awaiting_analysis(config: EvolutionConfig, batch: Batch) -> bool:
     """Whether this batch still awaits its analysis.
 
-    Closure is a completed analysis task, never a file that exists. Two things
-    can show one, and they are checked in that order of authority:
+    The analysis *stage*, not the batch: a batch stays current through
+    admission, its experiments, and the decision that follows (invariant 14,
+    `manifests.is_current`). This reading is what tells `batch-frozen` from
+    everything after it, and what a freeze interrupted before its analysis task
+    landed is repaired against.
+
+    The stage ends at a completed analysis task, never at a file that exists.
+    Two things can show one, and they are checked in that order of authority:
 
     - The analysis task itself, on the machine that has it
       (`_analysis_completion`, which identifies the file as this batch's
       generated task before reading its status). This is the primary reading,
-      and the only one anything is derived from: the contract closes a batch
+      and the only one anything is derived from: the contract ends the stage
       after its analysis task "completes successfully" (Data layout).
     - The committed closure record, everywhere else. `.ai-tasks/` is
       machine-local and ignored, so on a fresh clone the lifecycle simply
       cannot be read; the record is what the controller publishes from the
-      completed task so closure travels with the repository instead of
+      completed task so the stage's end travels with the repository instead of
       deadlocking every other checkout on a batch it cannot see finish.
 
-    `findings.md` gates both, and closes nothing by itself. The analysis task
+    `findings.md` gates both, and ends nothing by itself. The analysis task
     writes its dispositions while it is still being developed and reviewed, so
     draft findings beside a pending, in-progress, or in-final-review task are
-    not a completed analysis — reading them as one lets a second cohort form
-    while the first is still being analyzed, on this machine or any other.
+    not a completed analysis — reading them as one would release unreviewed
+    dispositions to the admission gate, on this machine or any other.
 
-    A task that is present and unfinished holds the batch open even against a
+    A task that is present and unfinished holds the stage open even against a
     closure record: local lifecycle can contradict the committed record only by
     being more conservative than it. A task file that cannot be read counts as
     in flight — an unreadable lifecycle has not been shown to have finished.
@@ -191,11 +204,12 @@ def _analysis_completion(config: EvolutionConfig, batch: Batch) -> bool | None:
     has no such task.
 
     One reading for both callers, because the guard and the record that attests
-    to it must not be able to disagree: `is_open` decides whether the next
-    cohort may form, and `_record_closures` publishes that same answer to every
-    other machine. The manifest is what says which task is meant to analyze this
-    batch, so the spec — and the identity check it carries — is derived from the
-    manifest rather than from whatever happens to sit at the task's path.
+    to it must not be able to disagree: `awaiting_analysis` decides whether the
+    analysis stage is over, and `_record_closures` publishes that same answer
+    to every other machine. The manifest is what says which task is meant to
+    analyze this batch, so the spec — and the identity check it carries — is
+    derived from the manifest rather than from whatever happens to sit at the
+    task's path.
     """
 
     task_id = batch.analysis_task_id
@@ -208,12 +222,12 @@ def _analysis_completion(config: EvolutionConfig, batch: Batch) -> bool | None:
 def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ...]:
     """Publish the closure record for every batch this machine can prove done.
 
-    The write that makes `is_open`'s second reading possible. It runs on this
-    machine because this is where the analysis task lives; it writes into the
-    versioned batch directory because every other machine needs the answer and
-    has no way to derive it. Only completion observed from the task's own
-    lifecycle is published — nothing here infers closure from a file's
-    existence, and nothing reads a lifecycle off a file that has not been
+    The write that makes `awaiting_analysis`'s second reading possible. It runs
+    on this machine because this is where the analysis task lives; it writes
+    into the versioned batch directory because every other machine needs the
+    answer and has no way to derive it. Only completion observed from the
+    task's own lifecycle is published — nothing here infers closure from a
+    file's existence, and nothing reads a lifecycle off a file that has not been
     identified as the task the manifest names (`_analysis_completion`). This
     record is the one thing another machine cannot check for itself, so
     attesting to it from an unverified artifact would export a local mistake as
@@ -276,19 +290,25 @@ def _write_closure(config: EvolutionConfig, batch: Batch, *, task_id: str, now: 
     return path
 
 
-def open_batch(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
-    """The single batch awaiting analysis, if any.
+def batch_awaiting_analysis(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
+    """The single current batch awaiting analysis, if any.
 
     Two would mean the repository already contradicts invariant 12, which this
     controller cannot repair by choosing one of them.
 
+    Only a current batch is asked about. A concluded batch awaits nothing — its
+    outcome ended the whole cycle — so a freeze interrupted before its analysis
+    task landed is left as the history it is rather than repaired into a task
+    for a cohort nobody is going to analyze.
+
     `batches` lets a caller that has already loaded and validated the manifests
     reuse them, so a reader deriving several facts at once does not re-read the
     batch directory per fact — and, more to the point, cannot end up applying a
-    second definition of "open".
+    second definition of "awaiting analysis".
     """
 
-    unfinished = [batch for batch in (load_batches(config) if batches is None else batches) if is_open(config, batch)]
+    known = load_batches(config) if batches is None else batches
+    unfinished = [batch for batch in known if is_current(config, batch) and awaiting_analysis(config, batch)]
     if len(unfinished) > 1:
         raise BatchError(
             "more than one open analysis batch: "
@@ -304,13 +324,16 @@ def evaluate_admission(
     *,
     now: datetime,
     forced: bool = False,
-    open_batch_id: str | None = None,
+    current_batch_id: str | None = None,
 ) -> AdmissionDecision:
     """Apply the configured admission policy to the pending pool.
 
     Pure, and the only place that decides. The order of the tests is the policy:
 
-    1. An open batch dominates everything (invariant 12).
+    1. A current batch dominates everything (invariant 14). It is current from
+       its freeze until its outcome is recorded, so the pool keeps accumulating
+       through analysis, admission, and the whole change cycle, and the next
+       cohort forms only once that batch has concluded.
     2. The pool must be the whole eligible set. `state.feed_exhausted` is false
        when discovery stopped before the feed was drained — or has never run;
        the count is then a prefix, and every threshold below would be measured
@@ -351,11 +374,11 @@ def evaluate_admission(
             oldest_pending_at=oldest,
             waited_days=waited,
             max_wait_days=config.batch.max_wait_days,
-            open_batch_id=open_batch_id,
+            current_batch_id=current_batch_id,
         )
 
-    if open_batch_id is not None:
-        return decision(freeze=False, reason=REASON_OPEN_BATCH)
+    if current_batch_id is not None:
+        return decision(freeze=False, reason=REASON_CURRENT_BATCH)
     if not state.feed_exhausted:
         return decision(freeze=False, reason=REASON_POOL_INCOMPLETE)
     if task_count == 0:
@@ -459,12 +482,28 @@ def freeze_locked(
         return replace(repaired, closed_batch_ids=closed)
 
     state = load_state(config)
-    decision = evaluate_admission(config, state, now=moment, forced=forced)
+    batches = load_batches(config)
+    # Nothing awaits analysis, which does not mean nothing is in flight: a batch
+    # is current until its outcome is recorded, and its experiments and rounds
+    # all happen after its analysis closed (invariant 14).
+    running = current_batch(config, batches=batches)
+    decision = evaluate_admission(
+        config,
+        state,
+        now=moment,
+        forced=forced,
+        current_batch_id=running.batch_id if running else None,
+    )
     if not decision.freeze:
-        return FreezeResult(decision=decision, closed_batch_ids=closed)
+        return FreezeResult(
+            decision=decision,
+            current_batch_id=running.batch_id if running else None,
+            analysis_task_id=running.analysis_task_id if running else None,
+            manifest_path=running.manifest_path if running else None,
+            closed_batch_ids=closed,
+        )
 
     revision = runner_revision if runner_revision is not None else release_line_revision(config.repo_root)
-    batches = load_batches(config)
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
     if analysis_task.task_exists(config, task_id):
@@ -530,7 +569,7 @@ def _reconcile_locked(config: EvolutionConfig, *, now: datetime) -> FreezeResult
     at all.
     """
 
-    unfinished = open_batch(config)
+    unfinished = batch_awaiting_analysis(config)
     if unfinished is None:
         return None
 
@@ -538,8 +577,8 @@ def _reconcile_locked(config: EvolutionConfig, *, now: datetime) -> FreezeResult
     state = load_state(config)
     completed = _complete_freeze(config, unfinished, state, now=now, state_present=present)
     return FreezeResult(
-        decision=evaluate_admission(config, state, now=now, open_batch_id=unfinished.batch_id),
-        open_batch_id=unfinished.batch_id,
+        decision=evaluate_admission(config, state, now=now, current_batch_id=unfinished.batch_id),
+        current_batch_id=unfinished.batch_id,
         analysis_task_id=unfinished.analysis_task_id,
         manifest_path=unfinished.manifest_path,
         completed=completed,

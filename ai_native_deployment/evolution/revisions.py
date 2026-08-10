@@ -1,19 +1,24 @@
-"""Which canonical revision governs an evolution run.
+"""This package's whole conversation with Git.
 
-Contract invariant 8 pins the runner: the stable protocol revision governing an
-evolution task stays fixed for that task, and a candidate revision never
-governs the run that creates it. The release line is therefore read from the
-most recent release tag reachable from HEAD — never from the branch tip, which
-on a working branch *is* the candidate.
+Three questions, all read-only and none of them fatal: a question Git cannot
+answer returns None rather than raising, because a status command must still
+answer.
 
-Both revisions are what a lifecycle reader needs (invariant 10: a candidate is
-exercised against a baseline, then promoted, revised, or reverted), so this
-module names them together as well as separately.
+**The release line** (`release_line_revision`). Contract invariant 8 pins the
+runner: the stable protocol revision governing an evolution task stays fixed for
+that task, and a candidate revision never governs the run that creates it. It is
+therefore read from the most recent release tag reachable from HEAD — never from
+the branch tip, which on a working branch *is* a candidate.
 
-It is also the one place that talks to Git, so the experiment refs are read
-through it too (`ref_tip`, `contains`). Everything here is read-only and
-non-fatal: a question Git cannot answer returns None rather than raising,
-because a status command must still answer.
+**The experiment refs** (`ref_tip`, `contains`). Where an experiment's durable
+ref sits, and whether one revision descends from another.
+
+What is deliberately *not* here any more is a lifecycle reading built out of
+`HEAD` against that tag. It answered "is this checkout on the release line",
+which names no experiment, changes with a `git checkout`, and reports a
+candidate for any unrelated branch (contract: What is derived). The revisions in
+play are properties of the batch and experiment records, so `lineage.py` derives
+them and `phase.py` reports them; this module only resolves the names.
 """
 
 from __future__ import annotations
@@ -29,8 +34,9 @@ RELEASE_TAG_GLOB = "v[0-9]*"
 class Revision:
     """One commit in play, and the name it is known by.
 
-    `ref` is None on a detached HEAD: the commit is still the answer, but there
-    is no branch or tag to call it — which is a fact worth showing rather than
+    `ref` is None for a commit no name leads to — a round's pinned candidate, a
+    promotion revision on the source line. The commit is still the answer; what
+    is missing is a shorthand for it, which is a fact worth showing rather than
     an absence worth hiding.
     """
 
@@ -40,19 +46,6 @@ class Revision:
     def describe(self) -> str:
         short = self.sha[:12]
         return f"{self.ref} ({short})" if self.ref else short
-
-
-@dataclass(frozen=True)
-class Revisions:
-    """The baseline and the candidate, as far as this checkout can tell.
-
-    Either may be None, and each None means something different: no baseline is
-    a checkout with no release tag, while no candidate is a checkout sitting
-    exactly on the release line — nothing is being tried against it.
-    """
-
-    baseline: Revision | None = None
-    candidate: Revision | None = None
 
 
 def release_line_revision(repo_root: Path) -> str | None:
@@ -67,37 +60,6 @@ def release_line_revision(repo_root: Path) -> str | None:
     if not _is_repository_root(repo_root):
         return None
     return _release_tag(repo_root)
-
-
-def describe_revisions(repo_root: Path) -> Revisions:
-    """Both revisions in play, for a lifecycle reader.
-
-    The candidate is the tip whenever the tip is not the baseline commit — one
-    rule, no special case for a checkout that has no release tag at all. There
-    the tip is still what a run would execute, and calling it the candidate says
-    so; what is missing in that repository is the baseline to measure it
-    against, which the None baseline reports on its own.
-
-    Read-only and never fatal: a path that is not the top of a work tree
-    (`_is_repository_root`, which is also what stops a directory nested inside
-    another repository from reporting its host's revisions) yields two Nones
-    rather than an error, because a status command must still answer.
-    """
-
-    if not _is_repository_root(repo_root):
-        return Revisions()
-
-    tag = _release_tag(repo_root)
-    baseline = None
-    if tag:
-        sha = _git(repo_root, "rev-parse", f"{tag}^{{commit}}")
-        baseline = Revision(sha=sha, ref=tag) if sha else None
-
-    head = _git(repo_root, "rev-parse", "HEAD")
-    if not head or (baseline is not None and head == baseline.sha):
-        return Revisions(baseline=baseline)
-    branch = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
-    return Revisions(baseline=baseline, candidate=Revision(sha=head, ref=branch if branch and branch != "HEAD" else None))
 
 
 def ref_tip(repo_root: Path, ref: str) -> str | None:

@@ -334,11 +334,13 @@ justified is a valid outcome (invariant 7).
   coverage, recurrence, counterexamples, confidence, affected revisions,
   expected benefit, and regression risk.
 - Write the disposition record to `{spec.findings_relative_path}`. It does not
-  close the batch by existing: this batch stays open — and no later batch can
-  form (invariant 12) — until this task reaches `completed`, at which point the
-  next `aii-2 evolution` run publishes `{spec.closure_relative_path}` from that
-  status. Never write that record by hand; it attests to a lifecycle, not to a
-  file.
+  end the analysis by existing: this stage stays open until this task reaches
+  `completed`, at which point the next `aii-2 evolution` run publishes
+  `{spec.closure_relative_path}` from that status. Never write that record by
+  hand; it attests to a lifecycle, not to a file. Completing this task releases
+  the dispositions to the admission gate; the batch itself stays current — and
+  no later cohort forms (invariant 14) — until its outcome is recorded, which is
+  a decision later than and separate from this task.
 - Draft each accepted `protocol-candidate` (and any other change task this
   analysis concludes is warranted) as a schema-conforming task file at
   `{spec.proposed_tasks_relative_path}/<draft-id>.md`, where `<draft-id>` is a

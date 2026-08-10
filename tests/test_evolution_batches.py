@@ -28,10 +28,11 @@ from evolution_fixtures import (
     write_closure,
     write_feed,
     write_manifest,
+    write_outcome,
 )
 
 from ai_native_deployment import evolution
-from ai_native_deployment.evolution import analysis_task, batches, ledger, revisions, state
+from ai_native_deployment.evolution import analysis_task, batches, ledger, manifests, revisions, state
 
 TARGET = 3
 MINIMUM = 2
@@ -139,9 +140,9 @@ def set_task_status(config: evolution.EvolutionConfig, task_id: str, status: str
 
 def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -> None:
     """Move a frozen batch to another id, the way a hand-repair would have to:
-    directory, manifest, closure record, the runtime claims naming it, and the
-    generated analysis task. Everything that is resolved against the manifest
-    has to come along — the claims, the closure record, and the task whose
+    directory, manifest, closure and outcome records, the runtime claims naming
+    it, and the generated analysis task. Everything that is resolved against the
+    manifest has to come along — the claims, the two records, and the task whose
     identity and manifest path the controller checks before reading its
     lifecycle — so leaving any of them on the old id is corruption rather than a
     relabel."""
@@ -159,6 +160,10 @@ def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -
         closure.write_text(
             json.dumps({**record, "batch_id": new_id, "analysis_task_id": renamed}), encoding="utf-8"
         )
+    outcome = config.batches_root / new_id / manifests.OUTCOME_FILENAME
+    if outcome.is_file():
+        record = json.loads(outcome.read_text(encoding="utf-8"))
+        outcome.write_text(json.dumps({**record, "batch_id": new_id}), encoding="utf-8")
     task = analysis_task.existing_task_path(config, task_id) if task_id else None
     if task is not None:
         text = task.read_text(encoding="utf-8").replace(old_id, new_id)
@@ -170,12 +175,16 @@ def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
 
 
-def close_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
-    """Close a batch the way the contract does: the analysis task completes, its
-    dispositions are committed as findings, and the next controller run
-    publishes the closure record from that completed status. Draft findings
-    beside a task that has not completed are not closure — the
-    `test_draft_findings_...` cases cover that, here and on another machine."""
+def close_analysis(config: evolution.EvolutionConfig, batch_id: str) -> None:
+    """End a batch's analysis *stage* the way the contract does: the analysis
+    task completes, its dispositions are committed as findings, and the next
+    controller run publishes the closure record from that completed status.
+    Draft findings beside a task that has not completed are not closure — the
+    `test_draft_findings_...` cases cover that, here and on another machine.
+
+    The batch stays current afterwards: what ends it is its outcome
+    (`conclude_batch`), and everything between the two — the admission gate, the
+    experiments — happens inside a batch that is still current (invariant 14)."""
 
     batch = next(item for item in evolution.load_batches(config) if item.batch_id == batch_id)
     record_findings(config, batch_id)
@@ -183,6 +192,17 @@ def close_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
         complete_analysis_task(config, batch.analysis_task_id)
     freeze(config)
     assert (config.batches_root / batch_id / batches.CLOSURE_FILENAME).is_file()
+
+
+def conclude_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
+    """End the batch itself, which is what releases the next cohort.
+
+    Written directly here: `conclude-no-change` is a guarded operation this
+    controller does not implement yet, and the record it will write is what
+    every reader already derives currency from."""
+
+    close_analysis(config, batch_id)
+    write_outcome(config.batches_root, batch_id)
 
 
 def closed_elsewhere(config: evolution.EvolutionConfig, batch_id: str, report_keys: list[str], **overrides) -> str:
@@ -612,7 +632,7 @@ def test_a_machine_with_no_runtime_state_does_not_re_import_a_frozen_cohort(
     time (invariants 1-3)."""
     feed = fill_pool(config, feed_root, TARGET)
     result = freeze(config)
-    close_batch(config, result.batch_id or "")
+    close_analysis(config, result.batch_id or "")
     shutil.rmtree(config.runtime_root)
     shutil.rmtree(analysis_task.tasks_root(config))
 
@@ -632,7 +652,7 @@ def test_a_clone_still_imports_a_later_evaluation_of_an_already_batched_task(
     what a second cohort can ever measure."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
-    close_batch(config, result.batch_id or "")
+    close_analysis(config, result.batch_id or "")
     shutil.rmtree(config.runtime_root)
     shutil.rmtree(analysis_task.tasks_root(config))
 
@@ -647,7 +667,7 @@ def test_list_reports_a_frozen_cohorts_reports_as_already_decided(
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
     result = freeze(config)
-    close_batch(config, result.batch_id or "")
+    close_analysis(config, result.batch_id or "")
     shutil.rmtree(config.runtime_root)
     shutil.rmtree(analysis_task.tasks_root(config))
 
@@ -688,8 +708,8 @@ def test_a_repeated_start_neither_freezes_again_nor_creates_a_second_task(
     again = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
 
     assert not again.freeze.frozen
-    assert again.freeze.decision.reason == batches.REASON_OPEN_BATCH
-    assert again.freeze.open_batch_id == first.freeze.batch_id
+    assert again.freeze.decision.reason == batches.REASON_CURRENT_BATCH
+    assert again.freeze.current_batch_id == first.freeze.batch_id
     assert again.freeze.completed == ()
     assert [batch.batch_id for batch in evolution.load_batches(config)] == ["evolution-batch-0001"]
     index_rows = [
@@ -726,7 +746,7 @@ def test_a_restart_completes_a_freeze_interrupted_after_the_manifest(
     resumed = freeze(config)
 
     assert not resumed.frozen
-    assert resumed.open_batch_id == "evolution-batch-0001"
+    assert resumed.current_batch_id == "evolution-batch-0001"
     assert set(resumed.completed) == {batches.COMPLETED_TASK, batches.COMPLETED_INDEX}
     assert analysis_task.task_exists(config, frozen[0].analysis_task_id or "")
     assert evolution.load_state(config).pending == []
@@ -958,7 +978,7 @@ def test_an_open_batch_is_reconciled_before_the_feed_is_contacted(
     # And the repair is reported once the feed comes back, not repeated.
     resumed = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
     assert resumed.freeze.completed == ()
-    assert resumed.freeze.open_batch_id == batch.batch_id
+    assert resumed.freeze.current_batch_id == batch.batch_id
 
 
 @pytest.mark.parametrize("replacement", ["# partial", "", "---\nid: something-else\n---\n"])
@@ -1026,7 +1046,7 @@ def test_a_claimed_and_logged_task_still_counts_as_the_generated_one(
     resumed = freeze(config)
 
     assert resumed.completed == ()
-    assert resumed.open_batch_id == result.batch_id
+    assert resumed.current_batch_id == result.batch_id
 
 
 def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
@@ -1080,8 +1100,9 @@ def test_draft_findings_do_not_close_a_batch_still_being_analyzed(
     config: evolution.EvolutionConfig, feed_root: Path, status: str
 ) -> None:
     """The analysis task writes its dispositions while it is still being
-    developed and reviewed. Reading that draft as completion would let a second
-    cohort form before the first analysis has concluded (invariant 12)."""
+    developed and reviewed. Reading that draft as completion would release
+    unreviewed dispositions to the admission gate (invariant 9), and the batch
+    would go on blocking the next cohort with nobody able to act on it."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
     if status != "pending":
@@ -1096,12 +1117,17 @@ def test_draft_findings_do_not_close_a_batch_still_being_analyzed(
     blocked = freeze(config, now=NOW + timedelta(days=1))
 
     assert not blocked.frozen
-    assert blocked.decision.reason == batches.REASON_OPEN_BATCH
-    assert blocked.open_batch_id == first.batch_id
+    assert blocked.decision.reason == batches.REASON_CURRENT_BATCH
+    assert blocked.current_batch_id == first.batch_id
     assert [batch.batch_id for batch in evolution.load_batches(config)] == ["evolution-batch-0001"]
 
-    # Completing the analysis is what releases the next batch.
+    # Completing the analysis ends the stage, not the batch: the pool keeps
+    # accumulating until the batch records an outcome (invariant 14).
     complete_analysis_task(config, first.analysis_task_id or "")
+    assert freeze(config, now=NOW + timedelta(days=1)).batch_id is None
+    assert batches.batch_awaiting_analysis(config) is None
+
+    write_outcome(config.batches_root, first.batch_id or "")
     assert freeze(config, now=NOW + timedelta(days=1)).batch_id == "evolution-batch-0002"
 
 
@@ -1115,7 +1141,7 @@ def test_a_completed_analysis_task_closes_its_batch_before_it_is_archived(
     set_task_status(config, first.analysis_task_id or "", "completed")
     record_findings(config, first.batch_id or "")
 
-    assert batches.open_batch(config) is None
+    assert batches.batch_awaiting_analysis(config) is None
 
 
 @pytest.mark.parametrize("status", ["pending", "in_progress", "final_review"])
@@ -1134,7 +1160,7 @@ def test_draft_findings_do_not_close_a_batch_on_another_machine_either(
     record_findings(config, first.batch_id or "")
     shutil.rmtree(analysis_task.tasks_root(config))
 
-    unfinished = batches.open_batch(config)
+    unfinished = batches.batch_awaiting_analysis(config)
 
     assert unfinished is not None and unfinished.batch_id == first.batch_id
     assert not (config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME).exists()
@@ -1162,7 +1188,7 @@ def test_a_completed_analysis_closes_its_batch_on_every_machine(
         "analysis_task_id": first.analysis_task_id,
         "closed_at": "2026-08-01T12:00:00Z",
     }
-    assert batches.open_batch(config) is None
+    assert batches.batch_awaiting_analysis(config) is None
     analyzed = [record for record in ledger.read_records(config) if record["record_type"] == "batch-analyzed"]
     assert analyzed == [
         {
@@ -1176,7 +1202,7 @@ def test_a_completed_analysis_closes_its_batch_on_every_machine(
 
     # And the next machine, which has none of the task files, agrees.
     shutil.rmtree(analysis_task.tasks_root(config))
-    assert batches.open_batch(config) is None
+    assert batches.batch_awaiting_analysis(config) is None
     assert freeze(config).closed_batch_ids == (), "the record is published once, not on every run"
 
 
@@ -1206,7 +1232,7 @@ def test_a_file_that_is_not_the_analysis_task_cannot_close_its_batch(
     path.write_text(replacement, encoding="utf-8")
 
     with pytest.raises(evolution.EvolutionError, match="is not the analysis task generated"):
-        batches.open_batch(config)
+        batches.batch_awaiting_analysis(config)
     with pytest.raises(evolution.EvolutionError, match="is not the analysis task generated"):
         freeze(config)
 
@@ -1230,7 +1256,7 @@ def test_an_unfinished_local_task_holds_a_batch_open_against_its_closure_record(
     )
     set_task_status(config, first.analysis_task_id or "", "in_progress")
 
-    unfinished = batches.open_batch(config)
+    unfinished = batches.batch_awaiting_analysis(config)
 
     assert unfinished is not None and unfinished.batch_id == first.batch_id
 
@@ -1266,7 +1292,7 @@ def test_a_closure_record_that_contradicts_its_manifest_is_refused(
             encoding="utf-8",
         )
         with pytest.raises(evolution.EvolutionError, match=message):
-            batches.open_batch(config)
+            batches.batch_awaiting_analysis(config)
 
 
 @pytest.mark.parametrize("named", [{}, {"analysis_task_id": None}], ids=["absent", "null"])
@@ -1283,7 +1309,7 @@ def test_a_closure_record_needs_a_manifest_that_names_its_task(
     write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-unrelated-analysis")
 
     with pytest.raises(evolution.BatchError, match="names no analysis task"):
-        batches.open_batch(config)
+        batches.batch_awaiting_analysis(config)
 
 
 def test_an_open_batch_that_names_no_analysis_task_is_reported(
@@ -1301,12 +1327,14 @@ def test_an_open_batch_that_names_no_analysis_task_is_reported(
         freeze(config)
 
 
-def test_a_new_batch_waits_for_the_open_one_to_record_findings(
+def test_a_new_batch_waits_for_the_current_one_to_record_its_outcome(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
+    """Invariant 14: the next cohort forms once the batch before it has
+    concluded — not once its analysis finished, which is a stage inside it."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
-    close_batch(config, first.batch_id or "")
+    conclude_batch(config, first.batch_id or "")
 
     later = [
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
@@ -1346,7 +1374,7 @@ def test_allocation_counts_from_the_highest_id_ever_used(
     was moved away, attaching new evidence to an old cohort's name."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
-    close_batch(config, first.batch_id or "")
+    conclude_batch(config, first.batch_id or "")
     relabel_batch(config, first.batch_id or "", "evolution-batch-0009")
     later = [
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
@@ -1425,9 +1453,10 @@ def test_a_version_1_manifest_keeps_its_read_path(
     assert [batch.schema_version for batch in loaded] == [1]
     assert loaded[0].task_count == 2
     assert loaded[0].report_keys == {"old1", "old2"}
-    assert batches.open_batch(config) is None
+    assert batches.batch_awaiting_analysis(config) is None
 
     # And a new batch is written at the current version, beside the old one.
+    write_outcome(config.batches_root, "evolution-batch-0001")
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
 
@@ -1453,7 +1482,7 @@ def test_a_version_1_manifest_still_guards_the_open_batch(
     result = freeze(config)
 
     assert not result.frozen
-    assert result.decision.reason == batches.REASON_OPEN_BATCH
+    assert result.decision.reason == batches.REASON_CURRENT_BATCH
     assert batches.COMPLETED_TASK in result.completed
     assert analysis_task.task_exists(config, "2026-07-31-evolution-batch-0001-analysis")
     # The old batch's report is recorded as claimed, so a later sync cannot pool

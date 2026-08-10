@@ -54,6 +54,7 @@ from .manifests import (
     load_batches,
     read_outcome,
     read_rejected_drafts,
+    require_one_current,
 )
 from .revisions import contains, ref_tip
 from .schema import load_schema, validate_or_raise
@@ -367,13 +368,7 @@ def describe(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> 
     )
 
     current = [lineage for lineage in lineages if lineage.current]
-    if len(current) > 1:
-        raise BatchError(
-            "more than one current batch: "
-            + ", ".join(lineage.batch_id for lineage in current)
-            + " — invariant 14 allows one at a time; record the earlier batch's outcome "
-            "(promoted or no-change) before the next cohort continues"
-        )
+    require_one_current([lineage.batch_id for lineage in current])
     return Lineage(batches=lineages, current=current[0] if current else None)
 
 
