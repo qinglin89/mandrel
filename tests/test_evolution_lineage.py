@@ -33,8 +33,9 @@ DRAFT_SHA = "d" * 64
 
 
 def experiment(**overrides: Any) -> dict[str, Any]:
-    """An open experiment on its second round: round 1 closed with a pinned
-    candidate, round 2 still taking tasks."""
+    """An open experiment on its second round: round 1 candidate-ready with its
+    tasks observed complete and its candidate pinned, round 2 open with a task
+    still running."""
 
     record = {
         "schema_version": 1,
@@ -55,18 +56,28 @@ def experiment(**overrides: Any) -> dict[str, Any]:
                         "draft_id": "loader-fallback",
                         "draft_sha256": DRAFT_SHA,
                         "admitted_at": "2026-08-01T09:00:00Z",
+                        "completion_observed_at": "2026-08-03T08:00:00Z",
                     }
                 ],
-                "closed_at": "2026-08-03T09:00:00Z",
-                "candidate_revision": CANDIDATE,
+                "seal": {
+                    "sealed_at": "2026-08-03T09:00:00Z",
+                    "candidate_revision": CANDIDATE,
+                },
             },
             {
                 "round": 2,
                 "opened_at": "2026-08-03T09:00:00Z",
                 "reason": "replay showed no convergence gain",
-                "tasks": [],
-                "closed_at": None,
-                "candidate_revision": None,
+                "tasks": [
+                    {
+                        "task_id": "2026-08-03-loader-fallback-hook-side",
+                        "draft_id": "loader-fallback-hook-side",
+                        "draft_sha256": DRAFT_SHA,
+                        "admitted_at": "2026-08-03T09:30:00Z",
+                        "completion_observed_at": None,
+                    }
+                ],
+                "seal": None,
             },
         ],
         "decision": None,
@@ -144,7 +155,7 @@ def test_every_schema_stays_inside_the_implemented_subset(path: Path) -> None:
 # --- experiment record -------------------------------------------------------
 
 
-def test_open_experiment_with_a_closed_and_an_open_round_validates() -> None:
+def test_open_experiment_with_a_candidate_ready_and_an_open_round_validates() -> None:
     assert errors(experiment(), "experiment.schema.json") == []
 
 
@@ -253,16 +264,111 @@ def test_an_admitted_task_states_the_bytes_it_was_admitted_from() -> None:
     assert errors(record, "experiment.schema.json")
 
 
+def test_an_admitted_task_states_whether_it_was_seen_through_to_completion() -> None:
+    """`.ai-tasks/` is machine-local, so the observation recorded here is the
+    only durable form of it. Omitting the field would make "not finished" and
+    "nobody looked" the same record — and sealing turns on that difference."""
+
+    record = experiment()
+    del record["rounds"][1]["tasks"][0]["completion_observed_at"]
+    assert errors(record, "experiment.schema.json")
+
+
 def test_a_round_is_numbered_from_one() -> None:
     record = experiment()
     record["rounds"][0]["round"] = 0
     assert errors(record, "experiment.schema.json")
 
 
-def test_a_closed_round_pins_a_revision_shaped_candidate() -> None:
+def test_a_candidate_ready_round_pins_a_revision_shaped_candidate() -> None:
     record = experiment()
-    record["rounds"][0]["candidate_revision"] = "HEAD"
+    record["rounds"][0]["seal"]["candidate_revision"] = "HEAD"
     assert errors(record, "experiment.schema.json")
+
+
+@pytest.mark.parametrize(
+    "seal",
+    [
+        {"sealed_at": "2026-08-03T09:00:00Z"},
+        {"candidate_revision": CANDIDATE},
+        {"sealed_at": "2026-08-03T09:00:00Z", "candidate_revision": None},
+        {"sealed_at": None, "candidate_revision": CANDIDATE},
+    ],
+    ids=["sealed-with-no-candidate", "candidate-nobody-sealed", "null-candidate", "null-seal-time"],
+)
+def test_a_half_pinned_round_is_not_a_representable_shape(seal: dict[str, Any]) -> None:
+    """The seal is one object rather than two nullable fields precisely so that
+    candidate-ready is all-or-nothing (contract invariant 16): a round that
+    claims a seal without a revision, or a revision nobody sealed, is refused by
+    the schema itself instead of by a controller rule that has to remember to
+    look."""
+
+    record = experiment()
+    record["rounds"][0]["seal"] = seal
+    assert errors(record, "experiment.schema.json")
+
+
+# --- end-of-string strictness ------------------------------------------------
+#
+# Every identity and digest below is anchored `^...$`, and Python's `$` also
+# matches just before a final newline. So each of these is a value the pattern
+# was written to refuse and a naive validator accepts: a draft slug that is no
+# longer one safe path segment, an experiment id that is not the id it names, a
+# revision that is not a revision.
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda record: record.update(experiment_id=EXPERIMENT_ID + "\n"),
+        lambda record: record.update(batch_id=BATCH_ID + "\n"),
+        lambda record: record.update(base_revision=BASE + "\n"),
+        lambda record: record.update(ref=f"refs/evolution/experiments/{EXPERIMENT_ID}\n"),
+        lambda record: record["rounds"][0]["tasks"][0].update(draft_id="loader-fallback\n"),
+        lambda record: record["rounds"][0]["tasks"][0].update(draft_sha256=DRAFT_SHA + "\n"),
+        lambda record: record["rounds"][0]["seal"].update(candidate_revision=CANDIDATE + "\n"),
+    ],
+    ids=[
+        "experiment-id",
+        "batch-id",
+        "base-revision",
+        "ref",
+        "draft-id",
+        "draft-digest",
+        "candidate-revision",
+    ],
+)
+def test_a_trailing_newline_is_refused_by_every_experiment_pattern(mutate: Any) -> None:
+    record = experiment()
+    mutate(record)
+    assert errors(record, "experiment.schema.json")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"batch_id": BATCH_ID + "\n"},
+        {"experiment_id": EXPERIMENT_ID + "\n"},
+        {"promotion_revision": PROMOTION + "\n"},
+    ],
+    ids=["batch-id", "experiment-id", "promotion-revision"],
+)
+def test_a_trailing_newline_is_refused_by_every_outcome_pattern(overrides: dict[str, Any]) -> None:
+    assert errors(outcome(outcome="promoted", **overrides), "batch-outcome.schema.json")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"draft_id": "hook-rewrite\n"},
+        {"draft_sha256": DRAFT_SHA + "\n"},
+    ],
+    ids=["draft-id", "draft-digest"],
+)
+def test_a_trailing_newline_is_refused_by_every_rejection_pattern(overrides: dict[str, Any]) -> None:
+    record = rejections()
+    record["rejected"][0].update(overrides)
+    assert errors(record, "rejected-drafts.schema.json")
 
 
 # --- batch outcome -----------------------------------------------------------

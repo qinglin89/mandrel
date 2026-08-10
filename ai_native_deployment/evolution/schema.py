@@ -137,7 +137,7 @@ def _validate_string(instance: str, schema: Mapping[str, Any], path: str) -> lis
     if "minLength" in schema and len(instance) < schema["minLength"]:
         errors.append(f"{path}: shorter than minLength {schema['minLength']}")
     pattern = schema.get("pattern")
-    if pattern is not None and re.search(pattern, instance) is None:
+    if pattern is not None and _search(pattern, instance) is None:
         errors.append(f"{path}: {instance!r} does not match {pattern}")
     fmt = schema.get("format")
     if fmt is not None:
@@ -146,6 +146,50 @@ def _validate_string(instance: str, schema: Mapping[str, Any], path: str) -> lis
         if not is_rfc3339_date_time(instance):
             errors.append(f"{path}: {instance!r} is not an RFC 3339 date-time")
     return errors
+
+
+def _search(pattern: str, instance: str) -> re.Match[str] | None:
+    """One `pattern` read with the semantics its author wrote it under.
+
+    JSON Schema patterns are ECMA-262 regexes matched anywhere in the string,
+    which is `re.search` — except for two divergences that both silently widen
+    what Python accepts:
+
+    - Python's `$` also matches just before a final newline; ECMA-262's, with no
+      `m` flag, does not. Left alone, every `^...$` identity pattern under
+      `evolution/schemas/` accepts its own value with a newline glued on: a
+      40-hex revision, a `<batch-id>-exp-<NN>` id, a draft slug that is supposed
+      to be one safe path segment with nothing else in it. `\\Z` is the anchor
+      that means what the schema says.
+    - `\\d`, `\\w`, and `\\s` are Unicode-wide in Python and ASCII in ECMA-262
+      without the `u` flag, so `re.ASCII` is the faithful reading — the same
+      reason `_RFC3339` carries it.
+    """
+
+    return re.search(_end_anchored(pattern), instance, re.ASCII)
+
+
+def _end_anchored(pattern: str) -> str:
+    """`$` rewritten to `\\Z` wherever it is an anchor — not where it is escaped
+    or inside a character class, both of which make it an ordinary character."""
+
+    out: list[str] = []
+    escaped = False
+    in_class = False
+    for char in pattern:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char == "$":
+            out.append(r"\Z")
+            continue
+        out.append(char)
+    return "".join(out)
 
 
 def _validate_object(

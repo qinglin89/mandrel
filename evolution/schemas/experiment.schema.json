@@ -50,7 +50,7 @@
       "pattern": "^refs/evolution/experiments/evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"
     },
     "rounds": {
-      "description": "Append-only. Exactly one round is open while the experiment is; a terminal experiment has all of them closed.",
+      "description": "Append-only. At most one round is unsealed, and it is the last one; every earlier round is candidate-ready and is never edited again.",
       "type": "array",
       "minItems": 1,
       "items": {
@@ -63,15 +63,14 @@
   },
   "$defs": {
     "round": {
-      "description": "One revision pass: the tasks admitted into it and the candidate revision it produced. Replay evidence names a round, so closing one and opening the next is what makes prior evidence stale by construction.",
+      "description": "One revision pass: the tasks admitted into it and the candidate it produced. Replay evidence names a round, so sealing one and opening the next is what makes prior evidence stale by construction.",
       "type": "object",
       "required": [
         "round",
         "opened_at",
         "reason",
         "tasks",
-        "closed_at",
-        "candidate_revision"
+        "seal"
       ],
       "properties": {
         "round": {
@@ -93,32 +92,45 @@
             "$ref": "#/$defs/admitted_task"
           }
         },
-        "closed_at": {
-          "type": [
-            "string",
-            "null"
-          ],
+        "seal": {
+          "$ref": "#/$defs/seal"
+        }
+      },
+      "additionalProperties": false
+    },
+    "seal": {
+      "description": "What makes a round candidate-ready, or null while it is still taking work. One object rather than two nullable fields so a half-pinned round — sealed with no revision, or a revision nobody sealed — is not a shape this contract can even hold (contract invariant 16). Nothing measures an unsealed round: the tip moves while a round is open, so evidence gathered before this record exists cannot say which tree it described.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "sealed_at",
+        "candidate_revision"
+      ],
+      "properties": {
+        "sealed_at": {
+          "description": "When the controller sealed the round, having observed every admitted task complete. Not when the last task finished.",
+          "type": "string",
           "format": "date-time"
         },
         "candidate_revision": {
-          "description": "The ref tip observed when this round closed; null while the round is open, and immutable once pinned. Distinct from the promotion revision a promoted candidate later produces on the source line.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "description": "The ref tip pinned at that moment: the revision replay exercises and every terminal decision names. Immutable, and the ref stays here until a new round is opened. Distinct from the promotion revision a promoted candidate later produces on the source line.",
+          "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         }
       },
       "additionalProperties": false
     },
     "admitted_task": {
-      "description": "One draft's admission: which proposal it was, the bytes admitted, and the task the copy took. The hash is the provenance a copied draft would otherwise lose the moment either file is edited.",
+      "description": "One draft's admission: which proposal it was, the bytes admitted, the task the copy took, and whether that task was seen through to completion. The hash is the provenance a copied draft would otherwise lose the moment either file is edited.",
       "type": "object",
       "required": [
         "task_id",
         "draft_id",
         "draft_sha256",
-        "admitted_at"
+        "admitted_at",
+        "completion_observed_at"
       ],
       "properties": {
         "task_id": {
@@ -137,12 +149,20 @@
         "admitted_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "completion_observed_at": {
+          "description": "When this task was observed at `completed`, or null while it has not been. Recorded here because the observation is the only durable form of it: `.ai-tasks/` is machine-local and close-out archives a finished task away, so on any other clone the task's own status is unreadable rather than merely absent. A round is sealed only once every task it admitted carries this (contract invariant 16).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
         }
       },
       "additionalProperties": false
     },
     "decision": {
-      "description": "The terminal decision, or null while the experiment is open. `superseded_by` is set only for `superseded` and `promotion_revision` only for `promoted`; both are present and null otherwise. The controller enforces that pairing, which the implemented JSON Schema subset cannot express — the fields stay explicit rather than optional so a record never leaves the reader guessing whether a value is absent or unrecorded.",
+      "description": "The terminal decision, or null while the experiment is open. `superseded_by` is set only for `superseded` and `promotion_revision` only for `promoted`; both are present and null otherwise. `promoted` additionally requires the last round to be candidate-ready, since what was promoted is the revision that round pinned and not the tip as it stood at decision time; `abandoned` and `superseded` may end an experiment whose last round was never sealed, which is the honest record of an attempt dropped before it produced a candidate. The controller enforces all of that, which the implemented JSON Schema subset cannot express — the fields stay explicit rather than optional so a record never leaves the reader guessing whether a value is absent or unrecorded.",
       "type": [
         "object",
         "null"

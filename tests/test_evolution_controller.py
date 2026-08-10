@@ -211,6 +211,50 @@ def test_validator_rejects_a_boolean_where_an_integer_is_required() -> None:
 
 @pytest.mark.parametrize(
     "value",
+    ["abc\n", "abc\n\n", "\nabc", "abcd", "ABC"],
+    ids=["trailing-newline", "two-newlines", "leading-newline", "suffix", "case"],
+)
+def test_an_anchored_pattern_means_the_whole_string(value: str) -> None:
+    """Python's `$` also matches just before a final newline; the ECMA-262 `$`
+    a schema author writes does not. Every `^...$` identity in
+    `evolution/schemas/` — draft slugs that must be one path segment, ids,
+    40-hex revisions — depends on this being the strict reading."""
+
+    anchored = {"type": "string", "pattern": "^abc$"}
+    assert schema.validate("abc", anchored) == []
+    assert schema.validate(value, anchored)
+
+
+def test_an_unanchored_pattern_still_matches_anywhere() -> None:
+    """JSON Schema `pattern` is a search, not a full match. Only the meaning of
+    `$` was corrected, so a pattern that never anchored keeps its reach."""
+
+    assert schema.validate("xxabcxx", {"type": "string", "pattern": "abc"}) == []
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["^a[$]b$", r"^a\$b$"],
+    ids=["character-class", "escaped"],
+)
+def test_a_literal_dollar_is_left_alone(pattern: str) -> None:
+    """`$` is an anchor only where it is one; inside a class or behind a
+    backslash it is the character, and rewriting it there would turn a pattern
+    that matches into one that cannot."""
+
+    assert schema.validate("a$b", {"type": "string", "pattern": pattern}) == []
+
+
+def test_a_pattern_reads_its_classes_as_ascii() -> None:
+    """ECMA-262 without the `u` flag scopes `\\d` to 0-9. Arabic-Indic digits
+    parse as a sequence number, a digest, or a batch ordinal nowhere
+    downstream."""
+
+    assert schema.validate("٧", {"type": "string", "pattern": r"^\d$"})
+
+
+@pytest.mark.parametrize(
+    "value",
     [
         "2026-07-30T10:00:00Z",
         "2026-07-30t10:00:00z",

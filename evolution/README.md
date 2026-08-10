@@ -75,6 +75,15 @@ complete an evaluation.
     each round's candidate revision stays reachable from the next one's, which
     is what keeps prior task selections, candidate trees, and the evidence
     measured against them readable after the experiment has moved on.
+16. **Pin the candidate before measuring it.** A round is measured only once it
+    is **candidate-ready**: every task admitted into it durably observed
+    complete, and its candidate revision pinned from the ref. Replay and every
+    terminal decision name that pinned revision, never the tip as it stands —
+    an open round's tip moves, so evidence taken against it describes a tree the
+    record cannot afterwards identify. While the last round is candidate-ready
+    the ref stays where it was pinned; opening a new round is what lets work
+    resume. An experiment dropped before it ever became candidate-ready records
+    no candidate at all, in the same spirit as invariant 7.
 
 An exceptional fast path for a severe safety or correctness failure requires a
 human-recorded justification. It does not silently weaken the normal batch
@@ -91,7 +100,12 @@ having its files moved away; each state below names the artifact that ends it.
 |---|---|---|
 | Batch | its manifest is frozen and no outcome is recorded | `batches/<batch-id>/outcome.json` records `promoted` or `no-change` |
 | Experiment | its record carries no decision | `experiment.json` records `abandoned`, `superseded`, or `promoted` |
-| Round | it is the experiment's last round and is open | its `closed_at` and `candidate_revision` are pinned |
+| Round | it is the experiment's last round and carries no seal | its `seal` pins a candidate revision — the round is **candidate-ready** |
+
+A candidate-ready round is terminal on its own account, not for the experiment
+holding it: through replay the experiment has no open round at all, and it stays
+non-terminal because nothing has decided it. Opening the next round resumes the
+work; a decision is what ends the experiment.
 
 Analysis completion (`analysis-complete.json`) is a stage inside a current
 batch, not the end of one: it releases the batch's dispositions to the
@@ -106,8 +120,8 @@ another — a candidate measured against the wrong one measures nothing.
 | Term | What it is | Recorded in |
 |---|---|---|
 | Base revision | the exact source commit every experiment of one batch starts from, frozen when that batch's first experiment is created | `experiment.json.base_revision` |
-| Candidate tip | the current head of the open experiment's ref — what a replay run would exercise right now | `refs/evolution/experiments/<experiment-id>` |
-| Round candidate revision | the tip pinned when a round closed; immutable, and what that round's evidence describes | `experiment.json.rounds[].candidate_revision` |
+| Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
+| Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
 | Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from | `outcome.json.promotion_revision` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
 
@@ -178,8 +192,9 @@ completed archived-task L1+L2 evaluations
   -> reviewed dispositions
   -> change-task drafts in batches/<batch-id>/proposed-tasks/
   -> human admits a group of drafts -> one experiment on the batch's frozen base
-  -> admitted improvement tasks -> candidate round
-  -> replay/canary against that base
+  -> admitted improvement tasks -> round work on the experiment ref
+  -> every admitted task observed complete -> seal: the round is candidate-ready
+  -> replay/canary of that pinned candidate against the base
   -> human promote | revise (next round) | abandon | supersede (next experiment)
   -> batch outcome: promoted, or no-change
   -> later report cohort measures the result
@@ -289,17 +304,38 @@ replay evidence measured against them describing a tree nobody can produce.
 ### Rounds
 
 A round is one revision pass within an experiment: the task set admitted into
-it, and the candidate revision it produced. Round 1 is created with the
-experiment. Two operations extend the lineage, and both only append:
+it, and the candidate it produced. Round 1 is created with the experiment. A
+round is **open** while its tasks are being worked, and **candidate-ready** once
+it is sealed. Three operations move it, and all three only append:
 
-- `revise` closes the open round — pinning its candidate revision from the ref
-  as it stands — and opens the next one with the reason for it.
 - `add-tasks` admits further drafts into the round that is open.
+- `seal-round` makes the open round candidate-ready: it records, per admitted
+  task, that the task was observed at `completed`, and pins the ref tip as that
+  round's candidate revision. It refuses while any admitted task is unfinished,
+  because a candidate that does not contain the change it was admitted for is
+  not the thing anyone means to measure.
+- `revise` opens the next round, from a round that is already candidate-ready,
+  with the reason for it.
+
+Sealing before measuring is invariant 16, and it is what makes a round a thing
+evidence can name. While a round is open the ref keeps fast-forwarding under
+whoever is working on it, so a replay started then measures one tree while a
+later pin names another — evidence about a tree the record cannot identify.
+While the last round is candidate-ready the ref stays at the pinned revision;
+work resumes by opening a new round, never by adding a commit under one that
+has already been measured. An operation finding the ref ahead of a
+candidate-ready round stops rather than guessing which of the two the evidence
+meant.
+
+Sealing ends the round, not the experiment. What ends the experiment is a
+decision, and the three decisions differ in what they need a round to be.
 
 A round is the unit replay evidence names. So a revision makes the previous
 round's evidence stale by construction rather than by anyone remembering to
 invalidate it: the new round has no evidence until its own is recorded, and the
-old evidence goes on naming the round it actually measured.
+old evidence goes on naming the round it actually measured — a round whose
+candidate revision was pinned before that evidence existed and has not moved
+since.
 
 ### Terminal decisions
 
@@ -311,6 +347,14 @@ into history:
 | `abandoned` | the attempt is dropped, with a reason | still current; another experiment may start |
 | `superseded` | replaced by a different approach, which the decision names | still current; the named successor is that experiment |
 | `promoted` | the candidate reached the canonical source line | ended by the batch outcome that records it |
+
+`promoted` is available only from a candidate-ready round, and what it promotes
+is that round's pinned candidate revision — never the tip as it stood when the
+decision was made. Promoting from an open round would put the same unpinned tree
+on the source line that invariant 16 refuses to measure. `abandoned` and
+`superseded` are available from an open round too, and leave it unsealed: an
+attempt dropped before it produced anything records no candidate, rather than
+having one invented to stand for it.
 
 Superseding is one operation, not two: it ends the experiment and creates the
 successor it names, because only one experiment may be open (invariant 14) and
@@ -339,11 +383,12 @@ cohort. Two ways reach it:
 ### What is derived
 
 None of this stores a lifecycle phase, and none of it may be inferred from the
-checkout. The current batch, the open experiment, its open round, the candidate
-revision, and the drafts still waiting at the gate are re-derived on every read
-from the committed manifests, closure records, experiment records, rejection
-records, the experiment refs, and Git — so any clone, on any branch, and a
-machine that has lost `.ai-tasks/`, all derive the same answer.
+checkout. The current batch, the open experiment, its last round and whether
+that round is candidate-ready, the candidate revision, and the drafts still
+waiting at the gate are re-derived on every read from the committed manifests,
+closure records, experiment records, rejection records, the experiment refs, and
+Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
+derive the same answer.
 
 Two readings are specifically not that answer:
 
@@ -358,17 +403,20 @@ Two readings are specifically not that answer:
 
 ### Guarded operations
 
-Each of the operations above — grouped admission, draft rejection, `revise`,
-`add-tasks`, abandon, supersede, and `conclude-no-change` — writes several
-places at once: the experiment ref, a versioned record, `.ai-tasks/` and its
-index, the audit ledger. They take the same single-writer lock as import and
+Each of the operations above — grouped admission, draft rejection, `add-tasks`,
+`seal-round`, `revise`, abandon, supersede, and `conclude-no-change` — writes
+several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
+its index, the audit ledger. They take the same single-writer lock as import and
 freeze, they write in an order where the durable record is what makes the
 operation real, and every step is safe to redo, so an interrupted operation is
 finished by the next run rather than repaired by hand. Any state they cannot
 account for — a second current batch, a second open experiment, an experiment
-whose base is not the batch's, a ref that is not where its record says, a draft
-already consumed, an unreadable record — stops the operation with what it
-found, instead of picking one reading and continuing.
+whose base is not the batch's, a ref that is not where its record says or that
+has moved past a candidate-ready round, a round sealed with no candidate or
+carrying a candidate nobody sealed, a task admitted into a sealed round with no
+completion observation, a draft already consumed, an unreadable record — stops
+the operation with what it found, instead of picking one reading and
+continuing.
 
 ## Evolution task requirements
 
@@ -390,8 +438,9 @@ A protocol-improvement task is not promotion proof. Its canary or replay must
 record:
 
 - The batch's base revision, and the experiment and round whose candidate
-  revision was exercised. Evidence that names an experiment but not a round
-  says nothing after the next `revise`.
+  revision was exercised. That revision is the one the round's seal pinned
+  before the run started (invariant 16); evidence that names an experiment but
+  not a round says nothing after the next `revise`.
 - Eligible cohort and exclusions.
 - Evaluator/rubric revision.
 - Expected directional changes.
