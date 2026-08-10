@@ -152,6 +152,133 @@ def test_every_schema_stays_inside_the_implemented_subset(path: Path) -> None:
     assert not unsupported, f"{path.name} uses keywords {sorted(unsupported)} that schema.py does not implement"
 
 
+# --- pattern semantics -------------------------------------------------------
+#
+# `pattern` is an ECMA-262 regex, and Python's `re` reads several of its
+# constructs as different sets. Every expectation below is ECMA-262's, taken
+# from a JavaScriptCore run of the same pattern against the same string, so
+# these are the cases a validator that hands the pattern straight to `re` — with
+# `re.ASCII` or without it — gets wrong. Values are written as code points: as
+# characters, most of them are invisible.
+
+
+def matches(pattern: str, value: str) -> bool:
+    return schema.validate(value, {"type": "string", "pattern": pattern}) == []
+
+
+@pytest.mark.parametrize(
+    ("code_point", "is_whitespace"),
+    [
+        (0x09, True),
+        (0x0A, True),
+        (0x20, True),
+        (0x1C, False),
+        (0x85, False),
+        (0xA0, True),
+        (0x1680, True),
+        (0x2028, True),
+        (0x200B, False),
+        (0x3000, True),
+        (0xFEFF, True),
+    ],
+    ids=[
+        "tab",
+        "line-feed",
+        "space",
+        "file-separator",
+        "next-line",
+        "no-break-space",
+        "ogham-space-mark",
+        "line-separator",
+        "zero-width-space",
+        "ideographic-space",
+        "zero-width-no-break-space",
+    ],
+)
+def test_the_whitespace_class_is_the_set_ecma_262_names(code_point: int, is_whitespace: bool) -> None:
+    """Python's `\\s` disagrees with ECMA-262 in both directions at once: it
+    matches NEXT LINE and FILE SEPARATOR, which ECMA-262 excludes, and misses
+    ZWNBSP, which it includes. `re.ASCII` does not repair that — it drops
+    NO-BREAK SPACE and every other Unicode space separator instead. Neither is
+    the set a schema author writing `\\s` asked for."""
+
+    assert matches(r"^\s$", chr(code_point)) is is_whitespace
+
+
+@pytest.mark.parametrize(
+    ("pattern", "value", "accepted"),
+    [
+        (r"^\d$", "5", True),
+        (r"^\d$", chr(0x0661), False),
+        (r"^[\d]$", chr(0x0661), False),
+        (r"^\D$", chr(0x0661), True),
+        (r"^\D$", "5", False),
+        (r"^\w$", "a", True),
+        (r"^\w$", "_", True),
+        (r"^\w$", chr(0x00E1), False),
+        (r"^[\w-]+$", "a-b_c", True),
+        (r"^\W$", chr(0x00E1), True),
+        (r"^\S$", "x", True),
+        (r"^\S$", chr(0x00A0), False),
+        (r"^[\s]$", chr(0x00A0), True),
+    ],
+    ids=[
+        "digit",
+        "arabic-indic-digit-is-no-digit",
+        "arabic-indic-digit-is-no-digit-in-a-class",
+        "arabic-indic-digit-is-a-non-digit",
+        "digit-is-no-non-digit",
+        "word-character",
+        "underscore-is-a-word-character",
+        "a-acute-is-no-word-character",
+        "class-keeps-its-other-members",
+        "a-acute-is-a-non-word-character",
+        "non-space",
+        "no-break-space-is-no-non-space",
+        "class-whitespace",
+    ],
+)
+def test_shorthand_classes_name_their_ecma_262_sets(pattern: str, value: str, accepted: bool) -> None:
+    assert matches(pattern, value) is accepted
+
+
+@pytest.mark.parametrize("pattern", [r"^[\D]$", r"^[\W]$", r"^[a\S]$"], ids=["digits", "word", "space"])
+def test_a_negated_shorthand_inside_a_class_is_refused_not_approximated(pattern: str) -> None:
+    """`re` cannot subtract one set from another, so there is no Python pattern
+    that means `[\\D]`. The validator says so instead of substituting something
+    close: a pattern nobody can honour is a schema defect, and this module's
+    rule is that what it does not implement fails loudly rather than passing
+    data nobody checked."""
+
+    with pytest.raises(schema.SchemaError):
+        matches(pattern, "x")
+
+
+def test_a_word_boundary_is_the_ascii_one_ecma_262_defines() -> None:
+    """`\\b` sits on the same word characters as `\\w`, so it is ASCII in
+    ECMA-262 and Unicode-wide in Python: between LATIN SMALL LETTER E WITH ACUTE
+    and `f` there is a boundary in one dialect and none in the other. This is
+    the one construct `re.ASCII` still governs once the classes are spelled
+    out — the flag is why this case holds."""
+
+    assert matches(r"\bfoo$", chr(0x00E9) + "foo")
+
+
+def test_a_dollar_that_is_not_an_anchor_stays_a_literal() -> None:
+    """Rewriting `$` to `\\Z` has to tell an anchor from an ordinary character,
+    or a pattern that spells `$` literally stops matching what it names."""
+
+    assert matches(r"^[$]\$$", "$$")
+    assert not matches(r"^[$]\$$", "$$\n")
+
+
+def test_an_escaped_bracket_does_not_close_a_character_class() -> None:
+    """The same scan decides what is inside a class, and a class it thinks ended
+    early would take the next `$` for an anchor and rewrite it."""
+
+    assert matches(r"^[\]$]{2}$", "]$")
+
+
 # --- experiment record -------------------------------------------------------
 
 

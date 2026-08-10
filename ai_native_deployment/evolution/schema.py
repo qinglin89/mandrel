@@ -55,6 +55,29 @@ _RFC3339 = re.compile(
 
 MAX_REPORTED_ERRORS = 5
 
+# The set ECMA-262 names by `\s` (§22.2.2.9): `WhiteSpace` — TAB, VT, FF,
+# ZWNBSP, and the Space_Separator category — plus the four `LineTerminator`s.
+# Held as code points because, spelled as characters, this would be a line of
+# mostly invisible source that an editor or a whitespace check is free to eat.
+_ECMA_WHITESPACE = (
+    (0x09, 0x0B, 0x0C, 0xFEFF)  # TAB, VT, FF, ZWNBSP
+    + (0x20, 0xA0, 0x1680, 0x202F, 0x205F, 0x3000)  # Space_Separator, singles
+    + tuple(range(0x2000, 0x200B))  # Space_Separator, EN QUAD .. HAIR SPACE
+    + (0x0A, 0x0D, 0x2028, 0x2029)  # LF, CR, LS, PS
+)
+
+# The sets ECMA-262 names by `\d`, `\w`, and `\s`, spelled out because no `re`
+# flag reproduces them. Python's classes are Unicode-wide, so `\d` there accepts
+# ARABIC-INDIC DIGIT ONE as a digit; `re.ASCII` narrows them past the spec
+# instead, dropping NO-BREAK SPACE and every other Unicode space separator from
+# `\s`. `\s` is wrong under both: Python's also matches U+0085 and U+001C, which
+# ECMA-262 excludes, and misses U+FEFF, which it includes.
+_ECMA_CLASSES = {
+    "d": "0-9",
+    "w": "A-Za-z0-9_",
+    "s": "".join(rf"\u{code:04x}" for code in _ECMA_WHITESPACE),
+}
+
 
 def load_schema(path: Path) -> dict[str, Any]:
     """Read one schema file. Kept uncached: the files are small, and a cache
@@ -152,8 +175,22 @@ def _search(pattern: str, instance: str) -> re.Match[str] | None:
     """One `pattern` read with the semantics its author wrote it under.
 
     JSON Schema patterns are ECMA-262 regexes matched anywhere in the string,
-    which is `re.search` — except for two divergences that both silently widen
-    what Python accepts:
+    which is `re.search` over what `_as_python_regex` returns. `re.ASCII` still
+    rides along, but by then it governs exactly one construct: the shorthand
+    classes are already spelled out, so all the flag reaches is `\\b`/`\\B`,
+    whose word boundary ECMA-262 defines over the ASCII word characters the flag
+    selects.
+    """
+
+    return re.search(_as_python_regex(pattern), instance, re.ASCII)
+
+
+def _as_python_regex(pattern: str) -> str:
+    """One ECMA-262 pattern as the Python regex that means the same thing.
+
+    Two constructs read differently in the two dialects, and neither difference
+    announces itself — the pattern keeps working, on a set of strings its author
+    did not write:
 
     - Python's `$` also matches just before a final newline; ECMA-262's, with no
       `m` flag, does not. Left alone, every `^...$` identity pattern under
@@ -161,27 +198,26 @@ def _search(pattern: str, instance: str) -> re.Match[str] | None:
       40-hex revision, a `<batch-id>-exp-<NN>` id, a draft slug that is supposed
       to be one safe path segment with nothing else in it. `\\Z` is the anchor
       that means what the schema says.
-    - `\\d`, `\\w`, and `\\s` are Unicode-wide in Python and ASCII in ECMA-262
-      without the `u` flag, so `re.ASCII` is the faithful reading — the same
-      reason `_RFC3339` carries it.
+    - `\\d`, `\\w`, and `\\s` name different sets in the two dialects, and no
+      `re` flag lines them up (`_ECMA_CLASSES`), so the sets are substituted.
+
+    What has no Python spelling is refused rather than approximated: `\\D`,
+    `\\W`, and `\\S` inside a character class would need set subtraction, which
+    `re` does not have.
     """
 
-    return re.search(_end_anchored(pattern), instance, re.ASCII)
-
-
-def _end_anchored(pattern: str) -> str:
-    """`$` rewritten to `\\Z` wherever it is an anchor — not where it is escaped
-    or inside a character class, both of which make it an ordinary character."""
-
     out: list[str] = []
-    escaped = False
     in_class = False
-    for char in pattern:
-        if escaped:
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif in_class:
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        index += 1
+        if char == "\\":
+            escape = pattern[index : index + 1]
+            index += 1
+            out.append(_escape_as_python(escape, in_class=in_class))
+            continue
+        if in_class:
             in_class = char != "]"
         elif char == "[":
             in_class = True
@@ -190,6 +226,23 @@ def _end_anchored(pattern: str) -> str:
             continue
         out.append(char)
     return "".join(out)
+
+
+def _escape_as_python(escape: str, *, in_class: bool) -> str:
+    """One backslash escape. Only the shorthand classes are rewritten; every
+    other escape names the same thing in both dialects."""
+
+    body = _ECMA_CLASSES.get(escape.lower())
+    if body is None:
+        return "\\" + escape
+    if escape.islower():
+        return body if in_class else f"[{body}]"
+    if in_class:
+        raise SchemaError(
+            rf"`\{escape}` inside a character class has no equivalent Python pattern "
+            "(`re` cannot subtract one set from another); spell the set out in the schema"
+        )
+    return f"[^{body}]"
 
 
 def _validate_object(

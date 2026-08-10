@@ -18,7 +18,8 @@ class ConfigError(EvolutionError):
 
 class SchemaError(EvolutionError):
     """A versioned schema under `evolution/schemas/` cannot be read, or uses a
-    JSON Schema keyword this validator does not implement."""
+    JSON Schema keyword or pattern construct this validator does not
+    implement."""
 
 
 class ValidationError(EvolutionError):
