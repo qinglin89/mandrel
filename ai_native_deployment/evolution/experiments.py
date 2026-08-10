@@ -632,6 +632,9 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
     for: two goals or two session logs leave every reader taking whichever it
     reaches first, a log with entries under it is a task someone has already
     worked, and an `## Admission` section is the one thing the gate itself adds.
+    A line that only looks like a heading is refused before any of that, because
+    it is what makes "which section is this line under" a question with more than
+    one answer.
     """
 
     if not block.present:
@@ -682,6 +685,7 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
         )
 
     body = text.splitlines()[block.body_start :]
+    _require_plain_headings(path, body)
     sections = _sections(body)
     names = [name for name, _ in sections]
     missing = [heading for heading in REQUIRED_SECTIONS if heading not in names]
@@ -702,6 +706,33 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
             "itself adds, and a copy carrying two of them is one no later run can identify as this admission's"
         )
     _require_empty_log(path, body, sections)
+
+
+def _require_plain_headings(path: Path, body: Sequence[str]) -> None:
+    """Refuse a draft carrying a line that looks like a section heading but is
+    indented.
+
+    Such a line means different things to its readers at once — Markdown reads it
+    as code, a session reading the copy reads it as a section, and the scan below
+    reads it as neither — and admission is what carries that disagreement into
+    the active pool. A copy could then hold a scope no two readers agree is one,
+    or an `## Admission` section the record cannot identify it by, standing beside
+    the one it can.
+
+    Refusing the shape here is also what lets a section's extent be read exactly:
+    where a section ends is where the next heading stands (`_is_section`), and a
+    file with no ambiguous heading-looking line in it has one answer to that.
+    Sections stand at column 0, the way the taskfile schema, the intake contract,
+    and every task this controller writes state theirs.
+    """
+
+    for line in body:
+        if line.strip().startswith("## ") and not _is_section(line):
+            raise BatchError(
+                f"{path}: {line.strip()!r} is indented; a task section stands at column 0, and a line that only "
+                "looks like a heading is read as one by the session working the copy and as text by everything "
+                "that checks it"
+            )
 
 
 def _require_empty_log(path: Path, body: Sequence[str], sections: Sequence[tuple[str, int]]) -> None:
@@ -743,7 +774,24 @@ def _sections(lines: Sequence[str]) -> list[tuple[str, int]]:
 
 
 def _is_section(line: str) -> bool:
-    return line.strip().startswith("## ")
+    """A line that opens a section — not one that merely looks like it.
+
+    The heading stands at column 0, where the taskfile schema and this
+    controller's own renderer put every section they write. Indentation is the
+    whole question: Markdown reads four spaces before a `##` as code rather than
+    as a heading, so a reader that ends a section at such a line ends it *inside*
+    the section, and everything below the false boundary is content nothing
+    compares — which is how an unrecorded instruction hides under a provenance
+    block that otherwise matches.
+
+    Reading an indented line as content instead can only make a section come out
+    longer than it is, and a section read long refuses where a section read short
+    admits. Drafts carrying a heading-looking line that is indented are turned
+    away at the gate (`_require_plain_headings`), so no file this controller
+    writes leaves the two readings anything to disagree about.
+    """
+
+    return line.startswith("## ")
 
 
 def _section_at(body: Sequence[str], sections: Sequence[tuple[str, int]], start: int) -> list[str]:
@@ -752,7 +800,9 @@ def _section_at(body: Sequence[str], sections: Sequence[tuple[str, int]], start:
     A section ends where the next level-2 heading stands, or at the end of the
     body — the same extent whether the question is "is this log empty" or "is this
     the provenance that was written". Reading a fixed number of lines instead
-    would answer about a prefix of the section and call it the section.
+    would answer about a prefix of the section and call it the section, and
+    ending at a line that is not a heading (`_is_section`) answers about a prefix
+    just the same, with the boundary chosen by whatever wrote the file.
     """
 
     following = [index for _, index in sections if index > start]
@@ -1164,7 +1214,10 @@ def _require_admitted_copy(
     section carrying what this admission wrote and then a line more is a copy whose
     provenance says something the record never said — another base to work from,
     another ref to commit on — and reading only as far as the recorded lines
-    reach is what leaves that line invisible.
+    reach is what leaves that line invisible. So is ending at a line that is not a
+    heading: an indented `##` is code to Markdown and a section to nothing, and a
+    boundary the file gets to invent is one it can put immediately after the
+    recorded lines and hide the rest behind (`_is_section`).
 
     The cost of matching the section rather than sampling it: a copy written by a
     controller whose wording of that section differed no longer matches its own

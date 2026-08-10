@@ -260,10 +260,14 @@ as text: each of those is a section the file declares once, the log is still
 empty — an entry under it is some session's record of work on a task nothing has
 dispatched, which is the same state the `pending` status and the unconsumed
 estimate refuse from the frontmatter side — and there is no `## Admission`
-section, because that one is what admission itself adds. The check belongs here
-because admission is a copy into the pool turn selection dispatches from:
-nothing downstream ever reads that file as a proposal again, so a proposal that
-is a task file in name only is refused at the gate or nowhere. An id already in
+section, because that one is what admission itself adds. Those sections stand at
+column 0. A heading-looking line that is indented is refused rather than copied
+into the pool: Markdown reads it as code and the session working the copy reads
+it as a section, so it would carry a scope, or a second admission block, that
+only some of its readers see. The check belongs here because admission is a copy
+into the pool turn selection dispatches from: nothing downstream ever reads that
+file as a proposal again, so a proposal that is a task file in name only is
+refused at the gate or nowhere. An id already in
 flight, already archived, or already admitted by this batch stops the admission
 instead of overwriting a task file or leaving two admissions answering for one
 task.
@@ -489,7 +493,10 @@ with nothing else under it. Both halves are structural. A block declaring a
 second id says the file is two tasks, and every reader takes whichever it reaches
 first; a line added under the provenance is the admission naming something no
 admission recorded — another base to work from, another ref to commit on — which
-reading only as far as the recorded lines reach would never see. That section is
+reading only as far as the recorded lines reach would never see, and which
+stopping at the first line the file merely made look like a heading would not see
+either. The next heading stands at column 0; an indented one is content, and
+content under that provenance is compared like the rest of it. That section is
 the immutable part of a copy, and everything a session changes lies outside it —
 the lifecycle above, the log below — so an ordinary claimed and logged task is
 still recognised, while a file that merely mentions the same values in prose, or

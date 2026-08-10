@@ -453,8 +453,10 @@ justified is a valid outcome (invariant 7).
   date-prefixed `id`, `status: pending`, `session-est: 0/<total>`,
   `blockers: []` and an empty `claimed-by`; then `## Goal`, `## Scope`,
   `## Acceptance`, and an empty `## Session log`, each of those stated exactly
-  once, and no admission section of its own — admission adds that one, naming
-  the experiment and the ref to work on. Drafts are inert until a human admits
+  once and standing at column 0, and no admission section of its own — admission
+  adds that one, naming the experiment and the ref to work on. An indented line
+  that looks like a heading is refused: Markdown reads it as code and the session
+  working the copy reads it as a section. Drafts are inert until a human admits
   a group of them into an experiment, which copies each into
   `.ai-tasks/` and adds its index row; writing one straight into `.ai-tasks/`
   as `pending` would put it in the dispatch pool and bypass the human admission
