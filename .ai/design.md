@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # Design Principles and Decisions
@@ -21,6 +21,8 @@ verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
   optional Git hooks invoke it without restating individual checks.
 - Protocol evolution uses repeated unique-task evidence, immutable cohorts,
   separate analysis/change tasks, stable runner revisions, and human gates.
+- Evolution lifecycle status is derived from durable artifacts and Git; no
+  mutable flow-state field governs the phase.
 
 ## Key Tradeoffs
 
@@ -61,8 +63,8 @@ verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 
 - Dataclass value objects at deployment/status boundaries.
 - Dependency injection for filesystem/subprocess-heavy tests.
-- Atomic or idempotent writes for receipts, registries, and future evolution
-  state.
+- Atomic or idempotent writes for receipts, registries, evolution state,
+  immutable batch publication, and generated task/index recovery.
 - Config/schema version fields on persisted machine contracts.
 - Fail closed on malformed state, unsafe paths, unsupported config, or missing
   provenance required for a decision.

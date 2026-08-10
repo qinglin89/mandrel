@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # Project Map
@@ -19,8 +19,8 @@ verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 | Boundary assurance | boundary lint, deployment/hook tests | shell lint, pytest |
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
-| Evolution policy | evolution contract/config/schemas/ledger | versioned files; no executable CLI yet |
-| Evolution controller | pending Python module/CLI | planned `evolution list|sync|start|status` |
+| Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
+| Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON |
 | Report publication | external orch-hub | pending global report feed/export |
 
 ## Change Impact

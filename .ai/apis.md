@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: ea0d02247214a3993b637809dadd816893ffecd3
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # APIs and Interfaces
@@ -15,10 +15,14 @@ verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
 | `registry remove <name-or-path>` | Remove local tracking only |
+| `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
+| `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
+| `evolution status [--json]` | Derive lifecycle phase plus baseline/candidate revisions from on-disk state and Git |
+| `evolution start [--force --justification <text>]` | Reconcile, sync, and freeze one batch when admission policy allows; force never waives the minimum |
 
-Evolution commands are not implemented yet. The initialized contract reserves
-human-triggered `evolution list|sync|start|status` behavior for the active
-controller task.
+All evolution operations are human-invoked and make no evaluation model call.
+`list` and `status` are read-only; `start` returning no batch is a normal
+successful outcome when policy is not met.
 
 ## Persisted Interfaces
 
@@ -30,18 +34,24 @@ controller task.
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
 | `evolution/config.toml` | Versioned evolution admission/storage policy |
-| `evolution/schemas/*.json` | Normalized report, batch, ledger contracts |
-| `.ai-evolution/state.json` | Future ignored discovery cursor and pending pool |
+| `evolution/schemas/*.json` | Versioned import, batch v1/v2, closure, and ledger contracts |
+| `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
+| `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
+| `evolution/batches/<id>/manifest.json` | Immutable committed cohort membership and evaluator/protocol provenance |
+| `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
+| `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts awaiting human move/admission into `.ai-tasks/` |
 | `evolution/ledger.jsonl` | Versioned sanitized append-only evolution audit |
 
 ## External Integration
 
-The pending orch-hub global report feed supplies globally ordered,
+The pending orch-hub global report feed is expected to supply globally ordered,
 archived-task reports with durable complete L1+L2 artifacts. Eligibility does
-not depend on evaluation trigger provenance. The evolution importer will use
-an opaque cursor and protected bundle fetch; list/import operations must make
-no evaluation model call. URL/token come from `ORCH_HUB_URL` and
-`ORCH_HUB_TOKEN`, never committed config.
+not depend on evaluation trigger provenance. The implemented client uses an
+opaque cursor, bearer token from `ORCH_HUB_TOKEN`, and base URL from
+`ORCH_HUB_URL`; it follows no redirects, permits cleartext HTTP only for
+loopback, and bounds every response read to 32 MiB. Until orch-hub publishes the
+feed, `--feed-dir` provides deterministic offline imports against the same
+`ReportFeed` boundary.
 
 ## API Conventions
 

@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: ea0d02247214a3993b637809dadd816893ffecd3
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # Architecture
@@ -32,7 +32,7 @@ evolution runtime/import pool → frozen batch → analysis/change/canary
 | Deploy operation | `ai_native_deployment` | copy/render/resolve/record |
 | Deployed payload | Deployment tool | target `.ai-protocol`, agent dirs, loader, orchestrator |
 | Project memory/tasks | Target repository | target `.ai/`, `.ai-tasks/` |
-| Local inventory/runtime | Machine operator | registry, manifests, venvs, secrets |
+| Local inventory/runtime | Machine operator | registry, manifests, venvs, secrets, `.ai-evolution/` |
 | Report scheduling/storage | orch-hub | complete L1+L2 artifacts and global feed |
 | Evolution policy/tasks | This repository | `evolution/`, `.ai-tasks/` |
 
@@ -64,19 +64,29 @@ evolution runtime/import pool → frozen batch → analysis/change/canary
 
 ## Evolution Flow
 
-The initialized workspace is policy/data scaffolding; executable import/batch
-commands remain pending. Raw reports will live under ignored `.ai-evolution/`;
-versioned `evolution/` keeps configuration, schemas, immutable manifests,
-sanitized cases, experiment outcomes, and the audit ledger. Analysis and
-canonical implementation are separate reviewed tasks, with runner revision
-pinning and human canary promotion.
+`aii-2 evolution list|sync|status|start` is the human-triggered controller.
+It consumes a protected orch-hub feed or deterministic local bundles, validates
+and hashes complete L1+L2 reports, deduplicates them by completed source task,
+and persists the cursor, drain proof, pending pool, rejections, and processed
+claims under ignored `.ai-evolution/`. Admission freezes the eligible pool into
+an immutable versioned manifest and generates one analysis-only task; closure
+and proposed change-task drafts remain separate artifacts with a human admission
+gate before implementation.
+
+Lifecycle phase and baseline/candidate revisions are re-derived from manifests,
+closure records, tasks, drafts, runtime state, and Git rather than stored as flow
+state. Versioned `evolution/` holds policy, schemas, manifests, sanitized cases,
+experiment outcomes, and the audit ledger; raw report content and credentials
+never enter it. Analysis, canonical implementation, and promotion remain
+separate reviewed/human-gated steps.
 
 ## External Dependencies
 
 - Git for source revisions and target audit.
 - Local filesystem and Python virtualenv tooling.
 - Claude/Codex CLI logins or Cursor API key only for selected runtime backends.
-- orch-hub protected report API for future evolution imports.
+- orch-hub protected report API for live evolution imports; the global feed is
+  still pending, so deterministic local bundle import is the available path.
 
 ## Deployment
 

@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: ea0d02247214a3993b637809dadd816893ffecd3
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # Features
@@ -18,8 +18,9 @@ verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 | Repository-local workflow skills | implemented | canonical Claude skill payload; manifest/lock coverage; cross-backend closeout pointers |
 | Evolution normative workspace | initialized | README, config, schemas, ledger, batch/case/experiment dirs |
 | Evolution report feed | pending in orch-hub | globally ordered archived-task reports with complete L1+L2 artifacts |
-| Evolution import/pending pool | pending | active evolution controller task |
-| Batch freeze and analysis-task creation | pending | active evolution controller task |
+| Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
+| Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
+| Evolution lifecycle CLI | implemented | `aii-2 evolution list|sync|status|start`; human and JSON phase rendering |
 | Canary/replay automation | future | experiment records exist; executable support not implemented |
 
 ## Evolution Behavior Chain

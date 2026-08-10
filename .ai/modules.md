@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: ea0d02247214a3993b637809dadd816893ffecd3
+last-updated: 2026-08-10
+verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 ---
 
 # Modules
@@ -9,7 +9,7 @@ verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 
 | Module | Location | Responsibility |
 |---|---|---|
-| CLI | `ai_native_deployment/cli.py`, `aii-2` | Parse/dispatch deploy, status, and registry commands |
+| CLI | `ai_native_deployment/cli.py`, `aii-2` | Parse/dispatch deploy, status, registry, and evolution commands |
 | Deployment | `ai_native_deployment/deploy.py` | Map/filter/render/copy current canonical files; bootstrap; content, entrypoint, and skill-precedence drift checks; removed-file orphan detection/pruning pending |
 | Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local and portable receipts plus hashes |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |
@@ -21,7 +21,7 @@ verified-against: ea0d02247214a3993b637809dadd816893ffecd3
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `ai_native_deployment/evolution.py` | Not implemented; pending import/pool/batch/task CLI |
+| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; derived phase/rendering and revisions |
 
 ## Boundary Rules
 
