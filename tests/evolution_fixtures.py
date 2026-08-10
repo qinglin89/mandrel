@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ai_native_deployment.evolution import analysis_task
 from ai_native_deployment.evolution import feed as feed_module
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -218,6 +219,33 @@ def rejection(draft_id: str, *, reason: str = "one report is not recurrence", sh
         "rejected_at": "2026-08-02T09:00:00Z",
         "reason": reason,
     }
+
+
+def complete_task(config, task_id: str) -> Path:
+    """Finish a task on this machine the way close-out does: the terminal status,
+    the file moved to the archive, and its row dropped from the active index.
+
+    Shared, because two things the controller does read exactly this — the
+    closure record published from a completed analysis task, and the completion
+    observation that seals a round — and a suite with its own idea of "finished"
+    would be testing against a lifecycle nothing else believes in.
+    """
+
+    source = analysis_task.task_path(config, task_id)
+    text = source.read_text(encoding="utf-8")
+    for status in ("pending", "in_progress", "final_review"):
+        if f"status: {status}" in text:
+            text = text.replace(f"status: {status}", "status: completed", 1)
+            break
+    source.write_text(text, encoding="utf-8")
+    target = analysis_task.archived_task_path(config, task_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    index = analysis_task.index_path(config)
+    if index.is_file():
+        kept = [line for line in index.read_text(encoding="utf-8").splitlines() if f"| {task_id} " not in line]
+        index.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return target
 
 
 def write_draft(batches_root: Path, batch_id: str, draft_id: str, body: str | None = None) -> Path:

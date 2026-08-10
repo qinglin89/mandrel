@@ -187,6 +187,18 @@ def _experiment_lines(status: LifecycleStatus) -> list[str]:
                 ),
             )
         )
+    pending = status.pending_successor
+    if pending is not None:
+        # The one state where an operator has to act on the lifecycle itself
+        # rather than on the work: nothing else will run until the supersession
+        # that recorded its decision creates the attempt it named.
+        lines.append(
+            _field(
+                "supersede",
+                f"{pending.experiment_id} named {pending.successor_id}, which was never created — "
+                "redo that supersession, for the reason on record, to finish it",
+            )
+        )
     return lines
 
 

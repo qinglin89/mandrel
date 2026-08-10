@@ -289,8 +289,8 @@ contract's normal outcome when evidence is still thin — and 2 for a refusal,
 corrupt local state, lock contention, or an unusable feed.
 
 `status` names a lifecycle phase — `idle`, `pool N/<target>`, `batch-frozen`,
-`dispositions-ready`, `proposals-pending`, `implementing` — and then the facts
-behind it:
+`dispositions-ready`, `proposals-pending`, `implementing`, `candidate-ready`,
+`supersede-pending`, `conclusion-pending` — and then the facts behind it:
 
 ```text
 $ ./aii-2 evolution status
@@ -298,9 +298,8 @@ evolution: pool 4/20
   pool         4 unique completed task(s); target 20, minimum 10
                oldest pending report imported 5 day(s) ago, max wait 30
   admission    no batch — pool-below-minimum
-  batches      0 frozen, none open
-  baseline     v2.2.0 (bb9f7277d258)
-  candidate    feat/evolution (a4cd995fd4ff)
+  batches      0 frozen, none current
+  revisions    none in play — no experiment has frozen a base
 ```
 
 One label is chosen by what blocks the next action: an open batch first (it is

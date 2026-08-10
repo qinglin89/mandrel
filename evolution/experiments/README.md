@@ -45,6 +45,16 @@ while the ref is held where they read it — a commit arriving in between would 
 pinned unasked or counted as the new round's work, and this record is the only
 thing that could have said otherwise.
 
+A decision is what ends an attempt, and it is written once. Abandoning drops it
+with a reason; superseding replaces it and creates the successor it names in the
+same operation, at the batch's base, with an empty round 1 that a later
+admission fills. That decision is recorded before the successor exists, because
+the interruption that leaves a successor merely owed is one state a reader can
+describe and the same supersession can finish, while the opposite order leaves
+two open experiments and no way to tell which is which. Either decision is
+refused while the ref stands off the history the record pins: after an attempt
+ends, nothing describes its ref any more.
+
 An implementation task is not evidence of improvement; promotion depends on a
 completed replay or canary record naming the base revision, the experiment, and
 the round it exercised.

@@ -16,9 +16,10 @@ The names below are the package's stable surface. Four things are reached
 through their modules rather than re-exported, because the bare name says
 nothing on its own: `phase.describe` (the derived lifecycle status),
 `lineage.describe` (the derived batch/experiment lineage), the
-`experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise`
-operations on a batch's change lineage, and the `render.format_*` functions
-(operator-facing text for the CLI).
+`experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` /
+`abandon` / `supersede` / `conclude_no_change` operations on a batch's change
+lineage, and the `render.format_*` functions (operator-facing text for the
+CLI).
 """
 
 from __future__ import annotations
@@ -36,7 +37,15 @@ from .batches import (
     start,
 )
 from .config import EvolutionConfig, load_config
-from .experiments import AdmissionResult, Admitted, RejectionResult, ReviseResult, SealResult
+from .experiments import (
+    AdmissionResult,
+    Admitted,
+    ConclusionResult,
+    DecisionResult,
+    RejectionResult,
+    ReviseResult,
+    SealResult,
+)
 from .errors import (
     BatchError,
     ConfigError,
@@ -68,7 +77,9 @@ __all__ = [
     "BatchLineage",
     "BatchView",
     "Candidate",
+    "ConclusionResult",
     "ConfigError",
+    "DecisionResult",
     "DirectoryFeed",
     "EvolutionConfig",
     "EvolutionError",

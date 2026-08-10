@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
+    complete_task,
     experiment_decision,
     experiment_round,
     git_repo,
@@ -115,23 +116,11 @@ def record_findings(config: evolution.EvolutionConfig, batch_id: str) -> Path:
 
 
 def complete_analysis_task(config: evolution.EvolutionConfig, task_id: str) -> None:
-    """Finish the analysis task the way close-out does: set the terminal status,
-    archive the file, and drop its row from the active index."""
+    """Finish the analysis task the way close-out does — the shared close-out
+    shape, since the lifecycle arc reads the same completion for a round's
+    seal."""
 
-    source = analysis_task.task_path(config, task_id)
-    text = source.read_text(encoding="utf-8")
-    for status in ("pending", "in_progress", "final_review"):
-        if f"status: {status}" in text:
-            text = text.replace(f"status: {status}", "status: completed", 1)
-            break
-    source.write_text(text, encoding="utf-8")
-    target = analysis_task.archived_task_path(config, task_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    source.rename(target)
-    index = analysis_task.index_path(config)
-    if index.is_file():
-        kept = [line for line in index.read_text(encoding="utf-8").splitlines() if f"| {task_id} " not in line]
-        index.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    complete_task(config, task_id)
 
 
 def set_task_status(config: evolution.EvolutionConfig, task_id: str, status: str) -> None:
@@ -200,9 +189,10 @@ def close_analysis(config: evolution.EvolutionConfig, batch_id: str) -> None:
 def conclude_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
     """End the batch itself, which is what releases the next cohort.
 
-    Written directly here: `conclude-no-change` is a guarded operation this
-    controller does not implement yet, and the record it will write is what
-    every reader already derives currency from."""
+    The record is written directly rather than through `conclude-no-change`,
+    which does now write one: what the freeze reads is the record, and going
+    through the operation would make these cases depend on its own guards. The
+    two are exercised together in the lifecycle suite."""
 
     close_analysis(config, batch_id)
     write_outcome(config.batches_root, batch_id)

@@ -421,11 +421,24 @@ Superseding is one operation, not two: it ends the experiment and creates the
 successor it names, because only one experiment may be open (invariant 14) and
 a decision cannot name a successor that does not exist yet. The successor is
 therefore the next id in the series, allocated one past the attempt it replaces;
-a decision naming anything else — an earlier attempt, its own id, an id nothing
-was created under — describes a replacement no operation here could have made.
-It starts from the batch's base like every other experiment — from the base,
-never from the tip it replaces, or the alternative would inherit exactly what was
-being replaced.
+a decision naming anything else — an earlier attempt, its own id — describes a
+replacement no operation here could have made. It starts from the batch's base
+like every other experiment — from the base, never from the tip it replaces, or
+the alternative would inherit exactly what was being replaced. Its round 1 opens
+with nothing admitted into it and `add-tasks` fills it, for the reason a revised
+round opens empty: which proposals answer the new approach is the next question,
+and an attempt that could not exist until they are written could not be started
+when it was decided.
+
+Two records, one operation, and the order between them is decided by what an
+interruption leaves. The decision is written first, so a run that stops in
+between leaves a supersession owing its successor — one state, readable, and
+finished by the same supersession redone for the same reason. Writing the
+successor first would leave two open experiments instead, which no reading can
+arbitrate and invariant 14 refuses outright. So a `superseded` decision whose
+successor is not there yet is not a broken record: it is that interruption, it
+is derived and reported as such, and every operation but its own redo refuses
+while the batch is in it.
 
 Abandoning or superseding discards nothing that was learned: the record keeps
 the base, every round, every task selection, and every candidate revision, and
@@ -453,11 +466,21 @@ with nothing to name, so checking the named experiment alone never sees it. A
 `promoted` batch holds exactly one, it is the one the outcome names, and the two
 name the same promotion revision.
 
+`no-change` is therefore written over a batch with nothing left open: its
+analysis stage has ended, no experiment is open, no attempt records a promotion,
+and no proposal is still waiting at the admission gate. The last one is the same
+agreement read from the gate's side — a draft nobody decided is this batch's own
+analysis saying a change was warranted, so admit it or decline it, both of which
+are terminal for a proposal. Those four conditions are exactly the derived phase
+`conclusion-pending`, which is the point: what `status` reports a batch is
+waiting for is the condition of the operation that answers it.
+
 ### What is derived
 
 None of this stores a lifecycle phase, and none of it may be inferred from the
 checkout. The current batch, the open experiment, its last round and whether
-that round is candidate-ready, the candidate revision, and the drafts still
+that round is candidate-ready, the candidate revision, a successor a
+supersession recorded and did not create, and the drafts still
 waiting at the gate are re-derived on every read from the committed manifests,
 closure records, experiment records, rejection records, the experiment refs, and
 Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
@@ -481,10 +504,20 @@ Each of the operations above — grouped admission, draft rejection, `add-tasks`
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
-decision about work that has already happened. They take the same single-writer
-lock as import and freeze, they write in an order where the durable record is
-what makes the operation real, and every step is safe to redo, so an interrupted
-operation is finished by the next run rather than repaired by hand.
+decision about work that has already happened, and an abandonment or a
+conclusion writes one record and an audit line for the same reason. They take
+the same single-writer lock as import and freeze, they write in an order where
+the durable record is what makes the operation real, and every step is safe to
+redo, so an interrupted operation is finished by the next run rather than
+repaired by hand.
+
+An ending is also guarded by the state of the ref it ends over. An experiment's
+ref is described only while that experiment is open, so a decision recorded over
+one standing off its own pinned history retires the finding along with the
+attempt — and the revisions that record names quietly stop being reachable with
+nobody left to say so. A ref this checkout simply does not hold is not that: it
+is the ordinary state of every clone that never fetched the namespace, and it
+stops nothing.
 
 That lock covers this package's own runs, and the two round transitions need
 more than it. Both are decided from one reading of where the experiment ref
@@ -559,6 +592,10 @@ that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert
 task file described above, a task id admitted twice, a file at an admitted task's
 id that is not its copy, a second decision about a proposal already declined, a
+second decision about an attempt that has already ended, a batch owing the
+successor a supersession recorded — to anything but that supersession redone — a
+`no-change` conclusion over an open attempt, over one that records a promotion,
+or over a gate where a proposal is still waiting, a
 `superseded` decision naming anything but the successor it created, an outcome
 that disagrees with the experiments about a promotion, an unreadable record —
 stops the operation with what it found, instead of picking one reading and

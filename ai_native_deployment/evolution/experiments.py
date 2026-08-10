@@ -25,6 +25,23 @@ Two more move the round an experiment is working in, and both only append
   opens empty and `add-tasks` fills it, rather than work staying blocked under a
   round that has already been measured.
 
+Three end things, and each of them is terminal for what it ends (contract:
+Terminal decisions, Batch outcome):
+
+- **abandon** — the attempt is dropped, with a reason. Nothing is discarded: the
+  record keeps the base, every round, every task selection and every candidate,
+  and the batch is free for another alternative.
+- **supersede** — the attempt is replaced, and the same operation creates the
+  replacement at the batch's base. One operation because only one experiment may
+  be open (invariant 14) and a decision cannot name a successor that does not
+  exist. The successor opens with an empty round 1, which `add-tasks` fills, for
+  the reason `revise` opens one: which proposals answer the new approach is the
+  next question, not this one.
+- **conclude-no-change** — the batch outcome of invariant 7. It fabricates
+  nothing on the way out: no candidate, no experiment, no promotion revision, no
+  merge, no deployment. The other way a batch ends is a promotion, which belongs
+  to the operation that performs one.
+
 **What makes the operation real.** Each writes several places at once — a Git
 ref, a versioned record, `.ai-tasks/` and its index, the audit ledger — and the
 order they are written in is the recovery story:
@@ -71,25 +88,37 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 from ..hashing import sha256_bytes
 from . import analysis_task
 from .batches import awaiting_analysis, record_closures
-from .config import EXPERIMENT_SCHEMA_FILENAME, EvolutionConfig
+from .config import EvolutionConfig
 from .errors import BatchError, RefHoldError
 from .ledger import append_records, build_record
 from .lineage import (
+    DECISION_ABANDONED,
+    DECISION_PROMOTED,
+    DECISION_SUPERSEDED,
     EXPERIMENT_FILENAME,
     EXPERIMENT_SCHEMA_VERSION,
     AdmittedTask,
     BatchLineage,
+    Decision,
     Experiment,
+    Lineage,
     RefState,
     Round,
     Seal,
     experiment_ref,
     format_experiment_id,
     is_draft_id,
+    parse_experiment,
 )
 from .lineage import describe as describe_lineage
-from .config import REJECTED_DRAFTS_SCHEMA_FILENAME
-from .manifests import REJECTED_DRAFTS_SCHEMA_VERSION, Batch, read_rejected_drafts
+from .config import OUTCOME_SCHEMA_FILENAME, REJECTED_DRAFTS_SCHEMA_FILENAME
+from .manifests import (
+    OUTCOME_NO_CHANGE,
+    OUTCOME_SCHEMA_VERSION,
+    REJECTED_DRAFTS_SCHEMA_VERSION,
+    Batch,
+    read_rejected_drafts,
+)
 from .revisions import create_ref, held_at, ref_tip, release_ref, resolve_commit
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
@@ -99,6 +128,9 @@ RECORD_TASKS_ADMITTED = "tasks-admitted"
 RECORD_DRAFT_REJECTED = "draft-rejected"
 RECORD_ROUND_SEALED = "round-sealed"
 RECORD_EXPERIMENT_REVISED = "experiment-revised"
+RECORD_EXPERIMENT_ABANDONED = "experiment-abandoned"
+RECORD_EXPERIMENT_SUPERSEDED = "experiment-superseded"
+RECORD_BATCH_CONCLUDED = "batch-concluded"
 
 DRAFT_SUFFIX = ".md"
 
@@ -188,6 +220,44 @@ class SealResult:
     # the seal real, so this reports the pin that is on record rather than
     # writing a second one.
     sealed: bool = True
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    """An attempt turned into history, and the successor a supersession created."""
+
+    batch_id: str
+    experiment_id: str
+    outcome: str
+    reason: str
+    decided_at: str
+    # The round the attempt ended in — open or candidate-ready, since an attempt
+    # dropped before it produced anything records no candidate (invariant 7).
+    round_number: int
+    # The replacement created at the batch's base in the same operation. None for
+    # an abandonment, which ends the attempt without one.
+    successor_id: str | None = None
+    successor_ref: str | None = None
+    # False when the decision was already on record: the same decision redone
+    # after an interruption. The successor is reported separately, because the
+    # interruption that costs a supersession its successor leaves exactly the
+    # state where one is False and the other True.
+    recorded: bool = True
+    successor_created: bool = False
+
+
+@dataclass(frozen=True)
+class ConclusionResult:
+    """The batch outcome that ends a change cycle, and what it recorded."""
+
+    batch_id: str
+    outcome: str
+    reason: str
+    decided_at: str
+    record_path: Path
+    # False when the conclusion was already on record — the same one redone after
+    # an interruption.
+    recorded: bool = True
 
 
 @dataclass(frozen=True)
@@ -660,12 +730,516 @@ def _require_open_experiment(current: BatchLineage, action: str) -> Experiment:
 
     experiment = current.open_experiment
     if experiment is None:
-        raise BatchError(
-            f"{current.batch_id} has no open experiment, so there is no round to {action}; a terminal decision is "
-            "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
-            "it needs"
-        )
+        raise _no_open_experiment(current, action)
     return experiment
+
+
+def _no_open_experiment(current: BatchLineage, action: str) -> BatchError:
+    """Why there is nothing to act on, in one place.
+
+    Every operation on an experiment reaches this, and each of them reaches it
+    from two directions: nothing has been admitted into this batch yet, or the
+    last attempt ended. The answer is the same either way, and it is not "try
+    again" — a terminal decision is never reopened.
+    """
+
+    return BatchError(
+        f"{current.batch_id} has no open experiment, so there is nothing to {action}; a terminal decision is "
+        "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
+        "it needs"
+    )
+
+
+# --- terminal decisions ------------------------------------------------------
+
+
+def abandon(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> DecisionResult:
+    """End the open experiment, without replacing it.
+
+    Nothing is discarded: the record keeps the base, every round, every task
+    selection and every candidate revision, and the ref keeps those trees
+    reachable. A batch carrying three abandoned experiments is history, not
+    damage — and history blocks nothing, so the batch is free for another
+    alternative (invariant 14).
+
+    The attempt may be abandoned from an open round as well as a
+    candidate-ready one. An attempt dropped before it produced anything records
+    no candidate rather than having one invented for it, which is invariant 7's
+    rule applied to an experiment.
+    """
+
+    return _end_attempt(config, DECISION_ABANDONED, reason, now=now)
+
+
+def supersede(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> DecisionResult:
+    """Replace the open experiment with a fresh attempt at the same change.
+
+    One operation rather than two, because only one experiment may be open
+    (invariant 14) and a decision cannot name a successor that does not exist
+    yet. The successor is therefore the next id in the series, created here, and
+    it starts from the batch's base — never from the tip it replaces, or the
+    alternative would inherit exactly what was being replaced.
+
+    Its round 1 opens empty and `add-tasks` fills it, for the reason a revised
+    round opens empty: which proposals answer the new approach is the next
+    question, and a successor that cannot exist until they are written is an
+    attempt that cannot be started when it is decided.
+    """
+
+    return _end_attempt(config, DECISION_SUPERSEDED, reason, now=now)
+
+
+def _end_attempt(
+    config: EvolutionConfig,
+    outcome: str,
+    reason: str,
+    *,
+    now: datetime | None,
+) -> DecisionResult:
+    """Record a terminal decision on the open experiment, and whatever it creates.
+
+    Both decisions share everything but the successor, so they share the guards
+    too. The ref check is one of them, and it is here for a reason particular to
+    ending an attempt: a ref standing off the history its record pins is
+    reported only for the *open* experiment, so a decision recorded over one
+    retires the finding along with the attempt. What can no longer be seen can
+    no longer be resolved, and the revisions that record pins would quietly stop
+    being reachable.
+    """
+
+    moment = _moment(now)
+    text = _reason(
+        reason,
+        f"a decision that an attempt is {outcome} records why; the reason is what a later reader has instead of "
+        "the conversation that produced it, and an attempt that ended for no stated reason is one the next "
+        "alternative cannot be built to avoid",
+    )
+
+    with single_writer_lock(config):
+        # A supersession finishes its own interrupted run, so it is the one
+        # operation that may act on a batch owing a successor.
+        current = _current_cycle(config, now=moment, finishing=outcome == DECISION_SUPERSEDED)
+        experiment = current.open_experiment
+        if experiment is None:
+            if outcome == DECISION_SUPERSEDED and current.pending_successor is not None:
+                return _finish_supersession(config, current, text, now=moment)
+            return _redo_decision(current, outcome, text)
+        # Before the redo report, not after it: a moved ref is a fact about the
+        # repository whichever request brought the operator here, and answering
+        # "already done" is what would hide it — the ordering a grouped
+        # admission and a seal already follow.
+        _require_consistent_ref(current)
+        if outcome == DECISION_SUPERSEDED:
+            redone = _superseded_already(current, experiment, text)
+            if redone is not None:
+                return redone
+
+        stamp = format_rfc3339(moment)
+        successor = (
+            _successor(config, current, experiment, reason=text, created_at=stamp)
+            if outcome == DECISION_SUPERSEDED
+            else None
+        )
+        if successor is not None:
+            # The ref first, as everywhere here: it is the one thing that must
+            # never be created twice or restored later, and a ref standing at the
+            # base with no record yet is inert and adoptable.
+            _create_experiment_ref(config, successor)
+        _decide(config, experiment, outcome, text, decided_at=stamp, successor=successor)
+        if successor is not None:
+            # After the decision, never before it. The other order leaves two
+            # open experiments if it is interrupted, which no reading can
+            # arbitrate; this one leaves a successor that is merely owed, which
+            # the same operation redone finishes.
+            _publish_record(config, successor)
+
+        append_records(config, _decision_records(current, experiment, successor, outcome, recorded_at=stamp))
+        return _decided(current, experiment, outcome, text, stamp, successor=successor, created=True)
+
+
+def _successor(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    *,
+    reason: str,
+    created_at: str,
+) -> Experiment:
+    """The replacement a supersession creates: next id, same base, empty round 1.
+
+    The base comes from the batch rather than from the attempt being replaced —
+    the same commit every experiment of this batch starts from (invariant 15),
+    which is also what `_base_revision` refuses to resolve when this checkout no
+    longer holds it.
+    """
+
+    successor_id = format_experiment_id(current.batch_id, experiment.ordinal + 1)
+    base_revision, base_release_ref = _base_revision(config, current, None)
+    return Experiment(
+        experiment_id=successor_id,
+        batch_id=current.batch_id,
+        created_at=created_at,
+        base_revision=base_revision,
+        base_release_ref=base_release_ref,
+        ref=experiment_ref(successor_id),
+        rounds=(Round(number=1, opened_at=created_at, reason=reason, tasks=(), seal=None),),
+        decision=None,
+        directory=config.experiments_root / successor_id,
+    )
+
+
+def _decide(
+    config: EvolutionConfig,
+    experiment: Experiment,
+    outcome: str,
+    reason: str,
+    *,
+    decided_at: str,
+    successor: Experiment | None,
+) -> Experiment:
+    """Write the terminal decision onto an experiment's record.
+
+    It states none of the rules about which decision is available when, and that
+    is deliberate: the record is published through the reader's own parse, so
+    `promoted` from a round nobody sealed, a successor that is not the next
+    ordinal, and a field paired with the wrong outcome are all refused by the
+    same code that refuses them on the way back in. A promotion has no operation
+    in this controller yet; when one lands it inherits those rules here rather
+    than restating them.
+    """
+
+    decided = replace(
+        experiment,
+        decision=Decision(
+            outcome=outcome,
+            decided_at=decided_at,
+            reason=reason,
+            superseded_by=successor.experiment_id if successor is not None else None,
+            promotion_revision=None,
+        ),
+    )
+    _write_record(config, decided)
+    return decided
+
+
+def _finish_supersession(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    reason: str,
+    *,
+    now: datetime,
+) -> DecisionResult:
+    """Create the successor a recorded supersession still owes.
+
+    The decision is what made the supersession real, and it landed; what did not
+    is the experiment it names. So the same supersession redone writes the ref
+    and the record that are missing and nothing else — no second decision, and
+    no ledger line, since the interruption cost the audit and re-appending would
+    claim two supersessions where one happened.
+
+    A different reason is a different decision about an attempt that already
+    ended, so it is refused naming the one on record — the rule every redo here
+    follows.
+    """
+
+    superseded = current.experiments[-1]
+    decision = superseded.decision
+    if decision is None or decision.reason != reason:
+        raise BatchError(
+            f"{superseded.experiment_id} was superseded for "
+            f"{(decision.reason if decision else '')!r}, and {current.pending_successor} was never created; a "
+            f"decision is recorded once, so redo that supersession for the same reason to finish it — {reason!r} "
+            "would be a second decision about an attempt that has already ended"
+        )
+
+    successor = _successor(config, current, superseded, reason=reason, created_at=format_rfc3339(now))
+    _create_experiment_ref(config, successor)
+    _publish_record(config, successor)
+    return _decided(
+        current,
+        superseded,
+        decision.outcome,
+        decision.reason,
+        decision.decided_at,
+        successor=successor,
+        created=True,
+        recorded=False,
+    )
+
+
+def _superseded_already(
+    current: BatchLineage,
+    experiment: Experiment,
+    reason: str,
+) -> DecisionResult | None:
+    """This supersession, already done — or None, meaning it has not been.
+
+    The completed shape is exact: the attempt before this one ended as
+    `superseded` for this reason and named this experiment, and this experiment
+    is still the empty round 1 that supersession opened. Anything else is a new
+    decision about the attempt that is open, including superseding a successor
+    that has not been worked yet, which is an ordinary thing to want.
+
+    The one case it reads as a redo and is not: superseding an untouched
+    successor for the very words its own creation recorded. That is the tradeoff
+    a revision already makes for the same reason — the reason is what
+    distinguishes one decision from another, and two decisions phrased
+    identically are not distinguishable at all.
+    """
+
+    if experiment.ordinal < 2:
+        return None
+    previous = current.experiments[-2]
+    decision = previous.decision
+    if decision is None or decision.outcome != DECISION_SUPERSEDED:
+        return None
+    if decision.superseded_by != experiment.experiment_id or decision.reason != reason:
+        return None
+    round_ = experiment.last_round
+    if len(experiment.rounds) > 1 or round_.tasks or round_.seal is not None:
+        return None
+    return _decided(
+        current,
+        previous,
+        decision.outcome,
+        decision.reason,
+        decision.decided_at,
+        successor=experiment,
+        created=False,
+        recorded=False,
+    )
+
+
+def _redo_decision(current: BatchLineage, outcome: str, reason: str) -> DecisionResult:
+    """The same decision run again, or a refusal naming what ended the attempt.
+
+    A decision whose record landed and whose audit line did not is this
+    operation, already done — the record is what makes it real. Anything else is
+    a second decision about an attempt that is already history, and a terminal
+    decision is never edited: what it says is what a later reader has.
+    """
+
+    last = current.experiments[-1] if current.experiments else None
+    decision = last.decision if last is not None else None
+    if last is None or decision is None:
+        raise _no_open_experiment(current, "end")
+    if decision.outcome != outcome or decision.reason != reason:
+        raise BatchError(
+            f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
+            "recorded once and never edited, so redo the same one to finish an interrupted decision — what "
+            "continues this batch is the next attempt"
+        )
+    return _decided(current, last, decision.outcome, decision.reason, decision.decided_at, recorded=False)
+
+
+def _decided(
+    current: BatchLineage,
+    experiment: Experiment,
+    outcome: str,
+    reason: str,
+    decided_at: str,
+    *,
+    successor: Experiment | None = None,
+    created: bool = False,
+    recorded: bool = True,
+) -> DecisionResult:
+    return DecisionResult(
+        batch_id=current.batch_id,
+        experiment_id=experiment.experiment_id,
+        outcome=outcome,
+        reason=reason,
+        decided_at=decided_at,
+        round_number=experiment.last_round.number,
+        successor_id=successor.experiment_id if successor is not None else None,
+        successor_ref=successor.ref if successor is not None else None,
+        recorded=recorded,
+        successor_created=created,
+    )
+
+
+def _decision_records(
+    current: BatchLineage,
+    experiment: Experiment,
+    successor: Experiment | None,
+    outcome: str,
+    *,
+    recorded_at: str,
+) -> list[dict[str, Any]]:
+    records = [
+        build_record(
+            RECORD_EXPERIMENT_SUPERSEDED if outcome == DECISION_SUPERSEDED else RECORD_EXPERIMENT_ABANDONED,
+            recorded_at=recorded_at,
+            batch_id=current.batch_id,
+            experiment_id=experiment.experiment_id,
+            round=experiment.last_round.number,
+        )
+    ]
+    if successor is not None:
+        records.append(
+            build_record(
+                RECORD_EXPERIMENT_CREATED,
+                recorded_at=recorded_at,
+                batch_id=current.batch_id,
+                experiment_id=successor.experiment_id,
+                revision=successor.base_revision,
+            )
+        )
+    return records
+
+
+def conclude_no_change(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> ConclusionResult:
+    """End the current batch having changed nothing (invariant 7).
+
+    A valid conclusion, and the common one: the evidence justified no protocol,
+    memory, orchestrator, or evaluator change, or every attempt at one was
+    dropped. It fabricates nothing on the way out — no candidate, no experiment,
+    no promotion revision, no merge, no deployment — and the record carries the
+    reason and nothing else.
+
+    This is the record that releases the next cohort, so what it may be written
+    over is exactly the state where nothing is left to do: the analysis stage
+    ended, no experiment is open, no proposal is still waiting for a decision,
+    and no attempt records a promotion. Those four are the phase `status` calls
+    `conclusion-pending`, which is the point — an operator reading that a batch
+    is waiting for its conclusion is reading the condition of this operation.
+
+    The other way a batch ends is a promotion, whose outcome record names the
+    experiment and the source-line revision it carried. That belongs to the
+    operation that performs the promotion.
+    """
+
+    moment = _moment(now)
+    text = _reason(
+        reason,
+        "concluding records why; a batch that ended is read afterwards only through what it wrote, and "
+        "'no change' without a reason says nothing about what the evidence showed",
+    )
+
+    with single_writer_lock(config):
+        settled = _settled(config, now=moment)
+        current = settled.current
+        if current is None:
+            return _redo_conclusion(settled, text)
+        _require_stage_ended(config, current)
+        _require_no_pending_successor(current)
+        _require_nothing_outstanding(current)
+
+        stamp = format_rfc3339(moment)
+        record = {
+            "schema_version": OUTCOME_SCHEMA_VERSION,
+            "batch_id": current.batch_id,
+            "outcome": OUTCOME_NO_CHANGE,
+            "decided_at": stamp,
+            "reason": text,
+            "experiment_id": None,
+            "promotion_revision": None,
+        }
+        validate_or_raise(
+            record,
+            load_schema(config.schema_path(OUTCOME_SCHEMA_FILENAME)),
+            description=f"batch outcome record for {current.batch_id}",
+        )
+        atomic_write_text(current.batch.outcome_path, _json(record))
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_BATCH_CONCLUDED,
+                    recorded_at=stamp,
+                    batch_id=current.batch_id,
+                    detail=OUTCOME_NO_CHANGE,
+                )
+            ],
+        )
+        return ConclusionResult(
+            batch_id=current.batch_id,
+            outcome=OUTCOME_NO_CHANGE,
+            reason=text,
+            decided_at=stamp,
+            record_path=current.batch.outcome_path,
+        )
+
+
+def _require_nothing_outstanding(current: BatchLineage) -> None:
+    """A batch concludes `no-change` only when nothing about it is still open.
+
+    Three different ways it can be, and each of them contradicts the conclusion
+    rather than merely preceding it:
+
+    - an open experiment is an attempt at a change, and an outcome is recorded
+      after the last attempt ends, never over one that is running;
+    - a promoted attempt says the source line moved, which is the same
+      contradiction the reader refuses from the other side — that batch
+      concluded by promoting, and the record has to say so;
+    - a draft still waiting is a proposal the analysis made and nobody decided,
+      so "the evidence justified no change" is a claim this batch's own gate
+      does not support. Admit it or decline it; both are terminal, and either
+      one is an answer.
+    """
+
+    if current.open_experiment is not None:
+        raise BatchError(
+            f"{current.batch_id} still has an open experiment ({current.open_experiment.experiment_id}); a "
+            "batch's outcome is recorded after its last attempt ends, so abandon or supersede that one first — "
+            "an abandoned attempt stays in the record as the evidence it is"
+        )
+    promoted = [
+        experiment.experiment_id
+        for experiment in current.experiments
+        if experiment.decision is not None and experiment.decision.outcome == DECISION_PROMOTED
+    ]
+    if promoted:
+        raise BatchError(
+            f"{current.batch_id} cannot conclude {OUTCOME_NO_CHANGE!r}: {promoted} record a promotion; a batch "
+            "whose candidate reached the source line concluded by promoting it, and the outcome names which "
+            "attempt it was and the revision that carries it"
+        )
+    if current.gate.waiting:
+        raise BatchError(
+            f"{current.batch_id} still has draft(s) {list(current.gate.waiting)} waiting at its admission gate; "
+            "concluding that the evidence justified no change while its own analysis has proposals nobody "
+            "decided says two things at once — admit them or decline them, both of which are terminal"
+        )
+
+
+def _redo_conclusion(settled: Lineage, reason: str) -> ConclusionResult:
+    """The same conclusion run again, or the refusal that nothing is current.
+
+    The record is what ends the batch, and it is written before the audit line —
+    so a run interrupted between the two left no batch current, and its own
+    retry would otherwise report that there is nothing to conclude. The newest
+    batch concluded `no-change` for exactly this reason is that operation,
+    already done.
+    """
+
+    concluded = [
+        item
+        for item in settled.batches
+        if item.outcome is not None
+        and item.outcome["outcome"] == OUTCOME_NO_CHANGE
+        and item.outcome["reason"] == reason
+    ]
+    if not concluded:
+        raise BatchError(
+            "no batch is current, so there is nothing to conclude; a batch is current from the freeze of its "
+            "manifest until its outcome is recorded (invariant 14), and freezing the next cohort is "
+            "`aii-2 evolution start`"
+        )
+    latest = concluded[-1]
+    outcome = latest.outcome or {}
+    return ConclusionResult(
+        batch_id=latest.batch_id,
+        outcome=OUTCOME_NO_CHANGE,
+        reason=reason,
+        decided_at=outcome["decided_at"],
+        record_path=latest.batch.outcome_path,
+        recorded=False,
+    )
 
 
 def _observe_completions(
@@ -798,36 +1372,78 @@ def _unmoved(
 # --- the guarded preamble ----------------------------------------------------
 
 
-def _current_cycle(config: EvolutionConfig, *, now: datetime) -> BatchLineage:
+def _current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = False) -> BatchLineage:
     """The batch these operations act on, settled before any of them writes.
 
-    Three questions in one, and all three are the derivation `status` reads
+    Four questions in one, and all of them are the derivation `status` reads
     rather than a cheaper local reading: which batch is current (invariant 14,
     from the whole lineage — an outcome record its own experiments contradict has
-    concluded nothing), whether its analysis stage has ended, and what its gate
-    and experiments currently are.
+    concluded nothing), whether its analysis stage has ended, whether a
+    supersession left the batch owing an experiment, and what its gate and
+    experiments currently are.
 
-    The closure records are published first for the same reason the freeze
-    publishes them first: the stage's end is read from the analysis task's own
-    lifecycle on the machine that has it, and from the committed record
-    everywhere else. Admitting a draft before that stage ends would implement
-    dispositions that are still being written.
+    `finishing` is for the one operation that may act on a batch owing a
+    successor: the supersession that is being redone to create it. Every other
+    operation would be building on a lineage with no attempt to build in.
     """
 
-    record_closures(config, now=now)
-    current = describe_lineage(config).current
+    current = _settled(config, now=now).current
     if current is None:
         raise BatchError(
             "no batch is current, so there is no admission gate to act on; freeze a cohort with "
             "`aii-2 evolution start` and let its analysis produce the drafts (invariant 14)"
         )
+    _require_stage_ended(config, current)
+    if not finishing:
+        _require_no_pending_successor(current)
+    return current
+
+
+def _settled(config: EvolutionConfig, *, now: datetime) -> Lineage:
+    """The whole lineage, with this machine's analysis closures published first.
+
+    The closure records are published first for the same reason the freeze
+    publishes them first: the stage's end is read from the analysis task's own
+    lifecycle on the machine that has it, and from the committed record
+    everywhere else. Admitting a draft before that stage ends would implement
+    dispositions that are still being written — and concluding a batch before it
+    would end a cohort whose analysis is still being written.
+    """
+
+    record_closures(config, now=now)
+    return describe_lineage(config)
+
+
+def _require_stage_ended(config: EvolutionConfig, current: BatchLineage) -> None:
+    """The batch's analysis stage is over before anything acts on its lineage."""
+
     if awaiting_analysis(config, current.batch):
         raise BatchError(
             f"{current.batch_id} is still in its analysis stage; drafts reach the gate when that task completes "
             f"and {current.batch.closure_path.name} records it — a proposal admitted before then implements "
             "dispositions nobody has reviewed (invariant 6)"
         )
-    return current
+
+
+def _require_no_pending_successor(current: BatchLineage) -> None:
+    """A supersession that recorded its decision and not the successor it names
+    stops everything but its own redo.
+
+    That state is readable on purpose (`lineage.pending_successor`): refusing it
+    in the reader would leave the interruption unrecoverable, since the operation
+    that finishes it could not run either. So the refusal is here, where an
+    operation is about to build on a batch whose only attempt is one that does
+    not exist yet.
+    """
+
+    successor = current.pending_successor
+    if successor is None:
+        return
+    raise BatchError(
+        f"{current.experiments[-1].experiment_id} was superseded by {successor}, which does not exist; the "
+        "decision landed and the attempt it creates did not, so this batch has nothing to work in — redo that "
+        "supersession, for the same reason, to finish it"
+    )
 
 
 def _require_consistent_ref(current: BatchLineage) -> None:
@@ -1376,7 +1992,7 @@ def _publish_record(config: EvolutionConfig, experiment: Experiment) -> Path:
     """
 
     record = _serialize(experiment)
-    _validate(config, record, experiment.experiment_id)
+    _validate(config, record, experiment)
 
     root = config.experiments_root
     root.mkdir(parents=True, exist_ok=True)
@@ -1406,7 +2022,7 @@ def _write_record(config: EvolutionConfig, experiment: Experiment) -> Path:
     """
 
     record = _serialize(experiment)
-    _validate(config, record, experiment.experiment_id)
+    _validate(config, record, experiment)
     path = experiment.directory / EXPERIMENT_FILENAME
     if not path.is_file():
         raise BatchError(f"{path} is gone; an experiment record is never recreated from a partial reading")
@@ -1414,12 +2030,20 @@ def _write_record(config: EvolutionConfig, experiment: Experiment) -> Path:
     return path
 
 
-def _validate(config: EvolutionConfig, record: Mapping[str, Any], experiment_id: str) -> None:
-    validate_or_raise(
-        record,
-        load_schema(config.schema_path(EXPERIMENT_SCHEMA_FILENAME)),
-        description=f"experiment record for {experiment_id}",
-    )
+def _validate(config: EvolutionConfig, record: Mapping[str, Any], experiment: Experiment) -> None:
+    """Check the record about to be written the way it will be read back.
+
+    Through the reader's own parse, not a schema check beside it: the schema
+    subset has no cross-field conditionals, so every rule that makes a record one
+    readable history — rounds that only append, a seal that waits for its tasks,
+    a sealed round with something admitted into it, a decision carrying exactly
+    the fields its outcome means, `promoted` only from a candidate-ready round —
+    lives in `lineage.parse_experiment`. Stating any of them a second time here
+    is what would let the writer and the reader drift, and the direction they
+    drift in is a record this controller wrote and can no longer read.
+    """
+
+    parse_experiment(config, record, experiment.directory)
 
 
 def _write_tasks(
@@ -1910,12 +2534,17 @@ def _json(record: Mapping[str, Any]) -> str:
 __all__ = [
     "Admitted",
     "AdmissionResult",
+    "ConclusionResult",
+    "DecisionResult",
     "RejectionResult",
     "ReviseResult",
     "SealResult",
+    "abandon",
     "add_tasks",
+    "conclude_no_change",
     "create",
     "reject",
     "revise",
     "seal_round",
+    "supersede",
 ]

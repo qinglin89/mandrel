@@ -19,13 +19,19 @@ the order is simply how far that one batch has got:
 1. No current batch — `pool` / `idle`. Evidence accumulating, or nothing at all.
 2. `batch-frozen`, then `dispositions-ready` once findings are written: the
    analysis stage, which ends at a completed analysis task.
-3. `implementing`, then `candidate-ready` once the round is sealed: the open
+3. `supersede-pending` — a supersession recorded its decision and not the
+   successor it names, so the batch has no attempt to work in until the same
+   supersession is redone. It outranks everything below it because every one of
+   those operations refuses in that state.
+4. `implementing`, then `candidate-ready` once the round is sealed: the open
    experiment, which is where work and then replay happen.
-4. `proposals-pending` — no experiment is open and drafts are waiting at the
+5. `proposals-pending` — no experiment is open and drafts are waiting at the
    human admission gate (invariant 9).
-5. `conclusion-pending` — nothing is open and nothing is waiting, so what the
+6. `conclusion-pending` — nothing is open and nothing is waiting, so what the
    batch needs is its outcome: a promotion, or the `no-change` that says the
-   evidence justified nothing (invariant 7).
+   evidence justified nothing (invariant 7). It is also exactly the condition
+   `conclude-no-change` writes under, so this label is the operation's own
+   precondition read back.
 
 Every fact behind the choice is emitted in the JSON regardless of which label
 won, so a reader that cares about a lower-precedence one does not have to
@@ -54,7 +60,7 @@ from .manifests import OUTCOME_PROMOTED, load_batches
 from .revisions import Revision
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -63,6 +69,7 @@ PHASE_DISPOSITIONS_READY = "dispositions-ready"
 PHASE_PROPOSALS_PENDING = "proposals-pending"
 PHASE_IMPLEMENTING = "implementing"
 PHASE_CANDIDATE_READY = "candidate-ready"
+PHASE_SUPERSEDE_PENDING = "supersede-pending"
 PHASE_CONCLUSION_PENDING = "conclusion-pending"
 
 # A round's two states (contract: Lifecycle states).
@@ -133,6 +140,19 @@ class Promotion:
 
 
 @dataclass(frozen=True)
+class PendingSuccessor:
+    """A supersession whose decision landed and whose successor did not.
+
+    Both ids, because neither on its own is the state: the attempt that ended is
+    where the reason is recorded, and the one that does not exist is what the
+    batch is owed.
+    """
+
+    experiment_id: str
+    successor_id: str
+
+
+@dataclass(frozen=True)
 class LifecycleStatus:
     """The derived phase and every fact it was derived from."""
 
@@ -147,6 +167,7 @@ class LifecycleStatus:
     history: tuple[Experiment, ...]
     revisions: LifecycleRevisions
     last_promotion: Promotion | None
+    pending_successor: PendingSuccessor | None
 
     @property
     def open_round(self) -> Round | None:
@@ -176,6 +197,8 @@ class LifecycleStatus:
             round_ = self.experiment.last_round
             tail = _round_tail(round_) if self.phase == PHASE_IMPLEMENTING else ""
             return f"{self.phase} {self.experiment.experiment_id} round {round_.number}{tail}"
+        if self.phase == PHASE_SUPERSEDE_PENDING and self.pending_successor is not None:
+            return f"{self.phase} {self.pending_successor.successor_id}"
         if self.phase == PHASE_PROPOSALS_PENDING and self.gate is not None:
             drafts = len(self.gate.waiting)
             batch_id = self.current_batch.batch_id if self.current_batch else ""
@@ -214,6 +237,12 @@ class LifecycleStatus:
             "experiments": {
                 "open": _experiment_json(self.experiment, self.ref),
                 "history": [_terminal_json(experiment) for experiment in self.history],
+                "pending_successor": None
+                if self.pending_successor is None
+                else {
+                    "experiment_id": self.pending_successor.experiment_id,
+                    "successor_id": self.pending_successor.successor_id,
+                },
             },
             "implementation_tasks": list(self.implementation_tasks),
             "revisions": {
@@ -271,6 +300,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
         history=current.terminal_experiments if current else (),
         revisions=_revisions(current),
         last_promotion=_last_promotion(lineage),
+        pending_successor=_pending_successor(current),
     )
 
 
@@ -301,6 +331,8 @@ def _phase(*, current: BatchLineage | None, stage_open: bool, pool: int) -> str:
         return PHASE_POOL if pool else PHASE_IDLE
     if stage_open:
         return PHASE_DISPOSITIONS_READY if current.batch.findings_recorded else PHASE_BATCH_FROZEN
+    if current.pending_successor is not None:
+        return PHASE_SUPERSEDE_PENDING
     experiment = current.open_experiment
     if experiment is not None:
         return PHASE_IMPLEMENTING if experiment.open_round is not None else PHASE_CANDIDATE_READY
@@ -352,6 +384,22 @@ def _revisions(current: BatchLineage | None) -> LifecycleRevisions:
     if current.candidate_revision is not None:
         candidate = Revision(sha=current.candidate_revision)
     return LifecycleRevisions(base=base, candidate_tip=tip, round_candidate=candidate)
+
+
+def _pending_successor(current: BatchLineage | None) -> PendingSuccessor | None:
+    """The experiment a recorded supersession still owes, if there is one.
+
+    Reported rather than raised for the same reason the lineage reads it that
+    way: the operation that finishes the supersession has to be able to run, and
+    an operator has to be able to see why nothing else will.
+    """
+
+    if current is None or current.pending_successor is None:
+        return None
+    return PendingSuccessor(
+        experiment_id=current.experiments[-1].experiment_id,
+        successor_id=current.pending_successor,
+    )
 
 
 def _last_promotion(lineage: Lineage) -> Promotion | None:

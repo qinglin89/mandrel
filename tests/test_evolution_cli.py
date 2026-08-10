@@ -667,7 +667,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 2
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 3
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -680,7 +680,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
     }
     assert payload["batches"] == {"total": 0, "current": None}
     assert payload["gate"] is None
-    assert payload["experiments"] == {"open": None, "history": []}
+    assert payload["experiments"] == {"open": None, "history": [], "pending_successor": None}
     assert payload["revisions"] == {"base": None, "candidate_tip": None, "round_candidate": None}
     assert payload["last_promotion"] is None
     assert json.loads(json.dumps(payload)) == payload

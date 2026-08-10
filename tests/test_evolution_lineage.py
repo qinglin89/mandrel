@@ -744,19 +744,44 @@ def test_experiments_on_two_bases_are_not_alternatives(config: evolution.Evoluti
         lineage.describe(config)
 
 
-def test_a_superseded_decision_names_an_experiment_that_exists(
+def test_a_supersession_that_never_created_its_successor_is_reported_not_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    """Superseding creates its successor in the same operation, so a name with
-    nothing behind it is a broken half of one."""
+    """Superseding writes the decision first and the successor second, so this is
+    what its interruption leaves — and it has to stay readable, or the operation
+    that finishes it could not run either. The reader names the state; the
+    guarded operations are what refuse on it."""
 
     write_experiment(
         config.experiments_root,
         EXP_01,
         decision=experiment_decision("superseded", superseded_by=EXP_02),
     )
-    with pytest.raises(evolution.BatchError, match="no such experiment exists"):
-        lineage.describe(config)
+
+    derived = only(config)
+    assert derived.pending_successor == EXP_02
+    assert derived.open_experiment is None
+    assert [experiment.experiment_id for experiment in derived.terminal_experiments] == [EXP_01]
+
+
+def test_a_successor_that_exists_is_owed_by_nobody(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The completed supersession, for contrast: the successor is the newest
+    experiment, so nothing is pending."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        decision=experiment_decision("superseded", superseded_by=EXP_02),
+    )
+    write_experiment(
+        config.experiments_root,
+        EXP_02,
+        rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
+    )
+
+    assert only(config).pending_successor is None
 
 
 @pytest.mark.parametrize("successor", [EXP_01, EXP_03], ids=["itself", "past-the-next-one"])

@@ -344,6 +344,26 @@ class BatchLineage:
 
         return tuple(experiment for experiment in self.experiments if not experiment.open)
 
+    @property
+    def pending_successor(self) -> str | None:
+        """The successor a supersession recorded but had not created yet.
+
+        Superseding writes two records — the decision that ends the attempt, and
+        the successor it names — and the decision is written first because it is
+        the only order whose interruption leaves one readable state: the other
+        way round leaves two open experiments, which no reading can arbitrate
+        (invariant 14). So this is the half-finished supersession, and the
+        operation is finished by being redone.
+
+        It can only ever be the newest experiment: ordinals run 1..N and a
+        successor is N+1, so an existing successor would itself be the newest.
+        """
+
+        if not self.experiments:
+            return None
+        decision = self.experiments[-1].decision
+        return decision.superseded_by if decision is not None else None
+
 
 @dataclass(frozen=True)
 class Lineage:
@@ -584,7 +604,7 @@ def _batch_lineage(
             + " — invariant 14 allows one; abandon or supersede the earlier attempt, which keeps it as evidence"
         )
     _require_serial_experiments(batch, experiments)
-    _require_named_successors(batch, experiments)
+    _require_named_successors(experiments)
     # Drafts before tasks: a draft admitted twice produces the same task id twice
     # as well, and of the two ways to say that, the repeated proposal is the one
     # an operator can act on.
@@ -658,18 +678,25 @@ def _require_serial_experiments(batch: Batch, experiments: tuple[Experiment, ...
         )
 
 
-def _require_named_successors(batch: Batch, experiments: tuple[Experiment, ...]) -> None:
+def _require_named_successors(experiments: tuple[Experiment, ...]) -> None:
     """A `superseded` decision names the experiment created to replace it: the
     next one in the series, and never itself.
 
     Superseding is one operation — it ends the attempt and creates its successor
-    — so the replacement is the id allocated immediately past it, and it exists
-    here. A name pointing anywhere else describes a replacement this controller
-    could not have made, and leaves the reason an attempt ended pointing at
-    evidence that answers a different question.
+    — so the replacement is the id allocated immediately past it. A name pointing
+    anywhere else describes a replacement this controller could not have made,
+    and leaves the reason an attempt ended pointing at evidence that answers a
+    different question.
+
+    Whether that successor is *here* is deliberately not checked. Ordinals run
+    1..N, so the only name that can be missing is N+1 — the successor of the
+    newest experiment, which is precisely the state an interrupted supersession
+    leaves. Refusing it would make the interruption unrecoverable: every read
+    raises, so the operation that would finish it cannot run either.
+    `BatchLineage.pending_successor` names that state instead, and the guarded
+    operations refuse on it (`experiments.py`) rather than the reader.
     """
 
-    known = {experiment.experiment_id for experiment in experiments}
     for experiment in experiments:
         successor = experiment.decision.superseded_by if experiment.decision else None
         if successor is None:
@@ -681,11 +708,6 @@ def _require_named_successors(batch: Batch, experiments: tuple[Experiment, ...])
                 f"{experiment.directory / EXPERIMENT_FILENAME}: names {successor!r} as its successor, which is "
                 f"{relation}; superseding creates the replacement in the same operation, so the successor is the "
                 f"next experiment in the series ({expected})"
-            )
-        if successor not in known:
-            raise BatchError(
-                f"{experiment.directory / EXPERIMENT_FILENAME}: names {successor!r} as its successor, but no such "
-                f"experiment exists in {batch.batch_id}; superseding records the replacement it creates"
             )
 
 
@@ -817,16 +839,7 @@ def _gate(config: EvolutionConfig, batch: Batch, consumed: Mapping[str, str]) ->
 
 
 def _read_experiment(config: EvolutionConfig, directory: Path) -> Experiment:
-    """One experiment record, validated and checked for the rules its schema
-    cannot state.
-
-    The implemented JSON Schema subset has no cross-field conditionals, so the
-    shape tests that make a record one readable history live here: the id it
-    sits under, the ref it claims, rounds that only append, a seal that waits
-    for its tasks, and a decision that carries exactly the fields its outcome
-    means. Each of them is a way for a record to be individually well-formed and
-    still describe two different histories.
-    """
+    """One experiment record from disk."""
 
     path = directory / EXPERIMENT_FILENAME
     try:
@@ -840,7 +853,29 @@ def _read_experiment(config: EvolutionConfig, directory: Path) -> Experiment:
         raise BatchError(f"unreadable experiment record {path}: {exc}") from exc
     if not isinstance(record, dict):
         raise BatchError(f"experiment record is not a JSON object: {path}")
+    return parse_experiment(config, record, directory)
 
+
+def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directory: Path) -> Experiment:
+    """One experiment record, validated and checked for the rules its schema
+    cannot state.
+
+    The implemented JSON Schema subset has no cross-field conditionals, so the
+    shape tests that make a record one readable history live here: the id it
+    sits under, the ref it claims, rounds that only append, a seal that waits
+    for its tasks, and a decision that carries exactly the fields its outcome
+    means. Each of them is a way for a record to be individually well-formed and
+    still describe two different histories.
+
+    Public because the writers publish through it (`experiments.py`): an
+    operation builds the next state of a record and validates it here before it
+    lands, so a write cannot produce a record its own reader refuses. Stating
+    those rules a second time on the write side is what would let the two drift
+    — and the direction they drift in is a record this controller wrote and can
+    no longer read.
+    """
+
+    path = directory / EXPERIMENT_FILENAME
     validate_or_raise(
         record,
         load_schema(config.schema_path(EXPERIMENT_SCHEMA_FILENAME)),
