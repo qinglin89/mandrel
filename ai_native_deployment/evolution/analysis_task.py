@@ -340,11 +340,13 @@ justified is a valid outcome (invariant 7).
   status. Never write that record by hand; it attests to a lifecycle, not to a
   file.
 - Draft each accepted `protocol-candidate` (and any other change task this
-  analysis concludes is warranted) as a schema-conforming task file under
-  `{spec.proposed_tasks_relative_path}/`. Drafts are inert until a human moves
-  one into `.ai-tasks/` and adds its index row; writing one straight into
-  `.ai-tasks/` as `pending` would put it in the dispatch pool and bypass the
-  human admission gate (invariant 9).
+  analysis concludes is warranted) as a schema-conforming task file at
+  `{spec.proposed_tasks_relative_path}/<draft-id>.md`, where `<draft-id>` is a
+  kebab-case slug and is that proposal's identity. Drafts are inert until a
+  human admits a group of them into an experiment, which copies each into
+  `.ai-tasks/` and adds its index row; writing one straight into `.ai-tasks/`
+  as `pending` would put it in the dispatch pool and bypass the human admission
+  gate (invariant 9).
 - Analysis is not implementation: this task must not edit `canonical/`
   (invariant 6). Accepted recommendations become separate admitted tasks.
 

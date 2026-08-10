@@ -39,7 +39,9 @@ complete an evaluation.
    disposes findings. It does not edit `canonical/`. Accepted recommendations
    become separate protocol-improvement tasks.
 7. **No change is valid.** A completed analysis may conclude that no protocol,
-   memory, orchestrator, or evaluator change is justified.
+   memory, orchestrator, or evaluator change is justified. That conclusion ends
+   the batch by itself and fabricates nothing on the way out: no candidate, no
+   experiment, no promotion, no merge, no deployment, and no revision change.
 8. **Pin the runner.** The stable protocol revision governing an evolution
    task remains fixed for that task. A candidate revision never governs the
    run that creates it.
@@ -54,14 +56,65 @@ complete an evaluation.
     hashes, and decision records that are safe for this repository.
 12. **One baseline at a time.** Do not run concurrent canonical
     protocol-improvement tasks against conflicting baselines. Read-only batch
-    analysis may queue, but admitted implementations are serialized.
+    analysis may queue, but admitted implementations are serialized. Invariant
+    14 is what that comes to once a batch has a lineage.
 13. **Do not optimize one score.** Evaluate quality, convergence/remediation
     rounds, quota consumption, elapsed time, and regressions. Cross-provider raw
     token counts are not directly comparable.
+14. **One current batch, one open experiment.** At most one batch is current at
+    a time — from the freeze of its manifest until it records a terminal
+    outcome — and within that batch at most one experiment is open. Reports keep
+    accumulating in the pending pool throughout; they are a later batch's
+    evidence, not a reason to cut this one short. Terminal experiments are
+    history and never block anything: abandoning or superseding one frees the
+    batch for another alternative, and only a promotion ends the batch.
+15. **One frozen base per batch, and rounds only add.** The first experiment
+    created for a batch freezes the source revision every experiment of that
+    batch starts from, so the alternatives are alternatives and none is built on
+    another. Within an experiment a revision round is appended, never rewritten:
+    each round's candidate revision stays reachable from the next one's, which
+    is what keeps prior task selections, candidate trees, and the evidence
+    measured against them readable after the experiment has moved on.
 
 An exceptional fast path for a severe safety or correctness failure requires a
 human-recorded justification. It does not silently weaken the normal batch
 rule.
+
+## Lifecycle states
+
+Every unit here is either **non-terminal** — still able to change — or
+**terminal**, which is a decision that was recorded and is never edited
+afterwards. Nothing is terminal by being old, by being unreferenced, or by
+having its files moved away; each state below names the artifact that ends it.
+
+| Unit | Non-terminal while | Terminal when |
+|---|---|---|
+| Batch | its manifest is frozen and no outcome is recorded | `batches/<batch-id>/outcome.json` records `promoted` or `no-change` |
+| Experiment | its record carries no decision | `experiment.json` records `abandoned`, `superseded`, or `promoted` |
+| Round | it is the experiment's last round and is open | its `closed_at` and `candidate_revision` are pinned |
+
+Analysis completion (`analysis-complete.json`) is a stage inside a current
+batch, not the end of one: it releases the batch's dispositions to the
+admission gate, and the batch stays current through admission, rounds, replay,
+and the decision that follows.
+
+## Revisions in play
+
+Five different commits, which an evidence trail must not substitute for one
+another — a candidate measured against the wrong one measures nothing.
+
+| Term | What it is | Recorded in |
+|---|---|---|
+| Base revision | the exact source commit every experiment of one batch starts from, frozen when that batch's first experiment is created | `experiment.json.base_revision` |
+| Candidate tip | the current head of the open experiment's ref — what a replay run would exercise right now | `refs/evolution/experiments/<experiment-id>` |
+| Round candidate revision | the tip pinned when a round closed; immutable, and what that round's evidence describes | `experiment.json.rounds[].candidate_revision` |
+| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from | `outcome.json.promotion_revision` |
+| Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
+
+The last one is why promotion is not the end of the evidence chain: a promoted
+revision changes nothing an evaluation can see until targets carry it, so the
+cohort that measures a promotion is the one whose reports were produced at that
+effective revision.
 
 ## Data layout
 
@@ -70,13 +123,17 @@ evolution/
   README.md                         this contract
   config.toml                       versioned policy defaults
   ledger.jsonl                      append-only sanitized audit
-  schemas/                          import, batch, and ledger contracts
+  schemas/                          every versioned data contract below
   batches/<batch-id>/manifest.json  immutable report membership
   batches/<batch-id>/findings.md    analysis disposition record
-  batches/<batch-id>/analysis-complete.json  reviewed-completion record; closes the batch
-  batches/<batch-id>/proposed-tasks/ change-task drafts awaiting human admission
+  batches/<batch-id>/analysis-complete.json  reviewed-completion record; ends the analysis stage
+  batches/<batch-id>/proposed-tasks/<draft-id>.md  change-task drafts; kept after admission
+  batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
+  batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   cases/                            curated sanitized regression cases
-  experiments/                      canary/replay definitions and outcomes
+  experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, decision
+
+refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
 
 .ai-evolution/                      ignored machine-local runtime state
   state.json                        discovery cursor and pending pool
@@ -84,19 +141,29 @@ evolution/
   imported-artifacts/               raw fetched bundles
 ```
 
-The discovery cursor, pending pool, and processed-batch ledger are distinct:
+The ref namespace is part of the layout, not an implementation detail. A
+branch is deleted when its work is over, and abandoning an experiment is
+exactly when that happens; the ref is what keeps every round's candidate tree
+reachable afterwards, so the revisions the record pins stay resolvable rather
+than becoming names of objects nobody can produce.
+
+Discovery, eligibility, the analysis stage, and the batch itself end at
+different moments, and each has its own record:
 
 - Advancing discovery records that a feed item was inspected. Whether that
   discovery reached the end of the feed is recorded with it: a pool left as a
   prefix by a page bound is not a denominator (invariants 1 and 2).
 - A pending report remains eligible until assigned to a frozen batch.
-- A batch is processed only after its analysis task completes successfully.
-  `findings.md` is the disposition record and is written while that task is
-  still being developed and reviewed, so it does not by itself close a batch.
-  Completion is read from the analysis task's own lifecycle status, and the
-  controller then records `analysis-complete.json` in the batch directory.
-  That record is committed because `.ai-tasks/` is machine-local: without it,
-  no other clone can tell a finished analysis from a draft.
+- A batch's analysis is finished only after its analysis task completes
+  successfully. `findings.md` is the disposition record and is written while
+  that task is still being developed and reviewed, so it does not by itself end
+  the stage. Completion is read from the analysis task's own lifecycle status,
+  and the controller then records `analysis-complete.json` in the batch
+  directory. That record is committed because `.ai-tasks/` is machine-local:
+  without it, no other clone can tell a finished analysis from a draft.
+- A batch is finished only when its outcome is recorded. Everything between the
+  two — the admission gate, the experiments, their rounds — happens inside a
+  batch that is still current (invariant 14).
 
 ## Normal workflow
 
@@ -110,10 +177,11 @@ completed archived-task L1+L2 evaluations
   -> pending batch-analysis task
   -> reviewed dispositions
   -> change-task drafts in batches/<batch-id>/proposed-tasks/
-  -> zero or more human-admitted improvement tasks
-  -> candidate canonical revision
-  -> replay/canary
-  -> human promote | revise | revert
+  -> human admits a group of drafts -> one experiment on the batch's frozen base
+  -> admitted improvement tasks -> candidate round
+  -> replay/canary against that base
+  -> human promote | revise (next round) | abandon | supersede (next experiment)
+  -> batch outcome: promoted, or no-change
   -> later report cohort measures the result
 ```
 
@@ -146,11 +214,14 @@ and implementation sits one human gate (invariant 9), and drafts wait in the
 batch that produced them:
 
 1. The analysis session writes each proposed change task as a
-   schema-conforming task file under `batches/<batch-id>/proposed-tasks/`. A
-   draft is inert there: nothing dispatches it, and it states its own evidence
-   and batch.
-2. A human admits one by moving it into `.ai-tasks/` and adding its index row.
-   That move is the admission decision.
+   schema-conforming task file at
+   `batches/<batch-id>/proposed-tasks/<draft-id>.md`. The draft id is a
+   kebab-case slug and is the proposal's identity. A draft is inert there:
+   nothing dispatches it, and it states its own evidence and batch.
+2. A human admits a group of drafts by starting an experiment from them
+   (below). Each admitted draft is copied into `.ai-tasks/` with its index row;
+   the experiment records the draft id, the hash of the bytes admitted, and the
+   task id the copy took.
 
 A draft is never written straight into `.ai-tasks/` as `pending`: the active
 pool is what turn selection dispatches from, so a draft placed there would be
@@ -158,17 +229,154 @@ picked up as admitted work and the gate would be bypassed. This reuses the
 existing task and index mechanics rather than adding a proposed-but-not-admitted
 task status.
 
+Admission copies rather than moves, and that is what makes it readable later:
+`.ai-tasks/` is machine-local and close-out archives a finished task away, so a
+draft that had moved out of the batch would leave nothing behind saying what was
+proposed or which experiment took it.
+
+A human may also decline a draft instead of admitting it, which is recorded in
+`batches/<batch-id>/rejected-drafts.json` with the reason and the bytes
+declined. That record exists because the gate's remaining work is *derived*:
+a draft is still waiting when no experiment has taken it and nothing has turned
+it down. Without it a declined proposal waits at the gate forever, and deleting
+the file instead would leave "why is this gone" a question only `git log`
+answers.
+
+Admitting and declining are both terminal for a proposal: a spent draft id is
+never reused. Proposing the same idea again means a new draft under a new id
+(`<slug>-v2`), whose own bytes and hash state what the second proposal actually
+was — so "we tried this twice" stays visible instead of collapsing into one
+file that changed.
+
 Automation may create the pending batch-analysis task itself — analysis
 classifies evidence and is forbidden from editing `canonical/` (invariant 6), so
 it decides no policy. Change tasks are the ones that need the gate.
+
+## Change lineage
+
+Analysis says what should change; an **experiment** is one attempt at it. A
+batch usually needs more than one attempt: an approach gets abandoned, another
+replaces it, a replay says the candidate did not work and it is revised. All
+three have to remain readable afterwards, which is why the lineage is durable
+artifacts and refs rather than the state of somebody's checkout.
+
+### Experiments
+
+One experiment is one attempt at the change a batch's analysis called for,
+recorded at `experiments/<experiment-id>/experiment.json`
+(`schemas/experiment.schema.json`). Its id is `<batch-id>-exp-<NN>`, allocated
+one past the highest ordinal that batch has ever used — never reused, so a
+historical experiment's name keeps naming the attempt it was.
+
+Creating one *is* the grouped admission of step 2 above. The human selects the
+drafts that belong together, and one operation creates the experiment's ref at
+the batch's base revision, the record, and the admitted tasks.
+
+The **first** experiment created for a batch freezes that batch's base revision
+(invariant 15) — not the batch freeze, which happens before anyone knows a
+change is warranted and would pin a base to evidence rather than to work. Every
+later experiment for the same batch starts from that exact commit; otherwise
+the alternatives are not alternatives but attempts against different protocols.
+A different base is refused rather than reconciled: the batch has one base, and
+which one it is was settled by its first experiment.
+
+Work happens on the durable ref `refs/evolution/experiments/<experiment-id>`,
+checked out under whatever local branch name suits the operator. The ref only
+fast-forwards. That is invariant 15's "rounds only add" stated as a Git rule: a
+rewritten round leaves the revisions its own record pins unreachable, and the
+replay evidence measured against them describing a tree nobody can produce.
+
+### Rounds
+
+A round is one revision pass within an experiment: the task set admitted into
+it, and the candidate revision it produced. Round 1 is created with the
+experiment. Two operations extend the lineage, and both only append:
+
+- `revise` closes the open round — pinning its candidate revision from the ref
+  as it stands — and opens the next one with the reason for it.
+- `add-tasks` admits further drafts into the round that is open.
+
+A round is the unit replay evidence names. So a revision makes the previous
+round's evidence stale by construction rather than by anyone remembering to
+invalidate it: the new round has no evidence until its own is recorded, and the
+old evidence goes on naming the round it actually measured.
+
+### Terminal decisions
+
+An experiment ends with exactly one decision, and the decision is what turns it
+into history:
+
+| Decision | Means | The batch afterwards |
+|---|---|---|
+| `abandoned` | the attempt is dropped, with a reason | still current; another experiment may start |
+| `superseded` | replaced by a different approach, which the decision names | still current; the named successor is that experiment |
+| `promoted` | the candidate reached the canonical source line | ended by the batch outcome that records it |
+
+Superseding is one operation, not two: it ends the experiment and creates the
+successor it names, because only one experiment may be open (invariant 14) and
+a decision cannot name a successor that does not exist yet. The successor starts
+from the batch's base like every other experiment — from the base, never from
+the tip it replaces, or the alternative would inherit exactly what was being
+replaced.
+
+Abandoning or superseding discards nothing that was learned: the record keeps
+the base, every round, every task selection, and every candidate revision, and
+the ref keeps those trees reachable. A batch carrying three abandoned
+experiments and one open alternative is an ordinary state, not damage.
+
+### Batch outcome
+
+A batch is current until `batches/<batch-id>/outcome.json` exists
+(`schemas/batch-outcome.schema.json`), and that record is what releases the next
+cohort. Two ways reach it:
+
+- `promoted` — an experiment was promoted; the outcome names it and the
+  promotion revision.
+- `no-change` — the evidence justified no change to anything (invariant 7). The
+  record carries the reason and nothing else: no experiment, no promotion
+  revision, and no commit invented to represent a change that was not made.
+
+### What is derived
+
+None of this stores a lifecycle phase, and none of it may be inferred from the
+checkout. The current batch, the open experiment, its open round, the candidate
+revision, and the drafts still waiting at the gate are re-derived on every read
+from the committed manifests, closure records, experiment records, rejection
+records, the experiment refs, and Git — so any clone, on any branch, and a
+machine that has lost `.ai-tasks/`, all derive the same answer.
+
+Two readings are specifically not that answer:
+
+- **`HEAD` measured against the release tag.** It answers "is this checkout on
+  the release line", which is a different question: it names no experiment,
+  changes with a `git checkout`, and reports a candidate for any unrelated
+  branch.
+- **Scanning task text for a batch citation.** `.ai-tasks/` is machine-local
+  and close-out archives tasks away, so the scan finds nothing on a fresh clone
+  and less as time passes. The experiment record names its own tasks, so the
+  lineage does not depend on those files still being there.
+
+### Guarded operations
+
+Each of the operations above — grouped admission, draft rejection, `revise`,
+`add-tasks`, abandon, supersede, and `conclude-no-change` — writes several
+places at once: the experiment ref, a versioned record, `.ai-tasks/` and its
+index, the audit ledger. They take the same single-writer lock as import and
+freeze, they write in an order where the durable record is what makes the
+operation real, and every step is safe to redo, so an interrupted operation is
+finished by the next run rather than repaired by hand. Any state they cannot
+account for — a second current batch, a second open experiment, an experiment
+whose base is not the batch's, a ref that is not where its record says, a draft
+already consumed, an unreadable record — stops the operation with what it
+found, instead of picking one reading and continuing.
 
 ## Evolution task requirements
 
 Every evolution task must:
 
 - Cite this contract and, after batching, one immutable batch ID.
-- State its runner protocol revision; change tasks also state the candidate
-  baseline.
+- State its runner protocol revision; change tasks also state the batch's base
+  revision, and the experiment and draft id they were admitted from.
 - Use only reports named by the batch manifest for batch-level claims.
 - Keep report content out of the taskfile except bounded summaries and
   references.
@@ -181,7 +389,9 @@ Every evolution task must:
 A protocol-improvement task is not promotion proof. Its canary or replay must
 record:
 
-- Baseline and candidate revisions.
+- The batch's base revision, and the experiment and round whose candidate
+  revision was exercised. Evidence that names an experiment but not a round
+  says nothing after the next `revise`.
 - Eligible cohort and exclusions.
 - Evaluator/rubric revision.
 - Expected directional changes.
@@ -190,4 +400,7 @@ record:
 - Regressions, ambiguity, and rollback decision.
 
 Promotion updates canonical source through the ordinary reviewed workflow and
-then uses `aii-2 deploy`; deployed target files are never edited directly.
+then uses `aii-2 deploy`; deployed target files are never edited directly. The
+promotion revision it produces is a commit on the source line, distinct from the
+candidate tip that was measured, and distinct again from the effective revision
+each target reaches only when it is redeployed.

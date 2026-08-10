@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-native-development.local/evolution/ledger-record.schema.json",
   "title": "Evolution ledger record",
+  "description": "One sanitized audit line. The ledger records that an event happened; it is never the state store, so no reading of the lifecycle depends on a record being here. `record_type` is the vocabulary of events this controller writes, and it is widened by the task that first writes a new one — a name reserved ahead of the operation only promises an event nothing emits.",
   "type": "object",
   "required": [
     "record_type",
@@ -16,12 +17,13 @@
         "report-rejected",
         "batch-frozen",
         "batch-analyzed",
-        "candidate-admitted",
-        "candidate-rejected",
-        "experiment-completed",
-        "candidate-promoted",
-        "candidate-revised",
-        "candidate-reverted"
+        "experiment-created",
+        "tasks-admitted",
+        "draft-rejected",
+        "experiment-revised",
+        "experiment-abandoned",
+        "experiment-superseded",
+        "batch-concluded"
       ]
     },
     "schema_version": {
@@ -37,10 +39,21 @@
     "batch_id": {
       "type": "string"
     },
+    "experiment_id": {
+      "type": "string"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "draft_id": {
+      "type": "string"
+    },
     "task_id": {
       "type": "string"
     },
     "revision": {
+      "description": "The commit the event turned on: an experiment's base at creation, the round's pinned candidate at a revision or a terminal decision, the promotion revision at a promoted conclusion.",
       "type": [
         "string",
         "null"
@@ -50,6 +63,7 @@
       "type": "string"
     },
     "detail": {
+      "description": "One bounded reason code authored by this package — a freeze trigger, a rejection reason, a batch outcome. Never material fetched from a feed.",
       "type": "string"
     }
   },

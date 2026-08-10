@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/rejected-drafts.schema.json",
+  "title": "Evolution drafts declined at the admission gate",
+  "description": "The drafts a human declined rather than admitted, for one batch. Committed, because whether a draft is still waiting at the gate is derived from what took it or turned it down — not from the directory still holding the file, and not from the ledger, which records that events happened and is never read back as state. Without this record a declined proposal waits at the gate forever.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "rejected"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}$"
+    },
+    "rejected": {
+      "description": "Append-only. A draft id appears at most once here and never also in an experiment: admitting and declining are both terminal for that proposal, and re-proposing the idea means a new draft id.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rejection"
+      }
+    }
+  },
+  "$defs": {
+    "rejection": {
+      "type": "object",
+      "required": [
+        "draft_id",
+        "draft_sha256",
+        "rejected_at",
+        "reason"
+      ],
+      "properties": {
+        "draft_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "draft_sha256": {
+          "description": "The bytes declined. A later draft proposing the same thing is a different proposal, and this is what says so.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "rejected_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

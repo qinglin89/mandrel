@@ -26,12 +26,18 @@ from .schema import load_schema, validate_or_raise
 LEDGER_SCHEMA_VERSION = 1
 
 # Written in schema order so appended lines match the ones already in the file.
+# `build_record` drops anything absent from this tuple, so a field added to
+# `ledger-record.schema.json` and not added here is silently discarded on the
+# way out — the two lists move together.
 FIELD_ORDER = (
     "record_type",
     "schema_version",
     "recorded_at",
     "report_key",
     "batch_id",
+    "experiment_id",
+    "round",
+    "draft_id",
     "task_id",
     "revision",
     "disposition",
