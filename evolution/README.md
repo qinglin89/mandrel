@@ -438,7 +438,22 @@ successor first would leave two open experiments instead, which no reading can
 arbitrate and invariant 14 refuses outright. So a `superseded` decision whose
 successor is not there yet is not a broken record: it is that interruption, it
 is derived and reported as such, and every operation but its own redo refuses
-while the batch is in it.
+while the batch is in it. That reading is for a batch whose cycle is still
+running, and it ends with the batch: an outcome recorded over one is a
+contradiction the records refuse (Batch outcome).
+
+A decision may name the attempt it is about, and one shape needs it to. An
+untouched successor standing open under a supersession recorded for the very same
+reason answers two requests at once — that supersession redone, and this
+successor superseded in its turn — because the human reason is the only thing
+between them and both spell it identically. Unnamed, it is read as the redo,
+which writes nothing; named, each is exactly what it says. A reason is evidence
+for a later reader, not the identity of an operation, so where the two readings
+diverge the request states which attempt it ends. Given, the name is a
+precondition rather than a lookup: an attempt this batch never had, or one older
+than the attempt that ended, refuses instead of acting on whatever happens to be
+open, and naming an attempt that already ended asks to finish that decision — so
+it holds to that decision's own outcome and reason.
 
 Abandoning or superseding discards nothing that was learned: the record keeps
 the base, every round, every task selection, and every candidate revision, and
@@ -464,7 +479,12 @@ A `no-change` batch holds no experiment recording a promotion — that pair says
 both that the source line moved and that it did not, and it is the contradiction
 with nothing to name, so checking the named experiment alone never sees it. A
 `promoted` batch holds exactly one, it is the one the outcome names, and the two
-name the same promotion revision.
+name the same promotion revision. Nor does either kind conclude over a
+supersession still owing its successor: an attempt nobody created has not ended,
+and that state is looked for in the batch that is current — so an outcome over it
+ends the cycle on an attempt that does not exist and simultaneously puts it
+beyond the redo that would finish it, with `status` no longer reporting it and
+the next cohort released over it.
 
 `no-change` is therefore written over a batch with nothing left open: its
 analysis stage has ended, no experiment is open, no attempt records a promotion,
@@ -519,19 +539,25 @@ nobody left to say so. A ref this checkout simply does not hold is not that: it
 is the ordinary state of every clone that never fetched the namespace, and it
 stops nothing.
 
-That lock covers this package's own runs, and the two round transitions need
-more than it. Both are decided from one reading of where the experiment ref
-stands — the tip a seal pins, the pinned revision a revision opens the next round
-from — while what ordinarily advances that ref is a fetch, a push, or an
-operator's own `update-ref`. A commit arriving between that reading and the
-record would be pinned as a candidate whose ancestry nothing asked about, or
-taken up as the new round's work, which leaves a commit made under a round that
-had already been measured indistinguishable from one made after it — the very
-ordering that lets replay evidence name one pinned tree. Reading again afterwards
-recovers neither, since the records that would disagree are the ones being
-written. So a seal and a revision are recorded under Git's own lock on that ref,
-held at the revision they read; one that cannot be held there records nothing and
-is decided again from where the ref now stands.
+That lock covers this package's own runs, and the two round transitions and both
+terminal decisions need more than it. Each is decided from one reading of where
+the experiment ref stands — the tip a seal pins, the pinned revision a revision
+opens the next round from, the ref state an ending is recorded over — while what
+ordinarily advances that ref is a fetch, a push, or an operator's own
+`update-ref`. A commit arriving between that reading and the record would be
+pinned as a candidate whose ancestry nothing asked about, or taken up as the new
+round's work, which leaves a commit made under a round that had already been
+measured indistinguishable from one made after it — the very ordering that lets
+replay evidence name one pinned tree. An ending loses something else again, and
+loses it for good: the ref is described only while its experiment is open, so the
+decision is the last reading anyone takes of it, and a ref leaving its pinned
+history in that gap has its disagreement retired by the very write that follows
+the check. Reading again afterwards recovers none of them, since the records that
+would disagree are the ones being written. So a seal, a revision, and a terminal
+decision are recorded under Git's own lock on that ref, held at the revision they
+read; one that cannot be held there records nothing and is decided again from
+where the ref now stands. A supersession's successor works on a ref of its own,
+which that hold neither covers nor stands in the way of creating.
 
 That order is the same throughout. The experiment ref goes first, because it is
 the one thing that must never be created twice or restored afterwards: a clone
@@ -592,10 +618,12 @@ that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert
 task file described above, a task id admitted twice, a file at an admitted task's
 id that is not its copy, a second decision about a proposal already declined, a
-second decision about an attempt that has already ended, a batch owing the
-successor a supersession recorded — to anything but that supersession redone — a
-`no-change` conclusion over an open attempt, over one that records a promotion,
-or over a gate where a proposal is still waiting, a
+second decision about an attempt that has already ended, a decision naming an
+attempt the batch never had or one older than the attempt that ended, a batch
+owing the successor a supersession recorded — to anything but that supersession
+redone — a `no-change` conclusion over an open attempt, over one that records a
+promotion, or over a gate where a proposal is still waiting, an outcome of either
+kind over a batch owing a successor, a
 `superseded` decision naming anything but the successor it created, an outcome
 that disagrees with the experiments about a promotion, an unreadable record —
 stops the operation with what it found, instead of picking one reading and

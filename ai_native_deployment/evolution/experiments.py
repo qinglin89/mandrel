@@ -597,7 +597,7 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
         # Every ref question this seal depends on is answered before the hold,
         # and the pin is what the hold is taken at: what was checked is then what
         # is still there when the record naming it lands.
-        with _unmoved(config, experiment, candidate, "seal"):
+        with _unmoved(config, experiment, candidate, "a seal is decided from where that ref stood and pins it"):
             tasks, observed = _observe_completions(config, current, experiment, round_, observed_at=stamp)
             sealed = replace(round_, tasks=tasks, seal=Seal(sealed_at=stamp, candidate_revision=candidate))
             updated = replace(experiment, rounds=experiment.rounds[:-1] + (sealed,))
@@ -667,7 +667,12 @@ def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None)
         # namespace. A commit arriving between the two would be adopted as the
         # new round's work, and a commit made under a round that was already
         # measured is the one thing this record must not be able to absorb.
-        with _unmoved(config, experiment, current.ref.tip if current.ref is not None else None, "revision"):
+        with _unmoved(
+            config,
+            experiment,
+            current.ref.tip if current.ref is not None else None,
+            "a revision is decided from where that ref stood and opens a round over it",
+        ):
             _write_record(config, updated)
             append_records(
                 config,
@@ -753,7 +758,13 @@ def _no_open_experiment(current: BatchLineage, action: str) -> BatchError:
 # --- terminal decisions ------------------------------------------------------
 
 
-def abandon(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> DecisionResult:
+def abandon(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    experiment_id: str | None = None,
+    now: datetime | None = None,
+) -> DecisionResult:
     """End the open experiment, without replacing it.
 
     Nothing is discarded: the record keeps the base, every round, every task
@@ -766,12 +777,20 @@ def abandon(config: EvolutionConfig, *, reason: str, now: datetime | None = None
     candidate-ready one. An attempt dropped before it produced anything records
     no candidate rather than having one invented for it, which is invariant 7's
     rule applied to an experiment.
+
+    `experiment_id` names the attempt this decision is about (see `_end_attempt`).
     """
 
-    return _end_attempt(config, DECISION_ABANDONED, reason, now=now)
+    return _end_attempt(config, DECISION_ABANDONED, reason, experiment_id=experiment_id, now=now)
 
 
-def supersede(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> DecisionResult:
+def supersede(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    experiment_id: str | None = None,
+    now: datetime | None = None,
+) -> DecisionResult:
     """Replace the open experiment with a fresh attempt at the same change.
 
     One operation rather than two, because only one experiment may be open
@@ -784,9 +803,13 @@ def supersede(config: EvolutionConfig, *, reason: str, now: datetime | None = No
     round opens empty: which proposals answer the new approach is the next
     question, and a successor that cannot exist until they are written is an
     attempt that cannot be started when it is decided.
+
+    `experiment_id` names the attempt this decision is about (see `_end_attempt`),
+    which is what tells a supersession redone from an untouched successor
+    superseded in its turn.
     """
 
-    return _end_attempt(config, DECISION_SUPERSEDED, reason, now=now)
+    return _end_attempt(config, DECISION_SUPERSEDED, reason, experiment_id=experiment_id, now=now)
 
 
 def _end_attempt(
@@ -794,6 +817,7 @@ def _end_attempt(
     outcome: str,
     reason: str,
     *,
+    experiment_id: str | None,
     now: datetime | None,
 ) -> DecisionResult:
     """Record a terminal decision on the open experiment, and whatever it creates.
@@ -804,7 +828,19 @@ def _end_attempt(
     reported only for the *open* experiment, so a decision recorded over one
     retires the finding along with the attempt. What can no longer be seen can
     no longer be resolved, and the revisions that record pins would quietly stop
-    being reachable.
+    being reachable. That is also why the decision is written while the ref is
+    held where the check found it: the disagreement this refuses is one a commit
+    arriving a moment later would make permanent.
+
+    `experiment_id` is optional and names the attempt this decision is about. Two
+    readings otherwise collide, and only in one shape: an untouched successor
+    standing open under a supersession recorded for the very same reason is both
+    "that supersession, redone" and "supersede this successor in its turn". Left
+    unnamed, it is read as the redo, which writes nothing — the safe direction.
+    Named, it is exactly what it says, so both are expressible: a human reason is
+    evidence, not the identity of an operation. It is a precondition wherever it
+    is given, so a request built against a lineage that has since moved on
+    refuses instead of ending an attempt nobody was looking at.
     """
 
     moment = _moment(now)
@@ -819,8 +855,10 @@ def _end_attempt(
         # A supersession finishes its own interrupted run, so it is the one
         # operation that may act on a batch owing a successor.
         current = _current_cycle(config, now=moment, finishing=outcome == DECISION_SUPERSEDED)
+        named = _named_attempt(current, experiment_id)
         experiment = current.open_experiment
         if experiment is None:
+            _require_named_ending(current, named)
             if outcome == DECISION_SUPERSEDED and current.pending_successor is not None:
                 return _finish_supersession(config, current, text, now=moment)
             return _redo_decision(current, outcome, text)
@@ -829,32 +867,126 @@ def _end_attempt(
         # "already done" is what would hide it — the ordering a grouped
         # admission and a seal already follow.
         _require_consistent_ref(current)
-        if outcome == DECISION_SUPERSEDED:
+        if named is not None and not named.open:
+            # A decision explicitly about an attempt that has already ended can
+            # only be the supersession that created the one now open, redone.
+            return _require_redone_supersession(current, experiment, named, outcome, text)
+        if outcome == DECISION_SUPERSEDED and named is None:
             redone = _superseded_already(current, experiment, text)
             if redone is not None:
                 return redone
 
         stamp = format_rfc3339(moment)
-        successor = (
-            _successor(config, current, experiment, reason=text, created_at=stamp)
-            if outcome == DECISION_SUPERSEDED
-            else None
-        )
-        if successor is not None:
-            # The ref first, as everywhere here: it is the one thing that must
-            # never be created twice or restored later, and a ref standing at the
-            # base with no record yet is inert and adoptable.
-            _create_experiment_ref(config, successor)
-        _decide(config, experiment, outcome, text, decided_at=stamp, successor=successor)
-        if successor is not None:
-            # After the decision, never before it. The other order leaves two
-            # open experiments if it is interrupted, which no reading can
-            # arbitrate; this one leaves a successor that is merely owed, which
-            # the same operation redone finishes.
-            _publish_record(config, successor)
+        # Held from here until the last record lands, at the tip the check above
+        # was answered for. After this decision nothing describes that ref again.
+        with _unmoved(
+            config,
+            experiment,
+            current.ref.tip if current.ref is not None else None,
+            "a terminal decision is the last reading anyone takes of that ref, and it is taken on where the ref "
+            "stood",
+        ):
+            successor = (
+                _successor(config, current, experiment, reason=text, created_at=stamp)
+                if outcome == DECISION_SUPERSEDED
+                else None
+            )
+            if successor is not None:
+                # The ref first, as everywhere here: it is the one thing that must
+                # never be created twice or restored later, and a ref standing at
+                # the base with no record yet is inert and adoptable. It is a ref
+                # of its own, so the hold on the ending attempt's does not cover
+                # it and does not stand in its way.
+                _create_experiment_ref(config, successor)
+            _decide(config, experiment, outcome, text, decided_at=stamp, successor=successor)
+            if successor is not None:
+                # After the decision, never before it. The other order leaves two
+                # open experiments if it is interrupted, which no reading can
+                # arbitrate; this one leaves a successor that is merely owed,
+                # which the same operation redone finishes.
+                _publish_record(config, successor)
 
-        append_records(config, _decision_records(current, experiment, successor, outcome, recorded_at=stamp))
+            append_records(config, _decision_records(current, experiment, successor, outcome, recorded_at=stamp))
         return _decided(current, experiment, outcome, text, stamp, successor=successor, created=True)
+
+
+def _named_attempt(current: BatchLineage, experiment_id: str | None) -> Experiment | None:
+    """The experiment a request named, or None when it named none.
+
+    An id this batch does not have is refused rather than ignored: it is a
+    request about a lineage other than the one in front of it — another batch's
+    attempt, a mistyped ordinal, or an experiment whose record is gone — and
+    silently acting on whatever is open is how the wrong attempt gets ended.
+    """
+
+    if experiment_id is None:
+        return None
+    for experiment in current.experiments:
+        if experiment.experiment_id == experiment_id:
+            return experiment
+    known = [experiment.experiment_id for experiment in current.experiments]
+    raise BatchError(
+        f"{current.batch_id} has no experiment {experiment_id!r}; its attempts are {known or 'none yet'} — a "
+        "decision names the attempt it ends, and an id this batch never allocated names none of them"
+    )
+
+
+def _require_named_ending(current: BatchLineage, named: Experiment | None) -> None:
+    """A decision named while nothing is open is about the attempt that ended.
+
+    Which is the newest one, always: ordinals run 1..N and only the newest may be
+    open, so with none open the last is what any decision here can be finishing.
+    """
+
+    if named is None:
+        return
+    last = current.experiments[-1] if current.experiments else None
+    if last is not None and named.experiment_id == last.experiment_id:
+        return
+    raise BatchError(
+        f"{named.experiment_id} is not the attempt {current.batch_id} last ended"
+        + (f" ({last.experiment_id})" if last is not None else "")
+        + "; a terminal decision is recorded once and never edited, so what a decision naming an earlier attempt "
+        "would say is already on record"
+    )
+
+
+def _require_redone_supersession(
+    current: BatchLineage,
+    experiment: Experiment,
+    named: Experiment,
+    outcome: str,
+    reason: str,
+) -> DecisionResult:
+    """The supersession that created the open attempt, named and redone.
+
+    Naming an attempt that has already ended asks for one thing only: to finish
+    the decision that ended it. So it holds to exactly the shape a redo has —
+    this outcome, this reason, and a successor that is the experiment now open —
+    and refuses anything else rather than quietly ending the open attempt in its
+    place, which is the mistake naming a target exists to make impossible.
+
+    Whether anything has been admitted into that successor since is not part of
+    the shape here, though it is for the unnamed reading: what makes the request
+    a redo is that it names the attempt already decided, and work done in the
+    replacement neither completes nor undoes the decision that created it.
+    """
+
+    decision = named.decision
+    if (
+        outcome == DECISION_SUPERSEDED
+        and decision is not None
+        and decision.outcome == DECISION_SUPERSEDED
+        and decision.superseded_by == experiment.experiment_id
+        and decision.reason == reason
+    ):
+        return _supersession_on_record(current, named, decision, experiment)
+    recorded = f"{decision.outcome!r} ({decision.reason!r})" if decision is not None else "no decision"
+    raise BatchError(
+        f"{named.experiment_id} already ended as {recorded}, and {experiment.experiment_id} is open; a decision "
+        f"is recorded once and never edited, so naming {named.experiment_id} asks to finish that one — to end "
+        f"the attempt that is open, name {experiment.experiment_id}"
+    )
 
 
 def _successor(
@@ -974,17 +1106,19 @@ def _superseded_already(
 ) -> DecisionResult | None:
     """This supersession, already done — or None, meaning it has not been.
 
-    The completed shape is exact: the attempt before this one ended as
-    `superseded` for this reason and named this experiment, and this experiment
-    is still the empty round 1 that supersession opened. Anything else is a new
-    decision about the attempt that is open, including superseding a successor
-    that has not been worked yet, which is an ordinary thing to want.
+    The reading a request that named no attempt gets. The completed shape is
+    exact: the attempt before this one ended as `superseded` for this reason and
+    named this experiment, and this experiment is still the empty round 1 that
+    supersession opened. Anything else is a new decision about the attempt that
+    is open, including superseding a successor that has been worked in, where
+    nothing about the request is ambiguous.
 
-    The one case it reads as a redo and is not: superseding an untouched
-    successor for the very words its own creation recorded. That is the tradeoff
-    a revision already makes for the same reason — the reason is what
-    distinguishes one decision from another, and two decisions phrased
-    identically are not distinguishable at all.
+    One shape answers to both readings — an untouched successor superseded for
+    the very words its own creation recorded — and unnamed it is read as the
+    redo, which writes nothing. That is the safe direction to be wrong in, and
+    it is not the only expressible one: naming the attempt says which was meant
+    (`_end_attempt`), since a human reason is evidence rather than the identity
+    of an operation.
     """
 
     if experiment.ordinal < 2:
@@ -998,13 +1132,29 @@ def _superseded_already(
     round_ = experiment.last_round
     if len(experiment.rounds) > 1 or round_.tasks or round_.seal is not None:
         return None
+    return _supersession_on_record(current, previous, decision, experiment)
+
+
+def _supersession_on_record(
+    current: BatchLineage,
+    superseded: Experiment,
+    decision: Decision,
+    successor: Experiment,
+) -> DecisionResult:
+    """A supersession that is complete, reported from what is written down.
+
+    Nothing is written and nothing is re-appended: the decision and the successor
+    are both on record, and the audit line an interruption may have cost is not
+    a second supersession's to claim.
+    """
+
     return _decided(
         current,
-        previous,
+        superseded,
         decision.outcome,
         decision.reason,
         decision.decided_at,
-        successor=experiment,
+        successor=successor,
         created=False,
         recorded=False,
     )
@@ -1330,12 +1480,12 @@ def _unmoved(
     config: EvolutionConfig,
     experiment: Experiment,
     revision: str | None,
-    transition: str,
+    requirement: str,
 ) -> Iterator[None]:
     """The experiment's ref, held where this operation read it, until its record
     says the same thing.
 
-    Both round transitions are decided from one reading of the ref and recorded
+    Every transition here is decided from one reading of the ref and recorded
     afterwards, and the gap between is not this package's to schedule: the
     single-writer lock covers evolution runs, while what advances an experiment
     ref is ordinary Git. A commit arriving in that gap costs a seal the property
@@ -1345,10 +1495,18 @@ def _unmoved(
     already been measured is left indistinguishable from one made after,
     which is exactly the ordering invariant 16 gives replay evidence.
 
-    Neither is recoverable by re-reading afterwards, because the records that
-    would disagree are the ones being written. So the ref is held: it either
-    stands where it was read for as long as the record takes to land, or this
-    refuses and nothing is written from a reading that has already expired.
+    A terminal decision loses something else again in that gap, and loses it
+    permanently. `BatchLineage.ref` describes the *open* experiment, so the
+    decision is the last reading of that ref anyone takes: a ref moving off the
+    pinned history between the check and the record is a disagreement the check
+    was there to catch, retired by the very write that follows it, with the
+    revisions the record pins left unreachable and nothing able to report it.
+
+    None of the three is recoverable by re-reading afterwards, because the
+    records that would disagree are the ones being written. So the ref is held:
+    it either stands where it was read for as long as the record takes to land,
+    or this refuses and nothing is written from a reading that has already
+    expired.
 
     An admission is not held this way, and should not be: it records no
     revision, the round it adds to is open, and a ref moving under an open round
@@ -1361,9 +1519,9 @@ def _unmoved(
         holding.enter_context(held_at(config.repo_root, experiment.ref, revision))
     except RefHoldError as exc:
         raise BatchError(
-            f"{experiment.experiment_id}: {exc}; a {transition} is decided from where that ref stood and pins or "
-            "opens a round around it, so it is recorded while the ref is held there rather than from a reading "
-            "that may already be stale — read the ref as it now stands and decide again"
+            f"{experiment.experiment_id}: {exc}; {requirement}, so it is recorded while the ref is held there "
+            "rather than from a reading that may already be stale — read the ref as it now stands and decide "
+            "again"
         ) from exc
     with holding:
         yield

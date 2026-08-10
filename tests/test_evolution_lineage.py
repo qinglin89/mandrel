@@ -1310,6 +1310,36 @@ def test_a_batch_cannot_conclude_over_an_open_experiment(config: evolution.Evolu
         lineage.describe(config)
 
 
+def test_a_batch_cannot_conclude_over_a_successor_nobody_created(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The same rule for the attempt that does not exist yet, and the harder half
+    to see: an attempt nobody created has not ended either.
+
+    The relaxation that keeps an interrupted supersession readable is for a batch
+    whose cycle is still running, where the redo can still finish it. An outcome
+    over one is where that stops: `status` would look for a pending successor
+    only in the current batch and find none, no operation could act on a batch
+    that has concluded, and the record ending the cycle would release the next
+    cohort over an attempt that was never started."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])],
+        decision=experiment_decision("superseded", superseded_by=EXP_02),
+    )
+    # While the batch is current the state is readable, which is what the redo
+    # depends on.
+    derived = only(config)
+    assert derived.current is True
+    assert derived.pending_successor == EXP_02
+
+    write_outcome(config.batches_root, BATCH_ID, reason="calling it here")
+    with pytest.raises(evolution.BatchError, match=f"superseded by {EXP_02}, which does not exist"):
+        lineage.describe(config)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

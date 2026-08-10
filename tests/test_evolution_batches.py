@@ -1452,6 +1452,40 @@ def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
     assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
 
 
+def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The same rule for the state an interrupted supersession leaves.
+
+    That state stays readable so the supersession can be redone — but only while
+    the batch is current. An outcome recorded over it ends the cycle on an attempt
+    that does not exist, and once the batch is no longer current nothing looks for
+    that successor again: the freeze reading the record's own shape would form the
+    next cohort over an unfinished operation nobody can now finish.
+    """
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    batch_id = first.batch_id or ""
+    close_analysis(config, batch_id)
+    write_experiment(
+        config.experiments_root,
+        f"{batch_id}-exp-01",
+        rounds=[experiment_round(1, candidate_revision="e" * 40)],
+        decision=experiment_decision("superseded", superseded_by=f"{batch_id}-exp-02"),
+    )
+    write_outcome(config.batches_root, batch_id, reason="calling it here")
+    later = [
+        make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
+        for index in range(1, TARGET + 1)
+    ]
+    evolution.sync(config, write_feed(feed_root, later))
+
+    with pytest.raises(evolution.BatchError, match="which does not exist"):
+        freeze(config, now=NOW + timedelta(days=1))
+
+    assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
+
+
 def test_allocation_counts_from_the_highest_id_ever_used(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:

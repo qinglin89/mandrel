@@ -2357,6 +2357,267 @@ def test_the_phase_names_the_successor_a_supersession_owes(
     assert f"{EXP_01} named {EXP_02}, which was never created" in render.format_status(status)
 
 
+# --- a ref that moves while an attempt is being ended -------------------------
+
+
+ENDINGS = [
+    pytest.param(
+        lambda config: experiments.abandon(config, reason="the loader order cannot be fixed", now=LATEST),
+        id="abandon",
+    ),
+    pytest.param(
+        lambda config: experiments.supersede(config, reason="the hook-side approach replaces it", now=LATEST),
+        id="supersede",
+    ),
+]
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_ending_an_attempt_refuses_a_ref_that_moved_since_it_was_read(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch, ending
+) -> None:
+    """The worst instance of that gap, because it is the one nothing can report
+    afterwards. `BatchLineage.ref` describes the open experiment, so a decision
+    is the last reading anyone takes of that ref: a commit landing between the
+    check and the record retires the disagreement along with the attempt, and
+    the revisions the record pins stop being reachable with nobody left to say
+    so."""
+
+    pinned = seal(config, ["loader-fallback"])
+    landed = arrives_after_the_derivation(monkeypatch, config, experiments.experiment_ref(EXP_01))
+
+    with pytest.raises(evolution.BatchError, match="a terminal decision is the last reading anyone takes"):
+        ending(config)
+
+    assert record(config, EXP_01)["decision"] is None
+    assert not (config.experiments_root / EXP_02).exists()
+    assert ledger_types(config)[-1] == "round-sealed"
+
+    # And it stays visible, which is the whole point: the attempt is still open,
+    # so the ref standing off its pinned round is still described and still
+    # refused.
+    derived = lineage.describe(config).current
+    assert derived.ref is not None
+    assert derived.ref.tip == landed[0] != pinned
+    assert derived.ref.consistent is False
+    with pytest.raises(evolution.BatchError, match="moved past a candidate-ready round|not on the history"):
+        ending(config)
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_nothing_outside_can_move_the_ref_while_a_decision_is_written(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch, ending
+) -> None:
+    """The other side of the same guarantee: while the decision is being written,
+    Git itself refuses the update that would open the gap."""
+
+    pinned = seal(config, ["loader-fallback"])
+    ref = experiments.experiment_ref(EXP_01)
+
+    decide = experiments._decide
+    refused: list[str | None] = []
+
+    def probe(*args, **kwargs):
+        arriving = git_commit(config.repo_root, "work arriving mid-decision")
+        refused.append(git_try_update_ref(config.repo_root, ref, arriving))
+        return decide(*args, **kwargs)
+
+    monkeypatch.setattr(experiments, "_decide", probe)
+    result = ending(config)
+
+    assert refused[0] is not None and "cannot lock ref" in refused[0]
+    assert result.recorded is True
+    assert git_rev(config.repo_root, ref) == pinned
+
+
+def test_a_supersession_creates_its_successor_while_the_ended_ref_is_held(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The hold is on the attempt being ended, and the successor works on a ref
+    of its own — so the ref that must not move is held for the whole write while
+    the ref that must be created still can be."""
+
+    pinned = seal(config, ["loader-fallback"])
+    base = record(config, EXP_01)["base_revision"]
+
+    result = experiments.supersede(config, reason="the hook-side approach replaces it", now=LATEST)
+
+    assert result.successor_created is True
+    assert git_rev(config.repo_root, result.successor_ref or "") == base
+    assert git_rev(config.repo_root, experiments.experiment_ref(EXP_01)) == pinned
+
+
+def test_the_ref_is_let_go_once_the_attempt_has_ended(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Held for the decision, not beyond it. The record has said everything it
+    is going to say about that ref, and what happens to it afterwards — a merge
+    of the abandoned candidate, a fetch — is nobody's finding here."""
+
+    seal(config, ["loader-fallback"])
+    experiments.abandon(config, reason="the loader order cannot be fixed", now=LATEST)
+
+    ref = experiments.experiment_ref(EXP_01)
+    assert git_try_update_ref(config.repo_root, ref, git_commit(config.repo_root, "later work")) is None
+
+
+def test_ending_an_attempt_holds_a_ref_this_checkout_does_not_have(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An absent `refs/evolution/*` is the ordinary state of a clone that never
+    fetched the namespace, and a decision is still recorded there. What is held
+    is then the absence, so a ref arriving mid-decision is the same interleaving
+    refused from the other side."""
+
+    seal(config, ["loader-fallback"])
+    git_delete_ref(config.repo_root, experiments.experiment_ref(EXP_01))
+
+    result = experiments.abandon(config, reason="the loader order cannot be fixed", now=LATEST)
+
+    assert result.recorded is True
+    assert record(config, EXP_01)["decision"]["outcome"] == "abandoned"
+
+
+# --- which attempt a decision is about ---------------------------------------
+
+
+def test_a_decision_may_name_the_attempt_it_ends(config: evolution.EvolutionConfig, batch: Path) -> None:
+    """A precondition, not a lookup: the request states which attempt it was
+    built against, and an operator acting on a lineage that has since moved on
+    finds that out instead of ending whatever happens to be open."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+
+    result = experiments.abandon(config, reason="the disposition was wrong", experiment_id=EXP_01, now=LATER)
+
+    assert result.experiment_id == EXP_01
+    assert record(config, EXP_01)["decision"]["outcome"] == "abandoned"
+
+
+def test_a_decision_naming_an_attempt_this_batch_never_had_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    experiments.create(config, ["loader-fallback"], now=NOW)
+
+    with pytest.raises(evolution.BatchError, match="has no experiment"):
+        experiments.abandon(config, reason="drop it", experiment_id=EXP_02, now=LATER)
+
+    assert record(config, EXP_01)["decision"] is None
+
+
+def test_naming_an_attempt_that_already_ended_asks_to_finish_that_decision(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The ambiguity the name resolves, from the redo side: the request is about
+    the attempt that ended, so it holds to that decision's own outcome and
+    reason rather than quietly ending the successor standing open."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
+
+    result = experiments.supersede(
+        config,
+        reason="the hook-side approach replaces it",
+        experiment_id=EXP_01,
+        now=LATEST,
+    )
+
+    assert result.recorded is False
+    assert result.successor_created is False
+    assert result.experiment_id == EXP_01
+    assert result.successor_id == EXP_02
+    assert not (config.experiments_root / f"{BATCH_ID}-exp-03").exists()
+
+
+def test_naming_the_open_successor_supersedes_it_for_the_very_same_reason(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The reported finding: unnamed, this shape reads as the predecessor's
+    supersession redone, because a human reason is the only thing telling the
+    two apart and both spell it identically. Named, both are expressible — and
+    this one is a new decision about the attempt that is open."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
+
+    unnamed = experiments.supersede(config, reason="the hook-side approach replaces it", now=LATEST)
+    assert unnamed.recorded is False
+    assert unnamed.experiment_id == EXP_01
+
+    result = experiments.supersede(
+        config,
+        reason="the hook-side approach replaces it",
+        experiment_id=EXP_02,
+        now=LATEST,
+    )
+
+    assert result.recorded is True
+    assert result.experiment_id == EXP_02
+    assert result.successor_id == f"{BATCH_ID}-exp-03"
+    assert record(config, EXP_02)["decision"]["reason"] == "the hook-side approach replaces it"
+    assert record(config, f"{BATCH_ID}-exp-03")["rounds"][0]["tasks"] == []
+
+
+def test_a_named_redo_holds_to_the_decision_that_is_on_record(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Naming the attempt that ended asks to finish its decision, so a different
+    reason is refused rather than applied to the attempt that is open — which is
+    the mistake naming a target exists to make impossible."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
+
+    with pytest.raises(evolution.BatchError, match="already ended as 'superseded'"):
+        experiments.supersede(config, reason="something else entirely", experiment_id=EXP_01, now=LATEST)
+    with pytest.raises(evolution.BatchError, match="already ended as 'superseded'"):
+        experiments.abandon(config, reason="the hook-side approach replaces it", experiment_id=EXP_01, now=LATEST)
+
+    assert record(config, EXP_02)["decision"] is None
+    assert record(config, EXP_01)["decision"]["outcome"] == "superseded"
+
+
+def test_a_decision_naming_an_attempt_older_than_the_one_that_ended_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """With nothing open, the only decision left to finish is the newest
+    attempt's: everything before it is history a second decision never edits."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
+    experiments.abandon(config, reason="the hook side turned out worse", now=LATEST)
+
+    with pytest.raises(evolution.BatchError, match="is not the attempt"):
+        experiments.abandon(config, reason="the loader order cannot be fixed", experiment_id=EXP_01, now=LATEST)
+
+
+def test_a_named_supersession_still_finishes_the_successor_it_owes(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interrupted state has no ambiguity to resolve — nothing is open — so
+    naming the attempt that owes the successor is the same request as before."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    monkeypatch.setattr(
+        experiments,
+        "_publish_record",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    with pytest.raises(OSError):
+        experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
+    monkeypatch.undo()
+
+    result = experiments.supersede(
+        config,
+        reason="the hook-side approach replaces it",
+        experiment_id=EXP_01,
+        now=LATEST,
+    )
+
+    assert result.successor_created is True
+    assert lineage.describe(config).current.open_experiment.experiment_id == EXP_02
+
+
 # --- concluding the batch ----------------------------------------------------
 
 

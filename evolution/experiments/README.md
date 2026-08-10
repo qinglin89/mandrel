@@ -51,9 +51,15 @@ same operation, at the batch's base, with an empty round 1 that a later
 admission fills. That decision is recorded before the successor exists, because
 the interruption that leaves a successor merely owed is one state a reader can
 describe and the same supersession can finish, while the opposite order leaves
-two open experiments and no way to tell which is which. Either decision is
-refused while the ref stands off the history the record pins: after an attempt
-ends, nothing describes its ref any more.
+two open experiments and no way to tell which is which. That readable state
+belongs to a batch still running: a batch outcome recorded over one concludes on
+an attempt nobody created and is refused. Either decision is refused while the
+ref stands off the history the record pins, and is recorded while that ref is
+held there — after an attempt ends nothing describes its ref again, so a
+disagreement arriving in that gap would be retired unseen along with the attempt.
+A decision may also name the attempt it ends, which is what tells a supersession
+redone from an untouched successor superseded in its turn: the two are otherwise
+distinguishable only by a human reason both spell identically.
 
 An implementation task is not evidence of improvement; promotion depends on a
 completed replay or canary record naming the base revision, the experiment, and

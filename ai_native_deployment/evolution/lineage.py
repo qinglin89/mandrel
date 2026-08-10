@@ -38,7 +38,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from . import analysis_task
 from .config import (
@@ -357,12 +357,13 @@ class BatchLineage:
 
         It can only ever be the newest experiment: ordinals run 1..N and a
         successor is N+1, so an existing successor would itself be the newest.
+
+        Only a current batch can be in this state. A concluded one carrying it is
+        refused as it is read (`_require_ended_attempts`), because a batch that
+        ended is no longer where anyone looks for an unfinished operation.
         """
 
-        if not self.experiments:
-            return None
-        decision = self.experiments[-1].decision
-        return decision.superseded_by if decision is not None else None
+        return _pending_successor(self.experiments)
 
 
 @dataclass(frozen=True)
@@ -613,12 +614,8 @@ def _batch_lineage(
     open_experiment = open_experiments[0] if open_experiments else None
 
     outcome = read_outcome(config, batch)
-    if outcome is not None and open_experiment is not None:
-        raise BatchError(
-            f"{batch.outcome_path}: this batch has concluded, but {open_experiment.experiment_id} carries no "
-            "decision; a batch's outcome is recorded after its last experiment ends, never over an open one"
-        )
     if outcome is not None:
+        _require_ended_attempts(batch, experiments, open_experiment, outcome)
         _require_one_promotion(batch, experiments, outcome)
 
     return BatchLineage(
@@ -695,6 +692,11 @@ def _require_named_successors(experiments: tuple[Experiment, ...]) -> None:
     raises, so the operation that would finish it cannot run either.
     `BatchLineage.pending_successor` names that state instead, and the guarded
     operations refuse on it (`experiments.py`) rather than the reader.
+
+    That relaxation is for a batch still running, and `_require_ended_attempts`
+    is where it ends: an outcome recorded over a successor nobody created has
+    concluded a cohort whose newest attempt does not exist, and there is no
+    recoverable reading of that to preserve.
     """
 
     for experiment in experiments:
@@ -732,6 +734,57 @@ def _require_one_task_per_admission(batch: Batch, experiments: Iterable[Experime
                     "task implements one proposal, and a second draft admitted into it means a task id nothing "
                     "can be traced through"
                 )
+
+
+def _require_ended_attempts(
+    batch: Batch,
+    experiments: tuple[Experiment, ...],
+    open_experiment: Experiment | None,
+    outcome: Mapping[str, Any],
+) -> None:
+    """A batch's outcome is recorded after its last attempt ends — and an attempt
+    that was never created has not ended either.
+
+    Two shapes of the same contradiction. An open experiment under an outcome is
+    the obvious one. The other is a supersession that recorded its decision and
+    not the successor it names: that state is deliberately readable so the
+    operation can be redone (`_require_named_successors`), but the relaxation is
+    for a batch whose cycle is still running. An outcome over one concludes a
+    cohort whose newest attempt does not exist — and it concludes it invisibly,
+    because a batch that is no longer current is no longer where anything looks
+    for a pending successor, so the redo that would finish it can no longer run
+    and the next cohort is released over the wreckage.
+    """
+
+    if open_experiment is not None:
+        raise BatchError(
+            f"{batch.outcome_path}: this batch has concluded, but {open_experiment.experiment_id} carries no "
+            "decision; a batch's outcome is recorded after its last experiment ends, never over an open one"
+        )
+    successor = _pending_successor(experiments)
+    if successor is not None:
+        raise BatchError(
+            f"{batch.outcome_path}: this batch has concluded, while {experiments[-1].experiment_id} was "
+            f"superseded by {successor}, which does not exist; an attempt nobody created has not ended either — "
+            "remove this outcome, redo that supersession to finish it, and conclude the batch over what it "
+            "actually did"
+        )
+
+
+def _pending_successor(experiments: Sequence[Experiment]) -> str | None:
+    """The successor a supersession recorded but had not created yet, from a
+    batch's experiments alone.
+
+    Read from the newest experiment only, and that is the whole of it: ordinals
+    run 1..N and a successor is N+1, so an existing successor would itself be the
+    newest. `BatchLineage.pending_successor` is the same answer for a lineage
+    that is already built; this is it for one still being checked.
+    """
+
+    if not experiments:
+        return None
+    decision = experiments[-1].decision
+    return decision.superseded_by if decision is not None else None
 
 
 def _require_one_promotion(
