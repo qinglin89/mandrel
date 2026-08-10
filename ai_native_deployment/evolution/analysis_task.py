@@ -23,6 +23,7 @@ from pathlib import Path
 from .config import EvolutionConfig
 from .errors import EvolutionError
 from .schema import format_rfc3339
+from .state import atomic_write_text
 
 TASKS_DIRNAME = ".ai-tasks"
 INDEX_FILENAME = "index.md"
@@ -31,6 +32,10 @@ ARCHIVE_DIRNAME = "archive"
 TASK_ID_SUFFIX = "-analysis"
 CONTRACT_PATH = "evolution/README.md"
 PROPOSED_TASKS_DIRNAME = "proposed-tasks"
+
+# The taskfile lifecycle's terminal status. A task carrying it (or archived,
+# which is where close-out moves it) has finished; anything else is in flight.
+STATUS_COMPLETED = "completed"
 
 # One estimated session is one effective context window (taskfile schema). Ten
 # reports of bounded evaluation artifacts plus their clustering is about that;
@@ -103,6 +108,15 @@ def index_path(config: EvolutionConfig) -> Path:
     return tasks_root(config) / INDEX_FILENAME
 
 
+def existing_task_path(config: EvolutionConfig, task_id: str) -> Path | None:
+    """Where this task currently lives, active or archived, if anywhere."""
+
+    for path in (task_path(config, task_id), archived_task_path(config, task_id)):
+        if path.is_file():
+            return path
+    return None
+
+
 def task_exists(config: EvolutionConfig, task_id: str) -> bool:
     """Whether this task id is already taken, active or completed.
 
@@ -110,20 +124,78 @@ def task_exists(config: EvolutionConfig, task_id: str) -> bool:
     pending by a restarted freeze, which would reopen a closed decision.
     """
 
-    return task_path(config, task_id).is_file() or archived_task_path(config, task_id).is_file()
+    return existing_task_path(config, task_id) is not None
+
+
+def task_status(path: Path) -> str | None:
+    """The `status:` value in a task file's frontmatter, or None when the file
+    does not carry one.
+
+    None is the answer for an unreadable or shapeless file too, and callers are
+    expected to treat it as "not completed": a task whose lifecycle cannot be
+    read has not been shown to have finished.
+    """
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, separator, value = line.partition(":")
+        if separator and key.strip() == "status":
+            return value.strip() or None
+    return None
+
+
+def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:
+    """Refuse to treat an unrelated file at this task id as the generated task.
+
+    A freeze that finds the file present declares the step complete, so what is
+    at that path decides whether the batch has an analysis task at all. The
+    markers checked here are the ones no working session removes — the task's
+    own id, its heading, and the manifest it must analyze — so an ordinary
+    claimed and logged task passes while a truncated, replaced, or unrelated
+    file is reported instead of silently accepted.
+
+    Nothing is repaired: a file at this path may already carry a session log,
+    and overwriting one to satisfy a freeze would destroy the record it exists
+    to keep.
+    """
+
+    path = existing_task_path(config, spec.task_id)
+    if path is None:
+        return
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EvolutionError(f"cannot read the analysis task {path}: {exc}") from exc
+    missing = [marker for marker in _markers(spec) if marker not in text]
+    if not text.startswith("---") or missing:
+        raise EvolutionError(
+            f"{path} is not the analysis task generated for {spec.batch_id} (missing {missing or ['frontmatter']}); "
+            "restore it from the batch manifest, or remove the file so the next run can write it again"
+        )
 
 
 def write_task(config: EvolutionConfig, spec: AnalysisTaskSpec) -> Path:
-    """Create the task file. Never overwrites: an existing file may already
-    carry a session log, and a freeze has no business replacing one."""
+    """Create the task file, published whole.
+
+    Never overwrites: an existing file may already carry a session log, and a
+    freeze has no business replacing one. Written through a temporary file and
+    renamed into place, so an interruption leaves no partial task behind for a
+    later run to accept as complete.
+    """
 
     path = task_path(config, spec.task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open("x", encoding="utf-8") as stream:
-            stream.write(render(spec))
-    except FileExistsError as exc:
-        raise EvolutionError(f"analysis task already exists: {path}") from exc
+    if path.exists():
+        raise EvolutionError(f"analysis task already exists: {path}")
+    atomic_write_text(path, render(spec))
     return path
 
 
@@ -131,7 +203,9 @@ def append_index_row(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool:
     """Add the task's row to the active index, once.
 
     Returns False when a row for this id is already there, so a restarted
-    freeze completing an interrupted one does not list the task twice.
+    freeze completing an interrupted one does not list the task twice. The
+    rewrite is atomic: the index is the operator's list of active work, and a
+    truncated one loses rows belonging to other tasks entirely.
     """
 
     path = index_path(config)
@@ -142,7 +216,7 @@ def append_index_row(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if not text.strip():
-        path.write_text("\n".join([INDEX_HEADING, "", *INDEX_TABLE_HEADER, row]) + "\n", encoding="utf-8")
+        atomic_write_text(path, "\n".join([INDEX_HEADING, "", *INDEX_TABLE_HEADER, row]) + "\n")
         return True
 
     # A `(none)` placeholder means the table is absent, not that a row exists.
@@ -154,8 +228,18 @@ def append_index_row(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool:
         lines.extend([*INDEX_TABLE_HEADER, row])
     else:
         lines.insert(last_row + 1, row)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(lines) + "\n")
     return True
+
+
+def task_heading(batch_id: str) -> str:
+    return f"# Batch analysis — {batch_id}"
+
+
+def _markers(spec: AnalysisTaskSpec) -> tuple[str, ...]:
+    """What `render` puts in every generated task and a session keeps."""
+
+    return (f"id: {spec.task_id}", task_heading(spec.batch_id), spec.manifest_relative_path)
 
 
 def render(spec: AnalysisTaskSpec) -> str:
@@ -180,7 +264,7 @@ prefetch: [{", ".join(PREFETCH)}]
 claimed-by:
 ---
 
-# Batch analysis — {spec.batch_id}
+{task_heading(spec.batch_id)}
 
 ## Goal
 

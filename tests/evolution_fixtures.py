@@ -92,6 +92,58 @@ def make_record(
     }
 
 
+def make_manifest_report(*, key: str, sequence: int = 1, task_id: str = "2026-07-01-task", version: int = 2) -> dict:
+    """One membership entry, in the shape the given manifest version requires."""
+
+    item = {
+        "report_key": key,
+        "sequence": sequence,
+        "repo_id": "repo-alpha",
+        "task_id": task_id,
+        "evaluation_id": f"eval-{key}",
+        "bundle_sha256": "b" * 64,
+    }
+    if version == 1:
+        return item
+    record = make_record(key=key, sequence=sequence, task_id=task_id)
+    return {
+        **item,
+        "generated_at": record["generated_at"],
+        "evaluator": record["evaluator"],
+        "provenance": record["provenance"],
+    }
+
+
+def write_manifest(
+    batches_root: Path,
+    batch_id: str,
+    report_keys: list[str],
+    *,
+    version: int = 2,
+    **overrides,
+) -> Path:
+    """A schema-valid manifest on disk, for tests that need a frozen batch
+    without freezing one — an older manifest version, or a batch whose reports
+    were never imported here."""
+
+    manifest = {
+        "schema_version": version,
+        "batch_id": batch_id,
+        "created_at": "2026-07-31T00:00:00Z",
+        "config_sha256": "c" * 64,
+        "forced": False,
+        "reports": [
+            make_manifest_report(key=key, sequence=index + 1, task_id=f"2026-07-{index + 1:02d}-task", version=version)
+            for index, key in enumerate(report_keys)
+        ],
+        **overrides,
+    }
+    directory = batches_root / batch_id
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return directory
+
+
 def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | None = None) -> feed_module.DirectoryFeed:
     (root / feed_module.REPORTS_DIRNAME).mkdir(parents=True, exist_ok=True)
     for record in records:

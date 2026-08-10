@@ -25,6 +25,9 @@ SCHEMAS_RELATIVE_PATH = Path("evolution") / "schemas"
 
 IMPORT_SCHEMA_FILENAME = "evaluation-import.schema.json"
 BATCH_SCHEMA_FILENAME = "batch-manifest.schema.json"
+# A frozen manifest is immutable, so each manifest version keeps the schema it
+# was written against; `manifests.py` picks between them by declared version.
+BATCH_SCHEMA_V1_FILENAME = "batch-manifest-v1.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
 STATE_FILENAME = "state.json"

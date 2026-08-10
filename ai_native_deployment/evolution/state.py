@@ -36,6 +36,7 @@ from ..hashing import sha256_bytes
 from ..manifest import utc_timestamp
 from .config import EvolutionConfig, batch_id_number
 from .errors import LockError, StateError
+from .manifests import claimed_reports
 from .reports import REJECTION_REASONS, NormalizedReport, canonical_json
 from .schema import is_rfc3339_date_time
 
@@ -212,7 +213,14 @@ class EvolutionState:
         }
 
     @classmethod
-    def from_json(cls, data: Any, path: Path, *, artifacts_root: str) -> "EvolutionState":
+    def from_json(
+        cls,
+        data: Any,
+        path: Path,
+        *,
+        artifacts_root: str,
+        claimed: Mapping[str, set[str]],
+    ) -> "EvolutionState":
         """Load a complete version-1 state, or refuse.
 
         Every field is required, absent included. A file that has lost its
@@ -224,6 +232,13 @@ class EvolutionState:
         `artifacts_root` is the repository-relative bundle root from the config
         governing this run; staged references are checked against it, so state
         cannot point later evidence reads anywhere else in the tree.
+
+        `claimed` maps each report a frozen manifest names to the batches naming
+        it, so a `processed` claim is checked against the membership record it
+        refers to rather than merely parsed. Both are required arguments: this
+        state is only meaningful against the config and the batches it was
+        written beside, and a defaulted parameter is a check a later call site
+        can skip by omission.
         """
 
         if not isinstance(data, dict):
@@ -259,7 +274,7 @@ class EvolutionState:
             seen.add(entry.dedup_key)
 
         rejected = _require_rejections(data, path)
-        processed = _require_processed(data, path)
+        processed = _require_processed(data, path, claimed)
         # One report has one decision. The same key in two of these means the
         # state contradicts itself about what was already done with it, and
         # `known_report_keys` would flatten the contradiction away.
@@ -280,7 +295,12 @@ def load_state(config: EvolutionConfig) -> EvolutionState:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise StateError(f"unreadable evolution state {path}: {exc}") from exc
-    return EvolutionState.from_json(data, path, artifacts_root=config.storage.imported_artifacts)
+    return EvolutionState.from_json(
+        data,
+        path,
+        artifacts_root=config.storage.imported_artifacts,
+        claimed=claimed_reports(config),
+    )
 
 
 def save_state(config: EvolutionConfig, state: EvolutionState) -> Path:
@@ -475,7 +495,11 @@ def _require_rejections(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
     return value
 
 
-def _require_processed(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
+def _require_processed(
+    data: Mapping[str, Any],
+    path: Path,
+    claimed: Mapping[str, set[str]],
+) -> dict[str, Any]:
     """`processed` records the reports a frozen batch has claimed.
 
     The shape is exactly what `batches._claim_reports` writes: the batch that
@@ -483,10 +507,14 @@ def _require_processed(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
     membership record, and duplicating any of it here would give one fact two
     homes that can disagree.
 
-    Checked as a reference, like everything else in this file: an entry that
-    kept its key and lost its batch would remove the report from discovery
-    while no longer saying which cohort analyzed it, so the report can be
-    neither re-imported nor traced.
+    Checked as a reference, like everything else in this file, and the reference
+    is resolved rather than merely parsed. A claim is what removes a report from
+    discovery (`known_report_keys`), so a syntactically valid batch id that no
+    manifest backs — or one whose manifest never names this report — hides the
+    report from every future sync while nothing on disk says which cohort
+    analyzed it. Resolving the claim against the manifests makes that
+    unrepresentable: the membership record is the authority, and a claim that
+    contradicts it is corruption, not history.
     """
 
     value = data["processed"]
@@ -504,6 +532,13 @@ def _require_processed(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
         batch_id = _require_str(entry, "batch_id", where)
         if batch_id_number(batch_id) is None:
             raise StateError(f"{where}: batch_id {batch_id!r} is not a batch identifier")
+        owners = claimed.get(report_key) or set()
+        if batch_id not in owners:
+            named_by = f"; it is named by {sorted(owners)}" if owners else "; no frozen manifest names it at all"
+            raise StateError(
+                f"{where}: no manifest for {batch_id} names this report{named_by} — a claim with no membership "
+                "record behind it removes the report from discovery forever"
+            )
         _require_timestamp(entry, "recorded_at", where)
     return value
 

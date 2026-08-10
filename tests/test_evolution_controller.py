@@ -13,7 +13,15 @@ import shutil
 from pathlib import Path
 
 import pytest
-from evolution_fixtures import ARTIFACT_BODIES, REPO_ROOT, make_record, make_repo, snapshot, write_feed
+from evolution_fixtures import (
+    ARTIFACT_BODIES,
+    REPO_ROOT,
+    make_record,
+    make_repo,
+    snapshot,
+    write_feed,
+    write_manifest,
+)
 
 from ai_native_deployment import evolution
 from ai_native_deployment.evolution import config as config_module
@@ -166,6 +174,7 @@ def test_shipped_schemas_use_only_implemented_keywords(config: evolution.Evoluti
     for filename in (
         config_module.IMPORT_SCHEMA_FILENAME,
         config_module.BATCH_SCHEMA_FILENAME,
+        config_module.BATCH_SCHEMA_V1_FILENAME,
         config_module.LEDGER_SCHEMA_FILENAME,
     ):
         loaded = schema.load_schema(config.schema_path(filename))
@@ -641,6 +650,10 @@ def corrupt(mutate) -> str:
         corrupt(lambda data: data["processed"].update(r8=a_claim(recorded_at="yesterday"))),
         corrupt(lambda data: data["processed"].update(r8=a_claim(note="extra"))),
         corrupt(lambda data: data["processed"].update(r8="evolution-batch-0001")),
+        # Well-formed, and still backed by nothing: no manifest under
+        # `evolution/batches/` names r8, so the claim suppresses the report from
+        # every future sync while no cohort accounts for it.
+        corrupt(lambda data: data["processed"].update(r8=a_claim())),
     ],
 )
 def test_corrupt_state_is_reported_never_silently_reset(
@@ -663,6 +676,38 @@ def test_the_complete_state_shape_loads(config: evolution.EvolutionConfig) -> No
     assert loaded.cursor is None
     assert [entry.dedup_key for entry in loaded.pending] == [("repo-alpha", "2026-07-01-task")]
     assert loaded.to_json() == valid_state()
+
+
+def test_a_processed_claim_loads_only_when_a_manifest_names_the_report(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """A claim is what removes a report from discovery, and the manifests are
+    the membership record. A claim the manifests do not back would skip the
+    report on every future sync while nothing on disk says which cohort
+    analyzed it — so the claim is resolved, not merely parsed."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    claimed = valid_state()
+    claimed["processed"] = {"r8": a_claim()}
+    config.state_path.write_text(json.dumps(claimed), encoding="utf-8")
+
+    # A manifest that exists but names other reports is no more of a backing
+    # than no manifest at all.
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r5", "r6"])
+    with pytest.raises(evolution.StateError, match="names this report"):
+        evolution.load_state(config)
+
+    # And one that names r8 under a different id does not answer for this claim.
+    write_manifest(config.batches_root, "evolution-batch-0002", ["r8"])
+    with pytest.raises(evolution.StateError, match="evolution-batch-0002"):
+        evolution.load_state(config)
+
+    shutil.rmtree(config.batches_root / "evolution-batch-0001")
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r8"])
+
+    loaded = evolution.load_state(config)
+
+    assert loaded.processed == {"r8": a_claim()}
+    assert "r8" in loaded.known_report_keys()
 
 
 def test_a_damaged_rejection_is_refused_instead_of_skipping_the_report_forever(
