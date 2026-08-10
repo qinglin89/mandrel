@@ -255,12 +255,18 @@ block that is opened, closed, and says each thing once, declaring a date-prefixe
 slug — which is also the file name the copy takes — the inert `pending` status,
 an estimate no session has consumed, nothing blocking it and nobody claiming it;
 and the body a session works from, which is its goal, its scope, its acceptance,
-and the session log it will record itself in. The check belongs here because
-admission is a copy into the pool turn selection dispatches from: nothing
-downstream ever reads that file as a proposal again, so a proposal that is a task
-file in name only is refused at the gate or nowhere. An id already in flight,
-already archived, or already admitted by this batch stops the admission instead
-of overwriting a task file or leaving two admissions answering for one task.
+and the session log it will record itself in. The body is read as sections, not
+as text: each of those is a section the file declares once, the log is still
+empty — an entry under it is some session's record of work on a task nothing has
+dispatched, which is the same state the `pending` status and the unconsumed
+estimate refuse from the frontmatter side — and there is no `## Admission`
+section, because that one is what admission itself adds. The check belongs here
+because admission is a copy into the pool turn selection dispatches from:
+nothing downstream ever reads that file as a proposal again, so a proposal that
+is a task file in name only is refused at the gate or nowhere. An id already in
+flight, already archived, or already admitted by this batch stops the admission
+instead of overwriting a task file or leaving two admissions answering for one
+task.
 
 What the copy adds is what the draft could not know: an `## Admission` section
 naming the batch, the experiment and round, the base revision and the release it
@@ -473,15 +479,21 @@ audit line did not is finished by declining the same drafts for the same reason,
 and a redo is as guarded as the operation it completes, so the ref check that
 stops a fresh admission stops the resumed one too.
 
-Recognition is identity, not position. A file standing at an admitted task's id
-is that admission's copy only when it says so — its own id, its admission
-section, the experiment that admitted it, and the digest of the proposal it
-implements — and an ordinary claimed and logged task still says all four. An
-unrelated file there stops the redo instead of being adopted, listed as this
-experiment's work, and dispatched. A task the record already shows completed is
-not rewritten by that repair; close-out archived it, and recreating it would
-reopen work that finished. So is one that has finished before the record observed
-it: the completion observation is a later operation, and between the two, a task
+Recognition is identity, not position — and identity is read from the structures
+that own the values, never from text containing them. A file standing at an
+admitted task's id is that admission's copy when its own frontmatter declares
+that id and it carries the one `## Admission` section that admission wrote: the
+batch, the experiment and round, the ref, the base revision, and the digest of
+the proposal it implements. That section is the immutable part of a copy, and
+everything a session changes lies outside it — the lifecycle above, the log
+below — so an ordinary claimed and logged task is still recognised, while a file
+that merely mentions the same values in prose, or a real copy of a different
+proposal renamed into this one's place, is not. An unrelated file there stops
+the redo instead of being adopted, listed as this experiment's work, and
+dispatched. A task the record already shows completed is not rewritten by that
+repair; close-out archived it, and recreating it would reopen work that
+finished. So is one that has finished before the record observed it: the
+completion observation is a later operation, and between the two, a task
 archived or `completed` in place belongs to close-out rather than to the active
 pool a restored row would put it back in. Any state they cannot
 account for — a second current batch, a second open experiment, an experiment

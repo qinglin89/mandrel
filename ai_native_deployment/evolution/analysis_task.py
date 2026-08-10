@@ -452,8 +452,10 @@ justified is a valid outcome (invariant 7).
   checks it as one: frontmatter opened and closed, declaring its own
   date-prefixed `id`, `status: pending`, `session-est: 0/<total>`,
   `blockers: []` and an empty `claimed-by`; then `## Goal`, `## Scope`,
-  `## Acceptance`, and an empty `## Session log`. Drafts are inert until a
-  human admits a group of them into an experiment, which copies each into
+  `## Acceptance`, and an empty `## Session log`, each of those stated exactly
+  once, and no admission section of its own — admission adds that one, naming
+  the experiment and the ref to work on. Drafts are inert until a human admits
+  a group of them into an experiment, which copies each into
   `.ai-tasks/` and adds its index row; writing one straight into `.ai-tasks/`
   as `pending` would put it in the dispatch pool and bypass the human admission
   gate (invariant 9).

@@ -52,7 +52,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from ..hashing import sha256_bytes
 from . import analysis_task
@@ -98,12 +98,13 @@ DRAFT_STATUS = "pending"
 _UNCONSUMED_SESSION_EST = re.compile(r"\A0/[1-9][0-9]*\Z", re.ASCII)
 EMPTY_BLOCKERS = "[]"
 ADMISSION_HEADING = "## Admission"
+SESSION_LOG_HEADING = "## Session log"
 
 # The body a task file carries: what the work is, what it covers, how it is
 # recognised as done, and where it records itself. The intake contract writes all
 # four for a pending task, and the dev and review contracts each read one of them
 # — an admitted copy joins the same pool and is worked by the same sessions.
-REQUIRED_SECTIONS = ("## Goal", "## Scope", "## Acceptance", "## Session log")
+REQUIRED_SECTIONS = ("## Goal", "## Scope", "## Acceptance", SESSION_LOG_HEADING)
 
 # Bound on the index-row summary lifted out of the draft's own title. The active
 # index is a list, not a description.
@@ -561,14 +562,21 @@ def _collect(
                 "proposal, and re-proposing means a new draft id"
             )
         raise BatchError(
-            f"{current.batch.directory / analysis_task.PROPOSED_TASKS_DIRNAME / (draft_id + DRAFT_SUFFIX)} does "
-            f"not exist; the drafts waiting at {current.batch_id}'s gate are {list(gate.waiting)}"
+            f"{_draft_path(current.batch, draft_id)} does not exist; the drafts waiting at "
+            f"{current.batch_id}'s gate are {list(gate.waiting)}"
         )
 
     drafts = tuple(_read_draft(current.batch, draft_id, for_tasks=for_tasks) for draft_id in sorted(requested))
     if for_tasks:
         _require_free_task_ids(config, current, drafts)
     return drafts
+
+
+def _draft_path(batch: Batch, draft_id: str) -> Path:
+    """Where a draft waits. One construction, because the copy's provenance names
+    this path and a later run rebuilds that line to recognise the copy."""
+
+    return batch.directory / analysis_task.PROPOSED_TASKS_DIRNAME / f"{draft_id}{DRAFT_SUFFIX}"
 
 
 def _read_draft(batch: Batch, draft_id: str, *, for_tasks: bool) -> _Draft:
@@ -580,7 +588,7 @@ def _read_draft(batch: Batch, draft_id: str, *, for_tasks: bool) -> _Draft:
     is, and `draft_sha256` describes both.
     """
 
-    path = batch.directory / analysis_task.PROPOSED_TASKS_DIRNAME / f"{draft_id}{DRAFT_SUFFIX}"
+    path = _draft_path(batch, draft_id)
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -618,6 +626,12 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
     module's own: an unterminated one has no body, and the admission provenance
     goes into the body. A file whose sections are all still inside its
     frontmatter would take the block in there with them.
+
+    The body is read as sections rather than as text for the same kind of reason.
+    A heading that occurs is not a section that is there once and says what it is
+    for: two goals or two session logs leave every reader taking whichever it
+    reaches first, a log with entries under it is a task someone has already
+    worked, and an `## Admission` section is the one thing the gate itself adds.
     """
 
     if not block.present:
@@ -668,12 +682,70 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
         )
 
     body = text.splitlines()[block.body_start :]
-    missing = [heading for heading in REQUIRED_SECTIONS if not any(line.strip() == heading for line in body)]
+    sections = _sections(body)
+    names = [name for name, _ in sections]
+    missing = [heading for heading in REQUIRED_SECTIONS if heading not in names]
     if missing:
         raise BatchError(
             f"{path}: no {missing} section(s); an admitted copy is worked from its scope and reviewed against its "
             "acceptance, and the session log is where each session records what it did"
         )
+    repeated = [heading for heading in REQUIRED_SECTIONS if names.count(heading) > 1]
+    if repeated:
+        raise BatchError(
+            f"{path}: {repeated} section(s) declared more than once; a task worked from two scopes or reviewed "
+            "against two acceptances has no one shape, and each reader takes whichever it reaches first"
+        )
+    if ADMISSION_HEADING in names:
+        raise BatchError(
+            f"{path}: the draft already carries an {ADMISSION_HEADING!r} section; that section is what admission "
+            "itself adds, and a copy carrying two of them is one no later run can identify as this admission's"
+        )
+    _require_empty_log(path, body, sections)
+
+
+def _require_empty_log(path: Path, body: Sequence[str], sections: Sequence[tuple[str, int]]) -> None:
+    """A draft's session log is empty, because a session log is what happens to a
+    task *after* it is dispatched.
+
+    The heading alone is not the check. An entry under it describes sessions that
+    claimed this task, incremented its estimate, and recorded what they did — none
+    of which can have happened to a proposal nothing dispatches, and all of which
+    the copy carries into the active pool as its own history. The rest of the
+    frontmatter says the same thing from the other side (`pending`, `0/<total>`,
+    unclaimed), so a log with entries in it is a file contradicting itself about
+    whether the work has started.
+    """
+
+    start = next(index for name, index in sections if name == SESSION_LOG_HEADING)
+    following = [index for _, index in sections if index > start]
+    end = following[0] if following else len(body)
+    entry = next((line for line in body[start + 1 : end] if line.strip()), None)
+    if entry is not None:
+        raise BatchError(
+            f"{path}: {SESSION_LOG_HEADING} already carries {entry.strip()!r}; a session log is appended to by the "
+            "sessions that work the task, so an entry in a proposal nothing has dispatched records work on a task "
+            "that does not exist yet"
+        )
+
+
+def _sections(lines: Sequence[str]) -> list[tuple[str, int]]:
+    """Every section heading in a task body, with the line it stands on.
+
+    Level two, and only level two: a session-log entry is a level-3 heading
+    (taskfile schema §5), so a scan taking any `#`-prefixed line as a section
+    would read an ordinary log as structure of its own. One reading, shared by
+    the shape check, the admission-section identity check, and the renderer that
+    decides where the provenance goes — three questions about the same sections,
+    and an answer that differed between them would put the block somewhere the
+    checks never looked.
+    """
+
+    return [(line.strip(), index) for index, line in enumerate(lines) if _is_section(line)]
+
+
+def _is_section(line: str) -> bool:
+    return line.strip().startswith("## ")
 
 
 def _field(path: Path, block: analysis_task.Frontmatter, name: str) -> str:
@@ -1004,7 +1076,7 @@ def _restore_task(
 
     existing = analysis_task.existing_task_path(config, task.task_id)
     if existing is not None:
-        _require_admitted_copy(existing, experiment, task)
+        _require_admitted_copy(config, current, experiment, round_, task, existing)
         if not (task.complete or analysis_task.task_finished(config, task.task_id)):
             summary = _summary(experiment, task.draft_id, _title_of(existing, task.draft_id))
             analysis_task.append_row(config, task.task_id, summary)
@@ -1049,7 +1121,14 @@ def _already(task: AdmittedTask, path: Path) -> Admitted:
     )
 
 
-def _require_admitted_copy(path: Path, experiment: Experiment, task: AdmittedTask) -> None:
+def _require_admitted_copy(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    round_: Round,
+    task: AdmittedTask,
+    path: Path,
+) -> None:
     """Refuse to treat an unrelated file at this task id as the admitted copy.
 
     A redo that finds the file present declares that copy done, so what is at
@@ -1058,10 +1137,22 @@ def _require_admitted_copy(path: Path, experiment: Experiment, task: AdmittedTas
     `pending` row on it, and hands the record a task whose bytes implement
     nothing it names.
 
-    The markers are the ones a working session keeps: the task's own id, the
-    admission section, the experiment that admitted it, and the digest of the
-    proposal it implements. A claimed and logged copy passes — its frontmatter
-    lifecycle moves and its session log grows, neither of which is a marker.
+    Identity is read from the structures that own the values, never from the text
+    containing them. The task id is the frontmatter field `id` — a file declaring
+    `not-id:` or discussing the id in prose is not a task with that id — and the
+    provenance is the one `## Admission` section, matched against the section this
+    admission itself would write. That section is the immutable part of a copy:
+    the batch, the experiment, the round, the ref, the base, and the digest of the
+    bytes admitted, none of which a session working the task has any reason to
+    edit. Everything a session *does* change is outside it — the frontmatter
+    lifecycle above, the session log below — so an ordinary claimed and logged
+    copy still matches, while a file that merely mentions the same values does
+    not.
+
+    The cost of matching the section rather than sampling it: a copy written by a
+    controller whose wording of that section differed no longer matches its own
+    admission. That fails closed, naming the line that differs, which is the same
+    answer this module gives to every other state it cannot account for.
 
     Nothing is repaired. The file may already carry a session log, and rewriting
     one to satisfy a redo would destroy the record it exists to keep.
@@ -1071,24 +1162,48 @@ def _require_admitted_copy(path: Path, experiment: Experiment, task: AdmittedTas
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise BatchError(f"cannot read the admitted task {path}: {exc}") from exc
-    missing = [marker for marker in _copy_markers(experiment, task) if marker not in text]
-    if missing:
+
+    detail = _unlike_admitted_copy(config, current, experiment, round_, task, text)
+    if detail is not None:
         raise BatchError(
-            f"{path} is not the copy {experiment.experiment_id} admitted as {task.task_id!r} (missing {missing}); "
-            "an admission never overwrites a task file, and a file this record cannot identify is not the work it "
+            f"{path} is not the copy {experiment.experiment_id} admitted as {task.task_id!r} ({detail}); an "
+            "admission never overwrites a task file, and a file this record cannot identify is not the work it "
             "accounts for — resolve what is at that id"
         )
 
 
-def _copy_markers(experiment: Experiment, task: AdmittedTask) -> tuple[str, ...]:
-    """What `_render_task` puts in every admitted copy and a session keeps."""
+def _unlike_admitted_copy(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    round_: Round,
+    task: AdmittedTask,
+    text: str,
+) -> str | None:
+    """What stops this file from being that admission's copy, or None."""
 
-    return (
-        f"id: {task.task_id}",
-        ADMISSION_HEADING,
-        f"`{experiment.experiment_id}`",
-        f"`{task.draft_sha256}`",
-    )
+    block = analysis_task.parse_frontmatter(text)
+    if not block.present or not block.closed:
+        return "it carries no closed frontmatter block"
+    declared = block.fields.get("id")
+    if declared is None:
+        return "its frontmatter declares no id"
+    if declared != task.task_id:
+        return f"its frontmatter declares id {declared!r}"
+
+    body = text.splitlines()[block.body_start :]
+    at = [index for name, index in _sections(body) if name == ADMISSION_HEADING]
+    if not at:
+        return f"it carries no {ADMISSION_HEADING!r} section"
+    if len(at) > 1:
+        return f"it carries {len(at)} {ADMISSION_HEADING!r} sections"
+
+    expected = _admission_lines(config, current, experiment, round_, task.draft_id, task.draft_sha256)
+    found = body[at[0] : at[0] + len(expected)]
+    for index, line in enumerate(expected):
+        if index >= len(found) or found[index] != line:
+            return f"its admission section does not carry {line!r}"
+    return None
 
 
 # --- shapes ------------------------------------------------------------------
@@ -1234,42 +1349,59 @@ def _render_task(
     experiment's ref, not on whatever branch the checkout happens to be on.
     """
 
-    relative = draft.path.relative_to(config.repo_root).as_posix()
-    manifest = current.batch.manifest
-    runner = manifest.get("runner_protocol_revision")
-    release = experiment.base_release_ref or "no release tag reachable"
-    block = "\n".join(
-        [
-            ADMISSION_HEADING,
-            "",
-            f"Admitted from evolution batch `{current.batch_id}` under the normative",
-            f"contract `{analysis_task.CONTRACT_PATH}`; every canonical change passes this",
-            "human gate (invariant 9).",
-            "",
-            f"- Draft `{draft.draft_id}`: `{relative}`,",
-            f"  sha256 `{draft.sha256}`.",
-            f"- Experiment `{experiment.experiment_id}`, round {round_.number}. Work on",
-            f"  `{experiment.ref}`, which only",
-            "  fast-forwards; the round is sealed — every admitted task observed complete,",
-            "  the tip pinned — before anything measures the candidate (invariants 15, 16).",
-            f"- Base revision `{experiment.base_revision}`",
-            f"  ({release}): the commit every experiment of this batch starts from.",
-            f"- Runner protocol revision: {runner or 'unknown — none recorded at freeze time'}.",
-            "  It stays fixed for this task, and a candidate revision never governs the run",
-            "  that creates it (invariant 8).",
-            "",
-            "",
-        ]
-    )
+    block = "\n".join([*_admission_lines(config, current, experiment, round_, draft.draft_id, draft.sha256), "", ""])
     lines = draft.text.splitlines(keepends=True)
     for index in range(draft.body_start, len(lines)):
-        if lines[index].startswith("## "):
+        if _is_section(lines[index]):
             head = "".join(lines[:index])
             separator = "" if head.endswith("\n\n") or not head else "\n"
             return head + separator + block + "".join(lines[index:])
     raise BatchError(
         f"{draft.path}: no body section to admit before; a draft is a schema-conforming task file, and the "
         "admission provenance goes above its first section"
+    )
+
+
+def _admission_lines(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    round_: Round,
+    draft_id: str,
+    draft_sha256: str,
+) -> tuple[str, ...]:
+    """The `## Admission` section, written once and read back the same way.
+
+    Every value in it comes from the record and the frozen manifest rather than
+    from the draft's own text, which is what lets a later run rebuild this exact
+    section from what the experiment says it admitted — and that reconstruction is
+    how an admitted copy is recognised on the way back (`_require_admitted_copy`).
+    Rendering and recognition through one function is the point: two spellings of
+    the same section would drift, and the direction they drift in is a copy this
+    controller wrote and can no longer identify.
+    """
+
+    relative = _draft_path(current.batch, draft_id).relative_to(config.repo_root).as_posix()
+    runner = current.batch.manifest.get("runner_protocol_revision")
+    release = experiment.base_release_ref or "no release tag reachable"
+    return (
+        ADMISSION_HEADING,
+        "",
+        f"Admitted from evolution batch `{current.batch_id}` under the normative",
+        f"contract `{analysis_task.CONTRACT_PATH}`; every canonical change passes this",
+        "human gate (invariant 9).",
+        "",
+        f"- Draft `{draft_id}`: `{relative}`,",
+        f"  sha256 `{draft_sha256}`.",
+        f"- Experiment `{experiment.experiment_id}`, round {round_.number}. Work on",
+        f"  `{experiment.ref}`, which only",
+        "  fast-forwards; the round is sealed — every admitted task observed complete,",
+        "  the tip pinned — before anything measures the candidate (invariants 15, 16).",
+        f"- Base revision `{experiment.base_revision}`",
+        f"  ({release}): the commit every experiment of this batch starts from.",
+        f"- Runner protocol revision: {runner or 'unknown — none recorded at freeze time'}.",
+        "  It stays fixed for this task, and a candidate revision never governs the run",
+        "  that creates it (invariant 8).",
     )
 
 

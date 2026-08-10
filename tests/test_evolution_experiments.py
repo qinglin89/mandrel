@@ -473,6 +473,33 @@ def malformed(**fields: str | None) -> str:
         ("# Malformed\n\n## Session log\n", "no frontmatter block"),
         (draft_body("malformed", sections=("Goal", "Session log")), r"\['## Scope', '## Acceptance'\] section"),
         (draft_body("malformed", sections=("Goal", "Scope", "Acceptance")), r"\['## Session log'\] section"),
+        (
+            draft_body("malformed", sections=("Goal", "Scope", "Acceptance", "Session logs")),
+            r"no \['## Session log'\] section",
+        ),
+        (
+            draft_body("malformed", sections=("Goal", "Scope", "Acceptance", "Session log", "Session log")),
+            r"\['## Session log'\] section\(s\) declared more than once",
+        ),
+        (
+            draft_body("malformed", sections=("Goal", "Scope", "Scope", "Acceptance", "Session log")),
+            r"\['## Scope'\] section\(s\) declared more than once",
+        ),
+        (
+            draft_body(
+                "malformed",
+                section_text={"Session log": "### 2026-08-02 / 019feb-a-session / (pending → in_progress)"},
+            ),
+            "already carries '### 2026-08-02",
+        ),
+        (
+            draft_body("malformed", section_text={"Session log": "- Done: nothing yet, but this is a log entry"}),
+            "already carries '- Done: nothing yet",
+        ),
+        (
+            draft_body("malformed", sections=("Goal", "Scope", "Acceptance", "Admission", "Session log")),
+            "already carries an '## Admission' section",
+        ),
     ],
     ids=[
         "unsafe-id",
@@ -489,6 +516,12 @@ def malformed(**fields: str | None) -> str:
         "no-frontmatter",
         "no-scope-or-acceptance",
         "no-session-log",
+        "session-log-lookalike-heading",
+        "two-session-logs",
+        "two-scopes",
+        "session-log-with-an-entry",
+        "session-log-with-a-line-under-it",
+        "admission-section-of-its-own",
     ],
 )
 def test_a_draft_that_is_not_an_inert_task_file_is_refused(
@@ -499,7 +532,13 @@ def test_a_draft_that_is_not_an_inert_task_file_is_refused(
     that increments its estimate, worked from its scope, reviewed against its
     acceptance, and recording itself in its session log. Nothing downstream ever
     reads it as a proposal again, so a proposal that is a task file in name only
-    is one here or nowhere."""
+    is one here or nowhere.
+
+    The body is checked as sections and not as text for the same reason the
+    frontmatter is: a heading that occurs somewhere says nothing about whether
+    the section is there once and inert. A log with an entry under it is a task
+    somebody has already worked — the state the other half of the check
+    (`pending`, `0/<total>`, unclaimed) refuses from the frontmatter side."""
 
     write_draft(config.batches_root, BATCH_ID, "malformed", body=body)
 
@@ -858,7 +897,9 @@ def test_a_draft_edited_after_admission_stops_the_restore(
     config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The copy owed to a task has to be the proposal that was admitted; the
-    record's hash is what says which bytes those were."""
+    record's hash is what says which bytes those were — so the edit here is one
+    that leaves a perfectly admissible draft behind, and is caught for being
+    different rather than for being malformed."""
 
     monkeypatch.setattr(
         experiments,
@@ -869,7 +910,10 @@ def test_a_draft_edited_after_admission_stops_the_restore(
         experiments.create(config, ["loader-fallback"], now=NOW)
     monkeypatch.undo()
     draft = batch / "proposed-tasks" / "loader-fallback.md"
-    draft.write_text(draft.read_text(encoding="utf-8") + "\nlate edit\n", encoding="utf-8")
+    draft.write_text(
+        draft.read_text(encoding="utf-8").replace("and nothing else.", "and the loader test beside them."),
+        encoding="utf-8",
+    )
 
     with pytest.raises(evolution.BatchError, match="no longer matches the bytes"):
         experiments.create(config, ["loader-fallback"], now=NOW)
@@ -966,6 +1010,92 @@ def test_an_unrelated_task_at_the_admitted_id_is_never_adopted(
 
     assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == unrelated
     assert "| 2026-08-01-loader-fallback |" not in index(config)
+
+
+def test_a_file_wearing_the_admitted_copy_s_markers_is_never_adopted(
+    config: evolution.EvolutionConfig, batch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Identity is read from the structures that own those values, not from the
+    text containing them. This file declares `not-id:` and mentions the heading,
+    the experiment, and the digest in prose — every marker present as a string,
+    and not one of them said by the file about itself."""
+
+    monkeypatch.setattr(
+        experiments,
+        "_write_tasks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    with pytest.raises(OSError):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+    monkeypatch.undo()
+    lookalike = (
+        "---\n"
+        "not-id: 2026-08-01-loader-fallback\n"
+        "status: in_progress\n"
+        "---\n"
+        "\n"
+        "# Someone else's work\n"
+        "\n"
+        f"Discussed under `## Admission` with `{EXP_01}` and the digest\n"
+        f"`{draft_sha256('loader-fallback')}` in passing.\n"
+    )
+    analysis_task.publish_task(config, "2026-08-01-loader-fallback", lookalike, description="task")
+
+    with pytest.raises(evolution.BatchError, match="is not the copy"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == lookalike
+    assert "| 2026-08-01-loader-fallback |" not in index(config)
+
+
+def test_a_copy_of_another_admission_moved_to_this_id_is_never_adopted(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The id alone does not identify a copy: a file can be given any id. What
+    only this admission wrote is its `## Admission` section — the draft it
+    implements, that draft's digest, the experiment and round that took it — so
+    a real copy of a different proposal, renamed into this one's place, is a
+    task implementing bytes this record never admitted."""
+
+    result = experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
+    other = next(item for item in result.admitted if item.draft_id == "hook-side-loader")
+    mine = next(item for item in result.admitted if item.draft_id == "loader-fallback")
+    mine.task_path.write_text(
+        other.task_path.read_text(encoding="utf-8").replace(
+            "id: 2026-08-01-hook-side-loader", "id: 2026-08-01-loader-fallback"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(evolution.BatchError, match="admission section does not carry"):
+        experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
+
+
+def test_a_copy_a_session_has_claimed_and_logged_is_still_its_admission_s(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The other half of the same rule, and the one that keeps it usable: what a
+    session changes is the lifecycle above the provenance and the log below it,
+    and neither is what the copy is identified by. A check that read either would
+    refuse every task anybody had started."""
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+    path = result.admitted[0].task_path
+    worked = (
+        path.read_text(encoding="utf-8")
+        .replace("status: pending", "status: in_progress")
+        .replace("session-est: 0/1", "session-est: 1/2")
+        .replace("claimed-by:\n", "claimed-by: 019feb-a-session@2026-08-06T09:00:00Z\n")
+        + "\n### 2026-08-06 / 019feb-a-session / (pending → in_progress)\n- Done: half of it.\n"
+    )
+    path.write_text(worked, encoding="utf-8")
+    analysis_task.index_path(config).unlink()
+
+    again = experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert again.restored == ()
+    assert "| 2026-08-01-loader-fallback | pending |" in index(config)
+    assert path.read_text(encoding="utf-8") == worked
 
 
 def test_a_task_finished_before_the_record_observed_it_is_left_to_close_out(

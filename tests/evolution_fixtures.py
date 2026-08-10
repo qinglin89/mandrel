@@ -340,11 +340,17 @@ def draft_body(
     task_id: str | None = None,
     frontmatter: str | None = None,
     sections: tuple[str, ...] = DRAFT_SECTIONS,
+    section_text: dict[str, str] | None = None,
     closed: bool = True,
 ) -> str:
     """A draft as the analysis session writes it — a schema-conforming pending
-    task file — or one field, section, or delimiter short of it, which is what
-    the admission gate decides about."""
+    task file — or one field, section, delimiter, or section-body short of it,
+    which is what the admission gate decides about.
+
+    `sections` may repeat a name, and `section_text` may put content under one
+    that is empty by default: two ways of writing a body that has a heading
+    without having the section it names once and inert.
+    """
 
     head = frontmatter
     if head is None:
@@ -356,10 +362,11 @@ def draft_body(
             "claimed-by:\n"
         )
     closer = "---\n" if closed else ""
+    text_of = {**_SECTION_TEXT, **(section_text or {})}
     body = ""
     for name in sections:
         body += f"## {name}\n\n"
-        text = _SECTION_TEXT.get(name)
+        text = text_of.get(name)
         if text:
             body += text.format(draft_id=draft_id) + "\n\n"
     return f"---\n{head}{closer}\n# Change {draft_id}\n\n{body}".rstrip("\n") + "\n"
