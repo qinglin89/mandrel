@@ -33,6 +33,7 @@ from evolution_fixtures import (
     git_commit,
     git_repo,
     git_rev,
+    git_unrelated_commit,
     git_update_ref,
     make_repo,
     rejection,
@@ -752,9 +753,39 @@ def test_a_superseded_decision_names_an_experiment_that_exists(
     write_experiment(
         config.experiments_root,
         EXP_01,
-        decision=experiment_decision("superseded", superseded_by=EXP_03),
+        decision=experiment_decision("superseded", superseded_by=EXP_02),
     )
-    with pytest.raises(evolution.BatchError, match="successor"):
+    with pytest.raises(evolution.BatchError, match="no such experiment exists"):
+        lineage.describe(config)
+
+
+@pytest.mark.parametrize("successor", [EXP_01, EXP_03], ids=["itself", "past-the-next-one"])
+def test_a_superseded_decision_names_the_successor_it_created(
+    config: evolution.EvolutionConfig, batch: Path, successor: str
+) -> None:
+    """The replacement is allocated one past the attempt it replaces, because
+    ending one and creating the other is a single operation. Any other name is a
+    replacement this controller could not have made, and leaves the reason the
+    attempt ended pointing at another experiment's evidence."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])],
+        decision=experiment_decision("superseded", superseded_by=successor),
+    )
+    write_experiment(
+        config.experiments_root,
+        EXP_02,
+        rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
+        decision=experiment_decision("abandoned"),
+    )
+    write_experiment(
+        config.experiments_root,
+        EXP_03,
+        rounds=[experiment_round(1, tasks=[admitted_task("prompt-budget")])],
+    )
+    with pytest.raises(evolution.BatchError, match="next experiment in the series"):
         lineage.describe(config)
 
 
@@ -791,7 +822,8 @@ def test_an_experiment_id_round_trips_through_its_two_spellings(ordinal: int) ->
     experiment_id = lineage.format_experiment_id(BATCH_ID, ordinal)
     assert lineage.experiment_ordinal(experiment_id) == ordinal
     assert lineage.experiment_batch_id(experiment_id) == BATCH_ID
-    assert schema.validate(experiment_id, {"type": "string", "pattern": "^evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"}) == []
+    pattern = load("experiment.schema.json")["properties"]["experiment_id"]["pattern"]
+    assert schema.validate(experiment_id, {"type": "string", "pattern": pattern}) == []
 
 
 def test_a_directory_that_is_not_an_experiment_identifier_is_refused(
@@ -855,6 +887,83 @@ def test_a_record_claiming_another_experiments_ref_is_refused(
 
     write_experiment(config.experiments_root, EXP_01, ref=f"refs/evolution/experiments/{EXP_02}")
     with pytest.raises(evolution.BatchError, match="one experiment, one durable ref"):
+        lineage.describe(config)
+
+
+@pytest.mark.parametrize(
+    "ordinal",
+    ["00", "000", "001", "0", "1"],
+    ids=["zero", "padded-zero", "a-second-spelling-of-one", "unpadded-zero", "unpadded-one"],
+)
+def test_an_ordinal_has_exactly_one_spelling(
+    config: evolution.EvolutionConfig, batch: Path, ordinal: str
+) -> None:
+    """`exp-00` names no attempt, and `exp-01` and `exp-001` are one position in
+    the series with two directories — which an allocation counting one past the
+    highest would hand out twice.
+
+    Refused at the directory, before the record is read: an id this build cannot
+    account for might be an experiment a later one writes, and skipping it is how
+    an ordinal already claimed gets reused.
+    """
+
+    write_experiment(config.experiments_root, f"{BATCH_ID}-exp-{ordinal}")
+    with pytest.raises(evolution.BatchError, match="not an experiment identifier"):
+        lineage.describe(config)
+
+
+def test_the_schema_and_the_reader_agree_on_which_ids_exist() -> None:
+    """Two spellings of one rule, in two dialects. The reader gates directories
+    and the schema gates records, so an id either of them accepts alone reaches
+    the other as a state it has no reading for."""
+
+    pattern = load("experiment.schema.json")["properties"]["experiment_id"]["pattern"]
+    for ordinal in ("00", "000", "001", "0", "1", "0a"):
+        candidate = f"{BATCH_ID}-exp-{ordinal}"
+        assert lineage.experiment_ordinal(candidate) is None
+        assert schema.validate(candidate, {"type": "string", "pattern": pattern}) != []
+
+
+def test_experiment_ordinals_run_from_one_with_none_missing(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An id is allocated one past the highest the batch ever used, so a gap is
+    an attempt whose record is missing — its base, its task selections, and its
+    candidates gone with it — rather than one that never existed."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])],
+        decision=experiment_decision("abandoned"),
+    )
+    write_experiment(
+        config.experiments_root,
+        EXP_03,
+        rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
+    )
+    with pytest.raises(evolution.BatchError, match=r"experiment ordinals \[1, 3\]"):
+        lineage.describe(config)
+
+
+def test_only_the_newest_experiment_may_be_open(config: evolution.EvolutionConfig, batch: Path) -> None:
+    """A history that could not have happened: the later experiment could only
+    have been created once the earlier one ended (invariant 14). Left standing,
+    the derivation reports the earlier attempt as current while the evidence
+    being collected belongs to the later one."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])],
+    )
+    write_experiment(
+        config.experiments_root,
+        EXP_02,
+        rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
+        decision=experiment_decision("abandoned"),
+    )
+    with pytest.raises(evolution.BatchError, match="the open one is the newest"):
         lineage.describe(config)
 
 
@@ -981,6 +1090,46 @@ def test_a_draft_is_never_readmitted_by_another_experiment(
     write_experiment(config.experiments_root, EXP_01, decision=experiment_decision("abandoned"))
     write_experiment(config.experiments_root, EXP_02)
     with pytest.raises(evolution.BatchError, match="consumed once"):
+        lineage.describe(config)
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["same-round", "later-round", "later-experiment"],
+)
+def test_one_task_answers_for_one_admission(
+    config: evolution.EvolutionConfig, batch: Path, where: str
+) -> None:
+    """Two drafts, one task id. Admission copies each draft to the task its
+    record names, so this is two proposals with a single file between them: the
+    record can say neither which bytes that task implemented nor whose
+    completion its one observation is — and that observation is what seals the
+    round."""
+
+    shared = "2026-08-01-loader-fallback"
+    first = admitted_task("loader-fallback", task_id=shared)
+    second = admitted_task("hook-side-loader", task_id=shared)
+    if where == "same-round":
+        write_experiment(config.experiments_root, EXP_01, rounds=[experiment_round(1, tasks=[first, second])])
+    elif where == "later-round":
+        write_experiment(
+            config.experiments_root,
+            EXP_01,
+            rounds=[
+                experiment_round(1, tasks=[first], candidate_revision=CANDIDATE),
+                experiment_round(2, tasks=[second]),
+            ],
+        )
+    else:
+        write_experiment(
+            config.experiments_root,
+            EXP_01,
+            rounds=[experiment_round(1, tasks=[first])],
+            decision=experiment_decision("abandoned"),
+        )
+        write_experiment(config.experiments_root, EXP_02, rounds=[experiment_round(1, tasks=[second])])
+
+    with pytest.raises(evolution.BatchError, match="one task implements one proposal"):
         lineage.describe(config)
 
 
@@ -1162,6 +1311,48 @@ def test_a_promoted_batch_and_the_experiment_it_names_state_one_event(
         lineage.describe(config)
 
 
+def test_a_no_change_batch_over_a_promoted_experiment_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The same contradiction as the disagreeing pair above, read from the side
+    that names nothing — which is why checking only the experiment an outcome
+    names never sees it. This record says both that the source line moved and
+    that it did not."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=experiment_decision("promoted", promotion_revision=PROMOTION),
+    )
+    write_outcome(config.batches_root, BATCH_ID, reason="the evidence justified no change")
+    with pytest.raises(evolution.BatchError, match="record a promotion"):
+        lineage.describe(config)
+
+
+def test_one_batch_promotes_one_candidate(config: evolution.EvolutionConfig, batch: Path) -> None:
+    """A promoted outcome names which attempt reached the source line; a second
+    experiment claiming the same leaves that trail two answers deep."""
+
+    for experiment_id, draft_id in ((EXP_01, "loader-fallback"), (EXP_02, "hook-side-loader")):
+        write_experiment(
+            config.experiments_root,
+            experiment_id,
+            rounds=[experiment_round(1, tasks=[admitted_task(draft_id)], candidate_revision=CANDIDATE)],
+            decision=experiment_decision("promoted", promotion_revision=PROMOTION),
+        )
+    write_outcome(
+        config.batches_root,
+        BATCH_ID,
+        outcome="promoted",
+        reason="promoted",
+        experiment_id=EXP_02,
+        promotion_revision=PROMOTION,
+    )
+    with pytest.raises(evolution.BatchError, match="one batch promotes one candidate"):
+        lineage.describe(config)
+
+
 def test_an_outcome_naming_another_batch_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
     write_outcome(config.batches_root, SECOND_BATCH, reason="over here")
@@ -1329,6 +1520,84 @@ def test_a_ref_ahead_of_an_open_round_is_the_ordinary_state(
     assert state.state == lineage.REF_AHEAD
     assert state.pinned_expected is False
     assert state.consistent is True
+
+
+def test_a_first_candidate_off_the_frozen_base_is_not_a_consistent_ref(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The tip against the latest pin is only the last link. Checked alone, an
+    experiment whose very first candidate sits on a history unrelated to the
+    batch's base reads as exactly what a well-behaved one looks like: the ref
+    resting on the revision its record names."""
+
+    base = git_rev(config.repo_root, "v2.2.0")
+    unrelated = git_unrelated_commit(config.repo_root, "an approach built somewhere else")
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        base_revision=base,
+        rounds=[experiment_round(1, candidate_revision=unrelated)],
+    )
+    git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), unrelated)
+
+    state = only(config).ref
+    assert state is not None
+    assert state.state == lineage.REF_AT_PIN
+    assert state.chain is False
+    assert state.chain_break == (base, unrelated)
+    assert state.consistent is False
+
+
+def test_a_round_that_does_not_build_on_the_one_before_it_is_not_consistent(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Invariant 15's "each round's candidate stays reachable from the next
+    one's": a round 2 that does not contain round 1's candidate has rewritten it,
+    leaving round 1's evidence describing a tree its own record can no longer
+    produce."""
+
+    base = git_rev(config.repo_root, "v2.2.0")
+    git_checkout(config.repo_root, base)
+    first = git_commit(config.repo_root, "round-1 work")
+    git_checkout(config.repo_root, base)
+    second = git_commit(config.repo_root, "round-2 work, off round 1")
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        base_revision=base,
+        rounds=[
+            experiment_round(1, tasks=[admitted_task("loader-fallback")], candidate_revision=first),
+            experiment_round(2, tasks=[admitted_task("hook-side-loader")], candidate_revision=second),
+        ],
+    )
+    git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), second)
+
+    state = only(config).ref
+    assert state is not None
+    assert state.state == lineage.REF_AT_PIN
+    assert state.chain is False
+    assert state.chain_break == (first, second)
+    assert state.consistent is False
+
+
+def test_a_pin_chain_this_checkout_cannot_walk_is_unknown_not_broken(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Half a history checked is enough to know one is wrong and never enough to
+    call it right — but a link nobody here can answer says nothing either way."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+    )
+    git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), git_rev(config.repo_root, "HEAD"))
+
+    state = only(config).ref
+    assert state is not None
+    assert state.chain is None
+    assert state.chain_break is None
+    assert state.consistent is None
 
 
 def test_a_ref_that_no_longer_contains_its_pinned_candidate_is_diverged(

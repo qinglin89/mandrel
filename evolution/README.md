@@ -281,7 +281,17 @@ One experiment is one attempt at the change a batch's analysis called for,
 recorded at `experiments/<experiment-id>/experiment.json`
 (`schemas/experiment.schema.json`). Its id is `<batch-id>-exp-<NN>`, allocated
 one past the highest ordinal that batch has ever used — never reused, so a
-historical experiment's name keeps naming the attempt it was.
+historical experiment's name keeps naming the attempt it was. `<NN>` is a
+positive ordinal zero-padded to two digits and no wider than it needs to be, so
+one attempt has one spelling: `exp-00` names none, and `exp-01` and `exp-001`
+would be two directories for one position that an allocation counting from the
+highest hands out twice.
+
+A batch's experiments are therefore one series, and reading it back says so:
+ordinals run 1..N with none missing — a gap is an attempt whose record was
+removed, taking its base, its task selections and its candidates with it — and
+only the newest of them is open, because the next one is created only once the
+one before it ended.
 
 Creating one *is* the grouped admission of step 2 above. The human selects the
 drafts that belong together, and one operation creates the experiment's ref at
@@ -358,10 +368,13 @@ having one invented to stand for it.
 
 Superseding is one operation, not two: it ends the experiment and creates the
 successor it names, because only one experiment may be open (invariant 14) and
-a decision cannot name a successor that does not exist yet. The successor starts
-from the batch's base like every other experiment — from the base, never from
-the tip it replaces, or the alternative would inherit exactly what was being
-replaced.
+a decision cannot name a successor that does not exist yet. The successor is
+therefore the next id in the series, allocated one past the attempt it replaces;
+a decision naming anything else — an earlier attempt, its own id, an id nothing
+was created under — describes a replacement no operation here could have made.
+It starts from the batch's base like every other experiment — from the base,
+never from the tip it replaces, or the alternative would inherit exactly what was
+being replaced.
 
 Abandoning or superseding discards nothing that was learned: the record keeps
 the base, every round, every task selection, and every candidate revision, and
@@ -379,6 +392,14 @@ cohort. Two ways reach it:
 - `no-change` — the evidence justified no change to anything (invariant 7). The
   record carries the reason and nothing else: no experiment, no promotion
   revision, and no commit invented to represent a change that was not made.
+
+The outcome and the experiments state one history between them, and it is the
+whole set that has to agree rather than the record the outcome happens to name.
+A `no-change` batch holds no experiment recording a promotion — that pair says
+both that the source line moved and that it did not, and it is the contradiction
+with nothing to name, so checking the named experiment alone never sees it. A
+`promoted` batch holds exactly one, it is the one the outcome names, and the two
+name the same promotion revision.
 
 ### What is derived
 
@@ -411,11 +432,15 @@ freeze, they write in an order where the durable record is what makes the
 operation real, and every step is safe to redo, so an interrupted operation is
 finished by the next run rather than repaired by hand. Any state they cannot
 account for — a second current batch, a second open experiment, an experiment
-whose base is not the batch's, a ref that is not where its record says or that
-has moved past a candidate-ready round, a round sealed with no candidate or
+left open under a later one, a gap or a second spelling in the batch's ordinals,
+an experiment whose base is not the batch's, a candidate revision that does not
+descend from the one pinned before it, a ref that is not where its record says or
+that has moved past a candidate-ready round, a round sealed with no candidate or
 carrying a candidate nobody sealed, a task admitted into a sealed round with no
-completion observation, a draft already consumed, an unreadable record — stops
-the operation with what it found, instead of picking one reading and
+completion observation, a draft already consumed, a task id admitted twice, a
+`superseded` decision naming anything but the successor it created, an outcome
+that disagrees with the experiments about a promotion, an unreadable record —
+stops the operation with what it found, instead of picking one reading and
 continuing.
 
 ## Evolution task requirements

@@ -38,11 +38,12 @@
       "minLength": 1
     },
     "experiment_id": {
+      "description": "The promoted experiment, which records the same promotion with the same revision. The controller checks the whole history against this, not only the named record: a `no-change` outcome over an experiment that says `promoted` is the same contradiction read from the other side.",
       "type": [
         "string",
         "null"
       ],
-      "pattern": "^evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"
+      "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
     },
     "promotion_revision": {
       "description": "The source-line commit carrying the promoted change — distinct from the candidate tip measured, and from the effective revision each target reaches only when redeployed.",

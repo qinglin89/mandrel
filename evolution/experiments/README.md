@@ -8,11 +8,16 @@ that turns it into history. The normative rules are in `../README.md` (Change
 lineage); this file is the layout note.
 
 The id is `<batch-id>-exp-<NN>`, allocated one past the highest ordinal that
-batch has ever used, so a name always keeps pointing at the attempt it was.
-Work lives on `refs/evolution/experiments/<experiment-id>`, which only
-fast-forwards: a rewritten round would leave the candidate revisions its own
-record pins unreachable, and any replay evidence measured against them
-describing a tree nobody can produce.
+batch has ever used, so a name always keeps pointing at the attempt it was. The
+ordinal is positive and zero-padded to two digits — `01`, `02`, … `99`, `100` —
+so one attempt has one spelling. Work lives on
+`refs/evolution/experiments/<experiment-id>`, which only fast-forwards: a
+rewritten round would leave the candidate revisions its own record pins
+unreachable, and any replay evidence measured against them describing a tree
+nobody can produce. Reading the lineage back checks that whole chain — the base
+reaching the first sealed candidate, each sealed candidate the next, and the ref
+tip at or ahead of the last — since the tip against the latest pin alone would
+accept an attempt built on a history the batch never froze.
 
 A batch may hold several experiments and usually will — abandoned, superseded,
 and one open alternative is an ordinary state. All of them start from the same

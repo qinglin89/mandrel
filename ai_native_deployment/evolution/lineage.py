@@ -24,11 +24,12 @@ unambiguous history stops the read (two open experiments, two bases for one
 batch, a round sealed with an unfinished task, a draft consumed twice) — the
 same rule the manifests already follow, and for the same reason: a reading that
 picks one interpretation lets the next operation act on the other. Git is
-treated differently. A ref that is absent, or ahead of where the record says it
-should be, is reported as an observation rather than raised: the artifacts are
-intact, the operator needs to be told which ref moved, and refusing to describe
-the lifecycle is not how they find out. Guarded operations are what refuse on
-an inconsistent ref; a reader names it.
+treated differently. A ref that is absent, ahead of where the record says it
+should be, or standing on a history the record's own pins do not lead to is
+reported as an observation rather than raised: the artifacts are intact, the
+operator needs to be told which ref moved, and refusing to describe the
+lifecycle is not how they find out. Guarded operations are what refuse on an
+inconsistent ref; a reader names it.
 """
 
 from __future__ import annotations
@@ -47,7 +48,13 @@ from .config import (
     EvolutionConfig,
 )
 from .errors import BatchError
-from .manifests import Batch, load_batches, read_outcome, read_rejected_drafts
+from .manifests import (
+    OUTCOME_PROMOTED,
+    Batch,
+    load_batches,
+    read_outcome,
+    read_rejected_drafts,
+)
 from .revisions import contains, ref_tip
 from .schema import load_schema, validate_or_raise
 
@@ -60,9 +67,15 @@ EXPERIMENT_SCHEMA_VERSION = 1
 EXPERIMENT_ID_INFIX = "-exp-"
 EXPERIMENT_ORDINAL_DIGITS = 2
 REF_NAMESPACE = "refs/evolution/experiments"
+# The ordinal exactly as `format_experiment_id` writes it: positive, zero-padded
+# to EXPERIMENT_ORDINAL_DIGITS, and no wider than the number needs. A plain
+# `[0-9]{2,}` accepts `00`, which names no attempt, and takes `01` and `001` as
+# two ids for one position in the series — two directories an allocation counting
+# "one past the highest" would hand out for the same ordinal.
+_ORDINAL = rf"(?:0{{{EXPERIMENT_ORDINAL_DIGITS - 1}}}[1-9]|[1-9][0-9]{{{EXPERIMENT_ORDINAL_DIGITS - 1},}})"
 _EXPERIMENT_ID = re.compile(
     rf"\A({re.escape(BATCH_ID_PREFIX)}[0-9]{{{BATCH_ID_DIGITS},}})"
-    rf"{re.escape(EXPERIMENT_ID_INFIX)}([0-9]{{{EXPERIMENT_ORDINAL_DIGITS},}})\Z",
+    rf"{re.escape(EXPERIMENT_ID_INFIX)}({_ORDINAL})\Z",
     re.ASCII,
 )
 # The stem a draft file must have to be admissible, mirroring the `draft_id`
@@ -229,18 +242,34 @@ class RefState:
     # at the pin, because work resumes by opening a round, never by committing
     # under one that has already been measured.
     pinned_expected: bool
+    # Whether the record's own pins form one appending history — the base, then
+    # each sealed round's candidate in order, each reachable from the next
+    # (invariant 15). None when this checkout does not hold the objects to say.
+    chain: bool | None
+    # The first pair that does not, as (earlier, later); None unless `chain` is
+    # False. Named because "this ref is inconsistent" without saying which of
+    # several revisions broke the history is not something an operator can act
+    # on.
+    chain_break: tuple[str, str] | None
 
     @property
     def consistent(self) -> bool | None:
-        """Whether the ref agrees with the record — None when this checkout
+        """Whether the ref and the record's pins agree — None when this checkout
         cannot say, which is the ordinary answer for a clone that never fetched
-        the namespace."""
+        the namespace.
 
-        if self.state in (REF_ABSENT, REF_UNKNOWN):
-            return None
-        if self.state == REF_DIVERGED:
+        A definite break outranks an unanswerable link, in either half: half a
+        history checked is enough to know it is wrong, and never enough to call
+        it right.
+        """
+
+        if self.chain is False or self.state == REF_DIVERGED:
             return False
-        return not (self.pinned_expected and self.state == REF_AHEAD)
+        if self.pinned_expected and self.state == REF_AHEAD:
+            return False
+        if self.chain is None or self.state in (REF_ABSENT, REF_UNKNOWN):
+            return None
+        return True
 
 
 @dataclass(frozen=True)
@@ -434,10 +463,20 @@ def experiment_ref(experiment_id: str) -> str:
 
 
 def describe_ref(config: EvolutionConfig, experiment: Experiment) -> RefState:
-    """Where this experiment's ref sits, as far as this checkout can tell."""
+    """Where this experiment's ref sits, and whether everything its record pins
+    leads there — as far as this checkout can tell.
+
+    The tip against the latest pin is only the last link of that history. On its
+    own it reports an experiment whose very first candidate sits on a history
+    unrelated to the batch's frozen base as exactly what a well-behaved one looks
+    like: the ref resting on the revision the record names. So the base has to
+    reach the first sealed candidate, and each sealed candidate the next, before
+    the tip is asked about at all.
+    """
 
     pinned = experiment.pinned_revision
     expected = experiment.last_round.candidate_ready
+    chain, chain_break = _pin_chain(config, experiment)
     tip = ref_tip(config.repo_root, experiment.ref)
     if tip is None:
         state = REF_ABSENT
@@ -446,7 +485,47 @@ def describe_ref(config: EvolutionConfig, experiment: Experiment) -> RefState:
     else:
         descends = contains(config.repo_root, pinned, tip)
         state = REF_UNKNOWN if descends is None else (REF_AHEAD if descends else REF_DIVERGED)
-    return RefState(ref=experiment.ref, tip=tip, pinned=pinned, state=state, pinned_expected=expected)
+    return RefState(
+        ref=experiment.ref,
+        tip=tip,
+        pinned=pinned,
+        state=state,
+        pinned_expected=expected,
+        chain=chain,
+        chain_break=chain_break,
+    )
+
+
+def _pin_chain(
+    config: EvolutionConfig, experiment: Experiment
+) -> tuple[bool | None, tuple[str, str] | None]:
+    """Whether every revision this record pins descends from the one before it.
+
+    Walks base → each sealed round's candidate in order, which is invariant 15's
+    "each round's candidate revision stays reachable from the next one's" put to
+    Git. A break is reported with the pair that broke it and is not softened by a
+    later link nobody can answer: what is already known to be wrong does not
+    become uncertain. An unanswerable link with no broken one is None — this
+    checkout does not hold both objects, which says nothing about the lineage.
+
+    Two identical revisions need no object to compare: a round sealed exactly
+    where the previous one was pinned added no commit, which is a candidate
+    nobody changed rather than a history anyone rewrote.
+    """
+
+    pins = [experiment.base_revision] + [
+        round_.candidate_revision for round_ in experiment.rounds if round_.candidate_revision is not None
+    ]
+    unknown = False
+    for earlier, later in zip(pins, pins[1:]):
+        if earlier == later:
+            continue
+        descends = contains(config.repo_root, earlier, later)
+        if descends is False:
+            return False, (earlier, later)
+        if descends is None:
+            unknown = True
+    return (None if unknown else True), None
 
 
 def _batch_lineage(
@@ -455,7 +534,6 @@ def _batch_lineage(
     experiments: tuple[Experiment, ...],
 ) -> BatchLineage:
     _require_one_base(batch, experiments)
-    _require_named_successors(batch, experiments)
     open_experiments = [experiment for experiment in experiments if experiment.open]
     if len(open_experiments) > 1:
         raise BatchError(
@@ -463,6 +541,13 @@ def _batch_lineage(
             + ", ".join(experiment.experiment_id for experiment in open_experiments)
             + " — invariant 14 allows one; abandon or supersede the earlier attempt, which keeps it as evidence"
         )
+    _require_serial_experiments(batch, experiments)
+    _require_named_successors(batch, experiments)
+    # Drafts before tasks: a draft admitted twice produces the same task id twice
+    # as well, and of the two ways to say that, the repeated proposal is the one
+    # an operator can act on.
+    consumed = _consumed_drafts(batch, experiments)
+    _require_one_task_per_admission(batch, experiments)
     open_experiment = open_experiments[0] if open_experiments else None
 
     outcome = read_outcome(config, batch)
@@ -472,14 +557,14 @@ def _batch_lineage(
             "decision; a batch's outcome is recorded after its last experiment ends, never over an open one"
         )
     if outcome is not None:
-        _require_agreeing_promotion(batch, experiments, outcome)
+        _require_one_promotion(batch, experiments, outcome)
 
     return BatchLineage(
         batch=batch,
         experiments=experiments,
         open_experiment=open_experiment,
         outcome=outcome,
-        gate=_gate(config, batch, experiments),
+        gate=_gate(config, batch, consumed),
         ref=describe_ref(config, open_experiment) if open_experiment else None,
     )
 
@@ -501,37 +586,130 @@ def _require_one_base(batch: Batch, experiments: Iterable[Experiment]) -> None:
         )
 
 
-def _require_named_successors(batch: Batch, experiments: Iterable[Experiment]) -> None:
-    """A `superseded` decision names the experiment that replaced it, and that
-    experiment has to exist here: superseding creates its successor in the same
-    operation, so a name with nothing behind it is a broken half of one."""
+def _require_serial_experiments(batch: Batch, experiments: tuple[Experiment, ...]) -> None:
+    """A batch's experiments are one series: ordinals 1..N, and only the newest
+    of them still open.
+
+    Both halves are invariant 14's allocation rule read backwards. An id is
+    handed out one past the highest that batch ever used, so a gap is an attempt
+    whose record is gone — taking its base, its task selections, and its
+    candidates with it — and nothing distinguishes that from an id allocated
+    wrongly. And a new experiment is created only once the one before it ended,
+    so an earlier attempt left open underneath a later one is a history that
+    could not have happened: whichever of the two a reader calls current, the
+    evidence it goes on to collect belongs to the other.
+    """
+
+    ordinals = [experiment.ordinal for experiment in experiments]
+    if ordinals != list(range(1, len(experiments) + 1)):
+        raise BatchError(
+            f"{batch.batch_id} has experiment ordinals {ordinals}; they are allocated one at a time from 1 and "
+            "an id is never reused, so a gap is an attempt whose record is missing rather than one that never "
+            "existed"
+        )
+    stale = [experiment.experiment_id for experiment in experiments[:-1] if experiment.open]
+    if stale:
+        raise BatchError(
+            f"{batch.batch_id}: {stale} carry no decision while {experiments[-1].experiment_id} exists after "
+            "them; an experiment is created only once the one before it ended, so the open one is the newest "
+            "(invariant 14) — record what happened to the earlier attempt"
+        )
+
+
+def _require_named_successors(batch: Batch, experiments: tuple[Experiment, ...]) -> None:
+    """A `superseded` decision names the experiment created to replace it: the
+    next one in the series, and never itself.
+
+    Superseding is one operation — it ends the attempt and creates its successor
+    — so the replacement is the id allocated immediately past it, and it exists
+    here. A name pointing anywhere else describes a replacement this controller
+    could not have made, and leaves the reason an attempt ended pointing at
+    evidence that answers a different question.
+    """
 
     known = {experiment.experiment_id for experiment in experiments}
     for experiment in experiments:
         successor = experiment.decision.superseded_by if experiment.decision else None
-        if successor is not None and successor not in known:
+        if successor is None:
+            continue
+        expected = format_experiment_id(experiment.batch_id, experiment.ordinal + 1)
+        if successor != expected:
+            relation = "itself" if successor == experiment.experiment_id else "another attempt"
+            raise BatchError(
+                f"{experiment.directory / EXPERIMENT_FILENAME}: names {successor!r} as its successor, which is "
+                f"{relation}; superseding creates the replacement in the same operation, so the successor is the "
+                f"next experiment in the series ({expected})"
+            )
+        if successor not in known:
             raise BatchError(
                 f"{experiment.directory / EXPERIMENT_FILENAME}: names {successor!r} as its successor, but no such "
                 f"experiment exists in {batch.batch_id}; superseding records the replacement it creates"
             )
 
 
-def _require_agreeing_promotion(
+def _require_one_task_per_admission(batch: Batch, experiments: Iterable[Experiment]) -> None:
+    """One task id belongs to one admission, across the batch's whole history.
+
+    Grouped admission copies each draft to the task id its record names, so two
+    admissions naming one task are two proposals with a single file between them.
+    The record can then say neither which bytes that task implemented nor whose
+    completion its one observation is — and that observation is what seals a
+    round.
+    """
+
+    owners: dict[str, str] = {}
+    for experiment in experiments:
+        for task in experiment.admitted_tasks:
+            admission = f"{experiment.experiment_id} as draft {task.draft_id!r}"
+            previous = owners.setdefault(task.task_id, admission)
+            if previous != admission:
+                raise BatchError(
+                    f"{batch.batch_id}: task {task.task_id!r} is admitted by {previous} and by {admission}; one "
+                    "task implements one proposal, and a second draft admitted into it means a task id nothing "
+                    "can be traced through"
+                )
+
+
+def _require_one_promotion(
     batch: Batch,
     experiments: Iterable[Experiment],
     outcome: Mapping[str, Any],
 ) -> None:
-    """A promoted batch and the experiment it names say the same thing.
+    """A concluded batch and every one of its experiments state one history.
 
-    Two records, one event: the batch outcome ends the cycle and the experiment
-    decision turns that attempt into history. Left unchecked they can disagree
-    about which attempt reached the source line, or with which commit — and the
-    promotion evidence trail is then two answers deep with no way to pick.
+    Two kinds of record, one event: the batch outcome ends the cycle and an
+    experiment decision turns that attempt into history. The whole set has to
+    agree, not only the record the outcome happens to name. A `no-change` batch
+    over an experiment recording `promoted` says both that the source line moved
+    and that it did not — the contradiction read from the side with nothing to
+    name, which is why checking the named experiment alone never sees it. Two
+    promoted experiments under one outcome leave the promotion trail two answers
+    deep with no way to pick.
     """
 
-    named = outcome["experiment_id"]
-    if named is None:
+    recorded = [
+        experiment
+        for experiment in experiments
+        if experiment.decision is not None and experiment.decision.outcome == DECISION_PROMOTED
+    ]
+    if outcome["outcome"] != OUTCOME_PROMOTED:
+        if recorded:
+            raise BatchError(
+                f"{batch.outcome_path}: concludes {outcome['outcome']!r}, while "
+                f"{[experiment.experiment_id for experiment in recorded]} record a promotion; a batch whose "
+                "candidate reached the source line concluded by promoting it, and invariant 7's no-change "
+                "conclusion is for the batch that changed nothing"
+            )
         return
+    if len(recorded) > 1:
+        raise BatchError(
+            f"{batch.outcome_path}: {[experiment.experiment_id for experiment in recorded]} all record a "
+            "promotion; one batch promotes one candidate, and the outcome names which of them it was"
+        )
+
+    # `read_outcome` has already refused a `promoted` outcome that names no
+    # experiment, so the lookup below has something to look for.
+    named = outcome["experiment_id"]
     promoted = {experiment.experiment_id: experiment for experiment in experiments}.get(named)
     if promoted is None:
         raise BatchError(
@@ -552,7 +730,14 @@ def _require_agreeing_promotion(
         )
 
 
-def _gate(config: EvolutionConfig, batch: Batch, experiments: Iterable[Experiment]) -> Gate:
+def _consumed_drafts(batch: Batch, experiments: Iterable[Experiment]) -> dict[str, str]:
+    """Which experiment took each draft, refusing a draft two of them took.
+
+    A lineage rule rather than a gate one, even though the gate is what reads the
+    answer: a proposal admitted twice is two attempts implementing one set of
+    bytes, whichever of them a reader is asking about.
+    """
+
     consumed: dict[str, str] = {}
     for experiment in experiments:
         for draft_id in experiment.draft_ids:
@@ -563,7 +748,10 @@ def _gate(config: EvolutionConfig, batch: Batch, experiments: Iterable[Experimen
                     f"{experiment.experiment_id}; a draft is consumed once, and proposing the idea again means "
                     "a new draft id"
                 )
+    return consumed
 
+
+def _gate(config: EvolutionConfig, batch: Batch, consumed: Mapping[str, str]) -> Gate:
     declined = tuple(entry["draft_id"] for entry in read_rejected_drafts(config, batch))
     both = sorted(set(declined) & set(consumed))
     if both:

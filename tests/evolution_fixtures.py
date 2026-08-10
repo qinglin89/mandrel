@@ -383,6 +383,30 @@ def git_commit(root: Path, message: str) -> str:
     return git_rev(root, "HEAD")
 
 
+def git_unrelated_commit(root: Path, message: str) -> str:
+    """A commit on a history of its own, sharing no ancestor with anything here.
+
+    What a rewritten or mistakenly-based experiment ref looks like from the
+    outside: a perfectly resolvable revision that nothing in the batch's line
+    leads to. Built with `commit-tree` rather than by branching, because the
+    point is that no ancestor is shared at all.
+    """
+
+    tree = subprocess.run(
+        ["git", "-C", str(root), "mktree"],
+        check=True,
+        capture_output=True,
+        text=True,
+        input="",
+    ).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(root), *GIT_IDENTITY, "commit-tree", tree, "-m", message],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def git_rev(root: Path, revision: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), "rev-parse", f"{revision}^{{commit}}"],

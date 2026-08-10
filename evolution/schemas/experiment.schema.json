@@ -20,9 +20,9 @@
       "const": 1
     },
     "experiment_id": {
-      "description": "`<batch-id>-exp-<NN>`, one past the highest ordinal its batch has ever used. Never reused: a historical experiment's name has to keep naming the attempt it was.",
+      "description": "`<batch-id>-exp-<NN>`, one past the highest ordinal its batch has ever used. Never reused: a historical experiment's name has to keep naming the attempt it was. The ordinal is a positive number zero-padded to two digits and no wider than it needs to be, so one attempt has exactly one spelling — `00` names no attempt, and `01` and `001` would be two directories for one position in the series. The batch's ordinals run 1..N with none missing and only the newest still open, which the controller enforces across the records the way the schema enforces the spelling of each.",
       "type": "string",
-      "pattern": "^evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"
+      "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
     },
     "batch_id": {
       "type": "string",
@@ -47,7 +47,7 @@
     "ref": {
       "description": "The durable Git ref holding this experiment's rounds. Fast-forward only, so every pinned candidate revision stays reachable after the working branch is deleted.",
       "type": "string",
-      "pattern": "^refs/evolution/experiments/evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"
+      "pattern": "^refs/evolution/experiments/evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
     },
     "rounds": {
       "description": "Append-only. At most one round is unsealed, and it is the last one; every earlier round is candidate-ready and is never edited again.",
@@ -191,12 +191,12 @@
           "minLength": 1
         },
         "superseded_by": {
-          "description": "The experiment that replaced this one. It belongs to the same batch and starts from the same base.",
+          "description": "The experiment that replaced this one: the same batch, the same base, and the next ordinal in the series, because superseding creates its successor in the same operation. The controller refuses any other name — an earlier attempt, a record's own id, or one that does not exist — since none of them is a replacement it could have made.",
           "type": [
             "string",
             "null"
           ],
-          "pattern": "^evolution-batch-[0-9]{4,}-exp-[0-9]{2,}$"
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
         },
         "promotion_revision": {
           "description": "The source-line commit carrying this candidate's change. Never the candidate tip it came from.",
