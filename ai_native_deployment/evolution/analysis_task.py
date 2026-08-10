@@ -153,7 +153,7 @@ def task_status(path: Path) -> str | None:
     return None
 
 
-def completion(config: EvolutionConfig, task_id: str) -> bool | None:
+def completion(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool | None:
     """Whether this machine's copy of the task says the work finished.
 
     Three answers, and the third is the one that matters: None means this
@@ -165,14 +165,27 @@ def completion(config: EvolutionConfig, task_id: str) -> bool | None:
     An archived task counts as finished by location: close-out moves a task to
     `archive/` only after it reaches `completed` (taskfile schema §7-8), and the
     active file is gone by then.
+
+    The file is identified as this batch's generated task before any of that is
+    read, because a status line is only a lifecycle when it belongs to the task
+    the manifest names. Everything downstream rests on this one reading: it
+    releases the open-batch guard, and it is the sole thing the committed
+    closure record attests to — so an unrelated, truncated, or replaced file
+    carrying `status: completed` at this path would close a batch whose analysis
+    never happened. A mismatch raises rather than reading as unfinished: it is
+    damage a human has to resolve, and a silent "still in flight" would hold the
+    batch open forever without ever saying why. The spec is taken whole for the
+    same reason `assert_generated` needs it — the markers are the task id, the
+    batch heading, and the manifest path together.
     """
 
-    active = task_path(config, task_id)
+    if existing_task_path(config, spec.task_id) is None:
+        return None
+    assert_generated(config, spec)
+    active = task_path(config, spec.task_id)
     if active.is_file():
         return task_status(active) == STATUS_COMPLETED
-    if archived_task_path(config, task_id).is_file():
-        return True
-    return None
+    return True
 
 
 def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:

@@ -153,9 +153,10 @@ def is_open(config: EvolutionConfig, batch: Batch) -> bool:
     can show one, and they are checked in that order of authority:
 
     - The analysis task itself, on the machine that has it
-      (`analysis_task.completion`). This is the primary reading, and the only
-      one anything is derived from: the contract closes a batch after its
-      analysis task "completes successfully" (Data layout).
+      (`_analysis_completion`, which identifies the file as this batch's
+      generated task before reading its status). This is the primary reading,
+      and the only one anything is derived from: the contract closes a batch
+      after its analysis task "completes successfully" (Data layout).
     - The committed closure record, everywhere else. `.ai-tasks/` is
       machine-local and ignored, so on a fresh clone the lifecycle simply
       cannot be read; the record is what the controller publishes from the
@@ -176,15 +177,32 @@ def is_open(config: EvolutionConfig, batch: Batch) -> bool:
 
     if not batch.findings_recorded:
         return True
-    task_id = batch.analysis_task_id
-    if task_id is not None:
-        local = analysis_task.completion(config, task_id)
-        if local is not None:
-            return not local
+    local = _analysis_completion(config, batch)
+    if local is not None:
+        return not local
     # No lifecycle to read here — the ordinary case on every machine but one,
     # and also a manifest that names no task at all. The committed record is
     # then the only thing that can answer.
     return read_closure(config, batch) is None
+
+
+def _analysis_completion(config: EvolutionConfig, batch: Batch) -> bool | None:
+    """This machine's reading of the batch's analysis lifecycle, or None when it
+    has no such task.
+
+    One reading for both callers, because the guard and the record that attests
+    to it must not be able to disagree: `is_open` decides whether the next
+    cohort may form, and `_record_closures` publishes that same answer to every
+    other machine. The manifest is what says which task is meant to analyze this
+    batch, so the spec — and the identity check it carries — is derived from the
+    manifest rather than from whatever happens to sit at the task's path.
+    """
+
+    task_id = batch.analysis_task_id
+    if task_id is None:
+        return None
+    spec = _task_spec(config, batch.manifest, task_id=task_id, batch_id=batch.batch_id)
+    return analysis_task.completion(config, spec)
 
 
 def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ...]:
@@ -195,7 +213,11 @@ def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ..
     versioned batch directory because every other machine needs the answer and
     has no way to derive it. Only completion observed from the task's own
     lifecycle is published — nothing here infers closure from a file's
-    existence.
+    existence, and nothing reads a lifecycle off a file that has not been
+    identified as the task the manifest names (`_analysis_completion`). This
+    record is the one thing another machine cannot check for itself, so
+    attesting to it from an unverified artifact would export a local mistake as
+    committed proof.
 
     Idempotent by the record's presence, and safe to run over every batch: a
     batch whose analysis finished before this record existed is closed by the
@@ -207,7 +229,7 @@ def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ..
         task_id = batch.analysis_task_id
         if task_id is None or not batch.findings_recorded:
             continue
-        if analysis_task.completion(config, task_id) is not True:
+        if _analysis_completion(config, batch) is not True:
             continue
         if read_closure(config, batch) is not None:
             continue

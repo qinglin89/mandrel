@@ -181,8 +181,9 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     answer everywhere the task never existed.
 
     Validated, and cross-checked against the manifest it sits beside: a record
-    naming another batch or another task is corruption, and corruption that
-    loads here releases the next cohort early.
+    naming another batch or another task — or sitting beside a manifest that
+    names no task for it to attest to — is corruption, and corruption that loads
+    here releases the next cohort early.
     """
 
     path = batch.closure_path
@@ -206,7 +207,19 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
             "one batch's completion cannot close another"
         )
     named = batch.analysis_task_id
-    if named is not None and record["analysis_task_id"] != named:
+    if named is None:
+        # Unrepresentable from this controller: it publishes a closure only from
+        # the completion of the task the manifest names, so a record beside a
+        # manifest naming none has no task whose lifecycle it could attest to —
+        # and nothing on disk could ever be shown to have analyzed this batch.
+        # Skipping the identity check here instead would let exactly that record
+        # release the next cohort.
+        raise BatchError(
+            f"{path}: {batch.manifest_path} names no analysis task, so this record attests to a completion "
+            f"nothing can be checked against; restore the manifest's analysis_task_id, or remove the record "
+            "and let the analysis this batch is still waiting for publish it"
+        )
+    if record["analysis_task_id"] != named:
         raise BatchError(
             f"{path}: closure record attests to task {record['analysis_task_id']!r}, but "
             f"{batch.manifest_path} names {named!r} as this batch's analysis task"

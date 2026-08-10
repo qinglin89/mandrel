@@ -15,6 +15,11 @@ anywhere and the cursor is still where the last completed page left it, so the
 next run re-fetches that page and skips whatever it already knows. Bundles for
 an uncommitted page are re-staged over themselves; they are never counted
 twice, because the pool, not the artifact directory, is what counts.
+
+The one thing an interruption must not leave behind is a previous run's claim
+that the feed ended: a fetched page is evidence about the feed that this run has
+not finished acting on, so the claim is retracted on disk before the page is
+processed and restored only by a page that commits exhausted.
 """
 
 from __future__ import annotations
@@ -172,6 +177,7 @@ def sync_locked(
     for _ in range(max_pages):
         page = feed.fetch_page(cursor, page_size)
         cursor = page.cursor
+        _retract_exhaustion(config, state)
         audit: list[dict[str, Any]] = []
         known = state.known_report_keys()
 
@@ -230,6 +236,33 @@ def sync_locked(
         pool_size=len(state.pending),
         exhausted=exhausted,
     )
+
+
+def _retract_exhaustion(config: EvolutionConfig, state: EvolutionState) -> None:
+    """Drop a previous run's "the feed ended here" before this page is worked on.
+
+    `feed_exhausted` is what lets a *separate* `freeze` treat the pool as the
+    whole eligible set (`batches.evaluate_admission`), so it has to describe the
+    last completed discovery and nothing else. A page in hand is evidence this
+    run has not finished acting on: staging its reports fetches artifacts, and a
+    transport failure there aborts before any commit. Left alone, the old flag
+    would survive that abort and a later freeze would publish the prefix the
+    failed run had just proved incomplete.
+
+    So the claim is retracted durably here and restored only by a page that
+    commits `exhausted` — the flag is only ever true because some discovery pass
+    reached the end and said so.
+
+    A *fetch* that fails is deliberately not retracted: it observed nothing, and
+    the pool is still what the last drain measured. Retracting there would mean
+    an unreachable feed permanently blocked freezing evidence that is already
+    complete, which is availability lost for no correctness gained.
+    """
+
+    if not state.feed_exhausted:
+        return
+    state.feed_exhausted = False
+    save_state(config, state)
 
 
 def _classify(

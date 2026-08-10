@@ -139,20 +139,30 @@ def set_task_status(config: evolution.EvolutionConfig, task_id: str, status: str
 
 def relabel_batch(config: evolution.EvolutionConfig, old_id: str, new_id: str) -> None:
     """Move a frozen batch to another id, the way a hand-repair would have to:
-    directory, manifest, closure record, and the runtime claims naming it. Both
-    the claims and the closure record are resolved against the manifest they
-    refer to, so leaving either on the old id is corruption rather than a
+    directory, manifest, closure record, the runtime claims naming it, and the
+    generated analysis task. Everything that is resolved against the manifest
+    has to come along — the claims, the closure record, and the task whose
+    identity and manifest path the controller checks before reading its
+    lifecycle — so leaving any of them on the old id is corruption rather than a
     relabel."""
 
     manifest = json.loads((config.batches_root / old_id / batches.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    task_id = manifest.get("analysis_task_id")
+    renamed = task_id.replace(old_id, new_id) if task_id else task_id
     (config.batches_root / old_id).rename(config.batches_root / new_id)
     (config.batches_root / new_id / batches.MANIFEST_FILENAME).write_text(
-        json.dumps({**manifest, "batch_id": new_id}), encoding="utf-8"
+        json.dumps({**manifest, "batch_id": new_id, "analysis_task_id": renamed}), encoding="utf-8"
     )
     closure = config.batches_root / new_id / batches.CLOSURE_FILENAME
     if closure.is_file():
         record = json.loads(closure.read_text(encoding="utf-8"))
-        closure.write_text(json.dumps({**record, "batch_id": new_id}), encoding="utf-8")
+        closure.write_text(
+            json.dumps({**record, "batch_id": new_id, "analysis_task_id": renamed}), encoding="utf-8"
+        )
+    task = analysis_task.existing_task_path(config, task_id) if task_id else None
+    if task is not None:
+        text = task.read_text(encoding="utf-8").replace(old_id, new_id)
+        task.rename(task.parent / f"{renamed}.md").write_text(text, encoding="utf-8")
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
     for claim in raw["processed"].values():
         if claim["batch_id"] == old_id:
@@ -784,6 +794,80 @@ def test_a_bounded_sync_still_blocks_a_separate_freeze(
     assert evolution.load_batches(config)[0].task_count == TARGET + 1
 
 
+def test_a_sync_that_fails_after_a_drain_leaves_no_stale_exhaustion(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """`feed_exhausted` describes the last *completed* discovery, so a run that
+    fetched a page and then failed may not leave the previous drain's answer
+    standing. That sync saw a report the earlier one never did — it proved the
+    pool is a prefix — and a separate freeze reading the stale flag would
+    publish exactly the cohort the failure had just invalidated."""
+    fill_pool(config, feed_root, TARGET)
+    assert evolution.load_state(config).feed_exhausted is True
+
+    records = [
+        make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
+        for index in range(1, TARGET + 2)
+    ]
+
+    class ArtifactsUnreachable:
+        """Serves the listing, fails on the bodies — a transport failure partway
+        through a page, which is where an import spends most of its time."""
+
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        def fetch_page(self, cursor, limit):
+            return self.inner.fetch_page(cursor, limit)
+
+        def fetch_artifacts(self, record):
+            if record.get("report_key") == f"r{TARGET + 1}":
+                raise evolution.FeedError("orch-hub unreachable")
+            return self.inner.fetch_artifacts(record)
+
+    with pytest.raises(evolution.FeedError):
+        evolution.sync(config, ArtifactsUnreachable(write_feed(feed_root, records)))
+
+    assert json.loads(config.state_path.read_text(encoding="utf-8"))["feed_exhausted"] is False
+
+    blocked = freeze(config)
+
+    assert not blocked.frozen
+    assert blocked.decision.reason == batches.REASON_POOL_INCOMPLETE
+    assert evolution.load_batches(config) == []
+
+    # Nothing is stuck: the next healthy sync drains the feed, restores the
+    # flag, and the batch forms over the whole eligible set.
+    healthy = evolution.sync(config, write_feed(feed_root, records))
+
+    assert healthy.exhausted and evolution.load_state(config).feed_exhausted is True
+    admitted = freeze(config)
+    assert admitted.frozen
+    assert evolution.load_batches(config)[0].task_count == TARGET + 1
+
+
+def test_a_feed_that_cannot_be_reached_at_all_keeps_the_last_drain(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The other side of the rule. A fetch that fails observed nothing, so the
+    pool is still exactly what the last drain measured; retracting there would
+    let an unreachable feed block freezing evidence that is already complete."""
+    fill_pool(config, feed_root, TARGET)
+
+    class Unreachable:
+        def fetch_page(self, cursor, limit):
+            raise evolution.FeedError("orch-hub unreachable")
+
+        def fetch_artifacts(self, record):
+            raise evolution.FeedError("orch-hub unreachable")
+
+    with pytest.raises(evolution.FeedError):
+        evolution.sync(config, Unreachable())
+
+    assert evolution.load_state(config).feed_exhausted is True
+    assert freeze(config).frozen
+
+
 def test_an_open_batch_is_reconciled_before_the_feed_is_contacted(
     config: evolution.EvolutionConfig, feed_root: Path, monkeypatch
 ) -> None:
@@ -1041,6 +1125,40 @@ def test_a_completed_analysis_closes_its_batch_on_every_machine(
     assert freeze(config).closed_batch_ids == (), "the record is published once, not on every run"
 
 
+@pytest.mark.parametrize("location", ["active", "archived"])
+@pytest.mark.parametrize(
+    "replacement",
+    ["---\nid: 2026-01-01-something-else\nstatus: completed\n---\n\n# Not this batch\n", "# partial"],
+    ids=["replaced", "truncated"],
+)
+def test_a_file_that_is_not_the_analysis_task_cannot_close_its_batch(
+    config: evolution.EvolutionConfig, feed_root: Path, location: str, replacement: str
+) -> None:
+    """Closure is read off the analysis task's lifecycle, so the file has to be
+    that task before its status means anything. Otherwise any frontmatter saying
+    `status: completed` at the path — or, in the archive, any file at all, since
+    location alone is completion there — releases the guard and gets attested
+    into the committed record every other machine trusts."""
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    record_findings(config, first.batch_id or "")
+    path = analysis_task.task_path(config, first.analysis_task_id or "")
+    if location == "archived":
+        archived = analysis_task.archived_task_path(config, first.analysis_task_id or "")
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(archived)
+        path = archived
+    path.write_text(replacement, encoding="utf-8")
+
+    with pytest.raises(evolution.EvolutionError, match="is not the analysis task generated"):
+        batches.open_batch(config)
+    with pytest.raises(evolution.EvolutionError, match="is not the analysis task generated"):
+        freeze(config)
+
+    assert not (config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME).exists()
+    assert path.read_text(encoding="utf-8") == replacement, "a file that may hold a session log is never rewritten"
+
+
 def test_an_unfinished_local_task_holds_a_batch_open_against_its_closure_record(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
@@ -1094,6 +1212,23 @@ def test_a_closure_record_that_contradicts_its_manifest_is_refused(
         )
         with pytest.raises(evolution.EvolutionError, match=message):
             batches.open_batch(config)
+
+
+@pytest.mark.parametrize("named", [{}, {"analysis_task_id": None}], ids=["absent", "null"])
+def test_a_closure_record_needs_a_manifest_that_names_its_task(
+    config: evolution.EvolutionConfig, named: dict
+) -> None:
+    """A closure attests that one named task completed. Beside a manifest that
+    names no analysis task there is nothing to attest to, and the controller
+    could not have written the record — so accepting it means trusting an
+    unverifiable file to release the next cohort, which is what skipping the
+    identity check on a null `analysis_task_id` did."""
+    write_manifest(config.batches_root, "evolution-batch-0001", ["old1"], **named)
+    record_findings(config, "evolution-batch-0001")
+    write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-unrelated-analysis")
+
+    with pytest.raises(evolution.BatchError, match="names no analysis task"):
+        batches.open_batch(config)
 
 
 def test_an_open_batch_that_names_no_analysis_task_is_reported(
