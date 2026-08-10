@@ -12,6 +12,13 @@ is cold and the drafts directory is the only place a proposal can legally wait.
 Shapes come from `.ai-protocol/meta/taskfile.md` (frontmatter, body sections,
 index row) and the intake contract's field table. Nothing here is deploy-owned:
 `.ai-tasks/` is target-local, ignored, operational state.
+
+The `.ai-tasks/` mechanics themselves — where a task lives, whether the id is
+taken, publishing a file without overwriting one, and adding a row to the active
+index exactly once — are shared with the change tasks `experiments.py` admits
+from a batch's drafts. They live here rather than being written twice: the index
+rewrite is atomic because a truncated one loses rows belonging to unrelated
+tasks, and that is not a rule worth restating in a second module.
 """
 
 from __future__ import annotations
@@ -141,16 +148,29 @@ def task_status(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
+    return frontmatter(text).get("status") or None
+
+
+def frontmatter(text: str) -> dict[str, str]:
+    """The task file's frontmatter fields, or empty when it carries none.
+
+    A flat `key: value` reading, which is all the taskfile schema's frontmatter
+    is and all any caller here needs — the lifecycle status, and the id an
+    admitted draft declares. First occurrence wins: a file with the field twice
+    says two things, and the earlier one is what a reader scanning down sees.
+    """
+
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return None
+        return {}
+    fields: dict[str, str] = {}
     for line in lines[1:]:
         if line.strip() == "---":
             break
         key, separator, value = line.partition(":")
-        if separator and key.strip() == "status":
-            return value.strip() or None
-    return None
+        if separator:
+            fields.setdefault(key.strip(), value.strip())
+    return fields
 
 
 def completion(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool | None:
@@ -219,35 +239,47 @@ def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:
 
 
 def write_task(config: EvolutionConfig, spec: AnalysisTaskSpec) -> Path:
-    """Create the task file, published whole.
+    """Create the analysis task file, published whole."""
 
-    Never overwrites: an existing file may already carry a session log, and a
-    freeze has no business replacing one. Written through a temporary file and
-    renamed into place, so an interruption leaves no partial task behind for a
-    later run to accept as complete.
+    return publish_task(config, spec.task_id, render(spec), description="analysis task")
+
+
+def publish_task(config: EvolutionConfig, task_id: str, text: str, *, description: str) -> Path:
+    """Create one task file under `.ai-tasks/`, published whole.
+
+    Never overwrites: an existing file may already carry a session log, and
+    neither a freeze nor an admission has any business replacing one. Written
+    through a temporary file and renamed into place, so an interruption leaves no
+    partial task behind for a later run to accept as complete.
     """
 
-    path = task_path(config, spec.task_id)
+    path = task_path(config, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        raise EvolutionError(f"analysis task already exists: {path}")
-    atomic_write_text(path, render(spec))
+        raise EvolutionError(f"{description} already exists: {path}")
+    atomic_write_text(path, text)
     return path
 
 
 def append_index_row(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool:
-    """Add the task's row to the active index, once.
+    """Add the analysis task's row to the active index, once."""
 
-    Returns False when a row for this id is already there, so a restarted
-    freeze completing an interrupted one does not list the task twice. The
-    rewrite is atomic: the index is the operator's list of active work, and a
-    truncated one loses rows belonging to other tasks entirely.
+    return append_row(config, spec.task_id, spec.summary)
+
+
+def append_row(config: EvolutionConfig, task_id: str, summary: str) -> bool:
+    """Add one `pending` row to the active index, once.
+
+    Returns False when a row for this id is already there, so a restarted freeze
+    or a redone admission completing an interrupted one does not list the task
+    twice. The rewrite is atomic: the index is the operator's list of active
+    work, and a truncated one loses rows belonging to other tasks entirely.
     """
 
     path = index_path(config)
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    row = f"| {spec.task_id} | pending | {spec.summary} |"
-    if any(line.startswith("|") and f"| {spec.task_id} " in line for line in text.splitlines()):
+    row = f"| {task_id} | pending | {summary} |"
+    if any(line.startswith("|") and f"| {task_id} " in line for line in text.splitlines()):
         return False
 
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -19,6 +19,13 @@ reaching the first sealed candidate, each sealed candidate the next, and the ref
 tip at or ahead of the last — since the tip against the latest pin alone would
 accept an attempt built on a history the batch never froze.
 
+The record is written by the controller, not by hand: one grouped admission
+creates the ref at the batch's base, this record with its first round, and one
+`.ai-tasks/` copy per admitted draft, recording the draft id, the sha256 of the
+bytes admitted, and the task id the copy took. Unlike a frozen batch manifest it
+is rewritten as the attempt proceeds — a round's admitted tasks, its seal, the
+terminal decision — and what it already says is never rewritten.
+
 A batch may hold several experiments and usually will — abandoned, superseded,
 and one open alternative is an ordinary state. All of them start from the same
 base revision, frozen by the batch's first experiment, because alternatives

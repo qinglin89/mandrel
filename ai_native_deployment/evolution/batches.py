@@ -208,7 +208,7 @@ def _analysis_completion(config: EvolutionConfig, batch: Batch) -> bool | None:
 
     One reading for both callers, because the guard and the record that attests
     to it must not be able to disagree: `awaiting_analysis` decides whether the
-    analysis stage is over, and `_record_closures` publishes that same answer
+    analysis stage is over, and `record_closures` publishes that same answer
     to every other machine. The manifest is what says which task is meant to
     analyze this batch, so the spec — and the identity check it carries — is
     derived from the manifest rather than from whatever happens to sit at the
@@ -222,7 +222,7 @@ def _analysis_completion(config: EvolutionConfig, batch: Batch) -> bool | None:
     return analysis_task.completion(config, spec)
 
 
-def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ...]:
+def record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ...]:
     """Publish the closure record for every batch this machine can prove done.
 
     The write that makes `awaiting_analysis`'s second reading possible. It runs
@@ -239,6 +239,11 @@ def _record_closures(config: EvolutionConfig, *, now: datetime) -> tuple[str, ..
     Idempotent by the record's presence, and safe to run over every batch: a
     batch whose analysis finished before this record existed is closed by the
     next run that sees its completed task.
+
+    Package-public because the admission operations in `experiments.py` open with
+    it for the same reason the freeze does: the analysis stage has to be settled
+    before either decides anything, and a second way of settling it would let
+    them disagree about whether a batch's dispositions are released yet.
     """
 
     recorded: list[tuple[str, str]] = []
@@ -461,7 +466,7 @@ def start(
         # whose lineage does not answer it once stops the run here rather than
         # after part of it has been written.
         running = current_batch(config)
-        closed = _record_closures(config, now=moment)
+        closed = record_closures(config, now=moment)
         repaired = _reconcile_locked(config, now=moment, current=running)
         imported = sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
         admitted = freeze_locked(
@@ -506,7 +511,7 @@ def freeze_locked(
     # analysis closed.
     running = current_batch(config, batches=batches)
 
-    closed = _record_closures(config, now=moment)
+    closed = record_closures(config, now=moment)
     repaired = _reconcile_locked(config, now=moment, current=running)
     if repaired is not None:
         return replace(repaired, closed_batch_ids=closed)

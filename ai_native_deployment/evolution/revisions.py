@@ -1,17 +1,20 @@
 """This package's whole conversation with Git.
 
-Three questions, all read-only and none of them fatal: a question Git cannot
+The questions are read-only and none of them is fatal: a question Git cannot
 answer returns None rather than raising, because a status command must still
-answer.
+answer. The one write is `create_ref`, which reports its failure instead.
 
-**The release line** (`release_line_revision`). Contract invariant 8 pins the
-runner: the stable protocol revision governing an evolution task stays fixed for
-that task, and a candidate revision never governs the run that creates it. It is
-therefore read from the most recent release tag reachable from HEAD — never from
-the branch tip, which on a working branch *is* a candidate.
+**The release line** (`release_line_revision`, `release_ref`). Contract
+invariant 8 pins the runner: the stable protocol revision governing an evolution
+task stays fixed for that task, and a candidate revision never governs the run
+that creates it. It is therefore read from the most recent release tag reachable
+from a commit — never from the branch tip, which on a working branch *is* a
+candidate.
 
-**The experiment refs** (`ref_tip`, `contains`). Where an experiment's durable
-ref sits, and whether one revision descends from another.
+**The experiment refs** (`ref_tip`, `contains`, `resolve_commit`, `create_ref`).
+Where an experiment's durable ref sits, whether one revision descends from
+another, which commit a name resolves to, and the one operation that creates a
+ref for a new experiment.
 
 What is deliberately *not* here any more is a lifecycle reading built out of
 `HEAD` against that tag. It answered "is this checkout on the release line",
@@ -28,6 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 RELEASE_TAG_GLOB = "v[0-9]*"
+
+# `git update-ref`'s spelling of "this ref must not exist yet". Passing it as the
+# expected old value makes creation a compare-and-swap Git performs under its own
+# ref lock, rather than a check this process makes and then acts on.
+ABSENT_REVISION = "0" * 40
 
 
 @dataclass(frozen=True)
@@ -57,9 +65,36 @@ def release_line_revision(repo_root: Path) -> str | None:
     (invariant 4 keeps missing fields explicit).
     """
 
+    return release_ref(repo_root, "HEAD")
+
+
+def release_ref(repo_root: Path, revision: str) -> str | None:
+    """The most recent release tag reachable from `revision`, or None when there
+    is none.
+
+    An experiment records this beside the base revision it froze, so the record
+    still states which released protocol that candidate builds on after the tag
+    itself has moved or gone. A commit ahead of every tag has no answer, and that
+    is recorded as the absence it is.
+    """
+
     if not _is_repository_root(repo_root):
         return None
-    return _release_tag(repo_root)
+    return _git(repo_root, "describe", "--tags", "--abbrev=0", "--match", RELEASE_TAG_GLOB, revision) or None
+
+
+def resolve_commit(repo_root: Path, revision: str) -> str | None:
+    """The full sha `revision` names, or None when this checkout cannot say.
+
+    Used where a revision is about to be *recorded*: a base revision or a ref
+    creation names one commit forever, so it is resolved to the sha rather than
+    stored as the branch, tag, or `HEAD` the operator happened to type — every
+    one of which means a different commit tomorrow.
+    """
+
+    if not _is_repository_root(repo_root):
+        return None
+    return _git(repo_root, "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}") or None
 
 
 def ref_tip(repo_root: Path, ref: str) -> str | None:
@@ -72,9 +107,28 @@ def ref_tip(repo_root: Path, ref: str) -> str | None:
     identify the trees, and the ref is what keeps them reachable where it exists.
     """
 
-    if not _is_repository_root(repo_root):
+    return resolve_commit(repo_root, ref)
+
+
+def create_ref(repo_root: Path, ref: str, revision: str) -> str | None:
+    """Create `ref` at `revision`, or say why that did not happen.
+
+    None means created. Anything else is Git's own complaint, returned rather
+    than raised so the caller can name the experiment the ref belongs to — which
+    is the part an operator needs and this module does not know.
+
+    Creation only: the expected old value is `ABSENT_REVISION`, so an existing
+    ref refuses instead of being moved. A ref already holding an experiment's
+    rounds is the one thing that must never be reset, and the check and the write
+    are one operation here rather than a look followed by a leap.
+    """
+
+    result = _run(repo_root, "update-ref", ref, revision, ABSENT_REVISION)
+    if result is None:
+        return "git is not available here"
+    if result.returncode == 0:
         return None
-    return _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}") or None
+    return " ".join((result.stderr or result.stdout or f"git update-ref exited {result.returncode}").split())
 
 
 def contains(repo_root: Path, ancestor: str, descendant: str) -> bool | None:
@@ -92,10 +146,6 @@ def contains(repo_root: Path, ancestor: str, descendant: str) -> bool | None:
     if result.returncode in (0, 1):
         return result.returncode == 0
     return None
-
-
-def _release_tag(repo_root: Path) -> str | None:
-    return _git(repo_root, "describe", "--tags", "--abbrev=0", "--match", RELEASE_TAG_GLOB) or None
 
 
 def _is_repository_root(repo_root: Path) -> bool:

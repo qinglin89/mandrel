@@ -319,7 +319,26 @@ def write_experiment(
 
 
 def _draft_body(draft_id: str) -> str:
-    return f"---\nid: 2026-08-01-{draft_id}\nstatus: pending\n---\n\n# {draft_id}\n"
+    """A draft as the analysis session writes it: a schema-conforming task file,
+    inert under `proposed-tasks/`, declaring the task id its admitted copy takes."""
+
+    return (
+        "---\n"
+        f"id: 2026-08-01-{draft_id}\n"
+        "status: pending\n"
+        "session-est: 0/1\n"
+        "blockers: []\n"
+        "claimed-by:\n"
+        "---\n"
+        "\n"
+        f"# Change {draft_id}\n"
+        "\n"
+        "## Goal\n"
+        "\n"
+        f"Implement the {draft_id} disposition of this batch.\n"
+        "\n"
+        "## Session log\n"
+    )
 
 
 def _write_json(path: Path, record: dict) -> Path:

@@ -468,6 +468,18 @@ def load_experiments(
     }
 
 
+def is_draft_id(value: str) -> bool:
+    """Whether this string could be a draft id at all.
+
+    The gate's own spelling of the rule, shared with the operations that admit
+    and decline drafts (`experiments.py`): a draft id is a kebab-case slug, which
+    is what makes it one path segment under `proposed-tasks/` rather than a name
+    that could reach anywhere else.
+    """
+
+    return _DRAFT_ID.match(value) is not None
+
+
 def experiment_ordinal(experiment_id: str) -> int | None:
     """The ordinal inside an experiment id, or None when the string is not one."""
 

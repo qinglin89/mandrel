@@ -249,6 +249,20 @@ Admission copies rather than moves, and that is what makes it readable later:
 draft that had moved out of the batch would leave nothing behind saying what was
 proposed or which experiment took it.
 
+A draft is a task file, so the copy takes the task id the draft itself declares,
+and that id is checked at the gate as much as the proposal is: a date-prefixed
+slug — which is also the file name the copy takes — the inert `pending` status,
+and the session log the work will record itself in. An id already in flight,
+already archived, or already admitted by this batch stops the admission instead
+of overwriting a task file or leaving two admissions answering for one task.
+
+What the copy adds is what the draft could not know: an `## Admission` section
+naming the batch, the experiment and round, the base revision and the release it
+builds on, the runner protocol revision, and the ref to work on. Those are the
+facts the task requirements below demand of a change task, and without the last
+one the session implementing it has nowhere to commit. The hash in the record is
+of the draft — what was proposed — and the copy is derived from it.
+
 A human may also decline a draft instead of admitting it, which is recorded in
 `batches/<batch-id>/rejected-drafts.json` with the reason and the bytes
 declined. That record exists because the gate's remaining work is *derived*:
@@ -295,7 +309,10 @@ one before it ended.
 
 Creating one *is* the grouped admission of step 2 above. The human selects the
 drafts that belong together, and one operation creates the experiment's ref at
-the batch's base revision, the record, and the admitted tasks.
+the batch's base revision, the record, and the admitted tasks. For the first
+experiment of a batch that base is the commit the work starts from — the
+checkout's `HEAD` unless a revision is named explicitly — recorded as its sha,
+because a branch or a tag means a different commit tomorrow.
 
 The **first** experiment created for a batch freezes that batch's base revision
 (invariant 15) — not the batch freeze, which happens before anyone knows a
@@ -431,7 +448,23 @@ several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. They take the same single-writer lock as import and
 freeze, they write in an order where the durable record is what makes the
 operation real, and every step is safe to redo, so an interrupted operation is
-finished by the next run rather than repaired by hand. Any state they cannot
+finished by the next run rather than repaired by hand.
+
+That order is the same throughout. The experiment ref goes first, because it is
+the one thing that must never be created twice or restored afterwards: a clone
+without `refs/evolution/*` is the ordinary state, and a repair that recreated the
+ref at the base would leave it behind the real work with the next commit forking
+the history. Then the durable record, which is what makes the operation real.
+Then `.ai-tasks/` and its index, which are derivable from the record and the
+drafts, and therefore restorable. Then the audit line, which nothing derives
+state from. So an interruption can leave a ref nothing yet records, or tasks a
+record already names — never a task in the active pool that no experiment
+accounts for, which is work a turn selection would dispatch with nothing behind
+it. Redoing the same operation with the same selection is how it finishes: it
+recognises its own recorded work and writes what is missing, rather than
+admitting anything a second time. A task the record already shows completed is
+not rewritten by that repair; close-out archived it, and recreating it would
+reopen work that finished. Any state they cannot
 account for — a second current batch, a second open experiment, an experiment
 left open under a later one, a gap or a second spelling in the batch's ordinals,
 an experiment whose base is not the batch's, a candidate revision that does not

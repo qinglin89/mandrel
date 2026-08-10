@@ -12,10 +12,11 @@ promotion stay human gates (contract invariant 9). Automation prepares evidence
 and pending analysis tasks; a human triggers the freeze and admits every
 proposed canonical change.
 
-The names below are the package's stable surface. Three things are reached
+The names below are the package's stable surface. Four things are reached
 through their modules rather than re-exported, because the bare name says
 nothing on its own: `phase.describe` (the derived lifecycle status),
-`lineage.describe` (the derived batch/experiment lineage), and the
+`lineage.describe` (the derived batch/experiment lineage), the
+`experiments.create` / `add_tasks` / `reject` gate operations, and the
 `render.format_*` functions (operator-facing text for the CLI).
 """
 
@@ -34,6 +35,7 @@ from .batches import (
     start,
 )
 from .config import EvolutionConfig, load_config
+from .experiments import AdmissionResult, Admitted, RejectionResult
 from .errors import (
     BatchError,
     ConfigError,
@@ -57,6 +59,8 @@ from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state,
 
 __all__ = [
     "AdmissionDecision",
+    "AdmissionResult",
+    "Admitted",
     "AnalysisTaskSpec",
     "Batch",
     "BatchError",
@@ -81,8 +85,9 @@ __all__ = [
     "NormalizedReport",
     "OrchHubFeed",
     "PoolEntry",
-    "Rejection",
     "RefState",
+    "Rejection",
+    "RejectionResult",
     "ReportFeed",
     "ReportRef",
     "Revision",
