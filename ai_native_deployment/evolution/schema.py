@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -222,6 +222,35 @@ def _type_name(value: Any) -> str:
     if isinstance(value, dict):
         return "object"
     return type(value).__name__
+
+
+def parse_rfc3339(value: str) -> datetime:
+    """One timestamp as an aware `datetime`, for age and ordering arithmetic.
+
+    Parsing lives beside the grammar deliberately: every persisted contract in
+    this package writes and reads `date-time` through this module, so there is
+    one definition of what a timestamp is. A value that is not RFC 3339 raises
+    rather than being coerced — an admission decision computed from a
+    misread timestamp is worse than one that refuses to be computed.
+    """
+
+    if not is_rfc3339_date_time(value):
+        raise ValidationError(f"not an RFC 3339 date-time: {value!r}")
+    candidate = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    return datetime.fromisoformat(candidate)
+
+
+def format_rfc3339(moment: datetime) -> str:
+    """The wire form every persisted timestamp uses: UTC, second precision, `Z`.
+
+    An aware datetime is required. A naive one carries no offset, so the `Z`
+    this appends would be an assumption about the caller's clock rather than a
+    fact about the instant.
+    """
+
+    if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise ValidationError("timestamp must be timezone-aware; a naive datetime has no offset to record")
+    return moment.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def is_rfc3339_date_time(value: str) -> bool:

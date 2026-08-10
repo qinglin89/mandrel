@@ -8,109 +8,29 @@ nothing to mock away.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
 
 import pytest
+from evolution_fixtures import ARTIFACT_BODIES, REPO_ROOT, make_record, make_repo, snapshot, write_feed
 
 from ai_native_deployment import evolution
 from ai_native_deployment.evolution import config as config_module
 from ai_native_deployment.evolution import feed as feed_module
 from ai_native_deployment.evolution import importer, ledger, reports, schema, state
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-ARTIFACT_BODIES = {
-    "evidence": b'{"layer": "L1", "events": []}',
-    "static_metrics": b'{"layer": "L1", "rounds": 2}',
-    "semantic_report": b'{"layer": "L2", "findings": []}',
-    "report_markdown": b"# Report\n\nNo findings.\n",
-}
-
-
 # --- fixtures ----------------------------------------------------------------
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repository carrying the real versioned evolution contract files.
-
-    The schemas and config are copied rather than re-invented: a test that
-    validated against a hand-written schema would prove nothing about the
-    contract this repository actually ships.
-    """
-    root = tmp_path / "repo"
-    (root / "evolution").mkdir(parents=True)
-    shutil.copy(REPO_ROOT / "evolution" / "config.toml", root / "evolution" / "config.toml")
-    shutil.copytree(REPO_ROOT / "evolution" / "schemas", root / "evolution" / "schemas")
-    (root / "evolution" / "ledger.jsonl").write_text("", encoding="utf-8")
-    return root
+    return make_repo(tmp_path)
 
 
 @pytest.fixture
 def config(repo: Path) -> evolution.EvolutionConfig:
     return evolution.load_config(repo)
-
-
-def make_record(
-    *,
-    key: str,
-    sequence: int,
-    repo_id: str = "repo-alpha",
-    task_id: str = "2026-07-01-task",
-    evaluation_id: str | None = None,
-    bodies: dict[str, bytes] | None = None,
-) -> dict:
-    bodies = bodies or ARTIFACT_BODIES
-    return {
-        "schema_version": 1,
-        "report_key": key,
-        "sequence": sequence,
-        "generated_at": "2026-07-30T10:00:00Z",
-        "source": {
-            "repo_id": repo_id,
-            "repo_name": repo_id.replace("-", " "),
-            "task_id": task_id,
-            "evaluation_id": evaluation_id or f"eval-{key}",
-            "archived": True,
-            "completed": True,
-        },
-        "evaluator": {"backend": "claude", "model": "claude-opus-5", "schema_version": 1, "rubric_revision": "r7"},
-        "artifacts": {
-            name: {
-                "sha256": hashlib.sha256(body).hexdigest(),
-                "size_bytes": len(body),
-                "media_type": "application/json" if name != "report_markdown" else "text/markdown",
-            }
-            for name, body in bodies.items()
-        },
-        "provenance": {
-            "runner_protocol_revision": "v2.2.0",
-            "deploy_lock_hash": "a" * 64,
-            "config_revision": "c1",
-            "effective_revision": "e1",
-            "dev": {"agent": "claude", "model": "claude-opus-5", "effort": "high", "profile": "dev"},
-            "review": {"agent": "codex", "model": "gpt-x", "effort": "high", "profile": "review"},
-        },
-    }
-
-
-def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | None = None) -> feed_module.DirectoryFeed:
-    (root / feed_module.REPORTS_DIRNAME).mkdir(parents=True, exist_ok=True)
-    for record in records:
-        key = record.get("report_key") or f"unkeyed-{record.get('sequence')}"
-        (root / feed_module.REPORTS_DIRNAME / f"{key}.json").write_text(json.dumps(record), encoding="utf-8")
-        artifacts = record.get("artifacts")
-        if not isinstance(artifacts, dict):
-            continue
-        directory = root / feed_module.ARTIFACTS_DIRNAME / key
-        directory.mkdir(parents=True, exist_ok=True)
-        for name, body in (bodies or ARTIFACT_BODIES).items():
-            if name in artifacts:
-                (directory / name).write_bytes(body)
-    return feed_module.DirectoryFeed(root)
 
 
 # --- config ------------------------------------------------------------------
@@ -639,6 +559,16 @@ def a_rejection(**overrides) -> dict:
     }
 
 
+def a_claim(**overrides) -> dict:
+    """The record `batches._claim_reports` writes for a batched report."""
+
+    return {
+        "batch_id": "evolution-batch-0001",
+        "recorded_at": "2026-07-30T10:00:03Z",
+        **overrides,
+    }
+
+
 def other_report(*, key: str, sequence: int) -> dict:
     return {**valid_state()["pending"][0]["primary"], "report_key": key, "sequence": sequence}
 
@@ -701,8 +631,16 @@ def corrupt(mutate) -> str:
         corrupt(lambda data: data["rejected"].update(r9=a_rejection(reason="a-code-this-build-never-writes"))),
         corrupt(lambda data: data["rejected"].update(r9=a_rejection(recorded_at="yesterday"))),
         corrupt(lambda data: data["rejected"].update(r9=a_rejection(note="extra"))),
-        # Nothing in this build claims a report for a batch.
-        corrupt(lambda data: data["processed"].update(r8={"batch_id": "b1"})),
+        # A claimed report names the batch that claimed it and when. An entry
+        # that kept the key and lost either one removes the report from
+        # discovery while no longer saying which cohort analyzed it.
+        corrupt(lambda data: data["processed"].update(r8={})),
+        corrupt(lambda data: data["processed"].update(r8={"batch_id": "b1", "recorded_at": "2026-07-30T10:00:03Z"})),
+        corrupt(lambda data: data["processed"].update(r8=a_claim(batch_id="evolution-batch-1"))),
+        corrupt(lambda data: data["processed"].update(r8={k: v for k, v in a_claim().items() if k != "recorded_at"})),
+        corrupt(lambda data: data["processed"].update(r8=a_claim(recorded_at="yesterday"))),
+        corrupt(lambda data: data["processed"].update(r8=a_claim(note="extra"))),
+        corrupt(lambda data: data["processed"].update(r8="evolution-batch-0001")),
     ],
 )
 def test_corrupt_state_is_reported_never_silently_reset(
@@ -876,14 +814,3 @@ def test_no_report_body_reaches_the_versioned_ledger(config: evolution.Evolution
     assert b"SECRET-TOKEN" not in config.ledger_path.read_bytes()
     assert b"SECRET-TOKEN" in (config.repo_root / evolution.load_state(config).pending[0].primary.artifacts_path
                                / state.ARTIFACTS_SUBDIR / "semantic_report").read_bytes()
-
-
-# --- helpers -----------------------------------------------------------------
-
-
-def snapshot(root: Path) -> dict[str, bytes]:
-    return {
-        str(path.relative_to(root)): path.read_bytes()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }

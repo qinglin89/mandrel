@@ -52,6 +52,7 @@
       "type": "array",
       "minItems": 1,
       "items": {
+        "description": "One report's membership entry. Identity and content hash pin what was analyzed; evaluator and provenance carry the cohort-coherence facts (contract invariants 4 and 5) so a frozen batch answers 'is this one cohort?' from committed content alone, without the ignored raw bundles.",
         "type": "object",
         "required": [
           "report_key",
@@ -59,7 +60,10 @@
           "repo_id",
           "task_id",
           "evaluation_id",
-          "bundle_sha256"
+          "bundle_sha256",
+          "generated_at",
+          "evaluator",
+          "provenance"
         ],
         "properties": {
           "report_key": {
@@ -85,10 +89,133 @@
           "bundle_sha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evaluator": {
+            "$ref": "#/$defs/evaluator"
+          },
+          "provenance": {
+            "$ref": "#/$defs/provenance"
           }
         },
         "additionalProperties": false
       }
+    }
+  },
+  "$defs": {
+    "evaluator": {
+      "type": "object",
+      "required": [
+        "backend",
+        "model",
+        "schema_version"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "rubric_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "runner_protocol_revision",
+        "deploy_lock_hash",
+        "config_revision",
+        "effective_revision",
+        "dev",
+        "review"
+      ],
+      "properties": {
+        "runner_protocol_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deploy_lock_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dev": {
+          "$ref": "#/$defs/role"
+        },
+        "review": {
+          "$ref": "#/$defs/role"
+        }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "type": "object",
+      "required": [
+        "agent",
+        "model",
+        "effort",
+        "profile"
+      ],
+      "properties": {
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

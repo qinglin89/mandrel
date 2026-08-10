@@ -9,6 +9,7 @@ half-honoured policy.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,14 @@ LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
 STATE_FILENAME = "state.json"
 LOCK_FILENAME = "lock"
+
+# Batch identity, mirroring `batch-manifest.schema.json`'s `batch_id` pattern.
+# It lives here because two modules need it and neither may import the other:
+# `state.py` validates the batch a processed report was claimed by, and
+# `batches.py` allocates and reads the ids themselves.
+BATCH_ID_PREFIX = "evolution-batch-"
+BATCH_ID_DIGITS = 4
+_BATCH_ID = re.compile(rf"\A{re.escape(BATCH_ID_PREFIX)}([0-9]{{{BATCH_ID_DIGITS},}})\Z", re.ASCII)
 
 SUPPORTED_SOURCE_KIND = "orch-hub"
 SUPPORTED_COUNT_UNIT = "unique-completed-task"
@@ -170,6 +179,24 @@ class EvolutionConfig:
         """Repo-relative POSIX path recorded in state for one report's bundle."""
 
         return f"{Path(self.storage.imported_artifacts).as_posix()}/{directory_name}"
+
+
+def batch_id_number(batch_id: str) -> int | None:
+    """The ordinal inside a batch id, or None when the string is not one.
+
+    Callers use the None to fail closed: a directory under `batches/` that is
+    not a batch id is not silently ignored, because ignoring it is how an
+    allocation reuses an id that a manifest already claims.
+    """
+
+    match = _BATCH_ID.match(batch_id)
+    return int(match.group(1)) if match else None
+
+
+def format_batch_id(number: int) -> str:
+    if number < 1:
+        raise ConfigError(f"batch ordinals start at 1, got {number}")
+    return f"{BATCH_ID_PREFIX}{number:0{BATCH_ID_DIGITS}d}"
 
 
 def load_config(repo_root: Path | None = None, *, config_path: Path | None = None) -> EvolutionConfig:

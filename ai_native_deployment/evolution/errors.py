@@ -41,3 +41,9 @@ class LockError(EvolutionError):
 
 class FeedError(EvolutionError):
     """The report feed is unavailable or returned an unusable page."""
+
+
+class BatchError(EvolutionError):
+    """A batch cannot be read or frozen: a manifest under `evolution/batches/`
+    contradicts itself or the pool, an id is already taken, or the requested
+    freeze would break an admission invariant."""

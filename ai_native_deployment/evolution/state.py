@@ -34,7 +34,7 @@ from typing import Any, Iterator, Mapping
 
 from ..hashing import sha256_bytes
 from ..manifest import utc_timestamp
-from .config import EvolutionConfig
+from .config import EvolutionConfig, batch_id_number
 from .errors import LockError, StateError
 from .reports import REJECTION_REASONS, NormalizedReport, canonical_json
 from .schema import is_rfc3339_date_time
@@ -51,6 +51,8 @@ _REPORT_REF_FIELDS = frozenset(
 )
 # Exactly what `importer._record_rejection` writes.
 _REJECTION_FIELDS = frozenset({"reason", "detail", "recorded_at"})
+# Exactly what `batches._claim_reports` writes.
+_PROCESSED_FIELDS = frozenset({"batch_id", "recorded_at"})
 
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z", re.ASCII)
 
@@ -287,7 +289,7 @@ def save_state(config: EvolutionConfig, state: EvolutionState) -> Path:
 
     path = config.state_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(path, json.dumps(state.to_json(), indent=2, sort_keys=True) + "\n")
+    atomic_write_text(path, json.dumps(state.to_json(), indent=2, sort_keys=True) + "\n")
     return path
 
 
@@ -361,7 +363,14 @@ def stage_artifacts(config: EvolutionConfig, report: NormalizedReport, blobs: Ma
     return config.artifacts_relative(name)
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` so a reader sees the file before or after, never during.
+
+    Shared with the batch freeze: a half-written manifest is worse than an
+    absent one, because absent means "not frozen" and half-written means
+    "frozen, membership unknown".
+    """
+
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp = Path(temp_name)
     try:
@@ -469,21 +478,33 @@ def _require_rejections(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
 def _require_processed(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
     """`processed` records the reports a frozen batch has claimed.
 
-    Nothing in this build freezes a batch, so it has no writer and no record
-    shape yet — and a shape invented ahead of its writer is a second source of
-    truth waiting to drift. Until batch freeze lands and defines it, a non-empty
-    map can only be corruption or state from another build, and both are refused
-    rather than trusted with the report keys they would remove from discovery.
+    The shape is exactly what `batches._claim_reports` writes: the batch that
+    claimed the report, and when. Nothing more — the batch manifest is the
+    membership record, and duplicating any of it here would give one fact two
+    homes that can disagree.
+
+    Checked as a reference, like everything else in this file: an entry that
+    kept its key and lost its batch would remove the report from discovery
+    while no longer saying which cohort analyzed it, so the report can be
+    neither re-imported nor traced.
     """
 
     value = data["processed"]
     if not isinstance(value, dict):
         raise StateError(f"{path}: processed must be an object")
-    if value:
-        raise StateError(
-            f"{path}: processed holds {len(value)} record(s), but nothing in this build claims a report "
-            "for a batch; the record shape is defined when batch freeze lands"
-        )
+    for report_key, entry in value.items():
+        where = f"{path}: processed[{report_key!r}]"
+        if not report_key:
+            raise StateError(f"{path}: processed has an empty report key")
+        if not isinstance(entry, dict):
+            raise StateError(f"{where}: must be an object")
+        unexpected = set(entry) - _PROCESSED_FIELDS
+        if unexpected:
+            raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
+        batch_id = _require_str(entry, "batch_id", where)
+        if batch_id_number(batch_id) is None:
+            raise StateError(f"{where}: batch_id {batch_id!r} is not a batch identifier")
+        _require_timestamp(entry, "recorded_at", where)
     return value
 
 

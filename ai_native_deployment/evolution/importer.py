@@ -139,6 +139,25 @@ def sync(
 ) -> SyncResult:
     """Import every eligible report the feed has not already been asked about."""
 
+    with single_writer_lock(config):
+        return sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
+
+
+def sync_locked(
+    config: EvolutionConfig,
+    feed: ReportFeed,
+    *,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    max_pages: int = DEFAULT_MAX_PAGES,
+) -> SyncResult:
+    """`sync` without acquiring the lock, for a caller that already holds it.
+
+    `evolution start` is sync-then-admit under one lock: the pool it admits
+    from must be the pool the sync just wrote, and the lock is a plain
+    `O_EXCL` file, so taking it twice in one process would deadlock against
+    itself.
+    """
+
     schema = load_import_schema(config)
     imported: list[str] = []
     reruns: list[str] = []
@@ -146,67 +165,66 @@ def sync(
     skipped: list[str] = []
     exhausted = False
 
-    with single_writer_lock(config):
-        state = load_state(config)
-        cursor_before = state.cursor
-        cursor = state.cursor
+    state = load_state(config)
+    cursor_before = state.cursor
+    cursor = state.cursor
 
-        for _ in range(max_pages):
-            page = feed.fetch_page(cursor, page_size)
-            cursor = page.cursor
-            audit: list[dict[str, Any]] = []
-            known = state.known_report_keys()
+    for _ in range(max_pages):
+        page = feed.fetch_page(cursor, page_size)
+        cursor = page.cursor
+        audit: list[dict[str, Any]] = []
+        known = state.known_report_keys()
 
-            for record in page.items:
-                outcome = _import_one(record, config, feed, schema, state, known)
-                if outcome.status == STATUS_KNOWN:
-                    skipped.append(outcome.report_key or "")
-                    continue
-                known.add(outcome.report_key or "")
-                if outcome.status == STATUS_REJECTED:
-                    rejected.append((outcome.report_key or "", outcome.reason or ""))
-                    # The reason code only. `outcome.detail` quotes the feed —
-                    # a malformed digest, a rejected field value — and the
-                    # ledger is committed (invariant 11). The full diagnostic
-                    # is kept in `state.rejected`, which is ignored runtime
-                    # data, so nothing an operator needs is lost.
-                    audit.append(
-                        build_record(
-                            RECORD_REJECTED,
-                            report_key=outcome.report_key,
-                            detail=publishable_reason(outcome.reason),
-                        )
-                    )
-                    continue
-                (reruns if outcome.status == STATUS_RERUN else imported).append(outcome.report_key or "")
+        for record in page.items:
+            outcome = _import_one(record, config, feed, schema, state, known)
+            if outcome.status == STATUS_KNOWN:
+                skipped.append(outcome.report_key or "")
+                continue
+            known.add(outcome.report_key or "")
+            if outcome.status == STATUS_REJECTED:
+                rejected.append((outcome.report_key or "", outcome.reason or ""))
+                # The reason code only. `outcome.detail` quotes the feed —
+                # a malformed digest, a rejected field value — and the
+                # ledger is committed (invariant 11). The full diagnostic
+                # is kept in `state.rejected`, which is ignored runtime
+                # data, so nothing an operator needs is lost.
                 audit.append(
                     build_record(
-                        RECORD_IMPORTED,
+                        RECORD_REJECTED,
                         report_key=outcome.report_key,
-                        task_id=outcome.task_id,
-                        detail=outcome.status,
+                        detail=publishable_reason(outcome.reason),
                     )
                 )
+                continue
+            (reruns if outcome.status == STATUS_RERUN else imported).append(outcome.report_key or "")
+            audit.append(
+                build_record(
+                    RECORD_IMPORTED,
+                    report_key=outcome.report_key,
+                    task_id=outcome.task_id,
+                    detail=outcome.status,
+                )
+            )
 
-            # One commit per page: state first (it is the truth), audit after.
-            state.cursor = cursor
-            save_state(config, state)
-            append_records(config, audit)
+        # One commit per page: state first (it is the truth), audit after.
+        state.cursor = cursor
+        save_state(config, state)
+        append_records(config, audit)
 
-            if page.exhausted:
-                exhausted = True
-                break
+        if page.exhausted:
+            exhausted = True
+            break
 
-        return SyncResult(
-            imported=tuple(imported),
-            reruns=tuple(reruns),
-            rejected=tuple(rejected),
-            skipped=tuple(skipped),
-            cursor_before=cursor_before,
-            cursor_after=state.cursor,
-            pool_size=len(state.pending),
-            exhausted=exhausted,
-        )
+    return SyncResult(
+        imported=tuple(imported),
+        reruns=tuple(reruns),
+        rejected=tuple(rejected),
+        skipped=tuple(skipped),
+        cursor_before=cursor_before,
+        cursor_after=state.cursor,
+        pool_size=len(state.pending),
+        exhausted=exhausted,
+    )
 
 
 def _classify(

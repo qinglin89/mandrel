@@ -73,6 +73,7 @@ evolution/
   schemas/                          import, batch, and ledger contracts
   batches/<batch-id>/manifest.json  immutable report membership
   batches/<batch-id>/findings.md    completed analysis disposition
+  batches/<batch-id>/proposed-tasks/ change-task drafts awaiting human admission
   cases/                            curated sanitized regression cases
   experiments/                      canary/replay definitions and outcomes
 
@@ -99,6 +100,7 @@ completed archived-task L1+L2 evaluations
   -> immutable batch manifest
   -> pending batch-analysis task
   -> reviewed dispositions
+  -> change-task drafts in batches/<batch-id>/proposed-tasks/
   -> zero or more human-admitted improvement tasks
   -> candidate canonical revision
   -> replay/canary
@@ -127,6 +129,29 @@ Analysis records task count, repository/task-type coverage, recurrence,
 counterexamples, confidence, affected revisions, expected benefit, regression
 risk, and the chosen disposition. Multiple unrelated candidates become
 separate tasks.
+
+## Change admission
+
+A disposition that calls for work does not create that work. Between analysis
+and implementation sits one human gate (invariant 9), and drafts wait in the
+batch that produced them:
+
+1. The analysis session writes each proposed change task as a
+   schema-conforming task file under `batches/<batch-id>/proposed-tasks/`. A
+   draft is inert there: nothing dispatches it, and it states its own evidence
+   and batch.
+2. A human admits one by moving it into `.ai-tasks/` and adding its index row.
+   That move is the admission decision.
+
+A draft is never written straight into `.ai-tasks/` as `pending`: the active
+pool is what turn selection dispatches from, so a draft placed there would be
+picked up as admitted work and the gate would be bypassed. This reuses the
+existing task and index mechanics rather than adding a proposed-but-not-admitted
+task status.
+
+Automation may create the pending batch-analysis task itself — analysis
+classifies evidence and is forbidden from editing `canonical/` (invariant 6), so
+it decides no policy. Change tasks are the ones that need the gate.
 
 ## Evolution task requirements
 
