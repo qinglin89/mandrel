@@ -31,6 +31,7 @@ from evolution_fixtures import (
     experiment_round,
     experiment_decision,
     git_commit,
+    git_delete_ref,
     git_repo,
     git_rev,
     git_unrelated_commit,
@@ -56,6 +57,10 @@ EXP_02 = f"{BATCH_ID}-exp-02"
 ANALYSIS_TASK = "2026-07-31-evolution-batch-0001-analysis"
 
 NOW = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
+LATER = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
+LATEST = datetime(2026, 8, 7, 9, 0, 0, tzinfo=timezone.utc)
+SEALED_AT = "2026-08-06T09:00:00Z"
+REVISED_AT = "2026-08-07T09:00:00Z"
 DRAFTS = ("loader-fallback", "hook-side-loader", "not-worth-it")
 
 
@@ -107,6 +112,38 @@ def index(config: evolution.EvolutionConfig) -> str:
 
 def ledger_types(config: evolution.EvolutionConfig) -> list[str]:
     return [record["record_type"] for record in evolution.read_records(config)]
+
+
+def finish(config: evolution.EvolutionConfig, task_id: str) -> Path:
+    """Take one admitted copy to `completed`, the way the session working it
+    does: the lifecycle above the provenance changes, the provenance does not."""
+
+    path = analysis_task.task_path(config, task_id)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("status: pending", "status: completed"),
+        encoding="utf-8",
+    )
+    return path
+
+
+def advance(config: evolution.EvolutionConfig, ref: str) -> str:
+    """One commit of the work an admitted task does, landed on the experiment
+    ref — a fast-forward, which is the only way that ref ever moves."""
+
+    revision = git_commit(config.repo_root, "candidate work")
+    git_update_ref(config.repo_root, ref, revision)
+    return revision
+
+
+def seal(config: evolution.EvolutionConfig, draft_ids: list[str]) -> str:
+    """Admit, work, and seal round 1: the candidate-ready state every revision
+    and every terminal decision starts from."""
+
+    admission = experiments.create(config, draft_ids, now=NOW)
+    for item in admission.admitted:
+        finish(config, item.task_id)
+    advance(config, admission.ref)
+    return experiments.seal_round(config, now=LATER).candidate_revision
 
 
 # --- grouped admission -------------------------------------------------------
@@ -1396,6 +1433,375 @@ def test_a_decline_never_writes_a_task(config: evolution.EvolutionConfig, batch:
 
     assert not analysis_task.tasks_root(config).exists()
     assert lineage.describe(config).current.gate.declined == ("no-id-at-all",)
+
+
+# --- sealing a round ---------------------------------------------------------
+
+
+def test_sealing_pins_the_tip_and_records_every_completion(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Invariant 16: what makes a round candidate-ready is the pair — every
+    admitted task observed at `completed`, and the tip pinned as the revision all
+    later evidence names."""
+
+    admission = experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
+    for item in admission.admitted:
+        finish(config, item.task_id)
+    revision = advance(config, admission.ref)
+
+    result = experiments.seal_round(config, now=LATER)
+
+    assert result.sealed is True
+    assert result.round_number == 1
+    assert result.candidate_revision == revision
+    assert sorted(result.observed) == ["2026-08-01-hook-side-loader", "2026-08-01-loader-fallback"]
+
+    written = record(config, EXP_01)["rounds"][0]
+    assert written["seal"] == {"sealed_at": SEALED_AT, "candidate_revision": revision}
+    assert [task["completion_observed_at"] for task in written["tasks"]] == [SEALED_AT, SEALED_AT]
+    assert ledger_types(config)[-1] == "round-sealed"
+
+
+def test_sealing_refuses_while_an_admitted_task_is_in_flight(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A candidate that does not contain the change it was admitted for is not
+    the thing anyone means to measure."""
+
+    admission = experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
+    finish(config, "2026-08-01-loader-fallback")
+    advance(config, admission.ref)
+
+    with pytest.raises(evolution.BatchError, match="2026-08-01-hook-side-loader \\(still in flight\\)"):
+        experiments.seal_round(config, now=LATER)
+
+    assert record(config, EXP_01)["rounds"][0]["seal"] is None
+
+
+def test_sealing_refuses_a_task_this_machine_does_not_hold(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """`.ai-tasks/` is machine-local, so absence is not evidence: a clone that
+    never had the task would otherwise seal a candidate for work it cannot see."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    admission.admitted[0].task_path.unlink()
+
+    with pytest.raises(evolution.BatchError, match="2026-08-01-loader-fallback \\(not on this machine\\)"):
+        experiments.seal_round(config, now=LATER)
+
+
+def test_the_completion_is_read_from_the_copy_the_record_admitted(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A file standing at an admitted task's id says nothing about whether the
+    change was made. Reading `completed` off an unrelated one would seal a
+    candidate around work nobody did."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    admission.admitted[0].task_path.write_text(
+        "---\nid: 2026-08-01-loader-fallback\nstatus: completed\n---\n\n# Someone else's work\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(evolution.BatchError, match="is not the copy .* admitted"):
+        experiments.seal_round(config, now=LATER)
+
+    assert record(config, EXP_01)["rounds"][0]["seal"] is None
+
+
+def test_an_archived_task_is_observed_as_complete(config: evolution.EvolutionConfig, batch: Path) -> None:
+    """Close-out archives a finished task, and the ordinary moment to seal is
+    after that: the copy is still identifiable where it now lives."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    archived = analysis_task.archived_task_path(config, "2026-08-01-loader-fallback")
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    admission.admitted[0].task_path.rename(archived)
+
+    result = experiments.seal_round(config, now=LATER)
+
+    assert result.observed == ("2026-08-01-loader-fallback",)
+
+
+def test_sealing_refuses_when_the_ref_is_not_in_this_checkout(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The seal records the revision the work actually reached, which only the
+    repository holding that ref knows."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    git_delete_ref(config.repo_root, admission.ref)
+
+    with pytest.raises(evolution.BatchError, match="is not in this checkout"):
+        experiments.seal_round(config, now=LATER)
+
+
+def test_sealing_refuses_a_ref_that_left_the_pinned_history(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The ref only fast-forwards (invariant 15). A tip on a history the record's
+    own pins do not lead to is a candidate nobody can identify."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    git_update_ref(config.repo_root, admission.ref, git_unrelated_commit(config.repo_root, "elsewhere"))
+
+    with pytest.raises(evolution.BatchError, match="not on the history"):
+        experiments.seal_round(config, now=LATER)
+
+
+def test_a_round_that_added_no_commit_seals_at_the_revision_already_pinned(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An admitted task may finish having changed nothing. The honest candidate
+    is then the base itself — a candidate nobody changed, not a history anyone
+    rewrote."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+
+    result = experiments.seal_round(config, now=LATER)
+
+    assert result.candidate_revision == admission.base_revision
+
+
+def test_sealing_writes_the_record_and_the_audit_and_nothing_else(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A seal moves no ref, publishes no task, and touches no draft: it records
+    an observation about work that already happened."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    advance(config, admission.ref)
+    before = snapshot(config.repo_root)
+
+    experiments.seal_round(config, now=LATER)
+
+    after = snapshot(config.repo_root)
+    assert {path for path in after if after[path] != before.get(path)} == {
+        f"evolution/experiments/{EXP_01}/experiment.json",
+        "evolution/ledger.jsonl",
+    }
+
+
+def test_sealing_again_reports_the_pin_already_on_record(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The record is what makes the seal real, so a run after an interrupted one
+    finishes it by saying what is pinned — never by pinning a second revision, and
+    never by re-appending the audit line the interruption cost."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    revision = advance(config, admission.ref)
+    experiments.seal_round(config, now=LATER)
+    before = snapshot(config.repo_root)
+
+    result = experiments.seal_round(config, now=LATEST)
+
+    assert result.sealed is False
+    assert result.candidate_revision == revision
+    assert result.sealed_at == SEALED_AT
+    assert snapshot(config.repo_root) == before
+
+
+def test_a_ref_that_moved_past_a_sealed_round_stops_the_seal_being_reported(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """While the last round is candidate-ready the ref stays where it was pinned;
+    work resumes by opening a round. Reporting the pin as though nothing had
+    happened is what would hide the commit that did."""
+
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    experiments.seal_round(config, now=LATER)
+    advance(config, admission.ref)
+
+    with pytest.raises(evolution.BatchError, match="ahead"):
+        experiments.seal_round(config, now=LATEST)
+
+
+def test_sealing_needs_an_open_experiment(config: evolution.EvolutionConfig, batch: Path) -> None:
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
+
+    with pytest.raises(evolution.BatchError, match="no open experiment"):
+        experiments.seal_round(config, now=LATER)
+
+
+def test_the_phase_follows_the_seal(config: evolution.EvolutionConfig, batch: Path) -> None:
+    admission = experiments.create(config, ["loader-fallback"], now=NOW)
+    finish(config, admission.admitted[0].task_id)
+    revision = advance(config, admission.ref)
+
+    experiments.seal_round(config, now=LATER)
+    status = phase.describe(config, now=LATER)
+
+    assert status.phase == phase.PHASE_CANDIDATE_READY
+    assert status.summary == f"candidate-ready {EXP_01} round 1"
+    assert status.implementation_tasks == ()
+    assert status.revisions.round_candidate is not None
+    assert status.revisions.round_candidate.sha == revision
+
+
+# --- revising ----------------------------------------------------------------
+
+
+def test_revise_opens_the_next_round_from_the_candidate_the_last_one_pinned(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The previous round's evidence goes on naming the revision it measured;
+    the new round has none of its own until it is sealed."""
+
+    pinned = seal(config, ["loader-fallback"])
+
+    result = experiments.revise(config, reason="replay lost two runs to the loader order", now=LATEST)
+
+    assert result.opened is True
+    assert result.round_number == 2
+    assert result.revised_from == pinned
+    rounds = record(config, EXP_01)["rounds"]
+    assert [item["round"] for item in rounds] == [1, 2]
+    assert rounds[0]["seal"]["candidate_revision"] == pinned
+    assert rounds[1] == {
+        "round": 2,
+        "opened_at": REVISED_AT,
+        "reason": "replay lost two runs to the loader order",
+        "tasks": [],
+        "seal": None,
+    }
+    assert ledger_types(config)[-1] == "experiment-revised"
+
+
+def test_revise_refuses_while_the_round_is_still_open(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A revision appends to a round whose candidate is pinned: a round nothing
+    measured leaves the next one revising nothing (invariant 16)."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+
+    with pytest.raises(evolution.BatchError, match="round 1 .* is still open"):
+        experiments.revise(config, reason="replay lost two runs", now=LATER)
+
+    assert len(record(config, EXP_01)["rounds"]) == 1
+
+
+def test_revise_records_why(config: evolution.EvolutionConfig, batch: Path) -> None:
+    seal(config, ["loader-fallback"])
+
+    with pytest.raises(evolution.BatchError, match="revising records why"):
+        experiments.revise(config, reason="   ", now=LATEST)
+
+
+def test_revise_refuses_a_ref_that_moved_past_the_pinned_candidate(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Opening a round is what lets work resume, so a commit that arrived before
+    it is work on a candidate that was already measured."""
+
+    seal(config, ["loader-fallback"])
+    advance(config, lineage.experiment_ref(EXP_01))
+
+    with pytest.raises(evolution.BatchError, match="ahead"):
+        experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+
+def test_revise_run_again_finishes_an_interrupted_one(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The round on record, opened for this reason and admitting nothing yet, is
+    this operation already done — so the redo reports it rather than opening a
+    third round, and the audit line the interruption cost is not re-appended."""
+
+    pinned = seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+    before = snapshot(config.repo_root)
+
+    result = experiments.revise(config, reason="replay  lost   two runs", now=LATEST)
+
+    assert result.opened is False
+    assert result.round_number == 2
+    assert result.revised_from == pinned
+    assert snapshot(config.repo_root) == before
+
+
+def test_revise_refuses_a_second_reason_for_the_round_already_open(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    with pytest.raises(evolution.BatchError, match="already opened for 'replay lost two runs'"):
+        experiments.revise(config, reason="on reflection, the hook order", now=LATEST)
+
+    assert len(record(config, EXP_01)["rounds"]) == 2
+
+
+def test_a_revised_round_that_admitted_nothing_is_not_sealed(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A round is the task set admitted into it and the candidate that set
+    produced; sealing an empty one pins a revision pass no proposal accounts
+    for."""
+
+    seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+    advance(config, lineage.experiment_ref(EXP_01))
+
+    with pytest.raises(evolution.BatchError, match="round 2 .* has admitted nothing"):
+        experiments.seal_round(config, now=LATEST)
+
+
+def test_the_phase_names_a_revised_round_with_nothing_admitted_yet(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Counting an empty round's tasks would report it as ready for a seal that
+    refuses one."""
+
+    seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    status = phase.describe(config, now=LATEST)
+
+    assert status.phase == phase.PHASE_IMPLEMENTING
+    assert status.summary == f"implementing {EXP_01} round 2 (no tasks admitted)"
+
+
+def test_a_revised_round_takes_its_own_tasks_and_seals_from_them(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The whole arc, and what it has to preserve: round 1's selection, its seal,
+    and the evidence that names it are all still there, and the ref reaches the
+    second candidate from the first."""
+
+    first = seal(config, ["loader-fallback"])
+    experiments.revise(config, reason="replay lost two runs", now=LATEST)
+
+    admission = experiments.add_tasks(config, ["hook-side-loader"], now=LATEST)
+    assert admission.round_number == 2
+    assert f"`{EXP_01}`, round 2" in admission.admitted[0].task_path.read_text(encoding="utf-8")
+
+    finish(config, admission.admitted[0].task_id)
+    second = advance(config, admission.ref)
+    result = experiments.seal_round(config, now=LATEST)
+
+    assert result.round_number == 2
+    assert result.candidate_revision == second
+    rounds = record(config, EXP_01)["rounds"]
+    assert rounds[0]["seal"]["candidate_revision"] == first
+    assert [task["draft_id"] for task in rounds[0]["tasks"]] == ["loader-fallback"]
+    assert [task["draft_id"] for task in rounds[1]["tasks"]] == ["hook-side-loader"]
+
+    derived = lineage.describe(config).current
+    assert derived.candidate_revision == second
+    assert derived.ref is not None
+    assert derived.ref.chain is True
+    assert derived.ref.consistent is True
 
 
 # --- the rest of the controller ----------------------------------------------

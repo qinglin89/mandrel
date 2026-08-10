@@ -281,8 +281,15 @@ def _round_tail(round_: Round) -> str:
     the seal is what pins its candidate, and nothing may be measured before that
     (invariant 16). Saying "0 tasks left" would report the work as the thing
     still outstanding when it is the seal.
+
+    A round that has admitted nothing is the other way round, and is exactly what
+    `revise` opens: the round exists so work can resume off the pinned candidate,
+    and what it is waiting for is the admission that fills it. Counting its tasks
+    would report it as ready for a seal that refuses one.
     """
 
+    if not round_.tasks:
+        return " (no tasks admitted)"
     left = len(round_.unfinished)
     if not left:
         return " (ready to seal)"

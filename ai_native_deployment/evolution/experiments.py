@@ -1,4 +1,4 @@
-"""The human admission gate: what a decision to implement a proposal writes.
+"""The human admission gate, and the rounds an admitted attempt moves through.
 
 `lineage.py` reads the batch and experiment records; this module is what writes
 them. Between analysis and implementation sits one human gate (invariant 9), and
@@ -11,6 +11,19 @@ these are the three operations on it:
 - **add-tasks** — further drafts admitted into the round that is open.
 - **reject** — a draft turned down, recorded so the gate stops waiting for a
   decision that was already made.
+
+Two more move the round an experiment is working in, and both only append
+(contract: Rounds):
+
+- **seal-round** — the open round becomes candidate-ready: every task it
+  admitted is observed at `completed` and the ref tip is pinned as that round's
+  candidate revision, which is the only revision replay or a promotion may
+  afterwards name (invariant 16).
+- **revise** — the next round is opened from an already-pinned one, with the
+  reason for it. It admits nothing: a revision is decided the moment replay
+  reports, and what belongs in the new round is the next question — so the round
+  opens empty and `add-tasks` fills it, rather than work staying blocked under a
+  round that has already been measured.
 
 **What makes the operation real.** Each writes several places at once — a Git
 ref, a versioned record, `.ai-tasks/` and its index, the audit ledger — and the
@@ -66,7 +79,9 @@ from .lineage import (
     AdmittedTask,
     BatchLineage,
     Experiment,
+    RefState,
     Round,
+    Seal,
     experiment_ref,
     format_experiment_id,
     is_draft_id,
@@ -81,6 +96,8 @@ from .state import atomic_write_text, single_writer_lock
 RECORD_EXPERIMENT_CREATED = "experiment-created"
 RECORD_TASKS_ADMITTED = "tasks-admitted"
 RECORD_DRAFT_REJECTED = "draft-rejected"
+RECORD_ROUND_SEALED = "round-sealed"
+RECORD_EXPERIMENT_REVISED = "experiment-revised"
 
 DRAFT_SUFFIX = ".md"
 
@@ -152,6 +169,40 @@ class RejectionResult:
     # record: the same selection redone after an interruption. The drafts are
     # declined either way, and only the caller reporting it needs the difference.
     recorded: bool = True
+
+
+@dataclass(frozen=True)
+class SealResult:
+    """A round made candidate-ready: what was pinned, and what was observed."""
+
+    batch_id: str
+    experiment_id: str
+    round_number: int
+    candidate_revision: str
+    sealed_at: str
+    # Tasks this run observed complete. Empty when every one of them had already
+    # been observed by an earlier run whose seal did not land.
+    observed: tuple[str, ...] = ()
+    # False when the round was already candidate-ready: the record is what makes
+    # the seal real, so this reports the pin that is on record rather than
+    # writing a second one.
+    sealed: bool = True
+
+
+@dataclass(frozen=True)
+class ReviseResult:
+    """The next round, opened from the candidate the previous one pinned."""
+
+    batch_id: str
+    experiment_id: str
+    round_number: int
+    reason: str
+    # The candidate revision this round revises: what the previous round pinned,
+    # and what its evidence goes on describing.
+    revised_from: str
+    # False when the round was already open on record — the same revision redone
+    # after an interruption.
+    opened: bool = True
 
 
 def create(
@@ -316,12 +367,11 @@ def reject(
     """
 
     moment = _moment(now)
-    text = " ".join((reason or "").split())
-    if not text:
-        raise BatchError(
-            "declining a draft records why; the reason travels with the batch and is what keeps a rejected "
-            "proposal from being re-argued from memory"
-        )
+    text = _reason(
+        reason,
+        "declining a draft records why; the reason travels with the batch and is what keeps a rejected "
+        "proposal from being re-argued from memory",
+    )
 
     with single_writer_lock(config):
         current = _current_cycle(config, now=moment)
@@ -422,6 +472,274 @@ def _redo_reject(
     )
 
 
+# --- rounds ------------------------------------------------------------------
+
+
+def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealResult:
+    """Make the open round candidate-ready: observe its tasks, pin its candidate.
+
+    Invariant 16. A round is measured only once every task admitted into it has
+    been observed at `completed` and the ref tip is pinned as that round's
+    candidate revision — after which replay, and any terminal decision, name that
+    pinned revision rather than a tip that is still free to move.
+
+    The observation is recorded because it is the only durable form of the fact:
+    `.ai-tasks/` is machine-local and close-out archives a finished task away, so
+    on another clone the task's own status is unreadable rather than merely
+    absent. Sealing therefore happens on the machine that holds the tasks.
+
+    Run again after an interrupted seal, it reports the pin already on record
+    rather than writing a second one — the record is what makes the seal real,
+    and the audit line it may have cost is not re-appended (the rule a redone
+    rejection already follows).
+    """
+
+    moment = _moment(now)
+    with single_writer_lock(config):
+        current = _current_cycle(config, now=moment)
+        experiment = _require_open_experiment(current, "seal")
+        # Before the already-sealed shortcut, not after it: a ref that has moved
+        # past a candidate-ready round is exactly the state this refuses, and
+        # reporting the pin as though nothing had happened is what would hide it.
+        _require_consistent_ref(current)
+
+        round_ = experiment.last_round
+        if round_.seal is not None:
+            return SealResult(
+                batch_id=current.batch_id,
+                experiment_id=experiment.experiment_id,
+                round_number=round_.number,
+                candidate_revision=round_.seal.candidate_revision,
+                sealed_at=round_.seal.sealed_at,
+                sealed=False,
+            )
+        if not round_.tasks:
+            raise BatchError(
+                f"round {round_.number} of {experiment.experiment_id} has admitted nothing; a round is the task "
+                "set admitted into it and the candidate that set produced, so sealing an empty one would pin a "
+                "revision pass no proposal accounts for — admit the drafts this round needs, or end the attempt "
+                "with a decision"
+            )
+
+        stamp = format_rfc3339(moment)
+        tasks, observed = _observe_completions(config, current, experiment, round_, observed_at=stamp)
+        candidate = _pinnable_tip(experiment, current.ref)
+        sealed = replace(round_, tasks=tasks, seal=Seal(sealed_at=stamp, candidate_revision=candidate))
+        updated = replace(experiment, rounds=experiment.rounds[:-1] + (sealed,))
+
+        _write_record(config, updated)
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_ROUND_SEALED,
+                    recorded_at=stamp,
+                    batch_id=current.batch_id,
+                    experiment_id=experiment.experiment_id,
+                    round=round_.number,
+                    revision=candidate,
+                )
+            ],
+        )
+        return SealResult(
+            batch_id=current.batch_id,
+            experiment_id=experiment.experiment_id,
+            round_number=round_.number,
+            candidate_revision=candidate,
+            sealed_at=stamp,
+            observed=observed,
+        )
+
+
+def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> ReviseResult:
+    """Open the next round of the open experiment, from an already-pinned one.
+
+    What makes the previous round's evidence stale is this record rather than
+    anyone remembering to invalidate it: the old evidence goes on naming the
+    round it measured, whose candidate revision was pinned before that evidence
+    existed and has not moved since, and the new round has none of its own until
+    it is sealed.
+
+    The round opens empty. A revision is decided the moment replay reports, and
+    the proposals it needs may not be written yet — while the last round is
+    candidate-ready the ref stays where it was pinned, so waiting for those
+    drafts before opening the round is waiting with the work blocked. `add-tasks`
+    admits them afterwards.
+    """
+
+    moment = _moment(now)
+    text = _reason(
+        reason,
+        "revising records why; the reason is what the next round's evidence is read against, and a revision "
+        "with none says only that somebody was dissatisfied",
+    )
+
+    with single_writer_lock(config):
+        current = _current_cycle(config, now=moment)
+        experiment = _require_open_experiment(current, "revise")
+        _require_consistent_ref(current)
+
+        last = experiment.last_round
+        if last.seal is None:
+            return _redo_revise(experiment, last, text)
+
+        stamp = format_rfc3339(moment)
+        opened = Round(number=last.number + 1, opened_at=stamp, reason=text, tasks=(), seal=None)
+        updated = replace(experiment, rounds=experiment.rounds + (opened,))
+
+        _write_record(config, updated)
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_EXPERIMENT_REVISED,
+                    recorded_at=stamp,
+                    batch_id=current.batch_id,
+                    experiment_id=experiment.experiment_id,
+                    round=opened.number,
+                    revision=last.seal.candidate_revision,
+                )
+            ],
+        )
+        return ReviseResult(
+            batch_id=current.batch_id,
+            experiment_id=experiment.experiment_id,
+            round_number=opened.number,
+            reason=text,
+            revised_from=last.seal.candidate_revision,
+        )
+
+
+def _redo_revise(experiment: Experiment, last: Round, reason: str) -> ReviseResult:
+    """The same revision run again, or a refusal naming the round that is open.
+
+    A round this revision opened and nothing has been admitted into yet *is* this
+    operation, already recorded — the record is what makes it real, and the audit
+    line an interruption cost is not re-appended. Anything else is a round with
+    work in it, or a second reason for one that already exists: both are answered
+    by what is on record rather than by opening another.
+    """
+
+    previous = experiment.rounds[-2] if len(experiment.rounds) > 1 else None
+    pinned = previous.candidate_revision if previous is not None else None
+    if pinned is not None and not last.tasks:
+        if last.reason == reason:
+            return ReviseResult(
+                batch_id=experiment.batch_id,
+                experiment_id=experiment.experiment_id,
+                round_number=last.number,
+                reason=last.reason,
+                revised_from=pinned,
+                opened=False,
+            )
+        raise BatchError(
+            f"round {last.number} of {experiment.experiment_id} was already opened for {last.reason!r}; a round "
+            f"is opened once, so redo the same revision to finish an interrupted one — {reason!r} would be a "
+            "second reason for a round that already exists, and what goes into that round is an admission"
+        )
+    raise BatchError(
+        f"round {last.number} of {experiment.experiment_id} is still open; a revision appends to a round whose "
+        "candidate is already pinned, so seal this one first — the previous round's evidence is what a revision "
+        "makes stale, and a round nothing measured leaves the next one revising nothing (invariant 16)"
+    )
+
+
+def _require_open_experiment(current: BatchLineage, action: str) -> Experiment:
+    """The attempt these operations act on: the one experiment still open."""
+
+    experiment = current.open_experiment
+    if experiment is None:
+        raise BatchError(
+            f"{current.batch_id} has no open experiment, so there is no round to {action}; a terminal decision is "
+            "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
+            "it needs"
+        )
+    return experiment
+
+
+def _observe_completions(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    round_: Round,
+    *,
+    observed_at: str,
+) -> tuple[tuple[AdmittedTask, ...], tuple[str, ...]]:
+    """This round's tasks, each carrying the observation that it finished.
+
+    The status is read from the copy this admission published, identified the
+    same way an interrupted admission identifies its own work: a file standing at
+    an admitted task's id that is not that copy says nothing about whether the
+    change was made, and reading `completed` off it would seal a candidate around
+    work nobody did.
+
+    A task the record already shows complete is not re-read. The observation is
+    durable and the file is not: close-out archives it, another clone never had
+    it, and an earlier run of this operation may have recorded the observation
+    before the seal itself was interrupted.
+    """
+
+    tasks: list[AdmittedTask] = []
+    observed: list[str] = []
+    outstanding: list[str] = []
+    for task in round_.tasks:
+        if task.complete:
+            tasks.append(task)
+            continue
+        path = analysis_task.existing_task_path(config, task.task_id)
+        if path is None:
+            tasks.append(task)
+            outstanding.append(f"{task.task_id} (not on this machine)")
+            continue
+        _require_admitted_copy(config, current, experiment, round_, task, path)
+        if not analysis_task.task_finished(config, task.task_id):
+            tasks.append(task)
+            outstanding.append(f"{task.task_id} (still in flight)")
+            continue
+        tasks.append(replace(task, completion_observed_at=observed_at))
+        observed.append(task.task_id)
+
+    if outstanding:
+        raise BatchError(
+            f"round {round_.number} of {experiment.experiment_id} is not ready to seal: {outstanding}; a "
+            "candidate that does not contain the change it was admitted for is not what anyone means to measure "
+            "(invariant 16), and `.ai-tasks/` is machine-local — a task nobody here holds is observed on the "
+            "machine that worked it rather than assumed finished"
+        )
+    return tuple(tasks), tuple(observed)
+
+
+def _pinnable_tip(experiment: Experiment, ref: RefState | None) -> str:
+    """The revision this seal pins, or a refusal naming why it cannot be one.
+
+    Stricter than the ref check every write here makes, and deliberately so: that
+    one refuses a ref known to be wrong, while a seal must not pin a revision
+    this checkout cannot show to descend from the history the record already
+    names. The pin is immutable and every later piece of evidence names it, so
+    "probably the right tree" is not a thing to write down.
+
+    The tip pinned is the one that was checked — the observation the lineage made
+    when it derived this experiment's ref state — rather than a fresh reading
+    taken at write time. A ref that moved in between would otherwise be pinned
+    without its ancestry ever having been asked about, which is the one property
+    this refusal exists to establish.
+    """
+
+    if ref is None or ref.tip is None:
+        raise BatchError(
+            f"{experiment.ref} is not in this checkout, so this round has no tip to pin; the seal records the "
+            "revision the work actually reached, which is a fact only the repository holding that ref has — "
+            "fetch it, or seal where the work happened"
+        )
+    if ref.consistent is not True:
+        raise BatchError(
+            f"{ref.ref} stands at {ref.tip[:12]}, and this checkout cannot confirm it descends from the "
+            f"{ref.pinned[:12]} the record pins ({ref.state}); a candidate revision is pinned once and every "
+            "later piece of evidence names it, so it is pinned from a history Git can answer for"
+        )
+    return ref.tip
+
+
 # --- the guarded preamble ----------------------------------------------------
 
 
@@ -489,6 +807,21 @@ def _require_consistent_ref(current: BatchLineage) -> None:
         f"record pins ({ref.state}); the ref only fast-forwards, and work admitted onto it now would be measured "
         "as part of a candidate nobody can identify"
     )
+
+
+def _reason(text: str, requirement: str) -> str:
+    """The human reason a decision records, as one line.
+
+    Collapsed because it travels in a versioned record and is compared there: a
+    redo recognising its own interrupted work matches the reason it wrote, and
+    two spellings differing only in how they were wrapped would read as two
+    different decisions.
+    """
+
+    collapsed = " ".join((text or "").split())
+    if not collapsed:
+        raise BatchError(requirement)
+    return collapsed
 
 
 def _requested(draft_ids: Iterable[str]) -> set[str]:
@@ -1523,7 +1856,11 @@ __all__ = [
     "Admitted",
     "AdmissionResult",
     "RejectionResult",
+    "ReviseResult",
+    "SealResult",
     "add_tasks",
     "create",
     "reject",
+    "revise",
+    "seal_round",
 ]

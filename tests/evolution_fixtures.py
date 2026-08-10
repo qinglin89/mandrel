@@ -471,6 +471,13 @@ def git_update_ref(root: Path, ref: str, revision: str) -> None:
     subprocess.run(["git", "-C", str(root), "update-ref", ref, revision], check=True)
 
 
+def git_delete_ref(root: Path, ref: str) -> None:
+    """Drop a ref, which is what every clone that never fetched
+    `refs/evolution/*` looks like from inside this package."""
+
+    subprocess.run(["git", "-C", str(root), "update-ref", "-d", ref], check=True)
+
+
 def git_checkout(root: Path, revision: str) -> None:
     subprocess.run(["git", "-C", str(root), "checkout", "-q", revision], check=True)
 

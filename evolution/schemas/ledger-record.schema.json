@@ -54,7 +54,7 @@
       "type": "string"
     },
     "revision": {
-      "description": "The commit the event turned on: an experiment's base at creation, the round's pinned candidate at a seal, a revision, or a terminal decision, the promotion revision at a promoted conclusion.",
+      "description": "The commit the event turned on: an experiment's base at creation, the round's pinned candidate at a seal and again at the revision that leaves that candidate behind, the promotion revision when a promotion is decided or concluded.",
       "type": [
         "string",
         "null"

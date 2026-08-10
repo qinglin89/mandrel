@@ -38,7 +38,9 @@ candidate revision — the round is then candidate-ready, and that pinned revisi
 is the only thing replay or a promotion may name. Revising opens the next round
 from an already-sealed one, so evidence gathered for an earlier round goes on
 naming that round rather than silently being read as describing the current
-candidate.
+candidate. A revised round opens with nothing admitted into it and is filled by
+a later admission, so work resumes as soon as the revision is decided rather
+than when the next proposals happen to be written.
 
 An implementation task is not evidence of improvement; promotion depends on a
 completed replay or canary record naming the base revision, the experiment, and

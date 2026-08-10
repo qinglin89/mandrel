@@ -901,6 +901,18 @@ def _read_round(path: Path, item: Mapping[str, Any]) -> Round:
         tasks=tasks,
         seal=Seal(sealed_at=seal["sealed_at"], candidate_revision=seal["candidate_revision"]) if seal else None,
     )
+    if round_.candidate_ready and not round_.tasks:
+        # An open round legitimately admits nothing for a while — `revise` opens
+        # one so work can resume off the pinned candidate, and `add-tasks` fills
+        # it. Sealing is where that stops being harmless: the pin is a candidate
+        # revision evidence names and a promotion could carry, so a sealed round
+        # with no admission behind it is canonical work that passed no gate
+        # (invariants 9 and 16).
+        raise BatchError(
+            f"{path}: round {round_.number} pins a candidate but admitted nothing; a round is the task set "
+            "admitted into it and the candidate that set produced, so this one names a revision no proposal "
+            "accounts for"
+        )
     if round_.candidate_ready and round_.unfinished:
         raise BatchError(
             f"{path}: round {round_.number} is sealed, but {list(round_.unfinished)} carry no completion "

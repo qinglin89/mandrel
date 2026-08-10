@@ -358,7 +358,25 @@ it is sealed. Three operations move it, and all three only append:
   because a candidate that does not contain the change it was admitted for is
   not the thing anyone means to measure.
 - `revise` opens the next round, from a round that is already candidate-ready,
-  with the reason for it.
+  with the reason for it. The round opens with nothing admitted into it, and
+  `add-tasks` is what fills it: a revision is decided the moment replay reports,
+  the proposals answering it may not be written yet, and while the last round is
+  candidate-ready the ref stays where it was pinned — so waiting for those drafts
+  before opening the round is waiting with the work blocked.
+
+Both halves of a seal are read where the fact actually is. The completion of an
+admitted task is read from the copy that admission published — identified as
+that copy the same way an interrupted admission identifies its own work, since a
+file merely standing at the task's id says nothing about whether the change was
+made — and `.ai-tasks/` is machine-local, so a task this machine does not hold is
+observed where it was worked rather than assumed finished. The candidate is read
+from the ref, which must be here and must be shown to descend from the revision
+pinned before it: the pin is immutable and every later piece of evidence names
+it, so a tree Git cannot answer for is not one to write down. A round whose ref
+never moved seals at the revision already pinned — a candidate nobody changed,
+which is an honest record and not a rewritten history. A round that admitted
+nothing is not sealed at all: it would pin a revision pass no proposal accounts
+for.
 
 Sealing before measuring is invariant 16, and it is what makes a round a thing
 evidence can name. While a round is open the ref keeps fast-forwarding under
@@ -461,10 +479,12 @@ Two readings are specifically not that answer:
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, abandon, supersede, and `conclude-no-change` — writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
-its index, the audit ledger. They take the same single-writer lock as import and
-freeze, they write in an order where the durable record is what makes the
-operation real, and every step is safe to redo, so an interrupted operation is
-finished by the next run rather than repaired by hand.
+its index, the audit ledger. Not every one of them touches all four — a seal and
+a revision write a record and an audit line, because what they record is a
+decision about work that has already happened. They take the same single-writer
+lock as import and freeze, they write in an order where the durable record is
+what makes the operation real, and every step is safe to redo, so an interrupted
+operation is finished by the next run rather than repaired by hand.
 
 That order is the same throughout. The experiment ref goes first, because it is
 the one thing that must never be created twice or restored afterwards: a clone
@@ -480,8 +500,11 @@ it. Redoing the same operation with the same selection is how it finishes: it
 recognises its own recorded work and writes what is missing, rather than
 admitting anything a second time — a rejection whose record landed and whose
 audit line did not is finished by declining the same drafts for the same reason,
-and a redo is as guarded as the operation it completes, so the ref check that
-stops a fresh admission stops the resumed one too.
+and a seal or a revision whose record landed reports the pin, or the round, that
+is already there rather than writing a second one. A redo is as guarded as the
+operation it completes, so the ref check that stops a fresh admission stops the
+resumed one too — and a ref that moved while a round was candidate-ready stops
+the redo before it can report that round as though nothing had happened.
 
 Recognition is identity, not position — and identity is read from the structures
 that own the values, never from text containing them. A file standing at an
@@ -512,9 +535,12 @@ a second current batch, a second open experiment, an experiment
 left open under a later one, a gap or a second spelling in the batch's ordinals,
 an experiment whose base is not the batch's, a candidate revision that does not
 descend from the one pinned before it, a ref that is not where its record says or
-that has moved past a candidate-ready round, a round sealed with no candidate or
-carrying a candidate nobody sealed, a task admitted into a sealed round with no
-completion observation, a draft already consumed, a draft that is not the inert
+that has moved past a candidate-ready round, a tip this checkout cannot show to
+descend from the revision pinned before it, a round sealed with no candidate or
+carrying a candidate nobody sealed, a round sealed with nothing admitted into it,
+a task whose completion this machine cannot observe, a second reason for a round
+that is already open, a task admitted into a sealed round with
+no completion observation, a draft already consumed, a draft that is not the inert
 task file described above, a task id admitted twice, a file at an admitted task's
 id that is not its copy, a second decision about a proposal already declined, a
 `superseded` decision naming anything but the successor it created, an outcome

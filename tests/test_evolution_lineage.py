@@ -1032,6 +1032,42 @@ def test_a_sealed_round_whose_task_was_never_observed_complete_is_refused(
         lineage.describe(config)
 
 
+def test_a_sealed_round_that_admitted_nothing_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An open round admitting nothing is the ordinary state right after a
+    revision. Sealing one is where it stops being harmless: the pin is a
+    candidate evidence names and a promotion could carry, so a round with no
+    admission behind it is canonical work that passed no gate."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, tasks=[], candidate_revision=CANDIDATE)],
+    )
+    with pytest.raises(evolution.BatchError, match="pins a candidate but admitted nothing"):
+        lineage.describe(config)
+
+
+def test_an_open_round_that_admitted_nothing_is_the_state_a_revision_leaves(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The other half of the same rule: work resumes when the round opens, not
+    when the drafts answering the revision happen to be written."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE), experiment_round(2, tasks=[])],
+    )
+
+    experiment = only(config).open_experiment
+    assert experiment is not None
+    assert experiment.open_round is not None and experiment.open_round.number == 2
+    assert experiment.open_round.tasks == ()
+    assert experiment.pinned_revision == CANDIDATE
+
+
 def test_an_open_round_has_nothing_pinned_to_measure(config: evolution.EvolutionConfig, batch: Path) -> None:
     """Revising makes the previous round's evidence stale by construction: the
     new round has no candidate, and the old evidence goes on naming the round it
