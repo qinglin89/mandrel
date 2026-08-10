@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Design Principles and Decisions
@@ -23,6 +23,8 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
   separate analysis/change tasks, stable runner revisions, and human gates.
 - Evolution lifecycle status is derived from durable artifacts and Git; no
   mutable flow-state field governs the phase.
+- Evolution reads and writes share one whole-lineage derivation; batch currency
+  is never inferred from one artifact's presence in isolation.
 
 ## Key Tradeoffs
 
@@ -65,11 +67,18 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 - Dependency injection for filesystem/subprocess-heavy tests.
 - Atomic or idempotent writes for receipts, registries, evolution state,
   immutable batch publication, and generated task/index recovery.
+- Multi-record/ref mutations are ordered so interruption leaves a named,
+  resumable state; the durable domain record, not the audit line, makes the
+  operation real.
+- A record naming a Git-ref transition is written under Git's own lock on the
+  revision it read; an atomic write of a stale ref observation is still stale.
+- Evolution writers publish through the reader's parser so persisted
+  cross-field rules are enforced in both directions.
 - Config/schema version fields on persisted machine contracts.
 - Fail closed on malformed state, unsafe paths, unsupported config, or missing
   provenance required for a decision.
-- Content equality, not marker/prose matching, proves ownership before an
-  optional Git-hook installer treats an existing hook as managed.
+- Content equality over the owning structure, not marker/prose/prefix matching,
+  proves ownership before existing files are adopted or repaired.
 
 ## Anti-Patterns to Avoid
 

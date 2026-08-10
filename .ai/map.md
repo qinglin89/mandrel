@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Project Map
@@ -21,6 +21,7 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
 | Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON |
+| Evolution change lineage | lineage/experiment/revision services, evolution policy | experiment/outcome/rejection records, durable experiment refs, phase JSON v3, guarded admission/round/decision operations |
 | Report publication | external orch-hub | pending global report feed/export |
 
 ## Change Impact

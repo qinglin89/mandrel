@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # APIs and Interfaces
@@ -17,7 +17,7 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 | `registry remove <name-or-path>` | Remove local tracking only |
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
-| `evolution status [--json]` | Derive lifecycle phase plus baseline/candidate revisions from on-disk state and Git |
+| `evolution status [--json]` | Derive schema-v3 phase, gate, experiment/round history, ref state, distinct base/candidate/tip revisions, and last promotion |
 | `evolution start [--force --justification <text>]` | Reconcile, sync, and freeze one batch when admission policy allows; force never waives the minimum |
 
 All evolution operations are human-invoked and make no evaluation model call.
@@ -34,12 +34,16 @@ successful outcome when policy is not met.
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
 | `evolution/config.toml` | Versioned evolution admission/storage policy |
-| `evolution/schemas/*.json` | Versioned import, batch v1/v2, closure, and ledger contracts |
+| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, outcome, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
 | `evolution/batches/<id>/manifest.json` | Immutable committed cohort membership and evaluator/protocol provenance |
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
-| `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts awaiting human move/admission into `.ai-tasks/` |
+| `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |
+| `evolution/batches/<id>/rejected-drafts.json` | Durable terminal decisions for declined draft identities and bytes |
+| `evolution/experiments/<id>/experiment.json` | Experiment identity, frozen batch base, durable ref, append-only rounds/tasks/seals, and terminal decision |
+| `refs/evolution/experiments/<id>` | Durable fast-forward candidate ref; independent of the checked-out branch |
+| `evolution/batches/<id>/outcome.json` | Terminal promoted/no-change batch outcome; valid only when the whole experiment lineage agrees |
 | `evolution/ledger.jsonl` | Versioned sanitized append-only evolution audit |
 
 ## External Integration

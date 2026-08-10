@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Features
@@ -21,7 +21,8 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
 | Evolution lifecycle CLI | implemented | `aii-2 evolution list|sync|status|start`; human and JSON phase rendering |
-| Canary/replay automation | future | experiment records exist; executable support not implemented |
+| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, batch no-change outcome, phase JSON v3 |
+| Canary/replay automation | future | candidate-ready rounds exist; replay, promotion, and rollback execution are not implemented |
 
 ## Evolution Behavior Chain
 
@@ -32,8 +33,10 @@ archived tasks acquire complete L1+L2 evaluation artifacts
   → validate/hash/dedupe into pending unique-task pool
   → threshold/age rule freezes immutable batch
   → pending analysis task cites evolution contract + batch
-  → reviewed dispositions create zero or more admitted change tasks
-  → candidate canary/replay → human promotion decision
+  → reviewed dispositions create inert change-task drafts
+  → human admission creates an experiment on the batch's frozen base
+  → append-only task rounds seal an exact candidate revision
+  → candidate canary/replay → human promotion or terminal no-change decision
 ```
 
 The evolution controller is independent of evaluation trigger policy and only

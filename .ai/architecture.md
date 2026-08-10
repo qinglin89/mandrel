@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Architecture
@@ -71,14 +71,18 @@ and persists the cursor, drain proof, pending pool, rejections, and processed
 claims under ignored `.ai-evolution/`. Admission freezes the eligible pool into
 an immutable versioned manifest and generates one analysis-only task; closure
 and proposed change-task drafts remain separate artifacts with a human admission
-gate before implementation.
+gate before implementation. Guarded domain operations then create one durable
+experiment ref and record, admit task copies, append and seal candidate rounds,
+record terminal experiment decisions, and conclude a batch with an outcome.
 
-Lifecycle phase and baseline/candidate revisions are re-derived from manifests,
-closure records, tasks, drafts, runtime state, and Git rather than stored as flow
-state. Versioned `evolution/` holds policy, schemas, manifests, sanitized cases,
-experiment outcomes, and the audit ledger; raw report content and credentials
-never enter it. Analysis, canonical implementation, and promotion remain
-separate reviewed/human-gated steps.
+One whole-lineage derivation governs both status and mutations: manifests,
+closure, experiment/outcome/rejection records, durable refs, and Git determine
+the current batch, open attempt, gate, round, and revisions from any checkout.
+`.ai-tasks/` supplies local completion observations, never historical identity;
+the audit ledger is not flow state. Versioned `evolution/` holds safe policy,
+schemas, manifests, lineage, sanitized cases, and audit while raw report content
+and credentials stay ignored. Analysis, canonical implementation, replay, and
+promotion remain separate reviewed/human-gated steps.
 
 ## External Dependencies
 

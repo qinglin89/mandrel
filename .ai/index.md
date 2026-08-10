@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-07-31
-verified-against: c7c625c20f6d917c24bb586cc73e8c9bf2742490
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # AI Knowledge Router
@@ -47,3 +47,6 @@ Load only what the current task needs.
 | Runner protocol revision | Stable protocol version governing one run |
 | Evolution report | Archived completed-task evaluation with durable complete L1+L2 artifacts |
 | Evolution batch | Immutable cohort of unique completed-task reports analyzed together |
+| Evolution experiment | One durable alternative attempted inside a batch, with its own ref, rounds, tasks, and terminal decision |
+| Experiment round | Append-only revision pass; candidate-ready only after task completion is observed and the ref tip is sealed |
+| Evolution revisions | Batch base, moving candidate tip, sealed round candidate, source-line promotion, and per-target effective revision are distinct commits |

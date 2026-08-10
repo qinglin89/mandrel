@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-09
-verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Conventions
@@ -32,6 +32,9 @@ verified-against: 623a1fd7e00197658ab81b5e6628131d4fc05faf
 - Ledger records append; immutable batch manifests are never edited.
 - Analysis tasks produce dispositions only; canonical edits require separate
   admitted tasks.
+- An admissible change draft is an inert taskfile: unique closed frontmatter,
+  pending/unclaimed lifecycle, unique column-0 Goal/Scope/Acceptance/Session
+  log sections, an empty log, and no pre-existing Admission section.
 
 ## Testing
 

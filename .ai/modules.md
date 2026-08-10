@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-10
-verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
+last-updated: 2026-08-11
+verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 ---
 
 # Modules
@@ -21,7 +21,8 @@ verified-against: 6f16f6e9c63ae0eb4bb1ad37bb54a914818a3f63
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; derived phase/rendering and revisions |
+| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; phase/rendering |
+| Evolution lineage | `evolution/lineage.py`, `experiments.py`, `revisions.py` | Whole-history derivation; durable experiment refs/records; guarded admission, round, terminal-decision, and no-change operations |
 
 ## Boundary Rules
 
