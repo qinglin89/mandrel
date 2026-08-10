@@ -43,7 +43,13 @@ socket call.
 **Credentials.** The token travels in a header, never in a URL or a log line,
 and never appears in an error message. Plain `http` is refused for anything but
 a loopback host: a bearer token on the wire in clear text is a leak that no
-later care can undo, and a local orch-hub is the only case where it is not.
+later care can undo, and a local orch-hub is the only case where it is not. For
+the same reason no redirect is followed — checking the configured URL says
+nothing about where a `Location` header would send the token.
+
+**Bounds.** Every response body is read under a limit this client owns rather
+than one the feed declares, so a corrupt or hostile feed cannot make the tool
+buffer until it dies.
 """
 
 from __future__ import annotations
@@ -60,16 +66,66 @@ from .feed import FeedPage
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
-# Cap for a body whose record declared no usable size. The declared size bounds
-# every well-formed fetch; this only stops a feed that answers a small artifact
-# with an endless stream.
-MAX_UNDECLARED_ARTIFACT_BYTES = 32 * 1024 * 1024
+# The most this client will buffer from one response — a feed page or an
+# artifact body alike. A declared `size_bytes` is the other side's claim, and the
+# import schema sets no ceiling on it, so reading up to it lets a feed name a
+# size no machine can hold. A smaller declared size still tightens the read; a
+# body that fills this cap fails the caller's size/hash check, which names both
+# numbers, so the bound rejects rather than silently truncates.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 ARTIFACTS_PATH_SEGMENT = "artifacts"
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
+# Bound for feed-controlled text quoted back in an error message.
+MAX_QUOTED_CHARS = 200
+
 Opener = Callable[..., Any]
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect rather than follow it with the token attached.
+
+    `urllib`'s default handler copies the request headers — `Authorization`
+    among them — onto the redirected request, and the destination is chosen by
+    whoever answered. Checking the configured base URL therefore proves nothing
+    about where the token ends up: one `Location` to another origin, or from
+    https down to plain http, hands the bearer token to a host nobody checked.
+
+    Refusing outright is the whole rule, so there is no origin comparison to get
+    subtly wrong — default ports, case, internationalized hosts, a chain that is
+    same-origin at each step and not end to end. The stated wire contract names
+    two exact endpoints; a redirect is not part of it, and naming the
+    destination makes a legitimate one a config edit rather than a mystery.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        fp.close()
+        raise FeedError(
+            f"orch-hub redirected {req.full_url} to {_bounded(newurl)} (HTTP {code}); the request carries "
+            "the bearer token, so it is not resent to a destination this client has not checked. Point the "
+            "feed URL environment variable at the final URL if that redirect is expected."
+        )
+
+
+def _default_opener() -> Opener:
+    """The opener every client uses unless a caller injects one.
+
+    Built here rather than reaching for `urllib.request.urlopen`, which runs the
+    process-global opener: refusing redirects has to be this client's own
+    property and not something another import can replace.
+    """
+
+    return urllib.request.build_opener(_RefuseRedirects()).open
 
 
 class OrchHubFeed:
@@ -92,7 +148,7 @@ class OrchHubFeed:
         self.base_url = _checked_base_url(base_url)
         self.feed_path = "/" + feed_path.strip("/")
         self._token = token
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or _default_opener()
         self._timeout = timeout
 
     def fetch_page(self, cursor: str | None, limit: int) -> FeedPage:
@@ -181,14 +237,18 @@ class OrchHubFeed:
         unreachable or misbehaving feed says nothing about a report's
         eligibility, and burying a good report on a transport hiccup is
         permanent.
+
+        `limit` is what the record declared for this body, if anything. It may
+        tighten the read and never widen it: the bound belongs to this client,
+        because the declaring side is the one that may be lying.
         """
 
-        cap = MAX_UNDECLARED_ARTIFACT_BYTES if limit is None else limit
+        cap = MAX_RESPONSE_BYTES if limit is None else min(limit, MAX_RESPONSE_BYTES)
         try:
             with self._open(self._request(url), timeout=self._timeout) as response:
-                # One byte past the bound: a body that fills it is over the
-                # declared size, and the caller's hash check reports the
-                # mismatch rather than this client buffering an unbounded body.
+                # One byte past the bound: a body that fills it is over the size
+                # this client will accept, and the caller's size/hash check
+                # reports the mismatch rather than this client buffering on.
                 return response.read(cap + 1)
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and missing_ok:
@@ -238,6 +298,15 @@ def _checked_base_url(base_url: str) -> str:
     if parts.query or parts.fragment:
         raise FeedError(f"orch-hub feed URL carries a query or fragment; give the base URL only, got {base_url!r}")
     return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+def _bounded(text: str) -> str:
+    """Quote feed-controlled text in a message without letting it be the message."""
+
+    text = text.strip()
+    if len(text) <= MAX_QUOTED_CHARS:
+        return text
+    return f"{text[:MAX_QUOTED_CHARS]}... ({len(text)} characters)"
 
 
 def _http_message(url: str, code: int, reason: Any) -> str:

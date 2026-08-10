@@ -1,9 +1,14 @@
 """The operator surface: CLI adapters, the orch-hub client, and the derived phase.
 
 Everything runs against a temporary repository. The orch-hub feed does not exist
-yet and this suite never opens a socket: the client is exercised through an
-injected opener that answers the wire contract `hub.py` states, which is the
-only way to test a client written against an API that has not shipped.
+yet, so the client is exercised through an injected opener that answers the wire
+contract `hub.py` states, which is the only way to test a client written against
+an API that has not shipped.
+
+Two tests are the exception and bind a loopback server: what `urllib` does with
+a redirect — whose headers it copies, and to whom — is a property of the real
+handler chain, and an injected opener replaces exactly the code under test. They
+use `127.0.0.1` and an ephemeral port; nothing leaves the machine.
 
 The temporary config lowers `target_task_count` to 2 and `minimum_task_count` to
 1 so a full flow fits in two reports; `test_evolution_controller` asserts the
@@ -12,20 +17,33 @@ shipped file's real numbers load.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import shutil
 import subprocess
+import threading
 import urllib.error
 import urllib.parse
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
 from evolution_fixtures import ARTIFACT_BODIES, git_repo, make_record, make_repo, snapshot, write_feed
 
 from ai_native_deployment import cli, evolution
-from ai_native_deployment.evolution import analysis_task, batches, hub, importer, phase, render, revisions
+from ai_native_deployment.evolution import (
+    analysis_task,
+    batches,
+    hub,
+    importer,
+    phase,
+    render,
+    reports,
+    revisions,
+)
 
 TARGET = 2
 MINIMUM = 1
@@ -535,6 +553,48 @@ def test_a_body_larger_than_declared_is_bounded_and_then_rejected(
     assert len(blobs["evidence"]) == declared + 1
 
 
+def test_a_declared_size_never_widens_the_clients_own_read_bound(config: evolution.EvolutionConfig) -> None:
+    """`size_bytes` has a minimum and no maximum in the import schema, so a feed
+    declaring a petabyte must not turn into a petabyte-sized read: the declaring
+    side is the one that may be lying."""
+    asked: list[int] = []
+
+    class Recording(FakeResponse):
+        def read(self, size: int = -1) -> bytes:
+            asked.append(size)
+            return super().read(size)
+
+    def opener(request: object, timeout: float | None = None) -> Recording:
+        return Recording(b"x" * 8)
+
+    record = make_record(key="r1", sequence=1)
+    record["artifacts"]["evidence"]["size_bytes"] = 10**15
+    feed = hub.OrchHubFeed(BASE_URL, TOKEN, "/api/evaluation/reports", opener=opener)
+
+    feed.fetch_artifacts(record)
+
+    assert max(asked) == hub.MAX_RESPONSE_BYTES + 1
+
+
+def test_a_body_over_the_clients_limit_is_rejected_not_quietly_shortened(
+    config: evolution.EvolutionConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap stops the read; the importer's size check is what stops the
+    truncated body reaching the pool as a short artifact nobody declared."""
+    monkeypatch.setattr(hub, "MAX_RESPONSE_BYTES", 2048)
+    bodies = dict(ARTIFACT_BODIES, evidence=b"L" * 4096)
+    record = make_record(key="r1", sequence=1, bodies=bodies)
+    routes: dict[str, object] = {
+        page_url(limit="50"): json.dumps({"items": [record], "next_cursor": "c1", "exhausted": True}).encode("utf-8")
+    }
+    routes.update({f"{BASE_URL}/api/evaluation/reports/r1/artifacts/{name}": body for name, body in bodies.items()})
+
+    result = importer.sync(config, hub_feed(routes))
+
+    assert result.imported == ()
+    assert result.rejected == (("r1", reports.REASON_ARTIFACT_HASH_MISMATCH),)
+
+
 def test_a_plaintext_url_to_a_remote_host_is_refused(config: evolution.EvolutionConfig) -> None:
     """A bearer token on the wire in clear text is a leak no later care undoes."""
     with pytest.raises(evolution.FeedError, match="clear text"):
@@ -550,6 +610,71 @@ def test_a_local_plaintext_feed_is_allowed(config: evolution.EvolutionConfig) ->
 def test_a_url_that_is_not_http_is_refused(config: evolution.EvolutionConfig) -> None:
     with pytest.raises(evolution.FeedError, match="http"):
         hub.feed_from_config(config, environ={"ORCH_HUB_URL": "file:///etc", "ORCH_HUB_TOKEN": TOKEN})
+
+
+Responder = Callable[[str], tuple[int, dict[str, str], bytes]]
+
+
+@contextlib.contextmanager
+def loopback_server(responder: Responder) -> Iterator[tuple[str, list[tuple[str, dict[str, str]]]]]:
+    """A throwaway server on 127.0.0.1, with the list of requests it received.
+
+    The two redirect tests need the real `urllib` handler chain: an injected
+    opener would replace the code that decides where the token goes.
+    """
+
+    received: list[tuple[str, dict[str, str]]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received.append((self.path, {key.lower(): value for key, value in self.headers.items()}))
+            status, headers, body = responder(self.path)
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            """Silence the default stderr logging; the assertions are the output."""
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_cross_origin_redirect_never_receives_the_token() -> None:
+    """`urllib`'s default handler copies the request headers — `Authorization`
+    among them — onto whichever destination answered with a `Location`, so
+    checking the configured URL proves nothing about where the token lands."""
+    drained = (200, {"Content-Type": "application/json"}, b'{"items": [], "next_cursor": null, "exhausted": true}')
+    with loopback_server(lambda path: drained) as (elsewhere, elsewhere_received):
+        with loopback_server(lambda path: (302, {"Location": f"{elsewhere}/feed"}, b"")) as (base, _):
+            feed = hub.OrchHubFeed(base, TOKEN, "/api/evaluation/reports")
+
+            with pytest.raises(evolution.FeedError, match="redirected") as excinfo:
+                feed.fetch_page(None, 10)
+
+    assert elsewhere_received == []
+    assert TOKEN not in str(excinfo.value)
+
+
+def test_a_same_origin_redirect_is_refused_as_well() -> None:
+    """The rule is "no redirects", not an origin comparison — there is no
+    same-origin test to get subtly wrong, and a chain that is same-origin at
+    every hop still ends wherever the last one points."""
+    with loopback_server(lambda path: (302, {"Location": "/moved"}, b"")) as (base, received):
+        feed = hub.OrchHubFeed(base, TOKEN, "/api/evaluation/reports")
+
+        with pytest.raises(evolution.FeedError, match="redirected"):
+            feed.fetch_page(None, 10)
+
+    assert len(received) == 1
 
 
 def test_the_hub_client_imports_a_report_end_to_end(config: evolution.EvolutionConfig) -> None:

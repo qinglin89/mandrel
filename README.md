@@ -355,6 +355,16 @@ Both requests carry `Authorization: Bearer $ORCH_HUB_TOKEN`. `exhausted` is
 required: it is what tells a later `freeze` that the pool is the whole eligible
 set rather than a prefix, so it is read from the feed and never inferred.
 
+Two bounds are the client's own rather than the feed's, and both refuse with a
+message naming what to change:
+
+- **No redirect is followed.** `urllib` would copy the `Authorization` header
+  onto whatever host a `Location` named, so a checked URL would say nothing
+  about where the token ends up. Point `ORCH_HUB_URL` at the final URL instead.
+- **Every response body is read under a fixed 32 MiB bound**, not the
+  `size_bytes` the record declares. A body that reaches the bound is rejected by
+  the usual size/hash check rather than truncated into the pool.
+
 ### What lands where
 
 | Path | Owner | Committed |
