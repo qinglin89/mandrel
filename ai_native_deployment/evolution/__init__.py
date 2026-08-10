@@ -2,13 +2,20 @@
 
 `evolution/README.md` is the normative contract; this package implements the
 mechanical part of it — discovering already-complete orch-hub reports,
-validating them, and staging unique completed tasks into a pending pool.
+validating and staging them as unique completed tasks, freezing an immutable
+cohort when admission policy allows, preparing that cohort's pending analysis
+task, and deriving where the lifecycle currently stands.
 
 What it deliberately does not do: run or schedule an evaluation, and decide
 anything a human is supposed to decide. Batch formation, change admission, and
 promotion stay human gates (contract invariant 9). Automation prepares evidence
 and pending analysis tasks; a human triggers the freeze and admits every
 proposed canonical change.
+
+The names below are the package's stable surface. Two things are reached
+through their modules rather than re-exported, because the bare name says
+nothing on its own: `phase.describe` (the derived lifecycle status) and the
+`render.format_*` functions (operator-facing text for the CLI).
 """
 
 from __future__ import annotations
@@ -38,10 +45,12 @@ from .errors import (
     ValidationError,
 )
 from .feed import DirectoryFeed, FeedPage, ReportFeed
+from .hub import OrchHubFeed, feed_from_config
 from .importer import Candidate, ListResult, SyncResult, list_candidates, sync
 from .ledger import append_records, build_record, read_records
+from .phase import BatchView, LifecycleStatus
 from .reports import NormalizedReport, Rejection, normalize
-from .revisions import release_line_revision
+from .revisions import Revision, Revisions, describe_revisions, release_line_revision
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock
 
 __all__ = [
@@ -49,6 +58,7 @@ __all__ = [
     "AnalysisTaskSpec",
     "Batch",
     "BatchError",
+    "BatchView",
     "Candidate",
     "ConfigError",
     "DirectoryFeed",
@@ -59,13 +69,17 @@ __all__ = [
     "FeedPage",
     "FreezeResult",
     "LedgerError",
+    "LifecycleStatus",
     "ListResult",
     "LockError",
     "NormalizedReport",
+    "OrchHubFeed",
     "PoolEntry",
     "Rejection",
     "ReportFeed",
     "ReportRef",
+    "Revision",
+    "Revisions",
     "SchemaError",
     "StartResult",
     "StateError",
@@ -73,7 +87,9 @@ __all__ = [
     "ValidationError",
     "append_records",
     "build_record",
+    "describe_revisions",
     "evaluate_admission",
+    "feed_from_config",
     "freeze",
     "list_candidates",
     "load_batches",

@@ -276,14 +276,19 @@ def _write_closure(config: EvolutionConfig, batch: Batch, *, task_id: str, now: 
     return path
 
 
-def open_batch(config: EvolutionConfig) -> Batch | None:
+def open_batch(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
     """The single batch awaiting analysis, if any.
 
     Two would mean the repository already contradicts invariant 12, which this
     controller cannot repair by choosing one of them.
+
+    `batches` lets a caller that has already loaded and validated the manifests
+    reuse them, so a reader deriving several facts at once does not re-read the
+    batch directory per fact — and, more to the point, cannot end up applying a
+    second definition of "open".
     """
 
-    unfinished = [batch for batch in load_batches(config) if is_open(config, batch)]
+    unfinished = [batch for batch in (load_batches(config) if batches is None else batches) if is_open(config, batch)]
     if len(unfinished) > 1:
         raise BatchError(
             "more than one open analysis batch: "

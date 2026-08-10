@@ -15,13 +15,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
+    git_repo,
     make_record,
     make_repo,
     snapshot,
@@ -600,6 +600,61 @@ def test_a_batched_report_is_never_re_imported(
     assert again.imported == ()
     assert sorted(again.skipped) == ["r1", "r2", "r3"]
     assert evolution.load_state(config).pending == []
+
+
+def test_a_machine_with_no_runtime_state_does_not_re_import_a_frozen_cohort(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The state that records the claim is gitignored; the manifest that records
+    the membership is committed. So a fresh clone — or this machine after
+    `.ai-evolution/` is deleted — must read the manifests, or it re-imports a
+    cohort already analyzed and freezes the same unique completed tasks a second
+    time (invariants 1-3)."""
+    feed = fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    close_batch(config, result.batch_id or "")
+    shutil.rmtree(config.runtime_root)
+    shutil.rmtree(analysis_task.tasks_root(config))
+
+    again = evolution.sync(config, feed)
+
+    assert again.imported == ()
+    assert sorted(again.skipped) == ["r1", "r2", "r3"]
+    assert freeze(config).batch_id is None
+    assert [batch.batch_id for batch in evolution.load_batches(config)] == [result.batch_id]
+
+
+def test_a_clone_still_imports_a_later_evaluation_of_an_already_batched_task(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The manifests suppress report keys, not tasks: a new evaluation is
+    evidence for a later batch (invariant 3), and losing it would silently cap
+    what a second cohort can ever measure."""
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    close_batch(config, result.batch_id or "")
+    shutil.rmtree(config.runtime_root)
+    shutil.rmtree(analysis_task.tasks_root(config))
+
+    late = make_record(key="late", sequence=200, task_id="2026-07-01-task", evaluation_id="eval-late")
+    again = evolution.sync(config, write_feed(feed_root, [late]))
+
+    assert again.imported == ("late",)
+
+
+def test_list_reports_a_frozen_cohorts_reports_as_already_decided(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    feed = fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    close_batch(config, result.batch_id or "")
+    shutil.rmtree(config.runtime_root)
+    shutil.rmtree(analysis_task.tasks_root(config))
+
+    listed = evolution.list_candidates(config, feed)
+
+    assert {candidate.status for candidate in listed.candidates} == {"known"}
+    assert listed.new_task_count == 0
 
 
 def test_a_later_report_for_a_batched_task_starts_a_new_pool_entry(
@@ -1648,21 +1703,6 @@ def test_the_audit_names_the_trigger_that_formed_the_batch(
 
 
 # --- runner revision ---------------------------------------------------------
-
-
-def git_repo(root: Path, *, tag: str | None) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    run = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-    (root / "file.txt").write_text("one\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "first"], check=True)
-    if tag is not None:
-        subprocess.run(["git", "-C", str(root), "tag", tag], check=True)
-        (root / "file.txt").write_text("two\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "candidate work"], check=True)
-    return root
 
 
 def test_the_runner_revision_is_the_release_tag_not_the_branch_tip(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 from ai_native_deployment.evolution import feed as feed_module
@@ -188,6 +189,28 @@ def write_feed(root: Path, records: list[dict], *, bodies: dict[str, bytes] | No
             if name in artifacts:
                 (directory / name).write_bytes(body)
     return feed_module.DirectoryFeed(root)
+
+
+def git_repo(root: Path, *, tag: str | None) -> Path:
+    """A work tree with one commit, and — when `tag` is given — a release tag
+    plus one commit on top of it.
+
+    That extra commit is the point of the tag case: it is the candidate
+    revision, and it must never be mistaken for the release line (invariant 8).
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    run = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    (root / "file.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "first"], check=True)
+    if tag is not None:
+        subprocess.run(["git", "-C", str(root), "tag", tag], check=True)
+        (root / "file.txt").write_text("two\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), *run, "commit", "-q", "-m", "candidate work"], check=True)
+    return root
 
 
 def snapshot(root: Path) -> dict[str, bytes]:

@@ -10,6 +10,37 @@ import sys
 from pathlib import Path
 
 from . import deploy, manifest, registry
+from .evolution import errors as evolution_errors
+
+
+def _add_workspace_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--repo", help="evolution workspace root (default: this checkout)")
+
+
+def _add_feed_arguments(parser: argparse.ArgumentParser) -> None:
+    """Where reports come from, and how far one run reads.
+
+    `--feed-dir` is the offline path: a local report bundle, used for fixtures,
+    replay, and every run made before orch-hub publishes its global feed.
+    Without it the protected orch-hub client is built from the environment
+    variables `evolution/config.toml` names.
+    """
+
+    from .evolution import importer
+
+    parser.add_argument("--feed-dir", help="read reports from a local bundle directory instead of the orch-hub feed")
+    parser.add_argument(
+        "--page-size",
+        type=int,
+        default=importer.DEFAULT_PAGE_SIZE,
+        help=f"records per feed page (default: {importer.DEFAULT_PAGE_SIZE})",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=importer.DEFAULT_MAX_PAGES,
+        help=f"drain-safety bound on pages per run (default: {importer.DEFAULT_MAX_PAGES})",
+    )
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -49,7 +80,94 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     remove_parser = registry_subparsers.add_parser("remove", help="remove a repo from local registry tracking")
     remove_parser.add_argument("name_or_path", help="registered name or repo path")
 
+    evolution_parser = subparsers.add_parser(
+        "evolution",
+        help="protocol-evolution controller for this repository (human-triggered; never starts an evaluation)",
+    )
+    evolution_subparsers = evolution_parser.add_subparsers(dest="evolution_command", required=True)
+
+    evolution_list = evolution_subparsers.add_parser("list", help="inspect feed candidates; writes nothing")
+    _add_workspace_argument(evolution_list)
+    _add_feed_arguments(evolution_list)
+
+    evolution_sync = evolution_subparsers.add_parser("sync", help="import eligible reports into the pending pool")
+    _add_workspace_argument(evolution_sync)
+    _add_feed_arguments(evolution_sync)
+
+    evolution_status = evolution_subparsers.add_parser("status", help="show the lifecycle phase; writes nothing")
+    _add_workspace_argument(evolution_status)
+    evolution_status.add_argument("--json", action="store_true", help="print the same shape as JSON")
+
+    evolution_start = evolution_subparsers.add_parser(
+        "start",
+        help="close finished analyses, repair, sync, then freeze a batch when admission policy allows",
+    )
+    _add_workspace_argument(evolution_start)
+    _add_feed_arguments(evolution_start)
+    evolution_start.add_argument(
+        "--force",
+        action="store_true",
+        help="waive the configured target (never the minimum); requires --justification",
+    )
+    evolution_start.add_argument(
+        "--justification",
+        help="written human reason recorded in the manifest when --force forms a below-target batch",
+    )
+
     return parser
+
+
+def _evolution(args: argparse.Namespace) -> int:
+    """Adapter for the evolution controller: resolve the workspace and the feed,
+    call one domain function, print what it returned.
+
+    No policy lives here. Which reports are eligible, whether a batch may form,
+    and what closes one are all decided in `ai_native_deployment.evolution`,
+    where the contract's invariants are stated next to the code enforcing them.
+
+    Exit status is 0 for every completed run, including a `start` that formed no
+    batch: too little evidence is the contract's normal outcome, not a failure.
+    A refusal or an unusable feed raises and `main` reports it as 2.
+    """
+
+    from .evolution import batches, config as evolution_config, importer, phase, render
+
+    config = evolution_config.load_config(Path(args.repo).expanduser() if args.repo else None)
+
+    if args.evolution_command == "status":
+        status = phase.describe(config)
+        print(json.dumps(status.to_json(), indent=2, sort_keys=True) if args.json else render.format_status(status))
+        return 0
+
+    feed = _evolution_feed(config, args.feed_dir)
+    if args.evolution_command == "list":
+        result = importer.list_candidates(config, feed, page_size=args.page_size, max_pages=args.max_pages)
+        print(render.format_list(result))
+        return 0
+
+    if args.evolution_command == "sync":
+        result = importer.sync(config, feed, page_size=args.page_size, max_pages=args.max_pages)
+        print(render.format_sync(result))
+        return 0
+
+    started = batches.start(
+        config,
+        feed,
+        forced=args.force,
+        justification=args.justification,
+        page_size=args.page_size,
+        max_pages=args.max_pages,
+    )
+    print(render.format_start(started, config.repo_root))
+    return 0
+
+
+def _evolution_feed(config, feed_dir: str | None):
+    from .evolution import feed as feed_module, hub
+
+    if feed_dir:
+        return feed_module.DirectoryFeed(Path(feed_dir).expanduser().resolve())
+    return hub.feed_from_config(config, environ=os.environ)
 
 
 def _status_all() -> int:
@@ -129,10 +247,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"removed from registry: {args.name_or_path}")
                 return 0
 
+        if args.command == "evolution":
+            return _evolution(args)
+
     except (
         FileNotFoundError,
         manifest.ManifestError,
         registry.RegistryError,
+        evolution_errors.EvolutionError,
         OSError,
         subprocess.CalledProcessError,
     ) as exc:

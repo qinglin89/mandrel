@@ -31,6 +31,7 @@ from ..manifest import utc_timestamp
 from .config import EvolutionConfig
 from .feed import ReportFeed
 from .ledger import append_records, build_record
+from .manifests import claimed_reports
 from .reports import (
     NormalizedReport,
     Rejection,
@@ -112,7 +113,7 @@ def list_candidates(
 
     state = load_state(config)
     schema = load_import_schema(config)
-    known = state.known_report_keys()
+    known = _known_keys(config, state)
     pooled = {entry.dedup_key for entry in state.pending}
 
     candidates: list[Candidate] = []
@@ -173,13 +174,16 @@ def sync_locked(
     state = load_state(config)
     cursor_before = state.cursor
     cursor = state.cursor
+    # Read once: nothing in a sync freezes a batch, so the committed membership
+    # cannot change under it.
+    frozen = set(claimed_reports(config))
 
     for _ in range(max_pages):
         page = feed.fetch_page(cursor, page_size)
         cursor = page.cursor
         _retract_exhaustion(config, state)
         audit: list[dict[str, Any]] = []
-        known = state.known_report_keys()
+        known = state.known_report_keys() | frozen
 
         for record in page.items:
             outcome = _import_one(record, config, feed, schema, state, known)
@@ -236,6 +240,24 @@ def sync_locked(
         pool_size=len(state.pending),
         exhausted=exhausted,
     )
+
+
+def _known_keys(config: EvolutionConfig, state: EvolutionState) -> set[str]:
+    """Every report this repository has already decided about.
+
+    Runtime state is only half the answer. `.ai-evolution/` is machine-local and
+    ignored while the batch manifests are committed, so a fresh clone — or this
+    machine after its runtime directory is deleted — holds every membership
+    record and no pool at all. Consulting state alone there re-imports reports a
+    frozen cohort already analyzed and lets them form a second one, counting the
+    same unique completed tasks twice (invariants 1-3).
+
+    Report keys, not tasks: a *later* evaluation of a task an old batch covered
+    is a new report, and it belongs to a later batch (invariant 3) rather than
+    being suppressed by the earlier one.
+    """
+
+    return state.known_report_keys() | set(claimed_reports(config))
 
 
 def _retract_exhaustion(config: EvolutionConfig, state: EvolutionState) -> None:

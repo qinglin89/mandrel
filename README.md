@@ -263,6 +263,149 @@ unaffected; delete only the names above.
 so a target that has not had this cleanup done says so instead of reporting
 `in sync`.
 
+## Evolution
+
+`evolution/README.md` is the normative contract for changing the canonical
+protocol suite from evidence. `aii-2 evolution` is the mechanical half of it:
+it discovers already-complete evaluation reports, stages them, freezes an
+immutable cohort when the admission policy allows, and prepares that cohort's
+pending analysis task. It runs against this repository, not a target.
+
+Nothing here starts or schedules an evaluation, and nothing here decides
+policy: batch formation, change admission, and canary promotion stay human
+gates.
+
+```bash
+./aii-2 evolution status                 # lifecycle phase; writes nothing
+./aii-2 evolution list  --feed-dir ...   # inspect candidates; writes nothing
+./aii-2 evolution sync  --feed-dir ...   # import eligible reports into the pool
+./aii-2 evolution start --feed-dir ...   # sync, then freeze a batch if policy allows
+```
+
+Every subcommand takes `--repo <path>` to work on another checkout, and
+`status` takes `--json` for the same shape a script can read. Exit status is 0
+for any completed run — including a `start` that formed no batch, which is the
+contract's normal outcome when evidence is still thin — and 2 for a refusal,
+corrupt local state, lock contention, or an unusable feed.
+
+`status` names a lifecycle phase — `idle`, `pool N/<target>`, `batch-frozen`,
+`dispositions-ready`, `proposals-pending`, `implementing` — and then the facts
+behind it:
+
+```text
+$ ./aii-2 evolution status
+evolution: pool 4/20
+  pool         4 unique completed task(s); target 20, minimum 10
+               oldest pending report imported 5 day(s) ago, max wait 30
+  admission    no batch — pool-below-minimum
+  batches      0 frozen, none open
+  baseline     v2.2.0 (bb9f7277d258)
+  candidate    feat/evolution (a4cd995fd4ff)
+```
+
+One label is chosen by what blocks the next action: an open batch first (it is
+what stops another cohort forming), then an admitted change task in flight,
+then drafts waiting at the admission gate, then the pool. Every fact is printed
+regardless of which label won, so nothing is hidden by the choice.
+
+Nothing is stored to produce that: the phase is re-derived on every call from
+the manifests, the closure records and drafts beside them, the runtime pool,
+`.ai-tasks/`, and git. `--json` emits the same facts, with a `schema_version`.
+Two of them are machine-local — the admitted change tasks and an open batch's
+analysis lifecycle both come from gitignored `.ai-tasks/` — so another clone
+reads the batch's committed closure record instead.
+
+### Report source
+
+Reports come from orch-hub's protected global feed. Point the client at it with
+two environment variables, named by `[source]` in `evolution/config.toml` and
+never committed:
+
+```bash
+export ORCH_HUB_URL=https://orch-hub.example
+export ORCH_HUB_TOKEN=...
+```
+
+**That feed is not published yet.** Until it is, `list`, `sync`, and `start`
+without `--feed-dir` fail with one message naming both variables and the
+offline path — they do not hang, and they do not silently import nothing. The
+offline path is a local report bundle:
+
+```text
+<feed-dir>/reports/*.json                          one import record per file
+<feed-dir>/artifacts/<report_key>/<artifact-name>  the four L1+L2 bodies
+```
+
+`--feed-dir` is the supported way to run the controller today, and stays the
+way to replay a fixed cohort afterwards.
+
+The wire contract the client expects of orch-hub, stated so the two sides can
+be built against the same shape (details in
+`ai_native_deployment/evolution/hub.py`):
+
+```text
+GET <ORCH_HUB_URL><report_feed_path>?limit=<n>[&cursor=<opaque>]
+    -> {"items": [<import record>...], "next_cursor": <string|null>,
+        "exhausted": <bool>}
+GET <ORCH_HUB_URL><report_feed_path>/<report_key>/artifacts/<name>
+    -> the artifact bytes, or 404 if the feed does not serve it
+```
+
+Both requests carry `Authorization: Bearer $ORCH_HUB_TOKEN`. `exhausted` is
+required: it is what tells a later `freeze` that the pool is the whole eligible
+set rather than a prefix, so it is read from the feed and never inferred.
+
+### What lands where
+
+| Path | Owner | Committed |
+|---|---|---|
+| `.ai-evolution/state.json` | controller runtime | no — machine-local |
+| `.ai-evolution/imported-artifacts/` | raw fetched bundles | no — raw evidence |
+| `.ai-evolution/lock` | single-writer guard | no |
+| `evolution/batches/<id>/manifest.json` | frozen membership | yes, immutable |
+| `evolution/batches/<id>/findings.md` | analysis dispositions | yes |
+| `evolution/batches/<id>/analysis-complete.json` | closure record | yes |
+| `evolution/batches/<id>/proposed-tasks/` | change-task drafts | yes, inert |
+| `evolution/ledger.jsonl` | sanitized audit | yes, append-only |
+| `.ai-tasks/<id>-analysis.md` | generated analysis task | no — machine-local |
+
+Privacy follows that split. Raw report content and any diagnostic quoting a
+feed value stay under ignored `.ai-evolution/`; the ledger carries identities,
+hashes, and a bounded vocabulary of reason codes only. Credentials live in the
+environment and appear in no file, URL, or error message this tool writes.
+
+The closure record and the manifests are written by the controller but
+committed by you, like any other versioned artifact. Until that commit lands, a
+finished analysis reads as finished only on this machine.
+
+### Recovery
+
+- **Interrupted run.** Re-run the same command. A freeze commits manifest →
+  state → task → ledger and each step is redoable, so the next `start` finishes
+  whatever remains and reports what it repaired. Repair runs before the feed is
+  contacted, so an outage never blocks it.
+- **Lock held.** `evolution lock held: ... (pid N on HOST since TIME)` means
+  another run holds `.ai-evolution/lock`. It is never broken automatically — a
+  crashed holder and a slow one look identical. Remove the file once you have
+  confirmed no run is active.
+- **Corrupt runtime state.** `state.json` failures are reported, never
+  repaired: a silent reset would rewind the discovery cursor and drop pending
+  evidence. Restore the file, or delete `.ai-evolution/` and re-run `start` to
+  rebuild the pool from the feed. The committed batches are what protect you
+  there: discovery skips every report a frozen manifest already names, so a
+  wipe re-imports only what no cohort has analyzed, and an open batch's claims
+  and analysis task are recreated from its manifest. Raw bundles that were
+  staged before the wipe are gone; `status` reports the batch's evidence as
+  absent from this machine rather than as damage.
+- **`pool-incomplete`.** No discovery pass has reported the feed drained, so
+  the pool may be a prefix and no batch may form from it. Run `sync` until it
+  reports the feed drained.
+- **A generated analysis task that no longer looks like one.** The controller
+  identifies it by its id line, its `# Batch analysis — <batch-id>` heading, and
+  the manifest path it cites, then reads its lifecycle. Keep those three intact
+  while working the task; if the file is damaged, restore them or remove the
+  file so the next run can write it again.
+
 ## Not Copied
 
 Import and deploy intentionally skip local or sensitive files:
