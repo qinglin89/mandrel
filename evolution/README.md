@@ -383,9 +383,10 @@ experiments and one open alternative is an ordinary state, not damage.
 
 ### Batch outcome
 
-A batch is current until `batches/<batch-id>/outcome.json` exists
-(`schemas/batch-outcome.schema.json`), and that record is what releases the next
-cohort. Two ways reach it:
+A batch is current until `batches/<batch-id>/outcome.json`
+(`schemas/batch-outcome.schema.json`) records a conclusion the rest of its
+lineage agrees with, and that record is what releases the next cohort. Two ways
+reach it:
 
 - `promoted` — an experiment was promoted; the outcome names it and the
   promotion revision.
@@ -442,6 +443,13 @@ completion observation, a draft already consumed, a task id admitted twice, a
 that disagrees with the experiments about a promotion, an unreadable record —
 stops the operation with what it found, instead of picking one reading and
 continuing.
+
+The freeze, and the completion of one that was interrupted, are guarded by the
+same reading. Which batch is current decides both whether a new cohort may form
+and which unfinished freeze may be completed, so it is derived from the whole
+lineage before either writes: a conclusion its own experiments contradict leaves
+its batch current rather than releasing the next cohort, and two current batches
+stop the run instead of one of them being picked to continue.
 
 ## Evolution task requirements
 

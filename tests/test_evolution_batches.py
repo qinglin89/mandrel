@@ -21,11 +21,14 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
+    experiment_decision,
+    experiment_round,
     git_repo,
     make_record,
     make_repo,
     snapshot,
     write_closure,
+    write_experiment,
     write_feed,
     write_manifest,
     write_outcome,
@@ -1057,8 +1060,11 @@ def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
     keys = sorted(evolution.load_batches(config)[0].report_keys)
-    # A closed batch that also names the report, so the state below still loads.
+    # A batch that also names the report, so the state below still loads, and
+    # concluded, so this reaches the claim check rather than stopping at two
+    # current batches (invariant 14).
     closed_elsewhere(config, "evolution-batch-0002", keys)
+    write_outcome(config.batches_root, "evolution-batch-0002")
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
     raw["processed"][keys[0]]["batch_id"] = "evolution-batch-0002"
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -1352,7 +1358,7 @@ def test_a_new_batch_waits_for_the_current_one_to_record_its_outcome(
     assert second.analysis_task_id != first.analysis_task_id
 
 
-def test_two_open_batches_are_refused_rather_than_arbitrated(
+def test_two_current_batches_are_refused_rather_than_arbitrated(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     fill_pool(config, feed_root, TARGET)
@@ -1363,8 +1369,97 @@ def test_two_open_batches_are_refused_rather_than_arbitrated(
         json.dumps({**read_manifest(first), "batch_id": "evolution-batch-0007"}), encoding="utf-8"
     )
 
-    with pytest.raises(evolution.BatchError, match="more than one open"):
+    with pytest.raises(evolution.BatchError, match="more than one current batch"):
         freeze(config)
+
+
+def test_a_second_current_batch_stops_the_repair_before_it_is_selected(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Invariant 14 is asked before a repair is chosen, not after it has run.
+
+    Asking instead which *current* batch still awaits its analysis has an answer
+    whenever two of them stand at different stages: the analysis-complete one
+    drops out of the question, the interrupted one is the only candidate left,
+    and the repair completes its freeze — state transition, analysis task, index
+    row — and reports an ordinary run while another cohort's change cycle is
+    still open.
+    """
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    close_analysis(config, first.batch_id or "")
+    later = [
+        make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
+        for index in range(1, TARGET + 1)
+    ]
+    evolution.sync(config, write_feed(feed_root, later))
+    # A second current batch whose freeze stopped before its analysis task
+    # landed — exactly the state the repair exists to finish.
+    interrupted = "evolution-batch-0002"
+    task_id = f"2026-08-02-{interrupted}-analysis"
+    write_manifest(
+        config.batches_root,
+        interrupted,
+        [f"n{index}" for index in range(1, TARGET + 1)],
+        analysis_task_id=task_id,
+    )
+
+    with pytest.raises(evolution.BatchError, match="more than one current batch"):
+        freeze(config, now=NOW + timedelta(days=1))
+
+    assert not analysis_task.task_exists(config, task_id)
+    assert len(evolution.load_state(config).pending) == TARGET, "the second batch claimed nothing"
+
+
+@pytest.mark.parametrize(
+    "recorded, message",
+    [
+        (None, "has no such experiment"),
+        ("e" * 40, "the promotion revision is one commit on the source line"),
+    ],
+    ids=["experiment-missing", "revision-mismatched"],
+)
+def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
+    config: evolution.EvolutionConfig, feed_root: Path, recorded: str | None, message: str
+) -> None:
+    """A terminal record is not a concluded batch on its own.
+
+    `outcome.json` is what releases the next cohort, so a conclusion no
+    experiment of the batch bears out ends the cycle on a trail leading nowhere:
+    the promoted experiment does not exist, or it pinned another revision.
+    `status` already refused to describe either state; the freeze read the
+    record's own shape, called the batch concluded, and formed the cohort after
+    it.
+    """
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    batch_id = first.batch_id or ""
+    close_analysis(config, batch_id)
+    if recorded is not None:
+        write_experiment(
+            config.experiments_root,
+            f"{batch_id}-exp-01",
+            rounds=[experiment_round(1, candidate_revision=recorded)],
+            decision=experiment_decision("promoted", promotion_revision=recorded),
+        )
+    write_outcome(
+        config.batches_root,
+        batch_id,
+        outcome="promoted",
+        reason="the candidate held across the replay cohort",
+        experiment_id=f"{batch_id}-exp-01",
+        promotion_revision="d" * 40,
+    )
+    later = [
+        make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
+        for index in range(1, TARGET + 1)
+    ]
+    evolution.sync(config, write_feed(feed_root, later))
+
+    with pytest.raises(evolution.BatchError, match=message):
+        freeze(config, now=NOW + timedelta(days=1))
+
+    assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
 
 
 def test_allocation_counts_from_the_highest_id_ever_used(

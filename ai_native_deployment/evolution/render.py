@@ -125,7 +125,7 @@ def format_status(status: LifecycleStatus) -> str:
 
     lines.extend(_gate_lines(status.gate))
     lines.extend(_experiment_lines(status))
-    lines.extend(_revision_lines(status.revisions))
+    lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
     if status.last_promotion is not None:
         promotion = status.last_promotion
         lines.append(
@@ -217,14 +217,27 @@ def _ref_lines(status: LifecycleStatus) -> list[str]:
     return [_field("", f"{ref.ref}: {ref.state} — it is not at the revision the record pins ({ref.pinned[:12]})")]
 
 
-def _revision_lines(revisions: LifecycleRevisions) -> list[str]:
+def _revision_lines(revisions: LifecycleRevisions, *, open_experiment: bool) -> list[str]:
     """The base is what the other two hang off — a batch with no experiment has
     no revisions in play at all, rather than three absent ones. The three are
     never collapsed into one line: substituting one for another is what an
-    evidence trail must not do (contract: Revisions in play)."""
+    evidence trail must not do (contract: Revisions in play).
+
+    The candidate and the tip belong to the *open* experiment, so why they are
+    absent has to be read off whether there is one. Between attempts — every
+    experiment abandoned or superseded, the batch waiting for its next one or
+    for its outcome — there is no round to have left unsealed and no ref was
+    looked up, and reporting the two ordinary absences there states two things
+    about an experiment that does not exist.
+    """
 
     if revisions.base is None:
         return [_field("revisions", "none in play — no experiment has frozen a base")]
+    if not open_experiment:
+        return [
+            _field("base", revisions.base.describe()),
+            _field("", "no experiment is open — nothing is pinned and no ref was read"),
+        ]
     return [
         _field("base", revisions.base.describe()),
         _field(

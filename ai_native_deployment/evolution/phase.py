@@ -325,6 +325,12 @@ def _revisions(current: BatchLineage | None) -> LifecycleRevisions:
     fetched the namespace; the round candidate is what the record pinned, which
     is the only one replay evidence may name (invariant 16). They are equal only
     while the last round is candidate-ready and nobody has committed since.
+
+    Both are also absent for a reason of a different kind: a batch between
+    attempts has no open experiment, so no round left a candidate unsealed and
+    no ref was inspected at all. That reason is not encoded here — a reader
+    tells the two apart by `experiments.open`, which is null exactly then, and
+    must consult it before explaining either absence.
     """
 
     if current is None:

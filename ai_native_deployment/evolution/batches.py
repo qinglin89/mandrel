@@ -12,7 +12,10 @@ This is the step where evidence becomes a cohort. Three things make it safe:
   experiment its evidence justified. While one is current, `start` finishes
   whatever that batch's freeze left undone rather than forming a second cohort;
   the pool goes on accumulating in the meantime, which is where the next one
-  comes from.
+  comes from. Which batch that is comes from the whole lineage
+  (`lineage.current_batch`) and is settled before anything here writes: an
+  outcome record its own experiments contradict has concluded nothing, and two
+  current batches leave no one cycle a repair or a freeze could belong to.
 
 **What may be frozen.** Only a pool that is the whole eligible set — a cohort
 frozen from a prefix has a denominator set by a local pagination limit rather
@@ -51,6 +54,7 @@ from .errors import BatchError
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
+from .lineage import current_batch
 from .manifests import (
     BATCH_SCHEMA_VERSION,
     CLOSURE_FILENAME,
@@ -58,8 +62,6 @@ from .manifests import (
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
     Batch,
-    current_batch,
-    is_current,
     load_batches,
     next_batch_id,
     read_closure,
@@ -158,9 +160,10 @@ def awaiting_analysis(config: EvolutionConfig, batch: Batch) -> bool:
 
     The analysis *stage*, not the batch: a batch stays current through
     admission, its experiments, and the decision that follows (invariant 14,
-    `manifests.is_current`). This reading is what tells `batch-frozen` from
+    `lineage.current_batch`). This reading is what tells `batch-frozen` from
     everything after it, and what a freeze interrupted before its analysis task
-    landed is repaired against.
+    landed is repaired against. It says nothing about currency on its own —
+    every caller asks it of a batch already known to be current.
 
     The stage ends at a completed analysis task, never at a file that exists.
     Two things can show one, and they are checked in that order of authority:
@@ -291,10 +294,15 @@ def _write_closure(config: EvolutionConfig, batch: Batch, *, task_id: str, now: 
 
 
 def batch_awaiting_analysis(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
-    """The single current batch awaiting analysis, if any.
+    """The current batch awaiting analysis, if any.
 
-    Two would mean the repository already contradicts invariant 12, which this
-    controller cannot repair by choosing one of them.
+    Which batch is current is settled first, and from the whole lineage
+    (`lineage.current_batch`): two of them, or one whose terminal record its
+    experiments contradict, leaves no single cycle an interrupted freeze could
+    belong to. Asking "which current batch still awaits analysis" instead, as
+    this once did, answers with one of two current batches whenever they are at
+    different stages — and the repair below then completes that one and reports
+    a normal run.
 
     Only a current batch is asked about. A concluded batch awaits nothing — its
     outcome ended the whole cycle — so a freeze interrupted before its analysis
@@ -303,19 +311,23 @@ def batch_awaiting_analysis(config: EvolutionConfig, *, batches: list[Batch] | N
 
     `batches` lets a caller that has already loaded and validated the manifests
     reuse them, so a reader deriving several facts at once does not re-read the
-    batch directory per fact — and, more to the point, cannot end up applying a
-    second definition of "awaiting analysis".
+    batch directory per fact.
     """
 
-    known = load_batches(config) if batches is None else batches
-    unfinished = [batch for batch in known if is_current(config, batch) and awaiting_analysis(config, batch)]
-    if len(unfinished) > 1:
-        raise BatchError(
-            "more than one open analysis batch: "
-            + ", ".join(batch.batch_id for batch in unfinished)
-            + " — invariant 12 serializes analysis; complete the earlier batch's analysis and record its findings first"
-        )
-    return unfinished[0] if unfinished else None
+    return _still_awaiting(config, current_batch(config, batches=batches))
+
+
+def _still_awaiting(config: EvolutionConfig, current: Batch | None) -> Batch | None:
+    """The current batch, when its analysis stage has not ended.
+
+    One spelling for the two callers: the public reading above, which derives
+    the lineage for itself, and the repair below, which is handed the derivation
+    its write path already made.
+    """
+
+    if current is None or not awaiting_analysis(config, current):
+        return None
+    return current
 
 
 def evaluate_admission(
@@ -444,8 +456,13 @@ def start(
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
     with single_writer_lock(config):
+        # Before anything is closed, repaired, imported, or frozen: which batch
+        # is current is the question all four of those hang off, so a repository
+        # whose lineage does not answer it once stops the run here rather than
+        # after part of it has been written.
+        running = current_batch(config)
         closed = _record_closures(config, now=moment)
-        repaired = _reconcile_locked(config, now=moment)
+        repaired = _reconcile_locked(config, now=moment, current=running)
         imported = sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
         admitted = freeze_locked(
             config,
@@ -476,17 +493,25 @@ def freeze_locked(
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
 
+    batches = load_batches(config)
+    # Invariant 14 first, through the derivation `status` reads: one current
+    # batch, and its terminal record agreeing with the experiments it concludes
+    # over. Nothing below writes into a repository that cannot answer that —
+    # neither the closure records, nor the repair, nor a new cohort — because
+    # each of the three belongs to a change cycle, and an unreadable lineage
+    # does not say which one.
+    #
+    # A current batch here does not mean one awaiting analysis: a batch stays
+    # current through its experiments and rounds, which all happen after its
+    # analysis closed.
+    running = current_batch(config, batches=batches)
+
     closed = _record_closures(config, now=moment)
-    repaired = _reconcile_locked(config, now=moment)
+    repaired = _reconcile_locked(config, now=moment, current=running)
     if repaired is not None:
         return replace(repaired, closed_batch_ids=closed)
 
     state = load_state(config)
-    batches = load_batches(config)
-    # Nothing awaits analysis, which does not mean nothing is in flight: a batch
-    # is current until its outcome is recorded, and its experiments and rounds
-    # all happen after its analysis closed (invariant 14).
-    running = current_batch(config, batches=batches)
     decision = evaluate_admission(
         config,
         state,
@@ -561,15 +586,19 @@ def freeze_locked(
     )
 
 
-def _reconcile_locked(config: EvolutionConfig, *, now: datetime) -> FreezeResult | None:
-    """Finish an interrupted freeze of the open batch, or report there is none.
+def _reconcile_locked(config: EvolutionConfig, *, now: datetime, current: Batch | None) -> FreezeResult | None:
+    """Finish an interrupted freeze of the current batch, or report there is none.
 
     Reads only what is already on disk — the manifests, the runtime state, and
     `.ai-tasks/` — so a caller can repair before it has a feed, or without one
     at all.
+
+    Which batch is current is the caller's one derivation rather than a reading
+    of its own: a repair writes, so the cycle it belongs to is settled before
+    anything is selected, and not by a second definition of "current".
     """
 
-    unfinished = batch_awaiting_analysis(config)
+    unfinished = _still_awaiting(config, current)
     if unfinished is None:
         return None
 

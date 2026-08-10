@@ -28,7 +28,6 @@ from .batches import (
     FreezeResult,
     StartResult,
     batch_awaiting_analysis,
-    current_batch,
     evaluate_admission,
     freeze,
     load_batches,
@@ -50,7 +49,7 @@ from .feed import DirectoryFeed, FeedPage, ReportFeed
 from .hub import OrchHubFeed, feed_from_config
 from .importer import Candidate, ListResult, SyncResult, list_candidates, sync
 from .ledger import append_records, build_record, read_records
-from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState
+from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState, current_batch
 from .phase import BatchView, LifecycleStatus
 from .reports import NormalizedReport, Rejection, normalize
 from .revisions import Revision, release_line_revision

@@ -54,7 +54,6 @@ from .manifests import (
     load_batches,
     read_outcome,
     read_rejected_drafts,
-    require_one_current,
 )
 from .revisions import contains, ref_tip
 from .schema import load_schema, validate_or_raise
@@ -368,8 +367,44 @@ def describe(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> 
     )
 
     current = [lineage for lineage in lineages if lineage.current]
-    require_one_current([lineage.batch_id for lineage in current])
+    _require_one_current(current)
     return Lineage(batches=lineages, current=current[0] if current else None)
+
+
+def current_batch(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Batch | None:
+    """The one batch whose change cycle is still running, read as a whole
+    history rather than off a file's presence.
+
+    Currency decides two writes — whether a new cohort may be frozen, and which
+    interrupted freeze may be completed — so both ask here, through the same
+    derivation `status` reads. An `outcome.json` the rest of its batch
+    contradicts has ended nothing: it names an experiment the batch does not
+    have, or concludes `no-change` over an attempt that records a promotion.
+    Judging it by its own shape alone is what let a malformed conclusion release
+    the next cohort while `status`, deriving the same repository, refused to
+    describe it at all.
+    """
+
+    current = describe(config, batches=batches).current
+    return current.batch if current is not None else None
+
+
+def _require_one_current(current: list[BatchLineage]) -> None:
+    """Invariant 14: one batch is current at a time.
+
+    Refused rather than arbitrated. Whichever of the two a reader picks, the
+    experiments and evidence it goes on to collect belong to the other — and a
+    write path that picks one completes the interrupted freeze of a cohort while
+    another cohort's change cycle is still running.
+    """
+
+    if len(current) > 1:
+        raise BatchError(
+            "more than one current batch: "
+            + ", ".join(lineage.batch_id for lineage in current)
+            + " — invariant 14 allows one at a time; record the earlier batch's outcome "
+            "(promoted or no-change) before the next cohort continues"
+        )
 
 
 def describe_batch(config: EvolutionConfig, batch: Batch) -> BatchLineage:

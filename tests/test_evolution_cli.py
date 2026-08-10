@@ -477,6 +477,46 @@ def test_a_batch_with_nothing_open_and_nothing_waiting_awaits_its_conclusion(
     assert status.gate is not None and status.gate.waiting == ()
 
 
+@pytest.mark.parametrize("waiting", [False, True], ids=["conclusion-pending", "proposals-pending"])
+def test_a_batch_between_attempts_explains_its_revisions_by_what_is_open(
+    config: evolution.EvolutionConfig, feed_root: Path, waiting: bool
+) -> None:
+    """The candidate and the tip belong to the open experiment, and a batch
+    whose only attempt was abandoned has none.
+
+    Both absences then have one reason — there is nothing open — and neither of
+    the ordinary explanations is true: no round was left unsealed, and no ref
+    was looked up at all, so reporting them describes an experiment that does
+    not exist. The phase does not discriminate either, which is why both of the
+    states this batch can be in are here.
+    """
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    batch_id = result.batch_id or ""
+    close_batch(config, batch_id, result.analysis_task_id or "")
+    experiment(
+        config,
+        batch_id,
+        rounds=[experiment_round(1, tasks=[admitted_task("loader-fallback")])],
+        decision=experiment_decision("abandoned"),
+    )
+    if waiting:
+        draft(config, batch_id, "widen-scan")
+
+    status = phase.describe(config, now=NOW)
+    rendered = render.format_status(status)
+
+    assert status.phase == (phase.PHASE_PROPOSALS_PENDING if waiting else phase.PHASE_CONCLUSION_PENDING)
+    assert status.experiment is None and status.ref is None
+    assert status.to_json()["experiments"]["open"] is None, "what the rendering reads the absence off"
+    assert status.revisions.base is not None and status.revisions.base.sha == BASE
+    assert status.revisions.round_candidate is None and status.revisions.candidate_tip is None
+    assert "no experiment is open" in rendered
+    assert "the open round has not been sealed" not in rendered
+    assert "the experiment ref is not in this checkout" not in rendered
+    assert f"{batch_id}-exp-01 abandoned" in rendered
+
+
 def test_a_concluded_batch_stops_being_current_and_reports_its_promotion(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
