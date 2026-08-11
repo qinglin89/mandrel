@@ -447,6 +447,16 @@ second measurement under the first one's provenance. Each run is identified by
 the handle its harness issued, and one handle names one run: two records sharing
 one would be concluded from a single report.
 
+A rerun is a further attempt at one round, and it is what a completed attempt is
+handed back for: it replaces that attempt as the round's evidence, and the reason
+for it is drift in the integration rather than in the cohort. A *failed* attempt
+is not reproduced — a case set the harness could not hold is exactly what may
+have failed, and reproducing it would refuse every attempt after the first — and
+a round's first run has nothing to reproduce. What the record then states is what
+the harness answered with rather than what it was asked for, so a substitution is
+visible as a different case-set hash beside the attempt it was meant to
+reproduce.
+
 **Five states, three of them written down.** A record says `running`,
 `completed`, or `failed`. `incomplete` — no run names the round that needs one —
 and `stale` — the run that does no longer describes the tree in question — are

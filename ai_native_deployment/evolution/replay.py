@@ -615,7 +615,8 @@ def start(
                 "with nothing to choose between them — conclude that run first"
             )
 
-        attempt = sum(1 for replay in replays if replay.round_number == round_.number) + 1
+        here = [replay for replay in replays if replay.round_number == round_.number]
+        attempt = len(here) + 1
         described = _position(round_.number, attempt)
         integration = _pin(config, experiment, round_.seal.candidate_revision, source_ref, described)
 
@@ -626,6 +627,7 @@ def start(
                 round_number=round_.number,
                 attempt=attempt,
                 integration=integration,
+                reproduce=_reproduce(here),
             )
         )
         started = Replay(
@@ -881,6 +883,32 @@ def _pin(
         description=f"the integration pinned for {described} of {experiment.experiment_id}",
     )
     return integration
+
+
+def _reproduce(here: Sequence[Replay]) -> ReplayPlan | None:
+    """What a new attempt of this round must exercise, if anything.
+
+    A second attempt of one round replaces the first as that round's evidence,
+    and the reason for it is drift in the integration rather than in the cohort:
+    the source line moved, so the same measurement is taken again over the tree
+    that moved. Letting the harness select afresh would answer a question nobody
+    asked — a different cohort, a different rubric revision, standing where the
+    first one's numbers stood.
+
+    Not after a failure, which is the one case where selecting again is the point
+    — a case set the harness could not hold is exactly what may have failed, and
+    reproducing it would refuse every attempt after the first. So a completed
+    attempt is reproduced and a failed one is not, and a round's first run always
+    selects fresh.
+
+    What the record then states is what the harness answered with, not what it
+    was asked for: a harness that substituted something is visible as a different
+    case-set hash beside the attempt it was meant to reproduce, rather than
+    hidden behind the request.
+    """
+
+    previous = here[-1] if here else None
+    return previous.request.reproduce if previous is not None and previous.completed else None
 
 
 def _require_source_line_name(config: EvolutionConfig, path: Path, described: str, ref: str) -> None:

@@ -1559,6 +1559,17 @@ def test_a_source_line_that_moved_is_answered_by_a_new_attempt(
     second = run(config, harness, now=ENDED)
     assert (second.round_number, second.attempt) == (1, 2)
     assert second.integration.merge_input_revision == candidate
+    # The retry answers drift in the integration, not in the cohort: the harness
+    # is asked for the selections the first attempt resolved rather than for
+    # whatever it would choose today.
+    reproduce = harness.requests[-1].reproduce
+    assert reproduce is not None
+    assert reproduce.cases.case_set_id == "loader-regressions"
+    assert reproduce.cases.case_set_sha256 == "c" * 64
+    assert reproduce.evaluator.rubric_revision == "r7"
+    assert reproduce.harness.config_sha256 == "d" * 64
+    # The handle in it names the run being reproduced, never the one starting.
+    assert reproduce.harness.handle == "run-0101"
     replay.conclude(config, harness, now=ENDED)
 
     fresh = replay.describe_evidence(config, live(config))
@@ -1747,3 +1758,23 @@ def test_a_run_that_outlived_its_round_still_concludes_and_reads_as_stale(
     assert evidence.round_number == 2
     assert evidence.state == replay.EVIDENCE_STALE
     assert not evidence.promotable
+
+
+def test_a_retry_after_a_failure_lets_the_harness_select_again(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The one case where selecting afresh is the point: a case set the harness
+    could not hold is exactly what may have failed, so reproducing it would
+    refuse every attempt after the first. A round's first run selects fresh for a
+    reason of its own — there is nothing to reproduce."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report(outcome=replay.RESULT_FAILED, detail="the harness lost its cases", metrics=()))
+    run(config, harness)
+    assert harness.requests[0].reproduce is None
+    replay.conclude(config, harness, now=ENDED)
+
+    retry = run(config, harness, now=ENDED)
+
+    assert (retry.round_number, retry.attempt) == (1, 2)
+    assert harness.requests[-1].reproduce is None
