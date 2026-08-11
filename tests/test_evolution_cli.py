@@ -667,7 +667,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 4
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 5
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,

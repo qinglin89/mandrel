@@ -25,6 +25,7 @@
         "experiment-revised",
         "experiment-abandoned",
         "experiment-superseded",
+        "experiment-promoted",
         "batch-concluded"
       ]
     },

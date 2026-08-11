@@ -36,6 +36,7 @@ from evolution_fixtures import (
     git_unrelated_commit,
     git_update_ref,
     make_repo,
+    promotion_of,
     rejection,
     write_draft,
     write_experiment,
@@ -120,6 +121,7 @@ def outcome(**overrides: Any) -> dict[str, Any]:
         "reason": "no cluster reached the minimum unique-task count",
         "experiment_id": None,
         "promotion_revision": None,
+        "promotion": None,
     }
     record.update(overrides)
     return record
@@ -530,14 +532,72 @@ def test_no_change_outcome_validates_without_a_candidate() -> None:
     assert errors(outcome(), "batch-outcome.schema.json") == []
 
 
-def test_promoted_outcome_names_the_experiment_and_the_promotion_revision() -> None:
+def test_promoted_outcome_names_the_experiment_the_revision_and_the_merge_unit() -> None:
     promoted = outcome(
         outcome="promoted",
         reason="replay showed fewer remediation rounds",
         experiment_id=EXPERIMENT_ID,
         promotion_revision=PROMOTION,
+        promotion=promotion_of(),
     )
     assert errors(promoted, "batch-outcome.schema.json") == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"round": 0},
+        {"candidate_revision": "v2.3.0"},
+        {"merge_input_revision": PROMOTION + "\n"},
+        {"merge_input_ref": "release"},
+        {"merge_input_ref": "HEAD"},
+        {"tree": "not-a-tree"},
+        {"planned_targets": ["/Users/someone/checkouts/target"]},
+        {"planned_targets": ["~/target"]},
+        {"planned_targets": ["a/b"]},
+        {"planned_targets": [""]},
+    ],
+    ids=[
+        "round-zero",
+        "tag-as-candidate",
+        "trailing-newline",
+        "bare-branch",
+        "pseudo-ref",
+        "free-form-tree",
+        "absolute-path",
+        "home-relative-path",
+        "relative-path",
+        "empty-name",
+    ],
+)
+def test_a_merge_unit_that_names_nothing_checkable_is_refused(overrides: dict[str, Any]) -> None:
+    """The merge unit is what holds a promotion revision to the evidence, and a
+    planned target is a name this repository can carry — a machine-local path in
+    a committed record describes a checkout the next reader does not have."""
+
+    promoted = outcome(
+        outcome="promoted",
+        experiment_id=EXPERIMENT_ID,
+        promotion_revision=PROMOTION,
+        promotion=promotion_of(**overrides),
+    )
+    assert errors(promoted, "batch-outcome.schema.json")
+
+
+def test_a_promoted_outcome_states_every_field_of_its_merge_unit() -> None:
+    """No optional halves: a record missing the round or the tree leaves a reader
+    guessing whether the value is absent or was never recorded."""
+
+    for field in ("round", "candidate_revision", "merge_input_revision", "merge_input_ref", "tree", "planned_targets"):
+        merge = promotion_of()
+        del merge[field]
+        promoted = outcome(
+            outcome="promoted",
+            experiment_id=EXPERIMENT_ID,
+            promotion_revision=PROMOTION,
+            promotion=merge,
+        )
+        assert errors(promoted, "batch-outcome.schema.json"), field
 
 
 @pytest.mark.parametrize(

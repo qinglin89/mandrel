@@ -17,8 +17,8 @@ through their modules rather than re-exported, because the bare name says
 nothing on its own: `phase.describe` (the derived lifecycle status),
 `lineage.describe` (the derived batch/experiment lineage), the
 `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` /
-`abandon` / `supersede` / `conclude_no_change` operations on a batch's change
-lineage, the `replay.start` / `replay.conclude` / `replay.abandon` /
+`abandon` / `supersede` / `promote` / `conclude_no_change` operations on a
+batch's change lineage, the `replay.start` / `replay.conclude` / `replay.abandon` /
 `replay.withdraw` runs against a round's pinned candidate together with
 `replay.read_replays` / `replay.describe_evidence` and the rest of that module's
 vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
@@ -45,6 +45,7 @@ from .experiments import (
     Admitted,
     ConclusionResult,
     DecisionResult,
+    PromotionResult,
     RejectionResult,
     ReviseResult,
     SealResult,
@@ -101,6 +102,7 @@ __all__ = [
     "LockError",
     "NormalizedReport",
     "OrchHubFeed",
+    "PromotionResult",
     "PoolEntry",
     "RefState",
     "Rejection",

@@ -12,9 +12,11 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from ai_native_deployment.evolution import analysis_task
 from ai_native_deployment.evolution import feed as feed_module
+from ai_native_deployment.evolution import replay
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -184,11 +186,20 @@ def write_outcome(
     reason: str = "no cluster reached the minimum unique-task count",
     experiment_id: str | None = None,
     promotion_revision: str | None = None,
+    promotion: dict | None = None,
     decided_at: str = "2026-08-09T09:00:00Z",
 ) -> Path:
     """The terminal record that ends a batch, for tests that need a batch whose
-    change cycle is over."""
+    change cycle is over.
 
+    A `promoted` outcome carries the merge unit as well as the revision, so one
+    is supplied by default: a record stating the revision alone is refused as it
+    is read, which is a rule of its own rather than something every caller
+    wanting a concluded batch should have to restate.
+    """
+
+    if outcome == "promoted" and promotion is None:
+        promotion = promotion_of()
     return _write_json(
         batches_root / batch_id / "outcome.json",
         {
@@ -199,8 +210,25 @@ def write_outcome(
             "reason": reason,
             "experiment_id": experiment_id,
             "promotion_revision": promotion_revision,
+            "promotion": promotion,
         },
     )
+
+
+def promotion_of(**overrides: Any) -> dict:
+    """The merge unit a promoted outcome states: the round and candidate that
+    were measured, the source line it went onto, and the tree that produced."""
+
+    merge: dict[str, Any] = {
+        "round": 1,
+        "candidate_revision": "c" * 40,
+        "merge_input_revision": "e" * 40,
+        "merge_input_ref": "refs/heads/release",
+        "tree": "7" * 40,
+        "planned_targets": [],
+    }
+    merge.update(overrides)
+    return merge
 
 
 def write_rejected_drafts(batches_root: Path, batch_id: str, rejected: list[dict]) -> Path:
@@ -449,6 +477,68 @@ def replay_entry(
     }
 
 
+class FakeHarness:
+    """A replay harness that answers, and remembers what it was asked.
+
+    The controller may assume exactly two things about the real one — that it
+    starts a run and names it, and that polling that name eventually reports — so
+    this implements those two and records the requests, which is what a test
+    checks the controller pinned.
+
+    Shared because two suites need a run to exist for different reasons: the
+    replay suite is about what the operations write, and the promotion tests need
+    evidence that was actually measured rather than hand-written. A second copy
+    would let the boundary drift into two harness contracts.
+    """
+
+    def __init__(self, *, report: Any = None, plan: Any = None) -> None:
+        self.requests: list[Any] = []
+        self.polled: list[str] = []
+        self.report = report
+        self.plan = plan
+
+    def start(self, request: Any) -> Any:
+        self.requests.append(request)
+        if self.plan is not None:
+            return self.plan
+        return replay.ReplayPlan(
+            cases=replay.CaseSet(
+                case_set_id="loader-regressions",
+                case_set_sha256="c" * 64,
+                count=12,
+                excluded=(replay.Exclusion(case_id="case-9", reason="needs a credentialed backend"),),
+            ),
+            evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
+            harness=replay.Harness(
+                id="local-replay",
+                revision="0.1.0",
+                config_sha256="d" * 64,
+                handle=f"run-{request.round_number:02d}{request.attempt:02d}",
+            ),
+        )
+
+    def poll(self, handle: str) -> Any:
+        self.polled.append(handle)
+        return self.report
+
+
+def completed_report(**overrides: Any) -> Any:
+    """What a harness reports for a run that finished and measured something."""
+
+    fields: dict[str, Any] = {
+        "outcome": replay.RESULT_COMPLETED,
+        "detail": "convergence improved; no regression outside the excluded case",
+        "elapsed_seconds": 1820.5,
+        "metrics": (
+            replay.Measurement(metric="remediation-rounds", unit="rounds", baseline=2.4, candidate=1.6, better="lower"),
+        ),
+        "regressions": (),
+        "ambiguity": None,
+    }
+    fields.update(overrides)
+    return replay.ReplayReport(**fields)
+
+
 def write_replays(
     experiments_root: Path,
     experiment_id: str,
@@ -605,6 +695,14 @@ def git_repo(root: Path, *, tag: str | None) -> Path:
 
     root.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    # Written into the repository rather than passed per command, because the
+    # package makes commits of its own: a promotion's merge unit carries whoever
+    # promoted, so a checkout Git has no identity for is one it refuses to
+    # promote from — and a machine whose global config happens to supply one is
+    # not something a test may depend on.
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "commit.gpgsign", "false"], check=True)
     (root / "file.txt").write_text("one\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", "first"], check=True)

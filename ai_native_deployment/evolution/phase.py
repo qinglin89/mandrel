@@ -68,7 +68,7 @@ from .replay import Evidence, describe_evidence
 from .revisions import Revision
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -140,11 +140,28 @@ class LifecycleRevisions:
 
 @dataclass(frozen=True)
 class Promotion:
-    """The last change this repository recorded as reaching the source line."""
+    """The last change this repository recorded as reaching the source line.
+
+    The merge unit as well as the revision, because the revision alone is a
+    commit an operator cannot check against anything: with the round and the
+    candidate it names what was measured, and with the merge input it names the
+    line it went onto.
+
+    `planned_targets` is what the promotion was recorded as intending to
+    redeploy, and it is never what any target holds. That is per target, lags
+    every promotion until the target is redeployed, and is read from that
+    target's own `.ai-deploy-lock.json` — `aii-2 status`, not this.
+    """
 
     batch_id: str
     experiment_id: str
     revision: str
+    round_number: int
+    candidate_revision: str
+    merge_input_revision: str
+    merge_input_ref: str
+    tree: str
+    planned_targets: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -269,6 +286,15 @@ class LifecycleStatus:
                 "batch_id": self.last_promotion.batch_id,
                 "experiment_id": self.last_promotion.experiment_id,
                 "revision": self.last_promotion.revision,
+                "round": self.last_promotion.round_number,
+                "candidate_revision": self.last_promotion.candidate_revision,
+                "merge_input_revision": self.last_promotion.merge_input_revision,
+                "merge_input_ref": self.last_promotion.merge_input_ref,
+                "tree": self.last_promotion.tree,
+                # Planned, never deployed: what a target actually carries is in
+                # that target's own deploy receipt and lags this until it is
+                # redeployed (contract: Revisions in play).
+                "planned_targets": list(self.last_promotion.planned_targets),
             },
         }
 
@@ -448,10 +474,19 @@ def _last_promotion(lineage: Lineage) -> Promotion | None:
         return None
     latest = promoted[-1]
     outcome = latest.outcome or {}
+    # Present for every `promoted` outcome — `read_outcome` refuses one that
+    # states the revision without the merge unit it went as.
+    merge = outcome["promotion"]
     return Promotion(
         batch_id=latest.batch_id,
         experiment_id=outcome["experiment_id"],
         revision=outcome["promotion_revision"],
+        round_number=merge["round"],
+        candidate_revision=merge["candidate_revision"],
+        merge_input_revision=merge["merge_input_revision"],
+        merge_input_ref=merge["merge_input_ref"],
+        tree=merge["tree"],
+        planned_targets=tuple(merge["planned_targets"]),
     )
 
 

@@ -11,7 +11,8 @@
     "decided_at",
     "reason",
     "experiment_id",
-    "promotion_revision"
+    "promotion_revision",
+    "promotion"
   ],
   "properties": {
     "schema_version": {
@@ -22,7 +23,7 @@
       "pattern": "^evolution-batch-[0-9]{4,}$"
     },
     "outcome": {
-      "description": "`promoted` names the experiment whose candidate reached the source line. `no-change` is the valid conclusion of invariant 7 and fabricates nothing: with it, `experiment_id` and `promotion_revision` are both null, and no candidate, merge, deployment, or revision change is invented to represent a change that was not made. The controller enforces that pairing; the implemented JSON Schema subset cannot express it.",
+      "description": "`promoted` names the experiment whose candidate reached the source line, the revision that carries it, and the merge unit it was promoted as. `no-change` is the valid conclusion of invariant 7 and fabricates nothing: with it, `experiment_id`, `promotion_revision`, and `promotion` are all null, and no candidate, merge, deployment, or revision change is invented to represent a change that was not made. The controller enforces that pairing; the implemented JSON Schema subset cannot express it.",
       "enum": [
         "promoted",
         "no-change"
@@ -52,6 +53,62 @@
         "null"
       ],
       "pattern": "^[0-9a-f]{40}$"
+    },
+    "promotion": {
+      "$ref": "#/$defs/promotion"
+    }
+  },
+  "$defs": {
+    "promotion": {
+      "description": "The merge unit `promotion_revision` names, or null for a `no-change` outcome. A promotion revision on its own says a commit carries the change and nothing about what was measured to justify it: these are the round whose candidate was exercised, the source line it was integrated onto, and the tree the two produced — which is the identity of the thing replay measured, since two commits only imply a merge result. Together they are what makes the commit checkable against the evidence rather than merely recorded beside it, and what lets a run interrupted before this record landed recognise the merge it already made.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "round",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree",
+        "planned_targets"
+      ],
+      "properties": {
+        "round": {
+          "description": "The round whose seal pinned the promoted candidate. Named because evidence that names an experiment but not a round says nothing after the next `revise` (contract: Promotion evidence).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_revision": {
+          "description": "The revision that round's seal pinned and replay exercised. Never the promotion revision: one is the candidate as it was measured, the other the commit that carries it onto the source line.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "description": "Where the source line stood immediately before this promotion — the first parent of the promotion revision, and the same commit the replay integrated onto.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "description": "The source-line ref this promotion moved. Fully qualified, for the reason a replay's is: a bare name or a revision expression resolves against whichever working copy asks, and this record has to name the same line everywhere.",
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "description": "The tree the promotion revision carries, which is the tree the replay measured. What identifies the thing promoted: the same two commits merged with a different strategy, or with a conflict resolved by hand, land somewhere else.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "planned_targets": {
+          "description": "The target repositories this change is intended for, as they were known when the promotion was recorded. A plan, never an observation: a promoted revision changes nothing a target holds until that target is redeployed, so what any of them actually carries is read from its own `.ai-deploy-lock.json` and never from here. Names rather than paths — a machine-local path in a committed record is inventory this repository does not own, and the next reader's checkout is somewhere else entirely. Empty is a promotion with no target named yet, which is a fact about the plan and not about the deployment.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

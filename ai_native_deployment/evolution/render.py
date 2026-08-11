@@ -17,7 +17,7 @@ from pathlib import Path
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate
-from .phase import ROUND_CANDIDATE_READY, ROUND_OPEN, LifecycleRevisions, LifecycleStatus
+from .phase import ROUND_CANDIDATE_READY, ROUND_OPEN, LifecycleRevisions, LifecycleStatus, Promotion
 from .replay import Evidence
 
 FIELD_WIDTH = 13
@@ -128,15 +128,37 @@ def format_status(status: LifecycleStatus) -> str:
     lines.extend(_experiment_lines(status))
     lines.extend(_replay_lines(status.evidence))
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
-    if status.last_promotion is not None:
-        promotion = status.last_promotion
-        lines.append(
-            _field(
-                "promoted",
-                f"{promotion.revision[:12]} from {promotion.experiment_id} ({promotion.batch_id})",
-            )
-        )
+    lines.extend(_promotion_lines(status.last_promotion))
     return "\n".join(lines)
+
+
+def _promotion_lines(promotion: Promotion | None) -> list[str]:
+    """The last promotion, as the merge it was and the plan it carried.
+
+    The targets are labelled `planned` on their own line rather than listed
+    beside the revision, because the one thing this must not read as is a report
+    of what those repositories hold. A promoted revision reaches a target when
+    that target is redeployed and not before, and `aii-2 status <target>` is
+    what answers for it.
+    """
+
+    if promotion is None:
+        return []
+    lines = [
+        _field(
+            "promoted",
+            f"{promotion.revision[:12]} from {promotion.experiment_id} round {promotion.round_number} "
+            f"({promotion.batch_id})",
+        ),
+        _field(
+            "",
+            f"{promotion.candidate_revision[:12]} onto {promotion.merge_input_ref} at "
+            f"{promotion.merge_input_revision[:12]}, tree {promotion.tree[:12]}",
+        ),
+    ]
+    planned = ", ".join(promotion.planned_targets) if promotion.planned_targets else "none named"
+    lines.append(_field("", f"planned targets: {planned} — deployed only where `aii-2 status` says so"))
+    return lines
 
 
 def _analysis_note(complete: bool, findings_recorded: bool) -> str:

@@ -258,10 +258,16 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     The two outcomes carry different fields, and the pairing is checked here
     because the implemented JSON Schema subset cannot express it. A `no-change`
     record naming a promotion revision is the fabrication invariant 7 forbids,
-    and a `promoted` record naming neither an experiment nor a revision ends the
-    batch while saying nothing about what reached the source line — either way
-    the batch is over and the trail is wrong, which is exactly the state that
-    must not load.
+    and a `promoted` record missing any of the experiment, the revision, or the
+    merge unit ends the batch while saying less than it must about what reached
+    the source line — either way the batch is over and the trail is wrong, which
+    is exactly the state that must not load.
+
+    The merge unit is part of that pairing rather than an ornament on it. A
+    promotion revision alone says a commit exists; what makes it checkable
+    against the evidence is the round, the candidate, the source line it went
+    onto, and the tree — so a record carrying the revision and not those is one
+    nothing can afterwards hold to the replay it was argued from.
     """
 
     path = batch.outcome_path
@@ -277,11 +283,19 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
         return None
 
     promoted = record["outcome"] == OUTCOME_PROMOTED
-    named = {key: record[key] for key in ("experiment_id", "promotion_revision") if record[key] is not None}
-    if promoted and len(named) != 2:
+    fields = ("experiment_id", "promotion_revision", "promotion")
+    named = {key: record[key] for key in fields if record[key] is not None}
+    if promoted and len(named) != len(fields):
         raise BatchError(
-            f"{path}: a {OUTCOME_PROMOTED!r} outcome states the experiment it promoted and the source-line "
-            f"revision that carries it; this one states {sorted(named) or 'neither'}"
+            f"{path}: a {OUTCOME_PROMOTED!r} outcome states the experiment it promoted, the source-line "
+            f"revision that carries it, and the merge unit it was promoted as; this one states "
+            f"{sorted(named) or 'none of them'}"
+        )
+    if promoted and record["promotion"]["merge_input_revision"] == record["promotion_revision"]:
+        raise BatchError(
+            f"{path}: promotes {record['promotion_revision'][:12]} and names it as the source line this "
+            "promotion was made onto; the merge unit is the line before and the commit after, and a record "
+            "where they are one commit describes a promotion that carried nothing"
         )
     if not promoted and named:
         raise BatchError(

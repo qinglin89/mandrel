@@ -2,9 +2,10 @@
 
 The questions are read-only and none of them is fatal: a question Git cannot
 answer returns None rather than raising, because a status command must still
-answer. Three things here are not questions: `create_ref` and `merge_tree`,
-which write and report their failure instead of raising, and `held_at`, which
-writes nothing but takes Git's own ref lock and therefore refuses when it cannot.
+answer. Four things here are not questions: `create_ref` / `move_ref`,
+`merge_tree`, and `commit_merge`, which write and report their failure instead
+of raising, and `held_at`, which writes nothing but takes Git's own ref lock and
+therefore refuses when it cannot.
 
 **The release line** (`release_line_revision`, `release_ref`). Contract
 invariant 8 pins the runner: the stable protocol revision governing an evolution
@@ -14,14 +15,18 @@ from a commit — never from the branch tip, which on a working branch *is* a
 candidate.
 
 **The experiment refs** (`ref_tip`, `contains`, `resolve_commit`, `create_ref`,
-`held_at`). Where an experiment's durable ref sits, whether one revision descends
-from another, which commit a name resolves to, the one operation that creates a
-ref for a new experiment, and the one that holds a ref still while its record
-catches up with it.
+`move_ref`, `held_at`). Where an experiment's durable ref sits, whether one
+revision descends from another, which commit a name resolves to, the operations
+that create a ref for a new experiment and move one from where it was observed,
+and the one that holds a ref still while its record catches up with it.
 
 **The integration** (`merge_tree`). What a candidate and the source line produce
 together, computed without a checkout — the tree replay measures and a promotion
 would carry.
+
+**The promotion** (`commit_merge`, `commit_shape`). The merge unit that carries a
+measured tree onto the source line, and the shape a later run reads back to
+recognise one it made and did not finish recording.
 
 What is deliberately *not* here any more is a lifecycle reading built out of
 `HEAD` against that tag. It answered "is this checkout on the release line",
@@ -37,7 +42,7 @@ import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from .errors import RefHoldError
 
@@ -129,22 +134,110 @@ def ref_tip(repo_root: Path, ref: str) -> str | None:
 def create_ref(repo_root: Path, ref: str, revision: str) -> str | None:
     """Create `ref` at `revision`, or say why that did not happen.
 
-    None means created. Anything else is Git's own complaint, returned rather
-    than raised so the caller can name the experiment the ref belongs to — which
-    is the part an operator needs and this module does not know.
-
     Creation only: the expected old value is `ABSENT_REVISION`, so an existing
     ref refuses instead of being moved. A ref already holding an experiment's
-    rounds is the one thing that must never be reset, and the check and the write
-    are one operation here rather than a look followed by a leap.
+    rounds is the one thing that must never be reset.
     """
 
-    result = _run(repo_root, "update-ref", ref, revision, ABSENT_REVISION)
+    return move_ref(repo_root, ref, revision, ABSENT_REVISION)
+
+
+def move_ref(repo_root: Path, ref: str, revision: str, expected: str) -> str | None:
+    """Move `ref` from `expected` to `revision`, or say why that did not happen.
+
+    None means moved. Anything else is Git's own complaint, returned rather than
+    raised so the caller can name what the ref was to it — which is the part an
+    operator needs and this module does not know.
+
+    The expectation is not advisory: `update-ref` compares and swaps under its
+    own ref lock, so the reading a caller decided from and the write it decided
+    on are one operation rather than a look followed by a leap. That is the whole
+    of what protects a source line here — between reading where it stands and
+    putting a promotion on it, what moves it is ordinary Git, and this package's
+    single-writer lock covers none of that. `ABSENT_REVISION` is the same
+    mechanism spelled for a ref that must not exist yet (`create_ref`).
+    """
+
+    result = _run(repo_root, "update-ref", ref, revision, expected)
     if result is None:
         return "git is not available here"
     if result.returncode == 0:
         return None
     return " ".join((result.stderr or result.stdout or f"git update-ref exited {result.returncode}").split())
+
+
+def commit_merge(
+    repo_root: Path,
+    tree: str,
+    parents: Sequence[str],
+    message: str,
+) -> tuple[str | None, str]:
+    """A commit carrying `tree` with `parents` in order, or why there is none.
+
+    The merge unit a promotion puts on the source line: two parents — the source
+    line as it stood, then the candidate — and the tree replay measured. Built
+    from the recorded tree rather than from a merge performed now, because that
+    tree is the thing evidence exists about; recomputing the merge here is a
+    check on it (the caller makes it), never the source of what gets committed.
+
+    `commit-tree` writes an object and names it in nothing, which is what makes
+    the order recoverable: an interrupted promotion leaves a commit nothing
+    points at, and Git collects it. What makes it real is the ref move after it.
+
+    Returns the commit and no complaint, or no commit and Git's own words — the
+    `merge_tree` shape rather than a raise. The complaint an operator meets most
+    is an unset `user.email`: a promotion commit carries whoever made it, and
+    inventing an identity for it would put this package's name on a human
+    decision.
+    """
+
+    if not _is_repository_root(repo_root):
+        return None, f"{repo_root} is not the top of a work tree"
+    arguments = ["commit-tree", tree]
+    for parent in parents:
+        arguments += ["-p", parent]
+    result = _run(repo_root, *arguments, "-m", message)
+    if result is None:
+        return None, "git is not available here"
+    if result.returncode != 0:
+        complaint = result.stderr.strip() or result.stdout.strip() or f"git commit-tree exited {result.returncode}"
+        return None, " ".join(complaint.split())
+    written = result.stdout.strip()
+    if not written:
+        return None, "git commit-tree reported success and wrote no commit"
+    return written, ""
+
+
+def checked_out_ref(repo_root: Path) -> str | None:
+    """The ref `HEAD` points at, or None for a detached head or no answer.
+
+    Asked before a ref this package is about to move: moving the branch a work
+    tree is on leaves that work tree and its index describing the commit before,
+    so every file the move brought in reads as a pending deletion and an operator
+    reaching for the obvious repair loses whatever else was uncommitted there.
+    Nothing else here writes to a ref anyone checks out, which is why this is
+    asked in one place rather than by every writer.
+    """
+
+    return _git(repo_root, "symbolic-ref", "--quiet", "HEAD") or None
+
+
+def commit_shape(repo_root: Path, revision: str) -> tuple[str, tuple[str, ...]] | None:
+    """The tree a commit carries and the commits it was made from, or None when
+    this checkout cannot say.
+
+    What a promotion is recognised by when its records did not land. A commit's
+    own sha depends on when it was made, so a redo cannot recompute the one an
+    interrupted run created; what it can do is ask whether the commit the source
+    line now stands at was made from those two parents and carries that tree,
+    which no other commit is (contract: recognition is identity).
+    """
+
+    described = _git(repo_root, "show", "--no-patch", "--format=%T %P", f"{revision}^{{commit}}")
+    if not described:
+        return None
+    fields = described.split()
+    return fields[0], tuple(fields[1:])
 
 
 def merge_tree(repo_root: Path, ours: str, theirs: str) -> tuple[str | None, str]:

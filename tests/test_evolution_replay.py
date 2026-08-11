@@ -33,7 +33,9 @@ from typing import Any
 import pytest
 from evolution_fixtures import (
     REPO_ROOT,
+    FakeHarness,
     admitted_task,
+    completed_report,
     experiment_round,
     git_commit,
     git_delete_ref,
@@ -1471,63 +1473,6 @@ STARTED = datetime(2026, 8, 7, 9, 0, 0, tzinfo=timezone.utc)
 ENDED = datetime(2026, 8, 7, 17, 30, 0, tzinfo=timezone.utc)
 
 
-class FakeHarness:
-    """A harness that answers, and remembers what it was asked.
-
-    The controller may assume exactly two things about the real one — that it
-    starts a run and names it, and that polling that name eventually reports —
-    so this implements those two and records the requests, which is what the
-    tests check the controller pinned.
-    """
-
-    def __init__(self, *, report: replay.ReplayReport | None = None, plan: replay.ReplayPlan | None = None) -> None:
-        self.requests: list[replay.ReplayRequest] = []
-        self.polled: list[str] = []
-        self.report = report
-        self.plan = plan
-
-    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
-        self.requests.append(request)
-        if self.plan is not None:
-            return self.plan
-        return replay.ReplayPlan(
-            cases=replay.CaseSet(
-                case_set_id="loader-regressions",
-                case_set_sha256="c" * 64,
-                count=12,
-                excluded=(replay.Exclusion(case_id="case-9", reason="needs a credentialed backend"),),
-            ),
-            evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
-            harness=replay.Harness(
-                id="local-replay",
-                revision="0.1.0",
-                config_sha256="d" * 64,
-                handle=f"run-{request.round_number:02d}{request.attempt:02d}",
-            ),
-        )
-
-    def poll(self, handle: str) -> replay.ReplayReport | None:
-        self.polled.append(handle)
-        return self.report
-
-
-def completed_report(**overrides: Any) -> replay.ReplayReport:
-    fields: dict[str, Any] = {
-        "outcome": replay.RESULT_COMPLETED,
-        "detail": "convergence improved; no regression outside the excluded case",
-        "elapsed_seconds": 1820.5,
-        "metrics": (
-            replay.Measurement(
-                metric="remediation-rounds", unit="rounds", baseline=2.4, candidate=1.6, better="lower"
-            ),
-        ),
-        "regressions": (),
-        "ambiguity": None,
-    }
-    fields.update(overrides)
-    return replay.ReplayReport(**fields)
-
-
 @pytest.fixture
 def admitted(config: evolution.EvolutionConfig) -> None:
     """A current batch whose analysis has closed, with one proposal waiting."""
@@ -2015,7 +1960,7 @@ def test_status_reports_what_the_current_round_has_been_measured_by(
     going = phase.describe(config, now=ENDED)
     assert going.evidence is not None and going.evidence.state == replay.EVIDENCE_RUNNING
     payload = going.to_json()
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 4
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 5
     assert payload["replay"]["state"] == replay.EVIDENCE_RUNNING
     assert payload["replay"]["promotable"] is False
     assert payload["replay"]["run"]["attempt"] == 1
