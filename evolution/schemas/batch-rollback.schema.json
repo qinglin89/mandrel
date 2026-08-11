@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/batch-rollback.schema.json",
+  "title": "Evolution promotion rollback",
+  "description": "The record that takes a promotion back off the source line. It sits beside the `outcome.json` it reverses and never edits it: the promotion happened, and a batch that promoted stays a batch that promoted (contract: Rollback). What this record adds is the inverse commit and the moment the line took it, so every clone reads the same answer to whether that promotion is still effective — a question Git alone answers only where the objects are held.\n\nWritten in two moments, which is what makes an interrupted rollback finishable. The inverse commit is made first and recorded here with `reverted_at` null, because everything after that point is recoverable only by a run that can say which commit was this operation's; then the source line moves; then `reverted_at` is written. A record with a null `reverted_at` is therefore an inverse that may or may not be on the line, and the next run asks Git which — never a rollback that did not happen.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "experiment_id",
+    "promotion_revision",
+    "source_ref",
+    "reverted_from",
+    "revision",
+    "tree",
+    "reason",
+    "prepared_at",
+    "reverted_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}$"
+    },
+    "experiment_id": {
+      "description": "The promoted experiment, restated from the outcome this record reverses. Both are held to that outcome on every reading: a rollback of a promotion this batch did not make is not a rollback of anything.",
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+    },
+    "promotion_revision": {
+      "description": "The commit being reversed — the merge unit the outcome names, and never this record's own `revision`.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_ref": {
+      "description": "The line the promotion is being taken off, which is the one it was put on (`outcome.json` `promotion.merge_input_ref`). Fully qualified, for the reason every other recorded ref here is: a bare name or a revision expression resolves against whichever working copy asks.",
+      "type": "string",
+      "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+    },
+    "reverted_from": {
+      "description": "Where the source line stood when the inverse commit was made — its single parent, and the revision the ref move is a compare-and-swap from. Not the promotion revision: the line may have taken any number of commits since, and what a rollback must never do is drop them.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "revision": {
+      "description": "The inverse commit this operation made. New history rather than removed history: nothing is reset, rewritten, or deleted, so the promotion and everything after it stay exactly where they were and this commit is what takes the change back out.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "tree": {
+      "description": "The tree the inverse commit carries — the line as it stood with the promotion's change taken back out, computed as a three-way revert so later commits on the line are kept. Recorded for the reason a promotion records one: two commits only imply a result, and this is the content that actually reached the line.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "reason": {
+      "description": "Why the promotion was reversed. The evidence for a rollback is not in the run that justified the promotion — a run measures a tree, and whether the promotion argued from it should stand is a later judgement made against a later cohort (contract: Promotion evidence).",
+      "type": "string",
+      "minLength": 1
+    },
+    "prepared_at": {
+      "description": "When the inverse commit was made.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "reverted_at": {
+      "description": "When this controller recorded the source line as carrying the inverse commit, or null while it has not. Null is an operation in flight and never a rollback that was abandoned: the inverse commit exists, the next run asks Git whether the line took it, and it either finishes the move or makes the inverse again from where the line now stands.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

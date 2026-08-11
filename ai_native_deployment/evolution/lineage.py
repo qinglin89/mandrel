@@ -55,6 +55,7 @@ from .manifests import (
     load_batches,
     read_outcome,
     read_rejected_drafts,
+    read_rollback,
 )
 from .revisions import commit_shape, contains, ref_tip
 from .schema import load_schema, validate_or_raise
@@ -340,10 +341,29 @@ class BatchLineage:
     outcome: Mapping[str, Any] | None
     gate: Gate
     ref: RefState | None
+    # The record taking this batch's promotion back off the source line, if one
+    # was ever made. It does not reopen the batch: a batch that promoted stays a
+    # batch that promoted, and what this says is that the promotion is no longer
+    # what the line carries.
+    rollback: Mapping[str, Any] | None = None
 
     @property
     def batch_id(self) -> str:
         return self.batch.batch_id
+
+    @property
+    def promotion_effective(self) -> bool:
+        """Whether this batch's promotion is still on the source line.
+
+        False only for a promotion a completed rollback reversed. A rollback
+        still in flight — the inverse commit made, the line not yet recorded as
+        carrying it — leaves the promotion effective, because that is the state
+        the record actually describes and the next run is what settles it.
+        """
+
+        if self.outcome is None or self.outcome["outcome"] != OUTCOME_PROMOTED:
+            return False
+        return self.rollback is None or self.rollback["reverted_at"] is None
 
     @property
     def current(self) -> bool:
@@ -407,6 +427,40 @@ class Lineage:
 
     batches: tuple[BatchLineage, ...]
     current: BatchLineage | None
+
+    @property
+    def last_promoted(self) -> BatchLineage | None:
+        """The newest batch that ended by promoting, or None if none ever did.
+
+        One derivation, read by `status` and by the operation that reverses a
+        promotion: which promotion is the latest is a question with one answer,
+        and a rollback deciding it for itself would be a second way to find the
+        thing it is about to take off the source line.
+
+        Newest rather than newest-still-effective. A rollback is a fact about
+        this promotion, so a reader asks the batch it belongs to
+        (`promotion_effective`) rather than being handed the one before it — and
+        an operation that reached back past a reversed promotion to the one
+        underneath would be reversing something this repository's own lineage
+        was built on top of.
+        """
+
+        promoted = [
+            item
+            for item in self.batches
+            if item.outcome is not None and item.outcome["outcome"] == OUTCOME_PROMOTED
+        ]
+        return promoted[-1] if promoted else None
+
+    def after(self, batch: BatchLineage) -> tuple[BatchLineage, ...]:
+        """The batches frozen after `batch`, in order.
+
+        Batch ids are allocated in sequence and read in that order, so "later" is
+        a position in this tuple rather than a timestamp comparison.
+        """
+
+        ids = [item.batch_id for item in self.batches]
+        return tuple(self.batches[ids.index(batch.batch_id) + 1 :]) if batch.batch_id in ids else ()
 
 
 def describe(config: EvolutionConfig, *, batches: list[Batch] | None = None) -> Lineage:
@@ -652,6 +706,9 @@ def _batch_lineage(
     if outcome is not None:
         _require_ended_attempts(batch, experiments, open_experiment, outcome)
         _require_one_promotion(config, batch, experiments, outcome)
+    rollback = read_rollback(config, batch)
+    if rollback is not None:
+        _require_reversed_promotion(config, batch, outcome, rollback)
 
     return BatchLineage(
         batch=batch,
@@ -660,6 +717,7 @@ def _batch_lineage(
         outcome=outcome,
         gate=_gate(config, batch, consumed),
         ref=describe_ref(config, open_experiment) if open_experiment else None,
+        rollback=rollback,
     )
 
 
@@ -983,6 +1041,71 @@ def _require_checkable_merge_unit(
             f"{[parent[:12] for parent in parents]}, and the promotion is recorded as {tree[:12]} made "
             f"from {[stated['merge_input_revision'][:12], stated['candidate_revision'][:12]]}; the commit on the "
             "source line is what the record is held to"
+        )
+
+
+def _require_reversed_promotion(
+    config: EvolutionConfig,
+    batch: Batch,
+    outcome: Mapping[str, Any] | None,
+    rollback: Mapping[str, Any],
+) -> None:
+    """The rollback reverses the promotion this batch actually recorded.
+
+    Checked here for `_require_checkable_merge_unit`'s reason: a rollback says
+    that what reached the canonical source line is no longer there, and a claim
+    nothing checks is one any schema-valid file makes freely. What it is held to
+    is the outcome beside it — the promoted experiment, the exact commit, and the
+    line that commit went onto — and, wherever this checkout holds the object,
+    the inverse commit's own shape.
+
+    A rollback with no promotion to reverse is the case that must not load
+    quietly: it would make a batch's promotion read as reversed while the source
+    line still carries it, which is the one thing an operator reads this record
+    to learn.
+
+    The commit is skipped when absent rather than refused, as everywhere else
+    here — a repository that never fetched the source line holds neither the
+    promotion nor its inverse, and a history that stopped loading on a shallow
+    clone would take every other reading with it.
+    """
+
+    path = batch.rollback_path
+    if outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
+        concluded = f"concludes {outcome['outcome']!r}" if outcome is not None else "has not concluded"
+        raise BatchError(
+            f"{path}: reverses a promotion of {rollback['promotion_revision'][:12]}, and {batch.batch_id} "
+            f"{concluded}; a rollback takes back the promotion its own batch recorded, and one standing beside "
+            "no promotion says the source line lost something nothing here ever put there"
+        )
+    merge = outcome["promotion"]
+    stated = {
+        "experiment_id": outcome["experiment_id"],
+        "promotion_revision": outcome["promotion_revision"],
+        "source_ref": merge["merge_input_ref"],
+    }
+    differing = sorted(field for field, value in stated.items() if rollback[field] != value)
+    if differing:
+        raise BatchError(
+            f"{path}: states {differing} differently from the promotion {batch.outcome_path.name} recorded; a "
+            "rollback names the promotion it reverses, and one naming another commit, another attempt, or "
+            "another line is not a record of this batch's promotion coming off the source line"
+        )
+    if rollback["revision"] == rollback["promotion_revision"]:
+        raise BatchError(
+            f"{path}: names {rollback['revision'][:12]} as both the promotion and the commit reversing it; a "
+            "rollback adds history rather than removing it, so the inverse is a commit of its own"
+        )
+
+    shape = commit_shape(config.repo_root, rollback["revision"])
+    if shape is None:
+        return
+    carried, parents = shape
+    if carried != rollback["tree"] or parents != (rollback["reverted_from"],):
+        raise BatchError(
+            f"{path}: {rollback['revision'][:12]} carries {carried[:12]} made from "
+            f"{[parent[:12] for parent in parents]}, and the rollback is recorded as {rollback['tree'][:12]} made "
+            f"from {[rollback['reverted_from'][:12]]}; the commit on the source line is what the record is held to"
         )
 
 

@@ -22,7 +22,8 @@ batch's change lineage, the `replay.start` / `replay.conclude` / `replay.abandon
 `replay.withdraw` runs against a round's pinned candidate together with
 `replay.read_replays` / `replay.describe_evidence` and the rest of that module's
 vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
-and the `render.format_*` functions (operator-facing text for the CLI).
+`rollback.rollback` (the latest promotion taken back off the source line), and
+the `render.format_*` functions (operator-facing text for the CLI).
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ from .phase import BatchView, LifecycleStatus
 from .replay import Evidence, Replay, ReplayHarness, ReplayPlan, ReplayReport, ReplayRequest
 from .reports import NormalizedReport, Rejection, normalize
 from .revisions import Revision, release_line_revision
+from .rollback import RollbackResult
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock
 
 __all__ = [
@@ -116,6 +118,7 @@ __all__ = [
     "ReportRef",
     "Revision",
     "ReviseResult",
+    "RollbackResult",
     "SchemaError",
     "SealResult",
     "StartResult",

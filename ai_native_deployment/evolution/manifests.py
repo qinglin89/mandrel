@@ -6,14 +6,16 @@ writes, the way it already owns `_write_manifest` against this module's
 `read_manifest`. Whether a batch is *current* is not answered here: that is a
 question about its whole lineage, experiments included (`lineage.py`).
 
-Three records sit beside the manifest and none of them substitutes for another.
+Four records sit beside the manifest and none of them substitutes for another.
 `analysis-complete.json` ends the analysis stage; `outcome.json` ends the batch
 (contract invariant 14), which is a later and different moment — admission, the
 experiments, and their rounds all happen between the two;
 `rejected-drafts.json` ends nothing but is what keeps a declined proposal from
-waiting at the admission gate forever. All three are committed for the same
-reason: `.ai-tasks/` and `.ai-evolution/` are machine-local, so a conclusion
-that lived only there would be unreadable on every other clone.
+waiting at the admission gate forever; `rollback.json` comes after the end,
+saying that the promotion the outcome recorded is no longer on the source line.
+All four are committed for the same reason: `.ai-tasks/` and `.ai-evolution/`
+are machine-local, so a conclusion that lived only there would be unreadable on
+every other clone.
 
 Split out of `batches.py` because two layers need it and neither may import the
 other: `state.py` checks a processed report against the batch that claims it,
@@ -50,6 +52,7 @@ from .config import (
     CLOSURE_SCHEMA_FILENAME,
     OUTCOME_SCHEMA_FILENAME,
     REJECTED_DRAFTS_SCHEMA_FILENAME,
+    ROLLBACK_SCHEMA_FILENAME,
     EvolutionConfig,
     batch_id_number,
     format_batch_id,
@@ -62,10 +65,12 @@ FINDINGS_FILENAME = "findings.md"
 CLOSURE_FILENAME = "analysis-complete.json"
 OUTCOME_FILENAME = "outcome.json"
 REJECTED_DRAFTS_FILENAME = "rejected-drafts.json"
+ROLLBACK_FILENAME = "rollback.json"
 
 CLOSURE_SCHEMA_VERSION = 1
 OUTCOME_SCHEMA_VERSION = 1
 REJECTED_DRAFTS_SCHEMA_VERSION = 1
+ROLLBACK_SCHEMA_VERSION = 1
 
 OUTCOME_PROMOTED = "promoted"
 OUTCOME_NO_CHANGE = "no-change"
@@ -117,6 +122,10 @@ class Batch:
     @property
     def rejected_drafts_path(self) -> Path:
         return self.directory / REJECTED_DRAFTS_FILENAME
+
+    @property
+    def rollback_path(self) -> Path:
+        return self.directory / ROLLBACK_FILENAME
 
     @property
     def schema_version(self) -> int | None:
@@ -314,6 +323,31 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
             f"(invariant 7), but this one names {sorted(named)}"
         )
     return record
+
+
+def read_rollback(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | None:
+    """The record taking this batch's promotion back off the source line, or None.
+
+    Absence is the ordinary answer for every batch: most promotions stand, and a
+    batch that concluded `no-change` has nothing to reverse. What this reader
+    owes the lineage is a record it can read as one unambiguous rollback of one
+    promotion — whether that promotion is *this* batch's is checked where both
+    records are in hand (`lineage`), since the outcome is what the claim has to
+    agree with.
+
+    A null `reverted_at` is an operation in flight rather than a malformed
+    record: the inverse commit is made and recorded before the source line moves,
+    which is what lets an interrupted rollback be finished rather than repeated.
+    """
+
+    return read_batch_record(
+        config,
+        batch,
+        batch.rollback_path,
+        schema_filename=ROLLBACK_SCHEMA_FILENAME,
+        description="batch rollback record",
+        foreign="one batch's promotion cannot be reversed by another's record",
+    )
 
 
 def read_rejected_drafts(config: EvolutionConfig, batch: Batch) -> tuple[Mapping[str, Any], ...]:

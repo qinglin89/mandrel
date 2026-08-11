@@ -2,10 +2,10 @@
 
 The questions are read-only and none of them is fatal: a question Git cannot
 answer returns None rather than raising, because a status command must still
-answer. Four things here are not questions: `create_ref` / `move_ref`,
-`merge_tree`, and `commit_merge`, which write and report their failure instead
-of raising, and `held_at`, which writes nothing but takes Git's own ref lock and
-therefore refuses when it cannot.
+answer. Five things here are not questions: `create_ref` / `move_ref`,
+`merge_tree` / `revert_tree`, and `commit_tree`, which write and report their
+failure instead of raising, and `held_at`, which writes nothing but takes Git's
+own ref lock and therefore refuses when it cannot.
 
 **The release line** (`release_line_revision`, `release_ref`). Contract
 invariant 8 pins the runner: the stable protocol revision governing an evolution
@@ -24,12 +24,14 @@ and the one that holds a ref still while its record catches up with it.
 together, computed without a checkout — the tree replay measures and a promotion
 would carry.
 
-**The promotion** (`commit_merge`, `commit_shape`, `checked_out_refs`). The merge
-unit that carries a measured tree onto the source line; the shape a promotion
-commit is held to when a record claims it; and which branches some working tree
-is sitting on, asked before this package moves a ref anyone could be standing on.
-Whether a promotion *reached* the line is `contains` — the recorded commit, on
-that line — rather than either of the first two.
+**The promotion and its reversal** (`commit_tree`, `revert_tree`, `commit_shape`,
+`checked_out_refs`). The commit that carries a measured tree onto the source
+line and the one that takes it back off; the tree a revert produces against the
+line as it now stands; the shape either commit is held to when a record claims
+it; and which branches some working tree is sitting on, asked before this
+package moves a ref anyone could be standing on. Whether a promotion *reached*
+the line, or its inverse did, is `contains` — the recorded commit, on that line
+— rather than a shape or a tip.
 
 What is deliberately *not* here any more is a lifecycle reading built out of
 `HEAD` against that tag. It answered "is this checkout on the release line",
@@ -169,7 +171,7 @@ def move_ref(repo_root: Path, ref: str, revision: str, expected: str) -> str | N
     return " ".join((result.stderr or result.stdout or f"git update-ref exited {result.returncode}").split())
 
 
-def commit_merge(
+def commit_tree(
     repo_root: Path,
     tree: str,
     parents: Sequence[str],
@@ -177,21 +179,24 @@ def commit_merge(
 ) -> tuple[str | None, str]:
     """A commit carrying `tree` with `parents` in order, or why there is none.
 
-    The merge unit a promotion puts on the source line: two parents — the source
-    line as it stood, then the candidate — and the tree replay measured. Built
-    from the recorded tree rather than from a merge performed now, because that
-    tree is the thing evidence exists about; recomputing the merge here is a
-    check on it (the caller makes it), never the source of what gets committed.
+    Both of the commits this package puts on the source line are made here, and
+    each is built from a tree that was decided before the commit was: the merge
+    unit a promotion carries — two parents, the line as it stood and the
+    candidate, with the tree replay measured — and the inverse commit a rollback
+    carries, one parent and the tree the line has once the promotion's change is
+    taken back out. Neither is the result of a merge performed by this call;
+    recomputing one is a check the caller makes on the tree, never the source of
+    what gets committed.
 
     `commit-tree` writes an object and names it in nothing, which is what makes
-    the order recoverable: an interrupted promotion leaves a commit nothing
-    points at, and Git collects it. What makes it real is the ref move after it.
+    the order recoverable: an interrupted promotion or rollback leaves a commit
+    nothing points at, and Git collects it. What makes it real is the ref move
+    after it.
 
     Returns the commit and no complaint, or no commit and Git's own words — the
     `merge_tree` shape rather than a raise. The complaint an operator meets most
-    is an unset `user.email`: a promotion commit carries whoever made it, and
-    inventing an identity for it would put this package's name on a human
-    decision.
+    is an unset `user.email`: these commits carry whoever made them, and
+    inventing an identity would put this package's name on a human decision.
     """
 
     if not _is_repository_root(repo_root):
@@ -295,9 +300,47 @@ def merge_tree(repo_root: Path, ours: str, theirs: str) -> tuple[str | None, str
     for the reason a Git too old for ref transactions does in `_prepare`.
     """
 
+    return _written_tree(repo_root, "--write-tree", ours, theirs)
+
+
+def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> tuple[str | None, str]:
+    """The tree `tip` has once `revision`'s change is taken back out, or why
+    there is none.
+
+    A rollback's content, and it is a three-way merge rather than a tree the
+    record already holds: reverting means applying the change backwards *to the
+    line as it now stands*, so the commits that landed after the promotion are
+    carried through rather than dropped. Git's own revert states it the same
+    way, and this is that computation without a checkout — `revision` as the
+    merge base, the line's tip as one side, and the commit `revision` was made
+    from as the other, which is what makes the promotion's own change the
+    difference that gets reversed.
+
+    Where nothing followed the promotion the answer degenerates to the tree the
+    line had before it, which is the obvious case and the one this must not be
+    written as: pinning that tree would silently discard every commit since.
+
+    A conflict is a non-zero exit and refuses like every other failure here
+    (`merge_tree`): the change cannot be taken back out without deciding
+    something, and deciding it is a person's job with a working tree in front of
+    them. `--merge-base` needs Git 2.40, and one too old for it says so in its
+    own usage error rather than being probed for.
+    """
+
+    return _written_tree(repo_root, "--write-tree", f"--merge-base={revision}", tip, parent)
+
+
+def _written_tree(repo_root: Path, *arguments: str) -> tuple[str | None, str]:
+    """One `git merge-tree` run and one reading of what it answered.
+
+    Shared so that a tree computed for an integration and a tree computed for a
+    revert are refused on the same terms — in particular that a conflict prints a
+    tree and is still not an answer.
+    """
+
     if not _is_repository_root(repo_root):
         return None, f"{repo_root} is not the top of a work tree"
-    result = _run(repo_root, "merge-tree", "--write-tree", ours, theirs)
+    result = _run(repo_root, "merge-tree", *arguments)
     if result is None:
         return None, "git is not available here"
     written = result.stdout.strip().splitlines()

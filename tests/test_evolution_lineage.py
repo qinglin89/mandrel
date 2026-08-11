@@ -47,6 +47,7 @@ from evolution_fixtures import (
     write_outcome,
     write_rejected_drafts,
     write_replays,
+    write_rollback,
 )
 
 from ai_native_deployment import evolution
@@ -1841,6 +1842,145 @@ def test_a_current_record_that_lost_its_prepared_promotion_is_refused(
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(evolution.ValidationError, match="missing required property 'promotion'"):
+        lineage.describe(config)
+
+
+# --- a promotion taken back off the source line -------------------------------
+
+
+def rolled_back(config: evolution.EvolutionConfig, **overrides: Any) -> Path:
+    """A promoted batch with the record saying its promotion is no longer what
+    the line carries. `overrides` change what that record states, which is what
+    the outcome beside it holds it to."""
+
+    promoted_batch(config)
+    fields: dict[str, Any] = {
+        "experiment_id": EXP_01,
+        "promotion_revision": PROMOTION,
+        "source_ref": "refs/heads/release",
+        **overrides,
+    }
+    return write_rollback(config.batches_root, BATCH_ID, **fields)
+
+
+def test_a_rolled_back_promotion_is_still_a_promotion(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The record is read beside the outcome rather than instead of it: the batch
+    promoted, that stays true and stays terminal, and what the rollback adds is
+    that the source line no longer carries it."""
+
+    rolled_back(config)
+
+    derived = only(config)
+    assert derived.outcome is not None and derived.outcome["outcome"] == "promoted"
+    assert derived.rollback is not None
+    assert derived.promotion_effective is False
+    latest = lineage.describe(config).last_promoted
+    assert latest is not None and latest.batch_id == BATCH_ID
+
+
+def test_a_rollback_still_in_flight_leaves_the_promotion_effective(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An inverse commit exists and the line has not been recorded as carrying
+    it, which is the state the record describes — the operation is finished by
+    being run again, not by a reader deciding it happened."""
+
+    rolled_back(config, reverted_at=None)
+
+    derived = only(config)
+    assert derived.rollback is not None
+    assert derived.promotion_effective is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"experiment_id": "evolution-batch-0007-exp-02"},
+        {"promotion_revision": "9" * 40},
+        {"source_ref": "refs/heads/other"},
+    ],
+    ids=["experiment", "revision", "line"],
+)
+def test_a_rollback_naming_another_promotion_is_refused(
+    config: evolution.EvolutionConfig, batch: Path, overrides: dict
+) -> None:
+    """What a rollback claims is that what reached the canonical source line is
+    no longer there, and a claim nothing checks is one any schema-valid file
+    makes freely."""
+
+    rolled_back(config, **overrides)
+
+    with pytest.raises(evolution.BatchError, match="differently from the promotion"):
+        lineage.describe(config)
+
+
+def test_a_rollback_of_a_batch_that_promoted_nothing_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The case that must not load quietly: a batch's promotion would read as
+    reversed while the source line still carries it."""
+
+    write_outcome(config.batches_root, BATCH_ID, reason="the evidence justified no change")
+    write_rollback(
+        config.batches_root, BATCH_ID, experiment_id=EXP_01, promotion_revision=PROMOTION
+    )
+
+    with pytest.raises(evolution.BatchError, match="concludes 'no-change'"):
+        lineage.describe(config)
+
+
+def test_a_rollback_of_a_batch_that_has_not_concluded_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    write_rollback(
+        config.batches_root, BATCH_ID, experiment_id=EXP_01, promotion_revision=PROMOTION
+    )
+
+    with pytest.raises(evolution.BatchError, match="has not concluded"):
+        lineage.describe(config)
+
+
+def test_a_rollback_whose_inverse_is_the_promotion_itself_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A rollback adds history rather than removing it, so the inverse is a
+    commit of its own — a record naming one commit as both is describing a
+    reversal nothing could have performed."""
+
+    rolled_back(config, revision=PROMOTION)
+
+    with pytest.raises(evolution.BatchError, match="as both the promotion and the commit reversing it"):
+        lineage.describe(config)
+
+
+def test_the_inverse_commit_is_what_the_rollback_record_is_held_to(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The check outside this controller's own records, made wherever the
+    checkout holds the commit: an inverse naming another tree, or another commit
+    it was made from, is a record Git contradicts."""
+
+    real = git_commit(config.repo_root, "a commit that reverses nothing")
+    rolled_back(config, revision=real)
+
+    with pytest.raises(evolution.BatchError, match="is what the record is held to"):
+        lineage.describe(config)
+
+
+def test_a_rollback_record_sitting_in_another_batch_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    promoted_batch(config)
+    path = write_rollback(
+        config.batches_root, BATCH_ID, experiment_id=EXP_01, promotion_revision=PROMOTION
+    )
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["batch_id"] = "evolution-batch-0008"
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="cannot be reversed by another's record"):
         lineage.describe(config)
 
 

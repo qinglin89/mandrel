@@ -8,12 +8,18 @@ experiment's ref still agrees with its record. Those questions have one set of
 answers and one set of refusals, and they are here rather than in the module that
 happens to write first.
 
-Two modules write against this lineage: `experiments.py` moves an attempt
-through its rounds and ends it, and `replay.py` records the runs measured
-against a round's pinned candidate. Restating the preamble in the second one
-would give an operator two spellings of the same refusal and let them drift; the
-alternative — importing it from `experiments.py` — points the dependency the
-wrong way, since a promotion has to read replay evidence before it decides.
+Three modules write against this lineage: `experiments.py` moves an attempt
+through its rounds and ends it, `replay.py` records the runs measured against a
+round's pinned candidate, and `rollback.py` takes a promotion back off the
+source line. Restating the preamble in any of them would give an operator
+several spellings of the same refusal and let them drift; the alternative —
+importing it from `experiments.py` — points the dependency the wrong way, since
+a promotion has to read replay evidence before it decides.
+
+Two things here are not readings of the lineage at all: the reason a decision
+records, and whether some working tree is sitting on the ref about to move.
+They are here for the same reason as the rest — two operations ask each of them,
+and an operator meets one refusal rather than one per module.
 
 Nothing here writes. `settled` publishes this machine's analysis closures, which
 is a record catching up with a task lifecycle rather than a change to the
@@ -29,6 +35,7 @@ from .config import EvolutionConfig
 from .errors import BatchError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
+from .revisions import checked_out_refs
 
 
 def current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = False) -> BatchLineage:
@@ -161,6 +168,61 @@ def no_open_experiment(current: BatchLineage, action: str) -> BatchError:
         f"{current.batch_id} has no open experiment, so there is nothing to {action}; a terminal decision is "
         "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
         "it needs"
+    )
+
+
+def reason(text: str, requirement: str) -> str:
+    """The human reason a decision records, as one line.
+
+    Collapsed because it travels in a versioned record and is compared there: a
+    redo recognising its own interrupted work matches the reason it wrote, and
+    two spellings differing only in how they were wrapped would read as two
+    different decisions.
+    """
+
+    collapsed = " ".join((text or "").split())
+    if not collapsed:
+        raise BatchError(requirement)
+    return collapsed
+
+
+def require_line_not_checked_out(config: EvolutionConfig, ref: str, action: str) -> None:
+    """No working tree of this repository is sitting on the line about to move.
+
+    Moving a ref touches no working tree, which is what lets these operations run
+    in a checkout busy with unrelated work. That is only true while the ref is
+    nobody's: moving a branch some work tree is on leaves that tree and its index
+    describing the commit before, so everything the move changed reads there as
+    an edit nobody made — and the obvious repair takes whatever else was
+    uncommitted there with it.
+
+    Every worktree, not this process's own `HEAD`. A linked worktree
+    (`git worktree add`) holds a branch this checkout never looks at, and
+    `update-ref` moves it there without a word — leaving a directory the operator
+    may not have thought about in exactly the state above. So the question is put
+    to Git once, and a Git that cannot answer it refuses: this is the only thing
+    standing between the move and somebody's working tree.
+
+    Refused rather than repaired, because the repair is a checkout and that is a
+    far larger promise than either of these operations makes. It is also the one
+    refusal here an operator answers without deciding anything: run it from a
+    clone that is not on the release line.
+    """
+
+    checked_out = checked_out_refs(config.repo_root)
+    if checked_out is None:
+        raise BatchError(
+            f"whether {ref} is checked out anywhere cannot be answered in {config.repo_root}, and {action} "
+            "moves it without touching a working tree; a work tree sitting on that branch would be left "
+            "describing the commit before, so this refuses rather than move a ref it cannot say is free"
+        )
+    directory = checked_out.get(ref)
+    if directory is None:
+        return
+    raise BatchError(
+        f"{ref} is checked out at {directory}, and {action} moves it without touching a working tree; that "
+        "tree and its index would go on describing the commit before, showing what the move changed as an edit "
+        f"nobody made — run {action} from a checkout that is not on the source line"
     )
 
 

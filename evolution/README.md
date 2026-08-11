@@ -115,7 +115,7 @@ and the decision that follows.
 
 ## Revisions in play
 
-Six different commits, which an evidence trail must not substitute for one
+Seven different commits, which an evidence trail must not substitute for one
 another — a candidate measured against the wrong one measures nothing.
 
 | Term | What it is | Recorded in |
@@ -125,6 +125,7 @@ another — a candidate measured against the wrong one measures nothing.
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
 | Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
 | Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch. A promotion recorded before the experiment carried a merge unit (`experiment.json` version 1) states the revision alone, and the outcome is the only record of what it went as | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
+| Rollback revision | the source-line commit that takes a promoted change back out; a commit of its own with the line's tip as its parent, never the promotion it reverses and never a rewrite of it | `outcome.json`'s batch: `rollback.json` `revision` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
 
 The middle two are the pair a promotion is decided from, and neither stands in
@@ -152,6 +153,7 @@ evolution/
   batches/<batch-id>/proposed-tasks/<draft-id>.md  change-task drafts; kept after admission
   batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
+  batches/<batch-id>/rollback.json  the inverse commit that took a promoted change back off the source line
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, prepared promotion, decision
   experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
@@ -187,6 +189,10 @@ different moments, and each has its own record:
 - A batch is finished only when its outcome is recorded. Everything between the
   two — the admission gate, the experiments, their rounds — happens inside a
   batch that is still current (invariant 14).
+- A rollback comes after the end and does not reopen it. `rollback.json` says
+  that the promotion the outcome recorded is no longer what the source line
+  carries; the batch stays concluded, the experiment stays promoted, and the
+  outcome record is not edited.
 
 ## Normal workflow
 
@@ -728,7 +734,9 @@ reach it:
   one of the three a promotion may not have: a version-1 promotion never wrote
   one, which is why the other two are put to the values the outcome states rather
   than to the prepared ones. What is lost with it is one record agreeing with
-  another; what is kept is the run and the commit.
+  another; what is kept is the run and the commit. A promotion later taken back
+  off the line keeps this record exactly as it is — what says the line no longer
+  carries it is the rollback record beside it (Rollback).
 - `no-change` — the evidence justified no change to anything (invariant 7). The
   record carries the reason and nothing else: no experiment, no promotion
   revision, and no commit invented to represent a change that was not made.
@@ -756,16 +764,92 @@ either of them ends the gate along with the batch. The four together are exactly
 the derived phase `conclusion-pending`, which is the point: what `status` reports
 a batch is waiting for is the condition of the operation that answers it.
 
+### Rollback
+
+A promotion that turns out to have been wrong is taken back off the source line
+by a **rollback**, and everything it does is additive. The promotion commit stays
+where it is, the outcome that recorded it is not edited, the experiment stays
+promoted, and the batch stays concluded — what a rollback writes is a new commit
+reversing the change, and one record beside that outcome saying the line no
+longer carries it (`batches/<batch-id>/rollback.json`,
+`schemas/batch-rollback.schema.json`). Nothing here resets, rewrites, or deletes
+history: a line rewritten to drop a promotion would leave every other clone
+holding the commit and this one denying it, and the record of what was promoted,
+when, and on what evidence is the trail this whole contract exists to keep.
+
+**Which promotion.** The newest one this repository recorded, and no other —
+the same derivation `status` reports as the last promotion, so a rollback names
+nothing and picks nothing. Reaching further back is not offered: everything this
+repository did afterwards was decided on the line as that promotion left it, and
+an operator who means to reverse something older is reversing a base rather than
+a release. That is ordinary Git and a record of its own, not this operation.
+
+Four things are asked before anything is written:
+
+- **There is a promotion, and it is still effective.** A promotion a completed
+  rollback already reversed is not reversed twice; the same request run again
+  reports the rollback on record rather than making a second inverse.
+- **Nothing here was built on it.** No experiment of a later batch stands on the
+  promoted commit — neither its frozen base nor the candidate its last round
+  pinned. Such an attempt was developed, reviewed and measured against a line
+  carrying this change, and taking the change back out from under it leaves
+  evidence describing a line that no longer exists. A checkout that cannot
+  answer whether the two are related refuses: everywhere else here an
+  unanswerable Git question is a fact about the clone and is reported, and this
+  is the one place where the wrong answer costs somebody else's work.
+- **The line still carries the promotion.** A line that was reset, or is not the
+  one this promotion went onto, has nothing on it to take back — and a line that
+  already carries none of the promotion's content is a state something outside
+  this controller produced, which a rollback may not record as its own work.
+- **No working tree is on the line.** The same repository-level guard a promotion
+  makes, worktree-wide and for the same reason.
+
+The content is computed, not taken from a record. Reverting is applying the
+promotion's change backwards *to the line as it now stands*, so every commit that
+landed after the promotion is carried through — that is the difference between a
+revert and a rewind, and pinning the tree the line had before the promotion would
+silently discard them. A change that cannot be taken back out without deciding
+something conflicts, and a conflict refuses: what the line should hold instead is
+a person's judgement with a working tree in front of them.
+
+Then the writes, in the order a promotion uses and for the same reason — the Git
+half cannot be undone by this controller, so it has to be recognisable
+afterwards. The inverse commit is made first and named by nothing, so a run
+stopping there leaves an object Git collects. Then the record, with its reversal
+moment still null, which is what makes that commit *this operation's*. Then the
+source-line ref moves, compare-and-swap from the tip the inverse was made on top
+of. Then the moment is written, and the audit line after it.
+
+A second run therefore asks the record which commit was this operation's, and
+Git whether the line carries it — ancestry, never a shape a hand-made revert
+shares and never the tip, since a line that took further commits still carries
+the rollback. Where the line has left the prepared inverse behind, the inverse is
+made **again** from where the line now stands rather than discarded and refused
+as a prepared promotion is: a promotion's merge carries a tree that evidence
+exists about, and a moved line makes that evidence describe something else, while
+a rollback's content is computed from the line and nothing measured is
+invalidated by the line moving.
+
+A rollback is not a judgement the promotion's own evidence contains. A replay
+measures a tree; whether the promotion argued from it should stand is a later
+judgement against a later cohort, and what this records of it is the operator's
+reason (Promotion evidence). Nor does it say anything about deployment: targets
+carry what they were last deployed with, and a reversed promotion reaches them
+the same way the promotion did — through `aii-2 deploy`, read from each target's
+own receipt.
+
 ### What is derived
 
 None of this stores a lifecycle phase, and none of it may be inferred from the
 checkout. The current batch, the open experiment, its last round and whether
 that round is candidate-ready, the candidate revision, a successor a
 supersession recorded and did not create, the drafts still
-waiting at the gate, what the current round has been replayed by, and the last
-promotion this repository recorded are
+waiting at the gate, what the current round has been replayed by, the last
+promotion this repository recorded and whether the source line still carries it
+are
 re-derived on every read from the committed manifests, closure records,
-experiment records, replay records, rejection records, the experiment refs, and
+experiment records, replay records, rejection records, rollback records, the
+experiment refs, and
 Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
 derive the same answer.
 
@@ -773,9 +857,10 @@ Deriving is also where the records are held to each other. A concluded batch and
 its experiments state one history, and the merge unit a promoted outcome carries
 is checked against the promoted experiment's own prepared promotion, the
 completed run that measured that exact integration, and the commit itself
-wherever the checkout holds it. A record whose claim nothing checks is a claim
-any schema-valid file can make, and this one names what reached the canonical
-source line.
+wherever the checkout holds it. A rollback is checked the same way, against the
+outcome it reverses and against its own commit's shape. A record whose claim
+nothing checks is a claim any schema-valid file can make, and these name what
+reached the canonical source line and what came back off it.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run
@@ -812,7 +897,7 @@ Two readings are specifically not that answer:
 
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
-abandon, supersede, promote, and `conclude-no-change` — writes
+abandon, supersede, promote, `conclude-no-change`, and rollback — writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
@@ -823,7 +908,9 @@ would say about either is what the record already says, and the run's outcome is
 the event there is something to audit about. A promotion writes further than any
 of them — a commit, the record naming it, a ref on the source line, then two
 more records and two audit lines — and it is the one whose middle cannot be
-undone by this controller.
+undone by this controller. A rollback is the same shape with one record: a
+commit, the record naming it, the ref, then the moment written into that same
+record and one audit line.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
@@ -958,7 +1045,12 @@ produces the tree that was measured, a source line that moved between the
 evidence being read and the merge being put on it, a promoted outcome stating the
 revision without the merge unit it went as, a prepared promotion naming anything
 but the round it was prepared from or a reason other than the one the decision
-records, a record of a version this build has no reader for,
+records, a rollback of a promotion its batch did not record or of a batch that
+promoted nothing, a rollback naming the promotion it reverses as its own inverse
+commit or naming a commit Git describes differently, a rollback of a promotion a
+later attempt stands on or of a line that no longer carries it, a second
+reversal of a promotion already rolled back, a record of a version this build has
+no reader for,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert

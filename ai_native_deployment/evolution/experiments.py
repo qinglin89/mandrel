@@ -98,7 +98,9 @@ from .errors import BatchError, RefHoldError
 from .guards import (
     current_cycle,
     no_open_experiment,
+    reason as require_reason,
     require_consistent_ref,
+    require_line_not_checked_out,
     require_no_pending_successor,
     require_open_experiment,
     require_readable_evidence,
@@ -137,8 +139,7 @@ from .manifests import (
 )
 from .replay import Evidence, History, Integration, describe_evidence, read_replays
 from .revisions import (
-    checked_out_refs,
-    commit_merge,
+    commit_tree,
     contains,
     create_ref,
     held_at,
@@ -494,7 +495,7 @@ def reject(
     """
 
     moment = _moment(now)
-    text = _reason(
+    text = require_reason(
         reason,
         "declining a draft records why; the reason travels with the batch and is what keeps a rejected "
         "proposal from being re-argued from memory",
@@ -699,7 +700,7 @@ def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None)
     """
 
     moment = _moment(now)
-    text = _reason(
+    text = require_reason(
         reason,
         "revising records why; the reason is what the next round's evidence is read against, and a revision "
         "with none says only that somebody was dissatisfied",
@@ -880,7 +881,7 @@ def _end_attempt(
     """
 
     moment = _moment(now)
-    text = _reason(
+    text = require_reason(
         reason,
         f"a decision that an attempt is {outcome} records why; the reason is what a later reader has instead of "
         "the conversation that produced it, and an attempt that ended for no stated reason is one the next "
@@ -1365,7 +1366,7 @@ def promote(
     """
 
     moment = _moment(now)
-    text = _reason(
+    text = require_reason(
         reason,
         "a promotion records why the evidence justified putting this candidate on the source line; the reason is "
         "what a later reader has instead of the conversation that produced it, and it is what the cohort measuring "
@@ -1501,7 +1502,7 @@ def _promotable_integration(
             f"{experiment.experiment_id}: the run justifying this promotion integrated onto a detached revision, "
             "so there is no source line to move"
         )
-    _require_line_not_checked_out(config, integration.merge_input_ref)
+    require_line_not_checked_out(config, integration.merge_input_ref, "a promotion")
     _require_measured_tree(config, experiment, integration)
     return integration
 
@@ -1539,46 +1540,6 @@ def _require_nothing_in_flight(experiment: Experiment, history: History) -> None
             f"under {going.harness.id} handle {going.harness.handle!r}; a promotion ends the experiment, and "
             "nothing could afterwards conclude that run or record why it stopped — conclude it, or end it, first"
         )
-
-
-def _require_line_not_checked_out(config: EvolutionConfig, ref: str) -> None:
-    """No working tree of this repository is sitting on the line about to be moved.
-
-    A promotion moves a ref and touches no working tree, which is what lets it
-    run in a repository busy with unrelated work. That is only true while the ref
-    is nobody's: moving a branch some work tree is on would leave that tree and
-    its index describing the commit before, so everything the promotion brought
-    in reads as a pending deletion — and the obvious repair takes whatever else
-    was uncommitted there with it.
-
-    Every worktree, not this process's own `HEAD`. A linked worktree
-    (`git worktree add`) holds a branch this checkout never looks at, and
-    `update-ref` moves it there without a word — leaving a directory the operator
-    may not have thought about in exactly the state above. So the question is put
-    to Git once, and a Git that cannot answer it refuses the promotion: the guard
-    is the only thing standing between the move and somebody's working tree.
-
-    Refused rather than repaired, because the repair is a checkout and that is a
-    far larger promise than promoting makes. It is also the one refusal here an
-    operator answers without deciding anything: promote from a clone that is not
-    on the release line.
-    """
-
-    checked_out = checked_out_refs(config.repo_root)
-    if checked_out is None:
-        raise BatchError(
-            f"whether {ref} is checked out anywhere cannot be answered in {config.repo_root}, and a promotion "
-            "moves it without touching a working tree; a work tree sitting on that branch would be left "
-            "describing the commit before, so this refuses rather than move a ref it cannot say is free"
-        )
-    directory = checked_out.get(ref)
-    if directory is None:
-        return
-    raise BatchError(
-        f"{ref} is checked out at {directory}, and a promotion moves it without touching a working tree; that "
-        "tree and its index would go on describing the commit before, showing everything the promotion carried "
-        "as a pending deletion — promote from a checkout that is not on the source line"
-    )
 
 
 def _require_promotable(experiment: Experiment, evidence: Evidence) -> None:
@@ -1733,7 +1694,7 @@ def _prepare_promotion(
     the line would put a tree measured against the old one onto the new.
     """
 
-    revision, complaint = commit_merge(
+    revision, complaint = commit_tree(
         config.repo_root,
         integration.tree,
         [integration.merge_input_revision, integration.candidate_revision],
@@ -1775,7 +1736,7 @@ def _land(config: EvolutionConfig, experiment: Experiment, prepared: PreparedPro
     between the two runs somebody may have checked the line out.
     """
 
-    _require_line_not_checked_out(config, prepared.merge_input_ref)
+    require_line_not_checked_out(config, prepared.merge_input_ref, "a promotion")
     moved = move_ref(config.repo_root, prepared.merge_input_ref, prepared.revision, prepared.merge_input_revision)
     if moved is None:
         return
@@ -2062,7 +2023,7 @@ def conclude_no_change(
     """
 
     moment = _moment(now)
-    text = _reason(
+    text = require_reason(
         reason,
         "concluding records why; a batch that ended is read afterwards only through what it wrote, and "
         "'no change' without a reason says nothing about what the evidence showed",
@@ -2378,21 +2339,6 @@ def _held(
         ) from exc
     with holding:
         yield
-
-
-def _reason(text: str, requirement: str) -> str:
-    """The human reason a decision records, as one line.
-
-    Collapsed because it travels in a versioned record and is compared there: a
-    redo recognising its own interrupted work matches the reason it wrote, and
-    two spellings differing only in how they were wrapped would read as two
-    different decisions.
-    """
-
-    collapsed = " ".join((text or "").split())
-    if not collapsed:
-        raise BatchError(requirement)
-    return collapsed
 
 
 def _requested(draft_ids: Iterable[str]) -> set[str]:

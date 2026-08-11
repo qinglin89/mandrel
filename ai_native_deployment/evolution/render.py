@@ -17,7 +17,14 @@ from pathlib import Path
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate
-from .phase import ROUND_CANDIDATE_READY, ROUND_OPEN, LifecycleRevisions, LifecycleStatus, Promotion
+from .phase import (
+    ROUND_CANDIDATE_READY,
+    ROUND_OPEN,
+    LifecycleRevisions,
+    LifecycleStatus,
+    Promotion,
+    Rollback,
+)
 from .replay import Evidence
 
 FIELD_WIDTH = 13
@@ -158,7 +165,31 @@ def _promotion_lines(promotion: Promotion | None) -> list[str]:
     ]
     planned = ", ".join(promotion.planned_targets) if promotion.planned_targets else "none named"
     lines.append(_field("", f"planned targets: {planned} — deployed only where `aii-2 status` says so"))
+    lines.extend(_rollback_lines(promotion.rollback))
     return lines
+
+
+def _rollback_lines(rollback: Rollback | None) -> list[str]:
+    """The reversal of that promotion, when there is one.
+
+    Shown under the promotion rather than instead of it, because both are true:
+    the commit was promoted and a later commit took the change back out. An
+    inverse the line has not been recorded as carrying is named as the operation
+    in flight it is — the one state here whose next step is to run the rollback
+    again.
+    """
+
+    if rollback is None:
+        return []
+    if rollback.reverted_at is None:
+        return [
+            _field(
+                "",
+                f"rollback prepared as {rollback.revision[:12]} from {rollback.reverted_from[:12]} — the source "
+                "line has not been recorded as carrying it; run the rollback again to finish it",
+            )
+        ]
+    return [_field("", f"rolled back by {rollback.revision[:12]} at {rollback.reverted_at} — {rollback.reason}")]
 
 
 def _analysis_note(complete: bool, findings_recorded: bool) -> str:

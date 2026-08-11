@@ -3268,14 +3268,14 @@ def test_a_line_that_moved_before_the_merge_landed_gives_up_the_promotion(
     be finished — the evidence behind it describes a line that has moved on."""
 
     prepared(config)
-    made = revisions.commit_merge
+    made = revisions.commit_tree
 
     def interleaved(repo_root, tree, parents, message):
         result = made(repo_root, tree, parents, message)
         git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "x\n", "meanwhile"))
         return result
 
-    monkeypatch.setattr(experiments, "commit_merge", interleaved)
+    monkeypatch.setattr(experiments, "commit_tree", interleaved)
 
     with pytest.raises(evolution.BatchError, match="never reached"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
@@ -3525,7 +3525,7 @@ def test_a_merge_this_operation_did_not_make_is_not_its_promotion(
     reason, the plan, and the audit line attached to somebody else's commit."""
 
     run = prepared(config)
-    by_hand, complaint = revisions.commit_merge(
+    by_hand, complaint = revisions.commit_tree(
         config.repo_root,
         run.integration.tree,
         [release, run.integration.candidate_revision],

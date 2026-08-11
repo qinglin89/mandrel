@@ -11,14 +11,23 @@ import hashlib
 import json
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ai_native_deployment.evolution import analysis_task
+from ai_native_deployment.evolution import experiments
 from ai_native_deployment.evolution import feed as feed_module
 from ai_native_deployment.evolution import replay
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# The source line a candidate is promoted onto: a ref of its own rather than
+# whichever branch a checkout is on, because that is what the merge input is a
+# property of.
+RELEASE_REF = "refs/heads/release"
+PROMOTION_REASON = "replay showed fewer remediation rounds with no regression"
+PROMOTION_EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 
 ARTIFACT_BODIES = {
     "evidence": b'{"layer": "L1", "events": []}',
@@ -252,6 +261,44 @@ def prepared_promotion(**overrides: Any) -> dict:
     return promotion
 
 
+def write_rollback(
+    batches_root: Path,
+    batch_id: str,
+    *,
+    experiment_id: str,
+    promotion_revision: str,
+    source_ref: str = "refs/heads/release",
+    reverted_from: str = "e" * 40,
+    revision: str = "a" * 40,
+    tree: str = "8" * 40,
+    reason: str = "the next cohort showed no improvement and two new regressions",
+    prepared_at: str = "2026-08-10T09:00:00Z",
+    reverted_at: str | None = "2026-08-10T09:00:01Z",
+) -> Path:
+    """The record taking a batch's promotion back off the source line.
+
+    `reverted_at` of None is the operation in flight: the inverse commit exists
+    and the line has not been recorded as carrying it.
+    """
+
+    return _write_json(
+        batches_root / batch_id / "rollback.json",
+        {
+            "schema_version": 1,
+            "batch_id": batch_id,
+            "experiment_id": experiment_id,
+            "promotion_revision": promotion_revision,
+            "source_ref": source_ref,
+            "reverted_from": reverted_from,
+            "revision": revision,
+            "tree": tree,
+            "reason": reason,
+            "prepared_at": prepared_at,
+            "reverted_at": reverted_at,
+        },
+    )
+
+
 def write_rejected_drafts(batches_root: Path, batch_id: str, rejected: list[dict]) -> Path:
     """The drafts a human declined at this batch's admission gate."""
 
@@ -295,6 +342,50 @@ def complete_task(config, task_id: str) -> Path:
         kept = [line for line in index.read_text(encoding="utf-8").splitlines() if f"| {task_id} " not in line]
         index.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return target
+
+
+def promote_candidate(
+    config,
+    *,
+    batch_id: str,
+    drafts: tuple[str, ...] = ("loader-fallback", "hook-side-loader"),
+    source_ref: str = RELEASE_REF,
+    reason: str = PROMOTION_REASON,
+    targets: tuple[str, ...] = ("orch-hub",),
+    base: str | None = None,
+    at: datetime,
+) -> Any:
+    """A whole change cycle, from a frozen cohort to a commit on the source line.
+
+    Every step is the real operation — the freeze, the admission, the completion
+    observation, the seal, a run measured by the shared harness double, and the
+    promotion — because what needs a promotion here needs the commit, the tree
+    and the records that a promotion actually produces. A fixture writing an
+    `outcome.json` and a merge by hand would leave a rollback proved only against
+    itself.
+
+    Shared for the reason the harness double is: the promotion suite tests each
+    of these steps and the rollback suite needs the state after all of them, and
+    a second way of reaching it would be a second account of what a promotion
+    leaves behind.
+    """
+
+    directory = write_manifest(config.batches_root, batch_id, ["r1", "r2"], analysis_task_id=f"2026-07-31-{batch_id}")
+    (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, batch_id, analysis_task_id=f"2026-07-31-{batch_id}")
+    for draft_id in drafts:
+        write_draft(config.batches_root, batch_id, draft_id)
+
+    admission = experiments.create(config, list(drafts), base=base, now=at)
+    for item in admission.admitted:
+        complete_task(config, item.task_id)
+    git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, f"{batch_id} candidate work"))
+    experiments.seal_round(config, now=at)
+
+    harness = FakeHarness(report=completed_report())
+    replay.start(config, harness, source_ref=source_ref, expectation=PROMOTION_EXPECTATION, now=at)
+    replay.conclude(config, harness, now=at)
+    return experiments.promote(config, reason=reason, targets=targets, now=at)
 
 
 def write_draft(batches_root: Path, batch_id: str, draft_id: str, body: str | None = None) -> Path:
@@ -854,6 +945,60 @@ def git_sibling_commit(root: Path, parent: str, content: str, message: str) -> s
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def git_file_commit(root: Path, parent: str, name: str, content: str, message: str) -> str:
+    """One commit setting `name` to `content` on top of `parent`, keeping the
+    rest of that tree exactly as it was.
+
+    Two things a source line does after a promotion, and neither of them is
+    `git_sibling_commit`'s wholesale rewrite: unrelated work arriving (a file
+    the promotion never touched, which a rollback has to keep), and somebody
+    putting a promoted file back by hand (which leaves nothing for a rollback to
+    take out). Built with plumbing so the working tree, which holds the evolution
+    records under test, is never touched.
+    """
+
+    blob = subprocess.run(
+        ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+        check=True,
+        capture_output=True,
+        text=True,
+        input=content,
+    ).stdout.strip()
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", parent],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    kept = [line for line in listing.splitlines() if line.split("\t", 1)[-1] != name]
+    tree = subprocess.run(
+        ["git", "-C", str(root), "mktree"],
+        check=True,
+        capture_output=True,
+        text=True,
+        input="".join(f"{line}\n" for line in kept) + f"100644 blob {blob}\t{name}\n",
+    ).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(root), *GIT_IDENTITY, "commit-tree", tree, "-p", parent, "-m", message],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def git_file(root: Path, revision: str, path: str) -> str:
+    """What one path holds at one revision, for checking what a tree kept and
+    what it gave back."""
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "show", f"{revision}:{path}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
 
 
 def git_rev(root: Path, revision: str) -> str:

@@ -63,12 +63,12 @@ from .batches import AdmissionDecision, awaiting_analysis, evaluate_admission
 from .config import EvolutionConfig
 from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState, Round
 from .lineage import describe as describe_lineage
-from .manifests import OUTCOME_PROMOTED, load_batches
+from .manifests import load_batches
 from .replay import Evidence, describe_evidence
 from .revisions import Revision
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -139,6 +139,22 @@ class LifecycleRevisions:
 
 
 @dataclass(frozen=True)
+class Rollback:
+    """A promotion taken back off the source line, or an inverse on its way there.
+
+    `reverted_at` is null while the inverse commit exists and the line has not
+    been recorded as carrying it — an operation in flight rather than a rollback
+    that did not happen. The two are different next steps: one is done, and the
+    other is finished by running the rollback again.
+    """
+
+    revision: str
+    reverted_from: str
+    reverted_at: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
 class Promotion:
     """The last change this repository recorded as reaching the source line.
 
@@ -162,6 +178,10 @@ class Promotion:
     merge_input_ref: str
     tree: str
     planned_targets: tuple[str, ...]
+    # The reversal, if this promotion has one. Not a second promotion and not an
+    # absence of this one: the commit stays on the line and stays recorded, and
+    # what this says is that a later commit took the change back out.
+    rollback: Rollback | None = None
 
 
 @dataclass(frozen=True)
@@ -295,6 +315,17 @@ class LifecycleStatus:
                 # that target's own deploy receipt and lags this until it is
                 # redeployed (contract: Revisions in play).
                 "planned_targets": list(self.last_promotion.planned_targets),
+                "rollback": None
+                if self.last_promotion.rollback is None
+                else {
+                    "revision": self.last_promotion.rollback.revision,
+                    "reverted_from": self.last_promotion.rollback.reverted_from,
+                    # Null while the inverse commit has not been recorded as
+                    # reaching the line: an operation in flight, which is a
+                    # different next step from one that finished.
+                    "reverted_at": self.last_promotion.rollback.reverted_at,
+                    "reason": self.last_promotion.rollback.reason,
+                },
             },
         }
 
@@ -458,21 +489,23 @@ def _pending_successor(current: BatchLineage | None) -> PendingSuccessor | None:
 
 
 def _last_promotion(lineage: Lineage) -> Promotion | None:
-    """The most recent batch outcome that promoted something.
+    """The most recent batch outcome that promoted something, and whether it is
+    still what the source line carries.
 
     History rather than a revision in play, and the one piece of it a status
     reader needs: it is the commit the next cohort's reports have to be produced
-    at before anything can measure whether the change worked.
+    at before anything can measure whether the change worked — which is exactly
+    why a rollback of it has to be read here too, since reports produced after
+    one were produced at a line that no longer carries the change.
+
+    Which promotion is the latest is the lineage's own derivation, shared with
+    the operation that reverses one: two readings of "the last promotion" would
+    be two answers to what is on the source line.
     """
 
-    promoted = [
-        item
-        for item in lineage.batches
-        if item.outcome is not None and item.outcome["outcome"] == OUTCOME_PROMOTED
-    ]
-    if not promoted:
+    latest = lineage.last_promoted
+    if latest is None:
         return None
-    latest = promoted[-1]
     outcome = latest.outcome or {}
     # Present for every `promoted` outcome — `read_outcome` refuses one that
     # states the revision without the merge unit it went as.
@@ -487,6 +520,27 @@ def _last_promotion(lineage: Lineage) -> Promotion | None:
         merge_input_ref=merge["merge_input_ref"],
         tree=merge["tree"],
         planned_targets=tuple(merge["planned_targets"]),
+        rollback=_rollback(latest),
+    )
+
+
+def _rollback(promoted: BatchLineage) -> Rollback | None:
+    """The record taking that promotion back off the line, in flight or finished.
+
+    Both states are reported, and `reverted_at` is what tells them apart: an
+    inverse commit that exists while the line has not been recorded as carrying
+    it is durable in-flight state, and an operator meeting it only as a refusal
+    from the next attempt would have nothing to read it from.
+    """
+
+    record = promoted.rollback
+    if record is None:
+        return None
+    return Rollback(
+        revision=record["revision"],
+        reverted_from=record["reverted_from"],
+        reverted_at=record["reverted_at"],
+        reason=record["reason"],
     )
 
 
