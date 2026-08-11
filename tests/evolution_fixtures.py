@@ -468,6 +468,7 @@ def write_replays(
         "schema_version": 1,
         "experiment_id": declares if declares is not None else experiment_id,
         "pending": None,
+        "withdrawn": [],
         "replays": replays,
         **overrides,
     }
@@ -491,6 +492,27 @@ def replay_pending(
         "requested_at": requested_at,
         "integration": integration if integration is not None else replay_integration(),
         "expectation": expectation,
+    }
+
+
+def replay_withdrawal(
+    round_number: int = 1,
+    attempt: int = 1,
+    *,
+    requested_at: str = "2026-08-04T09:00:00Z",
+    withdrawn_at: str = "2026-08-04T09:30:00Z",
+    integration: dict | None = None,
+) -> dict:
+    """A position a request gave up without becoming a run. It keeps the position
+    allocated: the harness is keyed on it, and a run may have been started under
+    it that nothing here will ever name."""
+
+    return {
+        "round": round_number,
+        "attempt": attempt,
+        "requested_at": requested_at,
+        "withdrawn_at": withdrawn_at,
+        "integration": integration if integration is not None else replay_integration(),
     }
 
 

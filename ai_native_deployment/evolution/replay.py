@@ -66,6 +66,14 @@ order can still leave is a harness answering with something this record cannot
 hold: `abandon` is the way out of it once a run is recorded and `withdraw` is
 before one is, since a round is measured against one integration at a time and
 either would otherwise block every later run of the experiment.
+
+**A position is allocated once, whatever becomes of it.** A withdrawal gives up
+a request, not the attempt it held: the harness may have begun a run under that
+position, and reissuing it would key a second request to the run already going —
+the old integration's numbers arriving under a record stating the new one, which
+is the whole of what the request was written down to prevent. So a withdrawn
+position is kept, the next request takes the one after it, and what a round's
+attempts are allocated from is the runs and the withdrawals together.
 """
 
 from __future__ import annotations
@@ -282,16 +290,45 @@ class PendingRun:
 
 
 @dataclass(frozen=True)
-class History:
-    """One experiment's replay file: the runs, and the request that is not one yet.
+class WithdrawnRequest:
+    """A position a request held and gave up without ever becoming a run.
 
-    Both are read together because they are one file and one sequence — a
-    request occupies the position the run it becomes will take, so which attempt
-    is next cannot be answered from either half alone.
+    Kept rather than erased, because the position is half of what the harness is
+    keyed on. A withdrawal is what happens when the harness cannot describe what
+    it is running, which means it may well be running something: a later request
+    reissued at that position would be answered with *that* run, and the numbers
+    of the integration this record no longer names would arrive under the one it
+    does. So the position stays allocated forever and the next request takes the
+    one after it.
+
+    What it carries is what a withdrawal is about afterwards: the window the
+    stray run would have started in, and the integration pinned for it — which
+    is what an operator has to go on to find that run at the harness and stop
+    it. Deliberately not the expectation: that is a prediction kept to be read
+    back against numbers, and this request produced none.
+    """
+
+    round_number: int
+    attempt: int
+    requested_at: str
+    withdrawn_at: str
+    integration: Integration
+
+
+@dataclass(frozen=True)
+class History:
+    """One experiment's replay file: the runs, the request that is not one yet,
+    and the positions given up without becoming either.
+
+    All three are read together because they are one file and one sequence — a
+    request occupies the position the run it becomes will take, and a withdrawal
+    holds one nothing will ever take — so which attempt is next cannot be
+    answered from any of them alone.
     """
 
     replays: tuple[Replay, ...]
     pending: PendingRun | None
+    withdrawn: tuple[WithdrawnRequest, ...]
 
 
 @dataclass(frozen=True)
@@ -408,6 +445,10 @@ class ReplayHarness(Protocol):
         the request exists to prevent, so the plan already issued is returned
         instead — the same handle included.
 
+        The controller holds up its half of that key: a position a request gives
+        up is recorded as withdrawn rather than freed, so this side never has to
+        distinguish a repeated request from a new one wearing an old position.
+
         With `request.reproduce` set, what is being run is not a choice: the
         cohort, the evaluator, and the configuration are the ones an earlier run
         resolved, and a harness that cannot reproduce them — a case set it no
@@ -432,7 +473,7 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
     try:
         record = parse_json(path.read_text(encoding="utf-8"), description=f"replay record {path}")
     except FileNotFoundError:
-        return History(replays=(), pending=None)
+        return History(replays=(), pending=None, withdrawn=())
     except (OSError, json.JSONDecodeError) as exc:
         raise BatchError(f"unreadable replay record {path}: {exc}") from exc
     if not isinstance(record, dict):
@@ -454,12 +495,13 @@ def parse_replays(
 
     The implemented JSON Schema subset has no cross-field conditionals and no
     view of the experiment record at all, so the rules that make these runs one
-    readable history live here: runs that only append, one unfinished run at a
-    time, one handle naming one run, a result whose shape matches how it ended,
-    an outstanding request at the position the run it becomes will take, and —
-    the load-bearing one — a candidate revision that is the one the named round
-    actually pinned. Each is a way for a record to be well-formed on its own and
-    still be evidence about a tree nobody can identify.
+    readable history live here: runs that only append, every attempt of a round
+    allocated exactly once, one unfinished run at a time, one handle naming one
+    run, a result whose shape matches how it ended, an outstanding request at
+    the position the run it becomes will take, and — the load-bearing one — a
+    candidate revision that is the one the named round actually pinned. Each is
+    a way for a record to be well-formed on its own and still be evidence about
+    a tree nobody can identify.
 
     Public because the writers publish through it: an operation builds the next
     state of this file and validates it here before it lands, so a write cannot
@@ -481,12 +523,17 @@ def parse_replays(
 
     replays = tuple(_read_replay(path, experiment.experiment_id, item) for item in record["replays"])
     pending = _read_pending(path, record["pending"])
+    withdrawn = tuple(_read_withdrawal(path, item) for item in record["withdrawn"])
     _require_appended_runs(path, replays)
+    # Before anything reads a next attempt off this file: the two rules below and
+    # the writers all count positions, and counting is only the same as reading
+    # the highest one once the allocations are known to be contiguous.
+    _require_allocated_once(path, replays, withdrawn)
     _require_one_unfinished(path, replays)
     _require_distinct_handles(path, replays)
-    _require_requestable(path, replays, pending)
-    _require_pinned_candidates(path, experiment, replays, pending)
-    return History(replays=replays, pending=pending)
+    _require_requestable(path, replays, withdrawn, pending)
+    _require_pinned_candidates(path, experiment, replays, withdrawn, pending)
+    return History(replays=replays, pending=pending, withdrawn=withdrawn)
 
 
 def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Evidence:
@@ -504,10 +551,17 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
     5. nothing yet.
 
     An outstanding request is none of the five. It measured nothing, so it does
-    not change the state; what it changes is what the two branches reporting an
-    unmeasured round have to say, since "nothing has replayed this round" and
-    "something may be running against it right now and this record does not name
-    it yet" send an operator to different places.
+    not change the state; what it changes is what every branch short of a
+    promotion has to say, since "this round's run failed" and "its run failed
+    and something may be running against it right now that this record does not
+    name yet" send an operator to different places. So it is added once, below,
+    to whichever of those branches was reached — rather than at each `return`,
+    where the next branch to be written would be the next one to forget it.
+
+    A withdrawn position is not reported at all: it measured nothing, it is over
+    as far as this controller is concerned, and nothing here can ever learn
+    whether the harness ran it — the record keeps it for whoever goes looking,
+    and a note nothing could ever clear is not evidence about this round.
     """
 
     history = read_replays(config, experiment)
@@ -534,6 +588,12 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
         # `None` is a check this checkout could not make, which is not the same
         # answer as agreement and is not reported as one: the state describes the
         # run, and `unverified` is what stops it short of a promotion.
+        #
+        # This is the one branch an outstanding request is deliberately left out
+        # of. Reporting it in either tuple would make evidence that is still
+        # exact unpromotable, which is the promotion-side question of whether a
+        # run in flight holds a promotion back — an operation that does not
+        # exist yet, and whose gate is where that would be decided.
         return Evidence(
             **common,
             state=EVIDENCE_COMPLETE,
@@ -545,39 +605,36 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
     # Nothing below can also be carrying `unsealed`: every one of these branches
     # needs a run that names this round, and an unsealed round has none.
     if here and here[-1].running:
-        return Evidence(**common, state=EVIDENCE_RUNNING, replay=here[-1], drift=(), unverified=())
-    if here and here[-1].failed:
-        return Evidence(
-            **common,
-            state=EVIDENCE_FAILED,
-            replay=here[-1],
-            drift=(f"the newest run of round {last.number} failed: {here[-1].result.detail}",),
-            unverified=(),
+        # The one branch a request cannot coexist with — `_require_requestable`
+        # refuses one made under an unfinished run — so `awaiting` is empty here
+        # by that rule rather than by this branch's choosing.
+        measured, state, drift = here[-1], EVIDENCE_RUNNING, ()
+    elif here and here[-1].failed:
+        measured, state, drift = (
+            here[-1],
+            EVIDENCE_FAILED,
+            (f"the newest run of round {last.number} failed: {here[-1].result.detail}",),
         )
-    if newest_complete is not None:
-        return Evidence(**common, state=EVIDENCE_STALE, replay=newest_complete, drift=(note,), unverified=())
-    if replays:
-        stale = replays[-1]
-        return Evidence(
-            **common,
-            state=EVIDENCE_STALE,
-            replay=stale,
-            drift=unsealed
+    elif newest_complete is not None:
+        measured, state, drift = newest_complete, EVIDENCE_STALE, (note,)
+    elif replays:
+        measured, state, drift = (
+            replays[-1],
+            EVIDENCE_STALE,
+            unsealed
             + (
-                f"the newest evidence measured round {stale.round_number}, and this experiment is on round "
-                f"{last.number}; a round's evidence describes the candidate that round pinned and never the "
-                "next one's",
-            )
-            + awaiting,
-            unverified=(),
+                f"the newest evidence measured round {replays[-1].round_number}, and this experiment is on "
+                f"round {last.number}; a round's evidence describes the candidate that round pinned and never "
+                "the next one's",
+            ),
         )
-    return Evidence(
-        **common,
-        state=EVIDENCE_INCOMPLETE,
-        replay=None,
-        drift=(unsealed or (f"round {last.number} has not been replayed",)) + awaiting,
-        unverified=(),
-    )
+    else:
+        measured, state, drift = None, EVIDENCE_INCOMPLETE, (
+            unsealed or (f"round {last.number} has not been replayed",)
+        )
+    # Every branch above is already short of a promotion, so a request that may
+    # be running against this round is reported wherever it stands.
+    return Evidence(**common, state=state, replay=measured, drift=drift + awaiting, unverified=())
 
 
 # --- the runs ----------------------------------------------------------------
@@ -605,9 +662,15 @@ class RequestWithdrawn:
     """A request taken back before it ever became a run.
 
     `withdrawn` is False when there was nothing outstanding — this operation run
-    a second time, or run at all where no request stands. Nothing is left on
-    record either way, which is what makes the redo answerable from absence
-    rather than from a reason matched against what was written.
+    a second time, or run at all where no request stands. The redo is answered
+    from the request's absence rather than from a reason matched against what
+    was written: one write either landed, clearing the request and recording the
+    position it gave up, or it did not.
+
+    `pending` is what was withdrawn, reported back because it names the run that
+    may still be going at a harness this controller will never hear from again.
+    The same fact is on record as a withdrawal, so an operator who did not keep
+    this can still find it.
     """
 
     experiment_id: str
@@ -708,12 +771,12 @@ def start(
                 config,
                 current,
                 experiment,
-                replays,
+                history,
                 source_ref=source_ref,
                 expectation=predicted,
                 at=format_rfc3339(moment),
             )
-            _write_replays(config, experiment, replays, requested)
+            _write_replays(config, experiment, replace(history, pending=requested))
         else:
             _require_same_request(experiment, requested, source_ref, predicted)
 
@@ -743,7 +806,7 @@ def start(
             result=None,
         )
         try:
-            path = _write_replays(config, experiment, replays + (started,), None)
+            path = _write_replays(config, experiment, replace(history, replays=replays + (started,), pending=None))
         except (BatchError, ValidationError) as exc:
             raise BatchError(
                 f"{experiment.experiment_id}: {plan.harness.id} began {described} as handle "
@@ -768,7 +831,7 @@ def _request(
     config: EvolutionConfig,
     current: BatchLineage,
     experiment: Experiment,
-    replays: Sequence[Replay],
+    history: History,
     *,
     source_ref: str,
     expectation: str,
@@ -780,10 +843,15 @@ def _request(
     request is written down, and from then on the harness may be running
     something — so nothing that could refuse may still be waiting to be checked
     at that point.
+
+    The position it takes comes from everything this round has already
+    allocated, runs and withdrawals alike: a position handed out twice is a
+    request the harness would answer with the run it began under the first one.
     """
 
     guards.require_consistent_ref(current)
 
+    replays = history.replays
     round_ = experiment.last_round
     if round_.seal is None:
         raise BatchError(
@@ -801,7 +869,7 @@ def _request(
             "with nothing to choose between them — conclude that run first"
         )
 
-    attempt = len([replay for replay in replays if replay.round_number == round_.number]) + 1
+    attempt = _allocated(replays, history.withdrawn, round_.number) + 1
     return PendingRun(
         round_number=round_.number,
         attempt=attempt,
@@ -915,7 +983,7 @@ def conclude(
                 ambiguity=report.ambiguity,
             ),
         )
-        _write_replays(config, experiment, replays[:-1] + (concluded,), None)
+        _write_replays(config, experiment, replace(history, replays=replays[:-1] + (concluded,)))
         append_records(
             config,
             [
@@ -1009,7 +1077,7 @@ def abandon(
                 ambiguity=None,
             ),
         )
-        _write_replays(config, experiment, replays[:-1] + (concluded,), None)
+        _write_replays(config, experiment, replace(history, replays=replays[:-1] + (concluded,)))
         append_records(
             config,
             [
@@ -1035,18 +1103,29 @@ def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Request
     describe what it is running — a plan this record refuses to hold, a run it no
     longer knows about — leaves `start` unable to finish and every later run of
     the experiment blocked behind it, because a round is measured against one
-    integration at a time. This releases that position.
+    integration at a time. This gives up that request so the round can be
+    measured again.
+
+    What it does not give up is the position. The harness is keyed on the round
+    and the attempt, and the reason there is a withdrawal at all is that the
+    harness may be running something nobody here can describe — so reissuing
+    that position would key the next request to the run this one abandoned, and
+    the first integration's numbers would arrive under a record naming the
+    second. The position is recorded as withdrawn instead, and the next request
+    takes the one after it. A round's attempts therefore count the withdrawals
+    as well as the runs, and a gap in them stays what it always was: an
+    allocation whose record is missing.
 
     It takes no reason, and that is the difference from ending a run. A run that
     happened is history and carries why it stopped; a request that never became
-    one measured nothing, is derived as nothing, and leaves nothing behind for a
-    reason to be attached to. What it does leave, possibly, is a run going at a
-    harness that this controller will never name — so the request is reported
-    back with its integration, which is what an operator needs to stop it there.
+    one measured nothing, is derived as nothing, and has no result to attach a
+    reason to. What the withdrawal does record is what an operator needs to find
+    the run that may be going at a harness this controller will never hear from
+    again: the window it was started in, and the integration pinned for it.
 
     Run again, it reports that nothing was outstanding. That is the whole of its
     redo: a single write with nothing after it either has landed or has not, and
-    absence is the answer in both directions.
+    the request's absence is the answer in both directions.
     """
 
     moment = _moment(now)
@@ -1056,13 +1135,25 @@ def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Request
         experiment = guards.require_open_experiment(current, "withdraw a replay request of")
 
         history = read_replays(config, experiment)
-        if history.pending is None:
+        pending = history.pending
+        if pending is None:
             return RequestWithdrawn(
                 experiment_id=experiment.experiment_id,
                 pending=None,
                 withdrawn=False,
             )
-        _write_replays(config, experiment, history.replays, None)
+        taken = WithdrawnRequest(
+            round_number=pending.round_number,
+            attempt=pending.attempt,
+            requested_at=pending.requested_at,
+            withdrawn_at=format_rfc3339(moment),
+            integration=pending.integration,
+        )
+        _write_replays(
+            config,
+            experiment,
+            replace(history, pending=None, withdrawn=history.withdrawn + (taken,)),
+        )
 
     return RequestWithdrawn(
         experiment_id=experiment.experiment_id,
@@ -1196,14 +1287,9 @@ def _require_source_line_name(config: EvolutionConfig, path: Path, described: st
     _require_source_line_ref(path, described, ref)
 
 
-def _write_replays(
-    config: EvolutionConfig,
-    experiment: Experiment,
-    replays: Sequence[Replay],
-    pending: PendingRun | None,
-) -> Path:
-    """Publish this experiment's runs and its outstanding request, through the
-    parser that reads them back.
+def _write_replays(config: EvolutionConfig, experiment: Experiment, history: History) -> Path:
+    """Publish this experiment's runs, its outstanding request, and the positions
+    it has given up — through the parser that reads them back.
 
     The whole file is rewritten because a run's result lands after its pinned
     inputs did, and one file per experiment is what allocates the attempt. What
@@ -1211,30 +1297,31 @@ def _write_replays(
     does not append, so a caller handing back an edited earlier run is refused
     here rather than discovered as evidence about a tree nobody exercised.
 
+    It takes the whole file's state rather than its parts, so an operation says
+    what it changed and carries the rest forward untouched — a withdrawal that
+    was dropped by a caller listing arguments would hand its position back out.
+
     The request is part of that one write rather than a file beside it, so the
     transition every operation here makes — a request becoming the run it was
-    for, or being taken back — is one atomic replacement. Two files could be
-    seen holding both at once, and a reader finding a request beside the run it
+    for, or being given up — is one atomic replacement. Two files could be seen
+    holding both at once, and a reader finding a request beside the run it
     became would have to guess which of them the harness is running.
     """
 
-    record = _serialize(experiment.experiment_id, replays, pending)
+    record = _serialize(experiment.experiment_id, history)
     parse_replays(config, record, experiment)
     path = replays_path(experiment)
     atomic_write_text(path, _json(record))
     return path
 
 
-def _serialize(
-    experiment_id: str,
-    replays: Sequence[Replay],
-    pending: PendingRun | None,
-) -> dict[str, Any]:
+def _serialize(experiment_id: str, history: History) -> dict[str, Any]:
     return {
         "schema_version": REPLAYS_SCHEMA_VERSION,
         "experiment_id": experiment_id,
-        "pending": None if pending is None else _pending_json(pending),
-        "replays": [_replay_json(replay) for replay in replays],
+        "pending": None if history.pending is None else _pending_json(history.pending),
+        "withdrawn": [_withdrawal_json(taken) for taken in history.withdrawn],
+        "replays": [_replay_json(replay) for replay in history.replays],
     }
 
 
@@ -1245,6 +1332,16 @@ def _pending_json(pending: PendingRun) -> dict[str, Any]:
         "requested_at": pending.requested_at,
         "integration": _integration_json(pending.integration),
         "expectation": pending.expectation,
+    }
+
+
+def _withdrawal_json(taken: WithdrawnRequest) -> dict[str, Any]:
+    return {
+        "round": taken.round_number,
+        "attempt": taken.attempt,
+        "requested_at": taken.requested_at,
+        "withdrawn_at": taken.withdrawn_at,
+        "integration": _integration_json(taken.integration),
     }
 
 
@@ -1394,13 +1491,7 @@ def _read_replay(path: Path, experiment_id: str, item: Mapping[str, Any]) -> Rep
         round_number=item["round"],
         attempt=item["attempt"],
         started_at=item["started_at"],
-        integration=Integration(
-            base_revision=integration["base_revision"],
-            candidate_revision=integration["candidate_revision"],
-            merge_input_revision=integration["merge_input_revision"],
-            merge_input_ref=integration["merge_input_ref"],
-            tree=integration["tree"],
-        ),
+        integration=_read_integration(integration),
         cases=CaseSet(
             case_set_id=cases["case_set_id"],
             case_set_sha256=cases["case_set_sha256"],
@@ -1439,22 +1530,45 @@ def _read_pending(path: Path, item: Mapping[str, Any] | None) -> PendingRun | No
 
     if item is None:
         return None
-    integration = item["integration"]
     pending = PendingRun(
         round_number=item["round"],
         attempt=item["attempt"],
         requested_at=item["requested_at"],
-        integration=Integration(
-            base_revision=integration["base_revision"],
-            candidate_revision=integration["candidate_revision"],
-            merge_input_revision=integration["merge_input_revision"],
-            merge_input_ref=integration["merge_input_ref"],
-            tree=integration["tree"],
-        ),
+        integration=_read_integration(item["integration"]),
         expectation=item["expectation"],
     )
     _require_source_line_ref(path, _describe_pending(pending), pending.integration.merge_input_ref)
     return pending
+
+
+def _read_withdrawal(path: Path, item: Mapping[str, Any]) -> WithdrawnRequest:
+    """One position given up, as the record kept it.
+
+    Read with the same source-line rule as a run and a request, for the reason
+    it is kept at all: what it is for is an operator going to the harness with
+    the integration that was pinned, and a name no ref can hold would send them
+    looking for a source line that never existed.
+    """
+
+    taken = WithdrawnRequest(
+        round_number=item["round"],
+        attempt=item["attempt"],
+        requested_at=item["requested_at"],
+        withdrawn_at=item["withdrawn_at"],
+        integration=_read_integration(item["integration"]),
+    )
+    _require_source_line_ref(path, _describe_withdrawal(taken), taken.integration.merge_input_ref)
+    return taken
+
+
+def _read_integration(item: Mapping[str, Any]) -> Integration:
+    return Integration(
+        base_revision=item["base_revision"],
+        candidate_revision=item["candidate_revision"],
+        merge_input_revision=item["merge_input_revision"],
+        merge_input_ref=item["merge_input_ref"],
+        tree=item["tree"],
+    )
 
 
 def _read_result(path: Path, result: Mapping[str, Any] | None, described: str) -> Result | None:
@@ -1651,14 +1765,12 @@ def _require_pollable(path: Path, replay: Replay) -> None:
 
 
 def _require_appended_runs(path: Path, replays: Sequence[Replay]) -> None:
-    """Runs only append: rounds in order, attempts 1..N within each.
+    """Runs only append: rounds in order, attempts increasing within each.
 
-    A gap in the attempts is a run whose record is gone, taking its integration
-    and its numbers with it, and nothing distinguishes that from an attempt
-    allocated wrongly. A round appearing again after a later one has been
-    measured is evidence written back into a round the experiment had already
-    left, which is the one ordering the seal exists to give this record
-    (invariant 16).
+    A round appearing again after a later one has been measured is evidence
+    written back into a round the experiment had already left, which is the one
+    ordering the seal exists to give this record (invariant 16). That the
+    attempts are also the ones this file allocated is the next rule.
     """
 
     positions = [(replay.round_number, replay.attempt) for replay in replays]
@@ -1667,14 +1779,48 @@ def _require_appended_runs(path: Path, replays: Sequence[Replay]) -> None:
             f"{path}: runs are recorded at {positions}; they are appended one at a time, in round order and "
             "then attempt order, and none is ever removed or rewritten"
         )
-    attempts: dict[int, list[int]] = {}
-    for round_number, attempt in positions:
-        attempts.setdefault(round_number, []).append(attempt)
-    for round_number, numbered in attempts.items():
+
+
+def _require_allocated_once(
+    path: Path,
+    replays: Sequence[Replay],
+    withdrawn: Sequence[WithdrawnRequest],
+) -> None:
+    """Every attempt of a round is allocated 1..N, to a run or to a withdrawal.
+
+    Positions are what the harness is keyed on, so what this rule protects is
+    that one of them names one request forever. Two holders are two requests a
+    harness cannot tell apart — it answers the second with the run it began for
+    the first, and numbers taken against one integration land under a record
+    stating another. A gap is the same failure with the evidence missing: an
+    allocation whose record is gone, taking its integration and its numbers with
+    it, and indistinguishable from an attempt numbered wrongly.
+
+    Runs and withdrawals are counted together because that is what a withdrawal
+    is: a position that was allocated and will never carry a run.
+    """
+
+    holders: dict[int, dict[int, str]] = {}
+    for described, round_number, attempt in [
+        *((_describe_replay(replay), replay.round_number, replay.attempt) for replay in replays),
+        *((_describe_withdrawal(taken), taken.round_number, taken.attempt) for taken in withdrawn),
+    ]:
+        held = holders.setdefault(round_number, {})
+        earlier = held.get(attempt)
+        if earlier is not None:
+            raise BatchError(
+                f"{path}: {described} and {earlier} both hold round {round_number} attempt {attempt}; a "
+                "position is allocated once and names one request for good, because that is what the harness "
+                "is keyed on — a second request wearing it would be answered with the first one's run"
+            )
+        held[attempt] = described
+    for round_number, held in holders.items():
+        numbered = sorted(held)
         if numbered != list(range(1, len(numbered) + 1)):
             raise BatchError(
-                f"{path}: round {round_number} has attempts {numbered}; they are allocated one at a time from "
-                "1, so a gap is a run whose record is missing rather than one that never happened"
+                f"{path}: round {round_number} holds attempts {numbered}; they are allocated one at a time from "
+                "1 — to a run, or to a request withdrawn before it became one — so a gap is an allocation whose "
+                "record is missing rather than one that never happened"
             )
 
 
@@ -1705,16 +1851,22 @@ def _require_one_unfinished(path: Path, replays: Sequence[Replay]) -> None:
         )
 
 
-def _require_requestable(path: Path, replays: Sequence[Replay], pending: PendingRun | None) -> None:
+def _require_requestable(
+    path: Path,
+    replays: Sequence[Replay],
+    withdrawn: Sequence[WithdrawnRequest],
+    pending: PendingRun | None,
+) -> None:
     """An outstanding request stands at the position the run it becomes will take.
 
-    Which is the next attempt of its round, with no run unfinished under it. Both
-    halves are the same rule the runs follow, applied one step earlier — a round
-    is measured against one integration at a time, and runs only append — and
-    they are asked here because a request that could not be answered is worse
-    than one that was never made: `start` would resume it, the parser would then
-    refuse the run it wrote, and the position would be stuck with no operation
-    able to clear it but the withdrawal.
+    Which is the next attempt of its round that nothing else holds, with no run
+    unfinished under it. Both halves are the same rule the runs follow, applied
+    one step earlier — a round is measured against one integration at a time,
+    and positions are allocated once — and they are asked here because a request
+    that could not be answered is worse than one that was never made: `start`
+    would resume it, the parser would then refuse the run it wrote, and the
+    position would be stuck with no operation able to clear it but the
+    withdrawal.
     """
 
     if pending is None:
@@ -1726,18 +1878,25 @@ def _require_requestable(path: Path, replays: Sequence[Replay], pending: Pending
             "is measured against one integration at a time, so a request made under an unfinished run is a "
             "second answer about one tree waiting to be recorded"
         )
-    if replays and pending.round_number < replays[-1].round_number:
+    # The newest round anything has been allocated in — a withdrawal counts, or a
+    # request made after one in a later round would be a run written back into a
+    # round this file has already moved past.
+    behind = max(
+        [replay.round_number for replay in replays] + [taken.round_number for taken in withdrawn],
+        default=0,
+    )
+    if pending.round_number < behind:
         raise BatchError(
-            f"{path}: {described} is outstanding while the newest run measured round "
-            f"{replays[-1].round_number}; runs are appended in round order, so the run this request becomes "
-            "could never be written after the ones already recorded"
+            f"{path}: {described} is outstanding while round {behind} has already been measured or requested; "
+            "runs are appended in round order, so the run this request becomes could never be written after the "
+            "ones already recorded"
         )
-    attempt = len([replay for replay in replays if replay.round_number == pending.round_number]) + 1
+    attempt = _allocated(replays, withdrawn, pending.round_number) + 1
     if pending.attempt != attempt:
         raise BatchError(
             f"{path}: {described} is outstanding, and round {pending.round_number}'s next attempt is {attempt}; "
-            "a request holds the position its run will take, and one holding any other position either skips a "
-            "run or claims a position a recorded run already has"
+            "a request holds the position its run will take, and one holding any other position either skips an "
+            "allocation or claims one a recorded run or withdrawal already has"
         )
 
 
@@ -1745,6 +1904,7 @@ def _require_pinned_candidates(
     path: Path,
     experiment: Experiment,
     replays: Sequence[Replay],
+    withdrawn: Sequence[WithdrawnRequest],
     pending: PendingRun | None,
 ) -> None:
     """Every run names a round this experiment has, that round is candidate-ready,
@@ -1760,12 +1920,16 @@ def _require_pinned_candidates(
 
     An outstanding request is held to the same rule, one step earlier: it is
     answered by a run, and a request naming a round with nothing pinned would be
-    a run that could not be recorded once the harness answered.
+    a run that could not be recorded once the harness answered. A withdrawn one
+    is held to it a step later, for what it is kept for: an operator reading it
+    is looking for a run that may have been started against exactly that
+    candidate.
     """
 
     rounds = {round_.number: round_ for round_ in experiment.rounds}
     for described, round_number, integration in [
         *((_describe_replay(replay), replay.round_number, replay.integration) for replay in replays),
+        *((_describe_withdrawal(taken), taken.round_number, taken.integration) for taken in withdrawn),
         *(
             ()
             if pending is None
@@ -1799,6 +1963,25 @@ def _require_pinned_candidates(
             )
 
 
+def _allocated(
+    replays: Sequence[Replay],
+    withdrawn: Sequence[WithdrawnRequest],
+    round_number: int,
+) -> int:
+    """How many attempts of one round have been handed out, ever.
+
+    Counted rather than read off the highest one, which is the same number: the
+    parser refuses a round whose allocations are not 1..N before anything asks
+    this (`_require_allocated_once`), so the count is the last position given
+    out and the next is one above it. Withdrawals are in it because a position
+    given up is still given out — that is the whole of what a withdrawal keeps.
+    """
+
+    return len([replay for replay in replays if replay.round_number == round_number]) + len(
+        [taken for taken in withdrawn if taken.round_number == round_number]
+    )
+
+
 def _position(round_number: int, attempt: int) -> str:
     """How one run is named in an error: by the position it occupies, which is
     also its identity within the experiment."""
@@ -1814,6 +1997,13 @@ def _describe_pending(pending: PendingRun) -> str:
     """A request named by the position it holds, and marked as not yet a run."""
 
     return f"the request for {_position(pending.round_number, pending.attempt)}"
+
+
+def _describe_withdrawal(taken: WithdrawnRequest) -> str:
+    """A position named by the request that gave it up, which is what still holds
+    it: no run of that round will ever be recorded there."""
+
+    return f"the withdrawn request for {_position(taken.round_number, taken.attempt)}"
 
 
 def _describe_outstanding(pending: PendingRun) -> str:

@@ -8,6 +8,7 @@
     "schema_version",
     "experiment_id",
     "pending",
+    "withdrawn",
     "replays"
   ],
   "properties": {
@@ -22,6 +23,13 @@
     "pending": {
       "$ref": "#/$defs/pending"
     },
+    "withdrawn": {
+      "description": "The positions requests held and gave back without ever becoming runs, oldest first. Recorded rather than erased, because the position is half of what the harness is keyed on: a withdrawn request may have started a run all the same, and a position handed out a second time would be answered with that run — the old integration's numbers arriving under a record stating the new one. So the position stays allocated and the next request takes the one after it. Empty is the ordinary state; the array is stated rather than optional, because a reader that took its absence for 'nothing was withdrawn' would allocate a position that is already spoken for.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/withdrawal"
+      }
+    },
     "replays": {
       "description": "Append-only, ordered by round and then attempt. At most one run is still going, and it is the last entry: a round is measured against one integration at a time, and a second run started underneath an unfinished one would leave two answers about the same tree with nothing to choose between them.",
       "type": "array",
@@ -32,7 +40,7 @@
   },
   "$defs": {
     "pending": {
-      "description": "The run this controller committed to before it asked the harness for one, or null when nothing is outstanding. A harness is an external thing being started, and the record cannot state a run until that harness answers with the cohort, the evaluator, the configuration, and the handle it issued — so an interruption between the two would otherwise leave a run going that nothing here names, findable only in whatever the lost process printed. This is what names it across that window: the integration is pinned and written down first, and the request the harness is then asked for is exactly this one, re-submitted unchanged until it is answered. A harness asked twice for the same experiment, round, and attempt answers with the run it already began rather than starting a second, which is what makes the retry safe; attempts are allocated once and never reused, so there is no second request that legitimately wears one position. It is not a run and never becomes evidence: it holds only what the controller owns, it occupies the position the run it becomes will take, and the write that records that run clears it in the same file.",
+      "description": "The run this controller committed to before it asked the harness for one, or null when nothing is outstanding. A harness is an external thing being started, and the record cannot state a run until that harness answers with the cohort, the evaluator, the configuration, and the handle it issued — so an interruption between the two would otherwise leave a run going that nothing here names, findable only in whatever the lost process printed. This is what names it across that window: the integration is pinned and written down first, and the request the harness is then asked for is exactly this one, re-submitted unchanged until it is answered. A harness asked twice for the same experiment, round, and attempt answers with the run it already began rather than starting a second, which is what makes the retry safe; attempts are allocated once and never reused — a position a request gives back is kept in `withdrawn` rather than freed — so there is no second request that legitimately wears one. It is not a run and never becomes evidence: it holds only what the controller owns, it occupies the position the run it becomes will take, and the write that records that run clears it in the same file.",
       "type": [
         "object",
         "null"
@@ -51,7 +59,7 @@
           "minimum": 1
         },
         "attempt": {
-          "description": "The position the run will take: the next unallocated attempt of that round. Written down because it is half of what the harness is keyed on — a resumed request that allocated a second attempt would be asking for a second run rather than the one already going.",
+          "description": "The position the run will take: the next attempt of that round no run and no withdrawal already holds. Written down because it is half of what the harness is keyed on — a resumed request that allocated a second attempt would be asking for a second run rather than the one already going.",
           "type": "integer",
           "minimum": 1
         },
@@ -67,6 +75,43 @@
           "description": "What the run was expected to show, recorded here for the reason a run records it: before any numbers exist is the only time it can be written without being a reading of them.",
           "type": "string",
           "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "withdrawal": {
+      "description": "One request that was taken back before it became a run. It is not evidence and states no run: nothing here says whether the harness ever started one, because a withdrawal is what happens when the harness cannot say. What it keeps is the position — so that it is never issued again — and what an operator needs to go and find that run at the harness: when it was asked for, when it was given up, and the integration that was pinned for it. The expectation is deliberately not kept: it is a prediction held to be read back against numbers, and this request produced none.",
+      "type": "object",
+      "required": [
+        "round",
+        "attempt",
+        "requested_at",
+        "withdrawn_at",
+        "integration"
+      ],
+      "properties": {
+        "round": {
+          "description": "The round the withdrawn request was measuring, held to the same binding a run is: the candidate its seal pinned.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "description": "The position this request held and still holds. No run of that round is ever recorded at it and no later request is issued for it, because the harness may have begun a run under it that nothing here will ever name.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_at": {
+          "description": "When the integration was pinned — the moment the run the harness may have begun would have started from.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "withdrawn_at": {
+          "description": "When the request was given up. With `requested_at` it bounds the window a stray run at the harness would have been started in.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
         }
       },
       "additionalProperties": false
@@ -92,7 +137,7 @@
           "minimum": 1
         },
         "attempt": {
-          "description": "Which run of that round this is, allocated 1..N with none missing. A second attempt is the ordinary answer to a merge input that moved or a harness that failed, and it is a new run rather than an edit of the old one — the earlier attempt goes on describing the integration it actually measured.",
+          "description": "Which run of that round this is. Attempts are allocated 1..N with none missing, across the runs and the withdrawn requests together: a gap is an allocation whose record is gone rather than one that never happened. A second attempt is the ordinary answer to a merge input that moved or a harness that failed, and it is a new run rather than an edit of the old one — the earlier attempt goes on describing the integration it actually measured.",
           "type": "integer",
           "minimum": 1
         },

@@ -154,7 +154,7 @@ evolution/
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, decision
-  experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, and the request outstanding
+  experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
 
 refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
 
@@ -515,11 +515,19 @@ of numbers, and the answer to a failed run is another attempt.
 
 The fourth takes a request back, which is the same door one step earlier: a
 harness that cannot describe what it is running leaves the start unable to
-finish, and the position blocked for the same reason. It records no reason and
-no run — a request that never became one measured nothing, is derived as
-nothing, and leaves nothing for a reason to be attached to — so it reports the
-integration it withdrew, which is what an operator needs to stop that run at the
-harness. Run again it reports that nothing was outstanding.
+finish, and the round blocked for the same reason. It records no reason and no
+run — a request that never became one measured nothing, is derived as nothing,
+and leaves nothing for a reason to be attached to. What it does record is the
+position, which it keeps: the harness is keyed on the round and the attempt, and
+a withdrawal happens precisely when that harness may be running something nobody
+can describe, so reissuing the position would ask it for a run it already
+answers for and the first integration's numbers would arrive under a record
+naming the second. So the position stays allocated with the integration that was
+pinned for it — which is what an operator needs to stop that run at the harness —
+and the next request takes the one after it. A round's attempts are therefore
+allocated across its runs and its withdrawals together, and a gap in them is
+still an allocation whose record is missing. Run again it reports that nothing
+was outstanding.
 
 None of the four ends anything above the run. A candidate the numbers argue
 against is answered by a further round or by a terminal decision, both of which
@@ -639,6 +647,17 @@ whether the source line has moved since a run measured it needs the ref that run
 integrated onto, and a clone that never fetched it holds no answer at all. That
 is reported as the unanswered check it is, never as agreement — a promotion is
 refused on it, because a check nobody could make is not one that passed.
+
+An outstanding request is reported beside what the round has already been
+measured by rather than instead of it. It measured nothing, so it changes no
+state; what it changes is the next step, and a round whose newest run failed
+while a further one is unaccounted for is not the same situation as one simply
+waiting to be run. The single reading it is deliberately left out of is a result
+that is still exact: reporting it there would make evidence that describes the
+tree in question unpromotable on account of work that has measured nothing yet,
+which is a question for the promotion gate rather than for the reader. A
+withdrawn position is not reported at all — nothing here can learn whether the
+harness ever ran it, and the record keeps it for whoever goes looking.
 
 Two readings are specifically not that answer:
 
@@ -777,9 +796,10 @@ a run started against a round whose candidate is not pinned, a second run starte
 while one is still going, a candidate that does not merge onto the named source
 line, a source line named by anything but a fully-qualified ref Git can hold, a
 run recorded under a handle another run already has, a conclusion for a run this
-controller never recorded, a replay request standing anywhere but at the position
-the run it becomes will take, a resumed request answered as a different one, a
-conclusion or an ending taken while a request is outstanding,
+controller never recorded, one attempt of a round held by two of its runs and
+withdrawals or missing from them, a replay request standing anywhere but at the
+position the run it becomes will take, a resumed request answered as a different
+one, a conclusion or an ending taken while a request is outstanding,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert

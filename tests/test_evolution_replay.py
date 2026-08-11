@@ -24,6 +24,7 @@ cannot — a plan the record will not hold — names the run it left going.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ from evolution_fixtures import (
     replay_integration,
     replay_pending,
     replay_result,
+    replay_withdrawal,
     write_closure,
     write_draft,
     write_experiment,
@@ -122,6 +124,7 @@ def record(replays: list[dict], **overrides: Any) -> dict[str, Any]:
         "schema_version": 1,
         "experiment_id": EXPERIMENT_ID,
         "pending": None,
+        "withdrawn": [],
         "replays": replays,
         **overrides,
     }
@@ -283,6 +286,23 @@ def test_a_run_that_is_still_going_and_one_that_finished_both_validate() -> None
             "outstanding request naming a source line this checkout would resolve",
             record([], pending=replay_pending(integration=replay_integration(merge_input_ref="HEAD"))),
         ),
+        (
+            "unknown property on a withdrawn position",
+            record([], withdrawn=[{**replay_withdrawal(), "expectation": "fewer rounds"}]),
+        ),
+        (
+            "withdrawn position that does not say when it was given up",
+            record(
+                [],
+                withdrawn=[
+                    {key: value for key, value in replay_withdrawal().items() if key != "withdrawn_at"}
+                ],
+            ),
+        ),
+        (
+            "withdrawn position naming a source line this checkout would resolve",
+            record([], withdrawn=[replay_withdrawal(integration=replay_integration(merge_input_ref="HEAD"))]),
+        ),
     ],
 )
 def test_the_schema_refuses_a_record_it_cannot_read_as_evidence(description: str, instance: dict) -> None:
@@ -298,12 +318,29 @@ def test_a_request_the_harness_has_not_answered_for_is_part_of_the_record() -> N
     assert errors(record([replay_entry(1, 1)], pending=replay_pending(1, 2))) == []
 
 
+def test_a_position_given_up_is_part_of_the_record() -> None:
+    """The fourth state of a position: allocated, never run, and never issued
+    again. The run after it is attempt 2 with no attempt 1 recorded, which is
+    only a readable history because the withdrawal accounts for the gap."""
+
+    assert errors(record([], withdrawn=[replay_withdrawal()])) == []
+    assert errors(record([replay_entry(1, 2)], withdrawn=[replay_withdrawal(1, 1)])) == []
+
+
 def test_a_record_that_does_not_say_whether_a_request_stands_is_refused() -> None:
     """Invariant 4 again: absent and null are different claims. A reader given a
     record with no `pending` at all would take "nothing outstanding" from a file
     that never said so, which is the one reading that loses a run."""
 
     assert errors({key: value for key, value in record([]).items() if key != "pending"})
+
+
+def test_a_record_that_does_not_say_which_positions_were_given_up_is_refused() -> None:
+    """Same rule, and the same failure one step further on: a reader taking an
+    absent `withdrawn` for "none" would allocate a position the harness already
+    answers for, and pair the next request with the run it began under it."""
+
+    assert errors({key: value for key, value in record([]).items() if key != "withdrawn"})
 
 
 @pytest.mark.parametrize("field", ["ambiguity", "elapsed_seconds", "regressions"])
@@ -324,7 +361,9 @@ def test_an_experiment_nobody_has_measured_reads_as_no_evidence(config: evolutio
     """The ordinary state of every round before its first replay: the absence of
     a file and a file listing nothing are the same fact about the evidence."""
 
-    assert replay.read_replays(config, sealed_experiment(config)) == replay.History(replays=(), pending=None)
+    assert replay.read_replays(config, sealed_experiment(config)) == replay.History(
+        replays=(), pending=None, withdrawn=()
+    )
 
 
 def test_the_pinned_inputs_survive_the_round_trip(config: evolution.EvolutionConfig) -> None:
@@ -605,6 +644,101 @@ def test_runs_are_appended_in_order(
 
     with pytest.raises(evolution.BatchError, match=match):
         replay.read_replays(config, experiment)
+
+
+@pytest.mark.parametrize(
+    ("description", "entries", "withdrawn", "match"),
+    [
+        (
+            "a position held by a run and by a withdrawal at once",
+            [replay_entry(1, 1)],
+            [replay_withdrawal(1, 1)],
+            "both hold round 1 attempt 1",
+        ),
+        (
+            "one position given up twice",
+            [],
+            [replay_withdrawal(1, 1), replay_withdrawal(1, 1)],
+            "both hold round 1 attempt 1",
+        ),
+        (
+            "a withdrawal that accounts for no gap",
+            [],
+            [replay_withdrawal(1, 2)],
+            "holds attempts",
+        ),
+        (
+            "a withdrawal against a candidate no seal fixed",
+            [],
+            [replay_withdrawal(1, integration=replay_integration(candidate_revision="c" * 40))],
+            "while round 1 pinned",
+        ),
+        (
+            "a withdrawal naming a source line no ref can hold",
+            [],
+            [replay_withdrawal(1, integration=replay_integration(merge_input_ref="refs/heads/release.lock"))],
+            "not a name Git can hold",
+        ),
+    ],
+)
+def test_a_position_is_allocated_once_whatever_became_of_it(
+    config: evolution.EvolutionConfig, description: str, entries: list, withdrawn: list, match: str
+) -> None:
+    """The harness is keyed on the position, so one of them names one request for
+    good. Two holders are two requests that harness cannot tell apart — it
+    answers the second with the run it began for the first — and a gap is an
+    allocation whose record is gone."""
+
+    experiment = sealed_experiment(config)
+    write_replays(config.experiments_root, EXPERIMENT_ID, entries, withdrawn=withdrawn)
+
+    with pytest.raises(evolution.BatchError, match=match):
+        replay.read_replays(config, experiment)
+
+
+def test_the_run_after_a_withdrawal_takes_the_position_after_it(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """What the record is for. Attempt 1 was given up and stays given out, so the
+    run that follows is attempt 2 — and a request standing over the pair is held
+    to the same count, or `start` would resume it into a run the parser refuses."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 2)],
+        withdrawn=[replay_withdrawal(1, 1, withdrawn_at="2026-08-04T09:30:00Z")],
+    )
+
+    history = replay.read_replays(config, experiment)
+
+    assert [run.attempt for run in history.replays] == [2]
+    [given_up] = history.withdrawn
+    assert (given_up.round_number, given_up.attempt) == (1, 1)
+    assert given_up.withdrawn_at == "2026-08-04T09:30:00Z"
+    # Kept because it is what an operator has to go on: the run that may be going
+    # under that position measured exactly this integration.
+    assert given_up.integration.candidate_revision == CANDIDATE
+
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [],
+        withdrawn=[replay_withdrawal(1, 1)],
+        pending=replay_pending(1, 1),
+    )
+    with pytest.raises(evolution.BatchError, match="next attempt is 2"):
+        replay.read_replays(config, experiment)
+
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [],
+        withdrawn=[replay_withdrawal(1, 1)],
+        pending=replay_pending(1, 2),
+    )
+    assert replay.read_replays(config, experiment).pending is not None
 
 
 def test_one_round_is_measured_against_one_integration_at_a_time(
@@ -1136,6 +1270,47 @@ def test_the_newest_run_having_failed_is_what_the_round_reports(
     evidence = replay.describe_evidence(config, experiment)
     assert evidence.state == replay.EVIDENCE_FAILED
     assert any("lost its worker" in line for line in evidence.drift)
+
+
+@pytest.mark.parametrize(
+    ("description", "moves", "state"),
+    [
+        ("a run that failed", False, replay.EVIDENCE_FAILED),
+        ("a result the source line left behind", True, replay.EVIDENCE_STALE),
+    ],
+)
+def test_a_request_standing_over_a_recorded_run_is_reported_beside_it(
+    config: evolution.EvolutionConfig, repo: Path, release: str, description: str, moves: bool, state: str
+) -> None:
+    """Every reading short of a promotion says what is outstanding, not only the
+    ones with no run at all. A round whose newest run failed while a further one
+    was requested and never heard from is the case that matters most: an operator
+    told only about the failure starts another run beside one already going."""
+
+    experiment = sealed_experiment(config)
+    failed = replay_result("failed", detail="the harness lost its worker", metrics=[])
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [current_run(release, **({} if moves else {"result": failed}))],
+        pending=replay_pending(
+            1,
+            2,
+            integration=replay_integration(
+                candidate_revision=CANDIDATE, merge_input_revision=release, merge_input_ref=RELEASE_REF
+            ),
+        ),
+    )
+    if moves:
+        git_update_ref(repo, RELEASE_REF, git_commit(repo, "unrelated release work"))
+
+    evidence = replay.describe_evidence(config, experiment)
+
+    assert evidence.state == state
+    assert not evidence.promotable
+    assert any("is outstanding" in note for note in evidence.drift)
+    # Beside, not instead: what the record already said still reads the same.
+    assert len(evidence.drift) == 2
 
 
 def test_exact_evidence_is_not_unmade_by_a_second_run_beside_it(
@@ -1843,7 +2018,7 @@ def test_a_request_the_harness_cannot_describe_is_taken_back(
 ) -> None:
     """The way out of the window the request covers. A harness that cannot say
     what it is running leaves `start` unable to finish, and a round is measured
-    against one integration at a time — so the position is released, and what may
+    against one integration at a time — so the request is given up, and what may
     still be running is reported back for the operator to stop at the harness."""
 
     pinned(config)
@@ -1860,16 +2035,31 @@ def test_a_request_the_harness_cannot_describe_is_taken_back(
     # request that never became a run produced none.
     assert audit(config) == ["experiment-created", "tasks-admitted", "round-sealed"]
 
+    # The position is not handed back with the request. What is on record is what
+    # an operator needs to find the run that may be going under it — the window
+    # it would have started in, and the integration it was pinned to.
+    [given_up] = written(config)["withdrawn"]
+    assert (given_up["round"], given_up["attempt"]) == (1, 1)
+    assert given_up["requested_at"] == "2026-08-07T09:00:00Z"
+    assert given_up["withdrawn_at"] == "2026-08-07T17:30:00Z"
+    assert given_up["integration"]["merge_input_revision"] == release
+    # And it is not evidence: nothing measured this round.
+    assert replay.describe_evidence(config, live(config)).state == replay.EVIDENCE_INCOMPLETE
+
     # Run again, it reports that nothing was outstanding — a single write with
-    # nothing after it either landed or did not, and absence answers both.
+    # nothing after it either landed or did not, and the request's absence
+    # answers both.
     again = replay.withdraw(config, now=ENDED)
     assert again.withdrawn is False and again.pending is None
+    assert len(written(config)["withdrawn"]) == 1
 
-    # And the position is free: no run was recorded, so the next start is attempt
-    # 1 again rather than a gap nothing accounts for.
+    # The next start takes the position after it. Attempt 1 is spoken for: the
+    # harness may have begun a run keyed to it, and issuing it again would ask
+    # that harness for a second run at a name it already answers for.
     started = run(config, FakeHarness(), now=ENDED)
-    assert (started.round_number, started.attempt) == (1, 1)
+    assert (started.round_number, started.attempt) == (1, 2)
     assert started.resumed is False
+    assert [entry["attempt"] for entry in written(config)["replays"]] == [2]
 
 
 def test_the_request_is_on_record_before_the_harness_is_asked(
@@ -2028,6 +2218,112 @@ def test_a_resume_measures_what_was_pinned_rather_than_what_stands_now(
     evidence = replay.describe_evidence(config, live(config))
     assert evidence.state == replay.EVIDENCE_STALE
     assert any("has moved" in note for note in evidence.drift)
+
+
+class KeyedByPosition(FakeHarness):
+    """A harness that keeps the contract `ReplayHarness.start` states: asked
+    again for one experiment, round, and attempt, it answers with the run it
+    already began rather than starting a second.
+
+    Which is the only way a test can tell a reused position from a harmless one.
+    A harness that started a fresh run per call would make every reuse look
+    fine; a conforming one hands the old run back, so the record ends up naming
+    work that measured an integration it does not state. Its handles are its own
+    serial numbers rather than the position, for the same reason: the run has to
+    be identifiable apart from the name it was requested under.
+    """
+
+    def __init__(self, **overrides: Any) -> None:
+        super().__init__(**overrides)
+        self.begun: dict[tuple[str, int, int], replay.ReplayPlan] = {}
+
+    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
+        key = (request.experiment_id, request.round_number, request.attempt)
+        begun = self.begun.get(key)
+        if begun is not None:
+            self.requests.append(request)
+            return begun
+        plan = super().start(request)
+        began = dataclasses.replace(
+            plan, harness=dataclasses.replace(plan.harness, handle=f"run-{len(self.begun) + 1:04d}")
+        )
+        self.begun[key] = began
+        return began
+
+
+class KeyedByPositionLosingTheFirst(KeyedByPosition):
+    """The same harness, whose first answer never reaches the caller — so it is
+    running a job the record does not describe, which is the state a withdrawal
+    exists for."""
+
+    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
+        plan = super().start(request)
+        if len(self.requests) == 1:
+            raise RuntimeError("the harness answered, and the answer never arrived")
+        return plan
+
+
+def test_a_position_given_up_is_never_offered_to_the_harness_again(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """The recovery rests on one position naming one run. A withdrawal happens
+    when the harness cannot describe what it is running — which means it may well
+    be running it — so reissuing that position would ask a conforming harness for
+    a run it already answers for, and the first integration's numbers would come
+    back under a record naming the second."""
+
+    pinned(config)
+    harness = KeyedByPositionLosingTheFirst(report=completed_report())
+
+    with pytest.raises(RuntimeError):
+        run(config, harness)
+    assert replay.withdraw(config, now=ENDED).withdrawn is True
+
+    # The source line moves while the first run goes on measuring where it was.
+    moved = git_commit(repo, "release work")
+    git_update_ref(repo, RELEASE_REF, moved)
+
+    started = run(config, harness, now=ENDED)
+
+    assert (started.round_number, started.attempt) == (1, 2)
+    assert started.resumed is False
+    # Two positions asked for, two runs begun — not one run answering to both.
+    assert [(item.round_number, item.attempt) for item in harness.requests] == [(1, 1), (1, 2)]
+    assert started.plan.harness.handle == "run-0002"
+
+    [entry] = written(config)["replays"]
+    assert entry["harness"]["handle"] == "run-0002"
+    assert entry["integration"]["merge_input_revision"] == moved
+    # And the run that handle names was asked for exactly that integration.
+    assert harness.begun[(LIVE_EXPERIMENT, 1, 2)].harness.handle == "run-0002"
+    assert harness.requests[-1].integration.merge_input_revision == moved
+    # The first run is still the harness's, under the position the record keeps.
+    assert harness.begun[(LIVE_EXPERIMENT, 1, 1)].harness.handle == "run-0001"
+    [given_up] = written(config)["withdrawn"]
+    assert given_up["integration"]["merge_input_revision"] == release
+
+
+def test_a_failed_run_with_a_request_standing_over_it_reports_both(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Through the operations rather than a fixture: attempt 1 failed, attempt 2
+    was requested, and the harness's answer never arrived. `status` has to say
+    both — the failure alone reads as a round waiting for someone to run it."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report(outcome="failed", detail="the harness lost its worker", metrics=()))
+    run(config, harness)
+    replay.conclude(config, harness, now=ENDED)
+
+    with pytest.raises(RuntimeError):
+        run(config, LosesTheAnswer(), now=ENDED)
+
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_FAILED
+    assert any("lost its worker" in note for note in evidence.drift)
+    assert any("is outstanding" in note for note in evidence.drift)
+    payload = phase.describe(config, now=ENDED).to_json()
+    assert any("is outstanding" in note for note in payload["replay"]["drift"])
 
 
 def test_a_resume_answers_the_request_that_stands_or_refuses(
