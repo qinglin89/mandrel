@@ -101,6 +101,7 @@ having its files moved away; each state below names the artifact that ends it.
 | Batch | its manifest is frozen and no outcome is recorded | `batches/<batch-id>/outcome.json` records `promoted` or `no-change` |
 | Experiment | its record carries no decision | `experiment.json` records `abandoned`, `superseded`, or `promoted` |
 | Round | it is the experiment's last round and carries no seal | its `seal` pins a candidate revision — the round is **candidate-ready** |
+| Replay run | its record carries no result | its `result` records `completed` or `failed` |
 
 A candidate-ready round is terminal on its own account, not for the experiment
 holding it: through replay the experiment has no open round at all, and it stays
@@ -114,7 +115,7 @@ and the decision that follows.
 
 ## Revisions in play
 
-Five different commits, which an evidence trail must not substitute for one
+Six different commits, which an evidence trail must not substitute for one
 another — a candidate measured against the wrong one measures nothing.
 
 | Term | What it is | Recorded in |
@@ -122,8 +123,15 @@ another — a candidate measured against the wrong one measures nothing.
 | Base revision | the exact source commit every experiment of one batch starts from, frozen when that batch's first experiment is created | `experiment.json.base_revision` |
 | Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
+| Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
 | Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from | `outcome.json.promotion_revision` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
+
+The middle two are the pair a promotion is decided from, and neither stands in
+for the other. The candidate is pinned and cannot move; the merge input is not
+this experiment's to pin at all. What identifies the thing actually measured is
+therefore neither commit but the tree the two produce, which is why a replay
+records that as well (`integration.tree`).
 
 The last one is why promotion is not the end of the evidence chain: a promoted
 revision changes nothing an evaluation can see until targets carry it, so the
@@ -146,6 +154,7 @@ evolution/
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, decision
+  experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds
 
 refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
 
@@ -398,6 +407,46 @@ old evidence goes on naming the round it actually measured — a round whose
 candidate revision was pinned before that evidence existed and has not moved
 since.
 
+### Replay evidence
+
+Invariant 10 puts a canary or replay between a candidate and the source line,
+and every run of one is recorded in `experiments/<experiment-id>/replays.json`
+(`schemas/experiment-replays.schema.json`), appended in round and then attempt
+order. A run states what it exercised — the round it belongs to, the integration
+it measured, the case set and the exclusions applied to it, the evaluator that
+judged it, the harness and configuration that drove it, and the directional
+change it was expected to produce — and then, when it ends, what it measured.
+
+**A run is about one round.** It names the round and exercises exactly the
+revision that round's seal pinned, which is invariant 16 read from the evidence
+side. That binding is also what stops a report being carried forward: a later
+round wanting the same numbers would have to claim a candidate revision its own
+seal did not pin. The base is stated with it, so evidence carries its own
+baseline rather than being read against whichever one a later reader assumes.
+
+**A candidate is measured as it would be integrated.** What a promotion puts on
+the source line is the candidate merged onto that line, so a run records the
+merge input it integrated onto and the tree the two produced, and a promotion
+reproduces that tree rather than trusting the pair of commits to imply it. The
+pinned candidate cannot show the source line moving; the merge input is what
+does, which is why a run that was exact yesterday can describe nothing today
+without anything about the experiment having changed.
+
+**Five states, three of them written down.** A record says `running`,
+`completed`, or `failed`. `incomplete` — no run names the round that needs one —
+and `stale` — the run that does no longer describes the tree in question — are
+derived, and neither is stored. A run still going is a record rather than a
+process: it carries the harness's own opaque handle, so a later run of `status`
+on this machine or another sees it, and a run nobody can poll is refused rather
+than left to never conclude. A `failed` run records why it stopped and no
+numbers at all; a partial sweep reads as a cohort result nobody produced.
+
+Measurements are a set, never a score. Invariant 13 judges a candidate on
+quality, convergence, quota, and elapsed time together, so a run records each
+quantity on both the base and the candidate and marks which of them were goals —
+an observation with no baseline is recorded as one rather than as an improvement
+over nothing.
+
 ### Terminal decisions
 
 An experiment ends with exactly one decision, and the decision is what turns it
@@ -500,11 +549,18 @@ waiting for is the condition of the operation that answers it.
 None of this stores a lifecycle phase, and none of it may be inferred from the
 checkout. The current batch, the open experiment, its last round and whether
 that round is candidate-ready, the candidate revision, a successor a
-supersession recorded and did not create, and the drafts still
-waiting at the gate are re-derived on every read from the committed manifests,
-closure records, experiment records, rejection records, the experiment refs, and
+supersession recorded and did not create, the drafts still
+waiting at the gate, and what the current round has been replayed by are
+re-derived on every read from the committed manifests, closure records,
+experiment records, replay records, rejection records, the experiment refs, and
 Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
 derive the same answer.
+
+Replay evidence is the one reading with a question Git may be unable to answer:
+whether the source line has moved since a run measured it needs the ref that run
+integrated onto, and a clone that never fetched it holds no answer at all. That
+is reported as the unanswered check it is, never as agreement — a promotion is
+refused on it, because a check nobody could make is not one that passed.
 
 Two readings are specifically not that answer:
 
@@ -653,15 +709,16 @@ Every evolution task must:
 ## Promotion evidence
 
 A protocol-improvement task is not promotion proof. Its canary or replay must
-record:
+record, in the run's own record (Replay evidence):
 
 - The batch's base revision, and the experiment and round whose candidate
   revision was exercised. That revision is the one the round's seal pinned
   before the run started (invariant 16); evidence that names an experiment but
   not a round says nothing after the next `revise`.
+- The merge input the candidate was integrated onto, and the tree that produced.
 - Eligible cohort and exclusions.
 - Evaluator/rubric revision.
-- Expected directional changes.
+- Expected directional changes, recorded before the run produced any.
 - Quality and convergence outcomes.
 - Subscription/quota and elapsed-time observations when available.
 - Regressions, ambiguity, and rollback decision.

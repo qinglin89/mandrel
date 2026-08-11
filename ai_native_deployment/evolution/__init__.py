@@ -12,14 +12,16 @@ promotion stay human gates (contract invariant 9). Automation prepares evidence
 and pending analysis tasks; a human triggers the freeze and admits every
 proposed canonical change.
 
-The names below are the package's stable surface. Four things are reached
+The names below are the package's stable surface. Five things are reached
 through their modules rather than re-exported, because the bare name says
 nothing on its own: `phase.describe` (the derived lifecycle status),
 `lineage.describe` (the derived batch/experiment lineage), the
 `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` /
 `abandon` / `supersede` / `conclude_no_change` operations on a batch's change
-lineage, and the `render.format_*` functions (operator-facing text for the
-CLI).
+lineage, `replay.read_replays` / `replay.describe_evidence` together with the
+rest of that module's vocabulary (`replay.Integration`, `replay.CaseSet`,
+`replay.Measurement`, …), and the `render.format_*` functions (operator-facing
+text for the CLI).
 """
 
 from __future__ import annotations
@@ -63,6 +65,7 @@ from .importer import Candidate, ListResult, SyncResult, list_candidates, sync
 from .ledger import append_records, build_record, read_records
 from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState, current_batch
 from .phase import BatchView, LifecycleStatus
+from .replay import Evidence, Replay, ReplayHarness, ReplayPlan, ReplayReport, ReplayRequest
 from .reports import NormalizedReport, Rejection, normalize
 from .revisions import Revision, release_line_revision
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock
@@ -84,6 +87,7 @@ __all__ = [
     "EvolutionConfig",
     "EvolutionError",
     "EvolutionState",
+    "Evidence",
     "Experiment",
     "FeedError",
     "FeedPage",
@@ -100,6 +104,11 @@ __all__ = [
     "RefState",
     "Rejection",
     "RejectionResult",
+    "Replay",
+    "ReplayHarness",
+    "ReplayPlan",
+    "ReplayReport",
+    "ReplayRequest",
     "ReportFeed",
     "ReportRef",
     "Revision",

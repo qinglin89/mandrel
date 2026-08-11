@@ -32,6 +32,7 @@ CLOSURE_SCHEMA_FILENAME = "batch-closure.schema.json"
 OUTCOME_SCHEMA_FILENAME = "batch-outcome.schema.json"
 REJECTED_DRAFTS_SCHEMA_FILENAME = "rejected-drafts.schema.json"
 EXPERIMENT_SCHEMA_FILENAME = "experiment.schema.json"
+REPLAYS_SCHEMA_FILENAME = "experiment-replays.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
 STATE_FILENAME = "state.json"

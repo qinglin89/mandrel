@@ -1,0 +1,359 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/experiment-replays.schema.json",
+  "title": "Evolution experiment replay evidence",
+  "description": "Every replay run against one experiment's rounds, in the order they were started (contract: Promotion evidence, invariant 10). One file per experiment rather than one per run: a replay is only ever about the round it names, attempts are allocated from what this file already holds, and the evidence is then read beside the record that pins the tree it describes. A replay names both halves of what it exercised — the round's pinned candidate revision, which the seal fixed before the run started (invariant 16), and the source-line commit that candidate was integrated onto, whose drift the pinned candidate alone cannot show. Whether this evidence still describes what a promotion would carry is derived from those pins against the experiment record and Git; nothing here stores that judgement.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "replays"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "experiment_id": {
+      "description": "The experiment whose directory this file sits in. Stated as well as implied, so a record moved or copied names the lineage it belongs to rather than the one it landed in.",
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+    },
+    "replays": {
+      "description": "Append-only, ordered by round and then attempt. At most one run is still going, and it is the last entry: a round is measured against one integration at a time, and a second run started underneath an unfinished one would leave two answers about the same tree with nothing to choose between them.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/replay"
+      }
+    }
+  },
+  "$defs": {
+    "replay": {
+      "description": "One run of the case suite against one round's candidate. The pinned inputs are written when the run starts and never edited; the result is written when it ends. A run is reproducible from what is recorded here — the integration it exercised, the case set and the exclusions applied to it, the evaluator that judged it, and the harness configuration that drove it.",
+      "type": "object",
+      "required": [
+        "round",
+        "attempt",
+        "started_at",
+        "integration",
+        "cases",
+        "evaluator",
+        "harness",
+        "expectation",
+        "result"
+      ],
+      "properties": {
+        "round": {
+          "description": "The round whose candidate this run exercised. Evidence that names an experiment but not a round says nothing after the next `revise` (contract: Promotion evidence), and a later round never inherits an earlier one's report: the round is part of what the evidence is about, not a note beside it.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "description": "Which run of that round this is, allocated 1..N with none missing. A second attempt is the ordinary answer to a merge input that moved or a harness that failed, and it is a new run rather than an edit of the old one — the earlier attempt goes on describing the integration it actually measured.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
+        },
+        "cases": {
+          "$ref": "#/$defs/cases"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/evaluator"
+        },
+        "harness": {
+          "$ref": "#/$defs/harness"
+        },
+        "expectation": {
+          "description": "The directional changes this run was expected to produce, recorded before it produced any (contract: Promotion evidence). Written at the start deliberately: an expectation written beside the numbers is a reading of them, and a candidate that improved something nobody predicted is a different finding from one that did what it was admitted to do.",
+          "type": "string",
+          "minLength": 1
+        },
+        "result": {
+          "$ref": "#/$defs/result"
+        }
+      },
+      "additionalProperties": false
+    },
+    "integration": {
+      "description": "The exact tree this run exercised, and the three commits that identify it. A candidate is measured as it would be integrated, not on its own: what a promotion carries to the source line is the candidate merged onto that line, so a result binds to the merge input as well as the candidate. The pinned candidate cannot show that input moving, which is why it is recorded here rather than left to be re-derived from a checkout.",
+      "type": "object",
+      "required": [
+        "base_revision",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree"
+      ],
+      "properties": {
+        "base_revision": {
+          "description": "The batch's frozen base — the same commit the experiment record names, restated so the evidence carries its own baseline (contract: Revisions in play).",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate_revision": {
+          "description": "The revision the round's seal pinned. Never the ref tip as it stood when the run started: an open round's tip moves, and this record has to keep naming one tree after the experiment moves on (invariant 16).",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "description": "The source-line commit the candidate was integrated onto for this run. It moves for reasons that have nothing to do with the experiment — another promotion, ordinary release-line work — and each time it does, this result stops describing the tree a promotion would produce.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "description": "The ref that commit was read from, or null when the run was driven from a detached revision. Recorded because the sha alone says where the source line stood and not where to look for it now: with the name, a later reader can see the input has moved; without it, the drift is invisible until a promotion tries the merge. Null or a name — an empty string is neither, and would read as a ref this checkout simply does not hold.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "tree": {
+          "description": "The Git tree object the run actually exercised — the result of integrating the candidate onto the merge input. The two revisions say what was combined; this says what came out, which is what a promotion has to reproduce. A different merge strategy or a conflict resolved by hand lands on a different tree from the same pair of commits.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "description": "The eligible cohort this run exercised (contract: Promotion evidence). Identity and hash together, because a case set that was edited between two runs makes their numbers incomparable while its name goes on matching.",
+      "type": "object",
+      "required": [
+        "case_set_id",
+        "case_set_sha256",
+        "count",
+        "excluded"
+      ],
+      "properties": {
+        "case_set_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "count": {
+          "description": "How many cases this run exercised — the eligible cohort after `excluded`. A run over no cases measured nothing, so it is not a cohort size this record can hold.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "excluded": {
+          "description": "Cases held out, each with why. An exclusion nobody recorded is a cohort quietly narrowed to the cases that agreed with the change.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exclusion"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "exclusion": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "reason"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "evaluator": {
+      "description": "Who judged the run, in the vocabulary an imported report uses for the same fact (`evaluation-import.schema.json`). Same spelling on purpose: invariant 5 separates cohorts by evaluator, rubric, and materially different model revisions, and a comparison across two vocabularies cannot make that separation.",
+      "type": "object",
+      "required": [
+        "backend",
+        "model",
+        "rubric_revision"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rubric_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "harness": {
+      "description": "What drove the run. The harness and the case suite are a replaceable dependency, so the record names which one produced this evidence and how it was configured, rather than assuming there has only ever been one.",
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "config_sha256",
+        "handle"
+      ],
+      "properties": {
+        "id": {
+          "description": "A kebab slug naming the harness implementation.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_sha256": {
+          "description": "Hash of the replay configuration handed to that harness — the other half of reproducibility, since two runs of one harness over one case set still differ by how it was told to run them.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "handle": {
+          "description": "The harness's own name for the run, opaque above this boundary: the controller stores what it was handed and gives it back unread, exactly as it does a feed cursor. It is what a later process polls, so a run still going has one; a concluded run keeps it as provenance, and null records a harness that issued none. Null or a name, never an empty string — a handle nothing can be looked up by is the absence this field spells with null.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "description": "How the run ended, or null while it is still going. One object rather than an outcome field beside loose metrics, so a run that is half-reported — concluded with nothing measured, or measurements with nothing concluding them — is not a shape this contract can hold. `completed` measured the cohort and carries at least one measurement; `failed` measured nothing readable as a cohort result and carries none — a partial run is not evidence, and its story is in `detail`. The controller enforces that pairing, which the implemented JSON Schema subset cannot express.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "outcome",
+        "concluded_at",
+        "detail",
+        "elapsed_seconds",
+        "metrics",
+        "regressions",
+        "ambiguity"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "concluded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "detail": {
+          "description": "One line: what the numbers came to, or why the run produced none. What a later reader has instead of the console it scrolled past.",
+          "type": "string",
+          "minLength": 1
+        },
+        "elapsed_seconds": {
+          "description": "Wall-clock time the run took, or null when the harness did not report it. Recorded because invariant 13 counts elapsed time among the things a change is judged on, and absent rather than zero when it is unknown (invariant 4 keeps missing fields explicit).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metrics": {
+          "description": "Every measurement this run made, never one. Invariant 13 is explicit that a candidate is judged on quality, convergence, quota, and elapsed time together, so the record holds a set and marks which of them were goals.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/measurement"
+          }
+        },
+        "regressions": {
+          "description": "Cases the candidate did worse on. An empty array is the claim that there were none, which is what a promotion is read against — not the absence of a claim.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/regression"
+          }
+        },
+        "ambiguity": {
+          "description": "What this run could not settle, or null when it settled everything it measured (contract: Promotion evidence). Stated because the alternative is a promotion decided from numbers whose reader was never told which of them were close. Null is the claim that there was none; an empty string is a claim nobody made.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "description": "One quantity, on the base and on the candidate. `better` says which direction counts as improvement, and `neither` marks an observation that is recorded but is not a goal — quota consumed and elapsed time are the ordinary examples, and raw token counts compared across providers are not a comparison at all (invariant 13).",
+      "type": "object",
+      "required": [
+        "metric",
+        "unit",
+        "baseline",
+        "candidate",
+        "better"
+      ],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseline": {
+          "description": "The same quantity on the base revision, or null when this run measured only the candidate. A direction other than `neither` needs one: an improvement claim with nothing to improve on is a number, not a finding — which the controller enforces.",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "candidate": {
+          "type": "number"
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher",
+            "neither"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "regression": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "summary"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

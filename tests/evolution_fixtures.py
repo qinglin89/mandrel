@@ -346,6 +346,130 @@ def write_experiment(
     return experiments_root / experiment_id
 
 
+def measurement(
+    metric: str = "remediation-rounds",
+    *,
+    unit: str = "rounds",
+    baseline: float | None = 2.4,
+    candidate: float = 1.6,
+    better: str = "lower",
+) -> dict:
+    """One quantity on the base and on the candidate."""
+
+    return {"metric": metric, "unit": unit, "baseline": baseline, "candidate": candidate, "better": better}
+
+
+def replay_integration(
+    *,
+    base_revision: str = "a" * 40,
+    candidate_revision: str = "b" * 40,
+    merge_input_revision: str = "e" * 40,
+    merge_input_ref: str | None = "refs/heads/release",
+    tree: str = "f" * 40,
+) -> dict:
+    """The pinned tree one replay exercised: the round's candidate, the source
+    line it was integrated onto, and what the two produced."""
+
+    return {
+        "base_revision": base_revision,
+        "candidate_revision": candidate_revision,
+        "merge_input_revision": merge_input_revision,
+        "merge_input_ref": merge_input_ref,
+        "tree": tree,
+    }
+
+
+def replay_result(
+    outcome: str = "completed",
+    *,
+    detail: str = "convergence improved; no regression outside the excluded cases",
+    concluded_at: str = "2026-08-04T11:00:00Z",
+    elapsed_seconds: float | None = 1820,
+    metrics: list[dict] | None = None,
+    regressions: list[dict] | None = None,
+    ambiguity: str | None = None,
+) -> dict:
+    return {
+        "outcome": outcome,
+        "concluded_at": concluded_at,
+        "detail": detail,
+        "elapsed_seconds": elapsed_seconds,
+        "metrics": metrics if metrics is not None else [measurement()],
+        "regressions": regressions if regressions is not None else [],
+        "ambiguity": ambiguity,
+    }
+
+
+def replay_entry(
+    round_number: int = 1,
+    attempt: int = 1,
+    *,
+    started_at: str = "2026-08-04T09:00:00Z",
+    integration: dict | None = None,
+    cases: dict | None = None,
+    evaluator: dict | None = None,
+    harness: dict | None = None,
+    expectation: str = "fewer remediation rounds, with quality and elapsed time unchanged",
+    result: dict | None = None,
+    running: bool = False,
+) -> dict:
+    """One recorded replay run. `running` is the run with no result yet, which is
+    a state of its own rather than a missing field: the record is what a later
+    process polls."""
+
+    return {
+        "round": round_number,
+        "attempt": attempt,
+        "started_at": started_at,
+        "integration": integration if integration is not None else replay_integration(),
+        "cases": cases
+        if cases is not None
+        else {
+            "case_set_id": "loader-regressions",
+            "case_set_sha256": "c" * 64,
+            "count": 12,
+            "excluded": [],
+        },
+        "evaluator": evaluator
+        if evaluator is not None
+        else {"backend": "claude", "model": "claude-opus-5", "rubric_revision": "r7"},
+        "harness": harness
+        if harness is not None
+        else {
+            "id": "local-replay",
+            "revision": "0.1.0",
+            "config_sha256": "d" * 64,
+            "handle": "run-0001",
+        },
+        "expectation": expectation,
+        "result": None if running else (result if result is not None else replay_result()),
+    }
+
+
+def write_replays(
+    experiments_root: Path,
+    experiment_id: str,
+    replays: list[dict],
+    *,
+    declares: str | None = None,
+    **overrides,
+) -> Path:
+    """One experiment's replay evidence on disk, beside its record.
+
+    `declares` is the id the record itself states, defaulting to the directory it
+    sits in — so the ordinary case names the experiment once and the mismatch
+    case names it twice on purpose.
+    """
+
+    record = {
+        "schema_version": 1,
+        "experiment_id": declares if declares is not None else experiment_id,
+        "replays": replays,
+        **overrides,
+    }
+    return _write_json(experiments_root / experiment_id / "replays.json", record)
+
+
 def _draft_body(draft_id: str) -> str:
     """The default draft, kept as its own name because `draft_sha256` hashes it:
     what a fixture writes and what a record says was admitted are one string."""
