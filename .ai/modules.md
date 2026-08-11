@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 ---
 
 # Modules
@@ -21,8 +21,9 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; phase/rendering |
-| Evolution lineage | `evolution/lineage.py`, `experiments.py`, `revisions.py` | Whole-history derivation; durable experiment refs/records; guarded admission, round, terminal-decision, and no-change operations |
+| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; phase-v6 rendering |
+| Evolution lineage | `ai_native_deployment/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
+| Evolution replay/releases | `ai_native_deployment/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback and Git/ref recovery |
 
 ## Boundary Rules
 

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 ---
 
 # Architecture
@@ -19,9 +19,9 @@ role-scoped coding sessions
 archived completed-task L1+L2 evaluation
         │ orch-hub global report feed
         ▼
-evolution runtime/import pool → frozen batch → analysis/change/canary
-        │ reviewed canonical commit + human promotion
-        └──────────────────────► canonical source of truth
+evolution runtime/import pool → frozen batch → analysis/change/replay
+        │ reviewed exact-tree promotion; optional inverse rollback
+        └──────────────────────► canonical source line
 ```
 
 ## Ownership Layers
@@ -73,16 +73,21 @@ an immutable versioned manifest and generates one analysis-only task; closure
 and proposed change-task drafts remain separate artifacts with a human admission
 gate before implementation. Guarded domain operations then create one durable
 experiment ref and record, admit task copies, append and seal candidate rounds,
-record terminal experiment decisions, and conclude a batch with an outcome.
+run durable replays of the exact candidate/source integration tree, record
+terminal experiment decisions, promote only that measured tree, and conclude a
+batch with an outcome. A rollback adds an inverse commit to the latest effective
+promotion without editing the terminal experiment or batch outcome.
 
 One whole-lineage derivation governs both status and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
 the current batch, open attempt, gate, round, and revisions from any checkout.
 `.ai-tasks/` supplies local completion observations, never historical identity;
-the audit ledger is not flow state. Versioned `evolution/` holds safe policy,
-schemas, manifests, lineage, sanitized cases, and audit while raw report content
-and credentials stay ignored. Analysis, canonical implementation, replay, and
-promotion remain separate reviewed/human-gated steps.
+the audit ledger is not flow state. Per-experiment replay histories and prepared
+promotions, batch outcomes/rollbacks, durable refs, and Git commits are the
+release-decision state. Versioned `evolution/` holds safe policy, schemas,
+manifests, lineage, sanitized cases, and audit while raw report content and
+credentials stay ignored. Analysis, canonical implementation, replay,
+promotion, deployment, and rollback remain separate reviewed/human-gated steps.
 
 ## External Dependencies
 

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 ---
 
 # APIs and Interfaces
@@ -17,12 +17,20 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 | `registry remove <name-or-path>` | Remove local tracking only |
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
-| `evolution status [--json]` | Derive schema-v3 phase, gate, experiment/round history, ref state, distinct base/candidate/tip revisions, and last promotion |
+| `evolution status [--json]` | Derive schema-v6 phase, gate, experiment/round history, replay evidence, ref state, distinct revisions, and the last promotion/rollback |
 | `evolution start [--force --justification <text>]` | Reconcile, sync, and freeze one batch when admission policy allows; force never waives the minimum |
 
 All evolution operations are human-invoked and make no evaluation model call.
 `list` and `status` are read-only; `start` returning no batch is a normal
 successful outcome when policy is not met.
+
+## Evolution Domain Operations
+
+| Operation | Behavior |
+|---|---|
+| `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |
+| `experiments.promote` | Prepare and record the exact replayed merge, compare-and-swap the source ref, and publish agreeing experiment/batch outcomes without implying deployment |
+| `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
 
 ## Persisted Interfaces
 
@@ -34,16 +42,18 @@ successful outcome when policy is not met.
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
 | `evolution/config.toml` | Versioned evolution admission/storage policy |
-| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, outcome, rejection, and ledger contracts |
+| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, outcome, rollback, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
 | `evolution/batches/<id>/manifest.json` | Immutable committed cohort membership and evaluator/protocol provenance |
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
 | `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |
 | `evolution/batches/<id>/rejected-drafts.json` | Durable terminal decisions for declined draft identities and bytes |
-| `evolution/experiments/<id>/experiment.json` | Experiment identity, frozen batch base, durable ref, append-only rounds/tasks/seals, and terminal decision |
+| `evolution/experiments/<id>/experiment.json` | Versioned experiment identity/rounds/decision record; v2 explicitly carries nullable prepared-promotion state while frozen v1 remains readable |
+| `evolution/experiments/<id>/replays.json` | Versioned per-experiment replay history: allocated withdrawals, optional pending request, and durable running/failed/completed attempts |
 | `refs/evolution/experiments/<id>` | Durable fast-forward candidate ref; independent of the checked-out branch |
-| `evolution/batches/<id>/outcome.json` | Terminal promoted/no-change batch outcome; valid only when the whole experiment lineage agrees |
+| `evolution/batches/<id>/outcome.json` | Terminal promoted/no-change batch outcome; a promotion carries the exact replayed merge unit and planned target names, never deployment state |
+| `evolution/batches/<id>/rollback.json` | Prepared/completed inverse commit for the batch's promotion; leaves the outcome and experiment history unchanged |
 | `evolution/ledger.jsonl` | Versioned sanitized append-only evolution audit |
 
 ## External Integration

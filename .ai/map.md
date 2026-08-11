@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 ---
 
 # Project Map
@@ -20,8 +20,9 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON |
-| Evolution change lineage | lineage/experiment/revision services, evolution policy | experiment/outcome/rejection records, durable experiment refs, phase JSON v3, guarded admission/round/decision operations |
+| Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON v6 |
+| Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
+| Evolution replay/releases | replay/rollback/revision services, evolution policy | replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v6 |
 | Report publication | external orch-hub | pending global report feed/export |
 
 ## Change Impact

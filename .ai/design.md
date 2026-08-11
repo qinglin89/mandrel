@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 ---
 
 # Design Principles and Decisions
@@ -25,6 +25,14 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
   mutable flow-state field governs the phase.
 - Evolution reads and writes share one whole-lineage derivation; batch currency
   is never inferred from one artifact's presence in isolation.
+- Replay evidence binds one experiment round to its sealed candidate, exact
+  source-ref revision, and computed integration tree; only completed, current,
+  fully verified evidence is promotable.
+- Promotion records its exact prepared merge and intent before moving the source
+  ref; promotion and deployment remain distinct facts.
+- Rollback preserves the promoted outcome and Git ancestry: it records and lands
+  a three-way inverse commit against the current line, never resets history, and
+  refuses when later candidate lineage stands on the promotion.
 
 ## Key Tradeoffs
 
@@ -70,8 +78,10 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 - Multi-record/ref mutations are ordered so interruption leaves a named,
   resumable state; the durable domain record, not the audit line, makes the
   operation real.
-- A record naming a Git-ref transition is written under Git's own lock on the
-  revision it read; an atomic write of a stale ref observation is still stale.
+- A record claiming a ref still carries an observed revision is written under
+  Git's lock on that revision; operation-owned commits are identified exactly
+  and recovered by ancestry when later compatible ref advances preserve the
+  fact being recorded.
 - Evolution writers publish through the reader's parser so persisted
   cross-field rules are enforced in both directions.
 - Config/schema version fields on persisted machine contracts.
