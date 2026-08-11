@@ -1313,6 +1313,77 @@ def test_a_request_standing_over_a_recorded_run_is_reported_beside_it(
     assert len(evidence.drift) == 2
 
 
+@pytest.mark.parametrize(
+    ("description", "merge_input_ref"),
+    [
+        ("a source line this checkout does not hold", RELEASE_REF),
+        ("a merge input read from a detached revision", None),
+    ],
+)
+def test_a_request_standing_over_a_result_nobody_here_can_check_is_reported_beside_it(
+    config: evolution.EvolutionConfig, description: str, merge_input_ref: str | None
+) -> None:
+    """A completed run whose drift this checkout cannot answer resembles the one
+    reading that leaves the request out, and is not it. `unverified` has already
+    shut the gate, so the note costs nothing — while an operator told only
+    "completed, and the source line cannot be checked here" reads it as a run to
+    repeat from a clone that has the ref, and starts a second one beside the one
+    already going."""
+
+    experiment = sealed_experiment(config)
+    unfetched = "5" * 40
+    integration = replay_integration(
+        candidate_revision=CANDIDATE,
+        merge_input_revision=unfetched,
+        merge_input_ref=merge_input_ref,
+    )
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, integration=integration)],
+        pending=replay_pending(1, 2, integration=integration),
+    )
+
+    evidence = replay.describe_evidence(config, experiment)
+
+    assert evidence.state == replay.EVIDENCE_COMPLETE
+    assert not evidence.promotable
+    # What stops the promotion is unchanged; what is added is the next step.
+    assert evidence.unverified and len(evidence.unverified) == 1
+    assert any("is outstanding" in note for note in evidence.drift)
+
+
+def test_the_promotable_reading_is_the_one_that_leaves_the_request_out(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The other side of the rule, pinned so that "no note" keeps meaning what it
+    means here: not that no request stands, but that this reading is exact and
+    whether work in flight holds a promotion back is the promotion gate's
+    question rather than the reader's."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [current_run(release)],
+        pending=replay_pending(
+            1,
+            2,
+            integration=replay_integration(
+                candidate_revision=CANDIDATE, merge_input_revision=release, merge_input_ref=RELEASE_REF
+            ),
+        ),
+    )
+
+    evidence = replay.describe_evidence(config, experiment)
+
+    assert evidence.state == replay.EVIDENCE_COMPLETE
+    assert evidence.promotable
+    assert evidence.drift == () and evidence.unverified == ()
+    # The request is in the record either way — the gate reads it from there.
+    assert replay.read_replays(config, experiment).pending is not None
+
+
 def test_exact_evidence_is_not_unmade_by_a_second_run_beside_it(
     config: evolution.EvolutionConfig, release: str
 ) -> None:

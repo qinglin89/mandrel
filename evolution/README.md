@@ -653,11 +653,14 @@ measured by rather than instead of it. It measured nothing, so it changes no
 state; what it changes is the next step, and a round whose newest run failed
 while a further one is unaccounted for is not the same situation as one simply
 waiting to be run. The single reading it is deliberately left out of is a result
-that is still exact: reporting it there would make evidence that describes the
-tree in question unpromotable on account of work that has measured nothing yet,
-which is a question for the promotion gate rather than for the reader. A
-withdrawn position is not reported at all — nothing here can learn whether the
-harness ever ran it, and the record keeps it for whoever goes looking.
+this checkout confirms is still exact: reporting it there would make evidence
+that describes the tree in question unpromotable on account of work that has
+measured nothing yet, which is a question for the promotion gate rather than for
+the reader. A completed result whose source line cannot be checked here is not
+that reading — the unanswered check has already shut the gate, so the request is
+reported beside it like every other reading short of a promotion. A withdrawn
+position is not reported at all — nothing here can learn whether the harness ever
+ran it, and the record keeps it for whoever goes looking.
 
 Two readings are specifically not that answer:
 

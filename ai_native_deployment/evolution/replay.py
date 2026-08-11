@@ -541,22 +541,33 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
 
     Precedence, and each step is a different question a promotion would ask:
 
-    1. a completed run for this round whose merge input has not moved — the one
-       state that supports a promotion, and it is not unmade by a second run
-       started beside it, because evidence that is still exact stays exact;
-    2. a run still going;
-    3. the newest run, when that is the one that failed;
-    4. a completed run that no longer describes the tree in question — the round
+    1. a completed run for this round whose merge input this checkout confirms
+       has not moved — the one state that supports a promotion, and it is not
+       unmade by a second run started beside it, because evidence that is still
+       exact stays exact;
+    2. a completed run for this round whose merge input this checkout cannot
+       check at all — the same run, reported as the unanswered check it is;
+    3. a run still going;
+    4. the newest run, when that is the one that failed;
+    5. a completed run that no longer describes the tree in question — the round
        moved on, or the source line did;
-    5. nothing yet.
+    6. nothing yet.
 
-    An outstanding request is none of the five. It measured nothing, so it does
-    not change the state; what it changes is what every branch short of a
+    An outstanding request is none of the six. It measured nothing, so it does
+    not change the state; what it changes is what every reading short of a
     promotion has to say, since "this round's run failed" and "its run failed
     and something may be running against it right now that this record does not
-    name yet" send an operator to different places. So it is added once, below,
-    to whichever of those branches was reached — rather than at each `return`,
-    where the next branch to be written would be the next one to forget it.
+    name yet" send an operator to different places. So it is added once, at the
+    single return below, to whichever reading was reached — rather than at each
+    `return`, where the next one to be written would be the next to forget it.
+
+    Step 1 is the only reading it is left out of, and that is the whole rule:
+    the promotable reading is the one where reporting it would decide something
+    else — whether work in flight holds a promotion back, which is the promotion
+    gate's question. Step 2 is not that reading, however much it resembles it:
+    `unverified` has already shut the gate, so the note costs nothing there and
+    an operator reading "completed, and the source line cannot be checked here"
+    still needs to know a run may be going.
 
     A withdrawn position is not reported at all: it measured nothing, it is over
     as far as this controller is concerned, and nothing here can ever learn
@@ -584,27 +595,30 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
 
     newest_complete = next((replay for replay in reversed(here) if replay.completed), None)
     moved, note = (None, "") if newest_complete is None else _merge_input_moved(config, newest_complete)
-    if newest_complete is not None and moved is not True:
-        # `None` is a check this checkout could not make, which is not the same
-        # answer as agreement and is not reported as one: the state describes the
-        # run, and `unverified` is what stops it short of a promotion.
-        #
-        # This is the one branch an outstanding request is deliberately left out
-        # of. Reporting it in either tuple would make evidence that is still
-        # exact unpromotable, which is the promotion-side question of whether a
-        # run in flight holds a promotion back — an operation that does not
-        # exist yet, and whose gate is where that would be decided.
-        return Evidence(
-            **common,
-            state=EVIDENCE_COMPLETE,
-            replay=newest_complete,
-            drift=(),
-            unverified=() if moved is False else (note,),
-        )
+    if newest_complete is not None and moved is False:
+        # The one reading a promotion is built on, and the one an outstanding
+        # request is deliberately left out of: reporting it in either tuple would
+        # make evidence that is still exact unpromotable, which is the
+        # promotion-side question of whether a run in flight holds a promotion
+        # back — an operation that does not exist yet, and whose gate is where
+        # that would be decided.
+        return Evidence(**common, state=EVIDENCE_COMPLETE, replay=newest_complete, drift=(), unverified=())
 
-    # Nothing below can also be carrying `unsealed`: every one of these branches
-    # needs a run that names this round, and an unsealed round has none.
-    if here and here[-1].running:
+    # Every reading below is already short of a promotion, which is what lets the
+    # single return underneath report the outstanding request for all of them.
+    #
+    # Nothing below can be carrying `unsealed` either: every one of these
+    # branches needs a run that names this round, and an unsealed round has none.
+    unverified: tuple[str, ...] = ()
+    if newest_complete is not None and moved is None:
+        # A check this checkout could not make, which is not the same answer as
+        # agreement and is not reported as one. The state still describes the
+        # run; `unverified` is what stops it short of a promotion, and it keeps
+        # this reading ahead of a later run for the same reason step 1 is ahead
+        # of one: what a promotion asks about is the newest complete result.
+        measured, state, drift = newest_complete, EVIDENCE_COMPLETE, ()
+        unverified = (note,)
+    elif here and here[-1].running:
         # The one branch a request cannot coexist with — `_require_requestable`
         # refuses one made under an unfinished run — so `awaiting` is empty here
         # by that rule rather than by this branch's choosing.
@@ -634,7 +648,7 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
         )
     # Every branch above is already short of a promotion, so a request that may
     # be running against this round is reported wherever it stands.
-    return Evidence(**common, state=state, replay=measured, drift=drift + awaiting, unverified=())
+    return Evidence(**common, state=state, replay=measured, drift=drift + awaiting, unverified=unverified)
 
 
 # --- the runs ----------------------------------------------------------------
