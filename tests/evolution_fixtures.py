@@ -612,9 +612,54 @@ def git_unrelated_commit(root: Path, message: str) -> str:
     ).stdout.strip()
 
 
+def git_sibling_commit(root: Path, parent: str, content: str, message: str) -> str:
+    """One commit on a line of its own, off `parent`, rewriting `file.txt`.
+
+    The source line as it moves for reasons an experiment knows nothing about.
+    Built with plumbing rather than a checkout so the working tree — which holds
+    the uncommitted evolution records under test — is never touched, and written
+    to the same file the candidate commits touch so the two can be made to
+    conflict on purpose.
+    """
+
+    blob = subprocess.run(
+        ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+        check=True,
+        capture_output=True,
+        text=True,
+        input=content,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "-C", str(root), "mktree"],
+        check=True,
+        capture_output=True,
+        text=True,
+        input=f"100644 blob {blob}\tfile.txt\n",
+    ).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(root), *GIT_IDENTITY, "commit-tree", tree, "-p", parent, "-m", message],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def git_rev(root: Path, revision: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), "rev-parse", f"{revision}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def git_tree(root: Path, revision: str) -> str:
+    """The tree one commit carries, for checking what an integration produced
+    against Git rather than against the record that claims it."""
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", f"{revision}^{{tree}}"],
         check=True,
         capture_output=True,
         text=True,

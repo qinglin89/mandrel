@@ -49,7 +49,7 @@ from evolution_fixtures import (
 )
 
 from ai_native_deployment import evolution
-from ai_native_deployment.evolution import analysis_task, experiments, lineage, phase, render, state
+from ai_native_deployment.evolution import analysis_task, experiments, guards, lineage, phase, render, state
 
 BATCH_ID = "evolution-batch-0001"
 SECOND_BATCH = "evolution-batch-0002"
@@ -1813,12 +1813,14 @@ def arrives_after_the_derivation(monkeypatch, config: evolution.EvolutionConfig,
     across: after the lineage read where that ref stood, before the record
     saying so is written.
 
-    Injected at the reading itself, because that is where the gap opens. The
-    commit is an ordinary external Git update — a fetch, a push, an operator's
-    own `update-ref` — which the evolution single-writer lock has never covered.
+    Injected at the reading itself, because that is where the gap opens — which
+    is the guarded preamble every one of these operations runs, not the operation
+    itself. The commit is an ordinary external Git update — a fetch, a push, an
+    operator's own `update-ref` — which the evolution single-writer lock has
+    never covered.
     """
 
-    derive = experiments.describe_lineage
+    derive = guards.describe_lineage
     landed: list[str] = []
 
     def observe(*args, **kwargs):
@@ -1827,7 +1829,7 @@ def arrives_after_the_derivation(monkeypatch, config: evolution.EvolutionConfig,
             landed.append(advance(config, ref))
         return described
 
-    monkeypatch.setattr(experiments, "describe_lineage", observe)
+    monkeypatch.setattr(guards, "describe_lineage", observe)
     return landed
 
 

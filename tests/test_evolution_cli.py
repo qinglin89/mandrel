@@ -667,7 +667,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 3
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 4
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -682,6 +682,9 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
     assert payload["gate"] is None
     assert payload["experiments"] == {"open": None, "history": [], "pending_successor": None}
     assert payload["revisions"] == {"base": None, "candidate_tip": None, "round_candidate": None}
+    # No experiment is open, so there is no round for evidence to be about — a
+    # different absence from a round nothing has replayed.
+    assert payload["replay"] is None
     assert payload["last_promotion"] is None
     assert json.loads(json.dumps(payload)) == payload
 

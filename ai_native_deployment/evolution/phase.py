@@ -37,6 +37,13 @@ Every fact behind the choice is emitted in the JSON regardless of which label
 won, so a reader that cares about a lower-precedence one does not have to
 re-derive it.
 
+Replay evidence is emitted the same way and chooses no label. `candidate-ready`
+says a round has a pinned candidate, which is what may be measured; whether
+anything has measured it, and whether that measurement still describes the tree
+a promotion would carry, is the separate reading a promotion is refused on. A
+phase that folded the two together would report the same word for a round
+nobody has replayed and one whose evidence went stale this morning.
+
 **What is local.** `.ai-tasks/` is machine-local and gitignored, so the analysis
 stage of a current batch is answerable only on the machine holding that task;
 every other clone reads the committed closure record instead. Nothing else here
@@ -57,10 +64,11 @@ from .config import EvolutionConfig
 from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState, Round
 from .lineage import describe as describe_lineage
 from .manifests import OUTCOME_PROMOTED, load_batches
+from .replay import Evidence, describe_evidence
 from .revisions import Revision
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -168,6 +176,10 @@ class LifecycleStatus:
     revisions: LifecycleRevisions
     last_promotion: Promotion | None
     pending_successor: PendingSuccessor | None
+    # What the open experiment's current round has been measured by. None when no
+    # experiment is open: evidence is about a round, and a batch between attempts
+    # has none — which is a different absence from a round nothing has replayed.
+    evidence: Evidence | None = None
 
     @property
     def open_round(self) -> Round | None:
@@ -250,6 +262,7 @@ class LifecycleStatus:
                 "candidate_tip": _revision_json(self.revisions.candidate_tip),
                 "round_candidate": _revision_json(self.revisions.round_candidate),
             },
+            "replay": _evidence_json(self.evidence),
             "last_promotion": None
             if self.last_promotion is None
             else {
@@ -301,6 +314,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
         revisions=_revisions(current),
         last_promotion=_last_promotion(lineage),
         pending_successor=_pending_successor(current),
+        evidence=_evidence(config, current),
     )
 
 
@@ -386,6 +400,21 @@ def _revisions(current: BatchLineage | None) -> LifecycleRevisions:
     return LifecycleRevisions(base=base, candidate_tip=tip, round_candidate=candidate)
 
 
+def _evidence(config: EvolutionConfig, current: BatchLineage | None) -> Evidence | None:
+    """What the open experiment's current round has been measured by.
+
+    Derived here rather than stored, like everything else in this status, and
+    from the same experiment record the phase was chosen from — so `status` and
+    the promotion gate that will refuse on it are reading one answer. It is asked
+    of the open experiment only: a terminal attempt's runs are history, and a
+    batch between attempts has no round for evidence to be about.
+    """
+
+    if current is None or current.open_experiment is None:
+        return None
+    return describe_evidence(config, current.open_experiment)
+
+
 def _pending_successor(current: BatchLineage | None) -> PendingSuccessor | None:
     """The experiment a recorded supersession still owes, if there is one.
 
@@ -424,6 +453,40 @@ def _last_promotion(lineage: Lineage) -> Promotion | None:
         experiment_id=outcome["experiment_id"],
         revision=outcome["promotion_revision"],
     )
+
+
+def _evidence_json(evidence: Evidence | None) -> dict[str, Any] | None:
+    """The round's evidence, with the two ways it falls short kept apart.
+
+    `drift` is what this checkout established and `unverified` is what it could
+    not answer — a clone that never fetched the source-line ref cannot say
+    whether the merge input moved. A reader that merged them would report a
+    question nobody asked as a finding, and `promotable` is false either way.
+    """
+
+    if evidence is None:
+        return None
+    run = evidence.replay
+    return {
+        "state": evidence.state,
+        "round": evidence.round_number,
+        "promotable": evidence.promotable,
+        "run": None
+        if run is None
+        else {
+            "round": run.round_number,
+            "attempt": run.attempt,
+            "started_at": run.started_at,
+            "candidate_revision": run.integration.candidate_revision,
+            "merge_input_revision": run.integration.merge_input_revision,
+            "merge_input_ref": run.integration.merge_input_ref,
+            "tree": run.integration.tree,
+            "outcome": None if run.result is None else run.result.outcome,
+            "concluded_at": None if run.result is None else run.result.concluded_at,
+        },
+        "drift": list(evidence.drift),
+        "unverified": list(evidence.unverified),
+    }
 
 
 def _gate_json(gate: Gate | None) -> dict[str, Any] | None:

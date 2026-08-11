@@ -2,9 +2,9 @@
 
 The questions are read-only and none of them is fatal: a question Git cannot
 answer returns None rather than raising, because a status command must still
-answer. Two things here are not questions: `create_ref`, which writes and reports
-its failure instead of raising, and `held_at`, which writes nothing but takes
-Git's own ref lock and therefore refuses when it cannot.
+answer. Three things here are not questions: `create_ref` and `merge_tree`,
+which write and report their failure instead of raising, and `held_at`, which
+writes nothing but takes Git's own ref lock and therefore refuses when it cannot.
 
 **The release line** (`release_line_revision`, `release_ref`). Contract
 invariant 8 pins the runner: the stable protocol revision governing an evolution
@@ -18,6 +18,10 @@ candidate.
 from another, which commit a name resolves to, the one operation that creates a
 ref for a new experiment, and the one that holds a ref still while its record
 catches up with it.
+
+**The integration** (`merge_tree`). What a candidate and the source line produce
+together, computed without a checkout — the tree replay measures and a promotion
+would carry.
 
 What is deliberately *not* here any more is a lifecycle reading built out of
 `HEAD` against that tag. It answered "is this checkout on the release line",
@@ -141,6 +145,46 @@ def create_ref(repo_root: Path, ref: str, revision: str) -> str | None:
     if result.returncode == 0:
         return None
     return " ".join((result.stderr or result.stdout or f"git update-ref exited {result.returncode}").split())
+
+
+def merge_tree(repo_root: Path, ours: str, theirs: str) -> tuple[str | None, str]:
+    """The tree merging `theirs` into `ours` produces, or why there is none.
+
+    What replay measures is the candidate *as it would be integrated*, and what
+    a promotion carries is a tree rather than a pair of commits: a different
+    merge base, a conflict resolved by hand, and a different strategy all land
+    somewhere else from the same two revisions. So the tree is computed here,
+    from the two commits, and recorded with them.
+
+    `git merge-tree --write-tree` computes it without a working tree, an index,
+    or a checkout — this repository is ordinarily sitting on unrelated work, and
+    a merge that touched it would be a far larger promise than a replay is
+    making. It does write: the resulting tree, and any blobs the merge created,
+    enter the object database unreferenced, which is what lets a harness check
+    that tree out. Git collects them if nothing ever names them.
+
+    Returns the tree and no complaint, or no tree and Git's own words — the
+    `create_ref` shape rather than the raise, since a candidate that does not
+    integrate is an ordinary answer an operator acts on. Both failures Git spells
+    the same way (a non-zero exit) are refused the same way, deliberately: a
+    conflict *also* prints a tree, and that tree holds the conflict markers, so
+    taking it would measure a state no promotion could produce. A Git too old
+    for `--write-tree` (2.38) lands here too, saying so in its own usage error,
+    for the reason a Git too old for ref transactions does in `_prepare`.
+    """
+
+    if not _is_repository_root(repo_root):
+        return None, f"{repo_root} is not the top of a work tree"
+    result = _run(repo_root, "merge-tree", "--write-tree", ours, theirs)
+    if result is None:
+        return None, "git is not available here"
+    written = result.stdout.strip().splitlines()
+    if result.returncode == 0:
+        if not written:
+            return None, "git merge-tree reported success and wrote no tree"
+        return written[0].strip(), ""
+    complaint = result.stderr.strip() or result.stdout.strip() or f"git merge-tree exited {result.returncode}"
+    return None, " ".join(complaint.split())
 
 
 @contextmanager

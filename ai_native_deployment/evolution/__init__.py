@@ -18,10 +18,11 @@ nothing on its own: `phase.describe` (the derived lifecycle status),
 `lineage.describe` (the derived batch/experiment lineage), the
 `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` /
 `abandon` / `supersede` / `conclude_no_change` operations on a batch's change
-lineage, `replay.read_replays` / `replay.describe_evidence` together with the
-rest of that module's vocabulary (`replay.Integration`, `replay.CaseSet`,
-`replay.Measurement`, …), and the `render.format_*` functions (operator-facing
-text for the CLI).
+lineage, the `replay.start` / `replay.conclude` / `replay.abandon` runs against
+a round's pinned candidate together with `replay.read_replays` /
+`replay.describe_evidence` and the rest of that module's vocabulary
+(`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …), and the
+`render.format_*` functions (operator-facing text for the CLI).
 """
 
 from __future__ import annotations

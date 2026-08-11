@@ -34,23 +34,50 @@ about it lives in the memory of the process that started it. The record is also
 the whole of the request: the selections the harness made travel back to it as
 `ReplayRequest.reproduce`, so running the same thing again is asking for it by
 name rather than hoping the same choice is made twice.
+
+**Three operations, and the order inside them.** `start` pins the integration
+and asks the harness for a run; `conclude` asks that run for its numbers and
+records them; `abandon` records why a run ended when its harness cannot say,
+which is what keeps a harness that died from leaving the round unmeasurable
+behind a run nothing will ever conclude. All three take the same single-writer
+lock as every other evolution write, run the same guarded preamble, and publish
+through this module's own parser, so a write cannot produce evidence its own
+reader refuses.
+
+The harness call comes before the record, because the record cannot be written
+without the handle that call returns — a running run nothing can poll is refused
+here for the same reason. So an interruption between the two leaves a run going
+in the harness that no record names: nothing this controller can conclude, and
+nothing it can mistake for evidence either. The other order would be worse in
+kind rather than in degree: a record claiming a run that was never started reads
+as evidence pending, forever. Every check either operation makes is therefore
+made *before* that call, so a refusal costs nothing that was already running.
+`abandon` is the way out of the one thing that order can leave: a run whose
+harness answers with something the record cannot hold would otherwise be
+unconcludable, and a round is measured against one integration at a time.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
+from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, ValidationError
+from .ledger import append_records, build_record
 from .lineage import Experiment
-from .revisions import ref_tip
-from .schema import load_schema, parse_json, validate_or_raise
+from .revisions import merge_tree, ref_tip
+from .schema import definition, format_rfc3339, load_schema, parse_json, validate_or_raise
+from .state import atomic_write_text, single_writer_lock
 
 REPLAYS_FILENAME = "replays.json"
 REPLAYS_SCHEMA_VERSION = 1
+
+RECORD_REPLAY_COMPLETED = "replay-completed"
 
 # How a run ended, as its own record states it.
 RESULT_COMPLETED = "completed"
@@ -482,6 +509,530 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
     )
 
 
+# --- the runs ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunStarted:
+    """A run this operation began, and the record that now names it."""
+
+    experiment_id: str
+    round_number: int
+    attempt: int
+    started_at: str
+    integration: Integration
+    plan: ReplayPlan
+    record_path: Path
+
+
+@dataclass(frozen=True)
+class RunConcluded:
+    """What the newest run of the open experiment is, after asking about it.
+
+    Three states reach here and `recorded` is what tells them apart: the run
+    concluded now (True), a run still going (False, `running`), and a run whose
+    result was already on record (False) — which is an interrupted conclusion
+    reporting what it wrote rather than writing a second one.
+    """
+
+    experiment_id: str
+    replay: Replay
+    recorded: bool
+
+    @property
+    def round_number(self) -> int:
+        return self.replay.round_number
+
+    @property
+    def attempt(self) -> int:
+        return self.replay.attempt
+
+    @property
+    def running(self) -> bool:
+        return self.replay.running
+
+    @property
+    def outcome(self) -> str | None:
+        return self.replay.result.outcome if self.replay.result is not None else None
+
+
+def start(
+    config: EvolutionConfig,
+    harness: ReplayHarness,
+    *,
+    source_ref: str,
+    expectation: str,
+    now: datetime | None = None,
+) -> RunStarted:
+    """Measure the open experiment's pinned candidate, integrated onto `source_ref`.
+
+    What is pinned here is the whole of what the controller owns about a run: the
+    round's already-sealed candidate revision (invariant 16 — this operation
+    never seals one, and refuses an open round rather than measuring a tip that
+    is still free to move), the source-line commit read from `source_ref`, and
+    the tree the two produce. The harness owns the rest and answers with it.
+
+    The source line is named rather than assumed. The commit it stands at is what
+    a promotion would merge onto, it moves for reasons this experiment knows
+    nothing about, and a checkout has no way to tell which of its refs is the one
+    a promotion will land on — so it is given, recorded, and afterwards asked
+    about by name.
+
+    `expectation` is recorded before any numbers exist, which is the only time it
+    can be: an expectation written beside the result is a reading of it. It is
+    deliberately not handed to the harness, which would make a prediction an
+    instruction.
+
+    Every refusal is made before the harness is asked for anything. A second run
+    started while one is going is one of them, so a retry costs nothing: the
+    answer is to conclude the run that is going.
+    """
+
+    moment = _moment(now)
+    predicted = _expectation(expectation)
+
+    with single_writer_lock(config):
+        current = guards.current_cycle(config, now=moment)
+        experiment = guards.require_open_experiment(current, "replay")
+        guards.require_consistent_ref(current)
+
+        round_ = experiment.last_round
+        if round_.seal is None:
+            raise BatchError(
+                f"round {round_.number} of {experiment.experiment_id} is still open; a round is measured only "
+                "once its candidate is pinned, because an open round's tip moves and evidence taken against it "
+                "describes a tree the record cannot afterwards identify (invariant 16) — seal the round, and "
+                "this run names what the seal pinned"
+            )
+
+        replays = read_replays(config, experiment)
+        if replays and replays[-1].running:
+            going = replays[-1]
+            raise BatchError(
+                f"{_describe_replay(going)} of {experiment.experiment_id} is still running under "
+                f"{going.harness.id} handle {going.harness.handle!r}; a round is measured against one "
+                "integration at a time, so a second run started under it would leave two answers about one tree "
+                "with nothing to choose between them — conclude that run first"
+            )
+
+        attempt = sum(1 for replay in replays if replay.round_number == round_.number) + 1
+        described = _position(round_.number, attempt)
+        integration = _pin(config, experiment, round_.seal.candidate_revision, source_ref, described)
+
+        stamp = format_rfc3339(moment)
+        plan = harness.start(
+            ReplayRequest(
+                experiment_id=experiment.experiment_id,
+                round_number=round_.number,
+                attempt=attempt,
+                integration=integration,
+            )
+        )
+        started = Replay(
+            experiment_id=experiment.experiment_id,
+            round_number=round_.number,
+            attempt=attempt,
+            started_at=stamp,
+            integration=integration,
+            cases=plan.cases,
+            evaluator=plan.evaluator,
+            harness=plan.harness,
+            expectation=predicted,
+            result=None,
+        )
+        try:
+            path = _write_replays(config, experiment, replays + (started,))
+        except (BatchError, ValidationError) as exc:
+            raise BatchError(
+                f"{experiment.experiment_id}: {plan.harness.id} began {described} as handle "
+                f"{plan.harness.handle!r} and described it in a way this record cannot hold ({exc}); nothing was "
+                "written, so that run now answers to nothing here — stop it at the harness rather than starting "
+                "another beside it"
+            ) from exc
+
+    return RunStarted(
+        experiment_id=experiment.experiment_id,
+        round_number=round_.number,
+        attempt=attempt,
+        started_at=stamp,
+        integration=integration,
+        plan=plan,
+        record_path=path,
+    )
+
+
+def conclude(
+    config: EvolutionConfig,
+    harness: ReplayHarness,
+    *,
+    now: datetime | None = None,
+) -> RunConcluded:
+    """Ask the run that is going for its numbers, and record them if it has any.
+
+    Polling a run that is still going is the ordinary case and not an error: this
+    reports the run unchanged and writes nothing, so it can be called as often as
+    an operator likes. The clock is the controller's — a harness reports what it
+    measured, and when that was observed is recorded by whoever observed it, the
+    way a round's completion observation is.
+
+    Run again after an interrupted conclusion, it reports the result already on
+    record rather than polling for a second one; the audit line that interruption
+    may have cost is not re-appended, which is the rule a redone seal follows.
+
+    Unlike the round transitions, this does not refuse on a ref standing off its
+    record's history. The result is a fact about a run that already happened, and
+    a ref that has moved since makes that evidence stale rather than wrong —
+    which `describe_evidence` reports from the record. Refusing to write it would
+    discard the only durable form of the measurement and leave the run recorded
+    as going forever.
+    """
+
+    moment = _moment(now)
+
+    with single_writer_lock(config):
+        current = guards.current_cycle(config, now=moment)
+        experiment = guards.require_open_experiment(current, "conclude a replay of")
+
+        replays = read_replays(config, experiment)
+        if not replays:
+            raise BatchError(
+                f"{experiment.experiment_id} has no recorded run to conclude; a conclusion writes the result of "
+                "a run this controller started, and a harness invocation nothing here recorded is not one it can "
+                "speak for"
+            )
+
+        going = replays[-1]
+        if not going.running:
+            return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
+
+        report = harness.poll(going.harness.handle)
+        if report is None:
+            return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
+
+        stamp = format_rfc3339(moment)
+        concluded = replace(
+            going,
+            result=Result(
+                outcome=report.outcome,
+                concluded_at=stamp,
+                detail=report.detail,
+                elapsed_seconds=report.elapsed_seconds,
+                metrics=report.metrics,
+                regressions=report.regressions,
+                ambiguity=report.ambiguity,
+            ),
+        )
+        _write_replays(config, experiment, replays[:-1] + (concluded,))
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_REPLAY_COMPLETED,
+                    recorded_at=stamp,
+                    batch_id=current.batch_id,
+                    experiment_id=experiment.experiment_id,
+                    round=going.round_number,
+                    revision=going.integration.candidate_revision,
+                    detail=report.outcome,
+                )
+            ],
+        )
+
+    return RunConcluded(experiment_id=experiment.experiment_id, replay=concluded, recorded=True)
+
+
+def abandon(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> RunConcluded:
+    """Record why a run ended when its harness cannot say.
+
+    A run is going until something records that it stopped: age concludes
+    nothing, and a harness that died, lost its handle, or answers with a report
+    this record cannot hold would otherwise leave the run going forever — and
+    with it the whole experiment, since a round is measured against one
+    integration at a time. This is what records that it stopped, and the reason
+    is the operator's because the harness is the thing that could not give one.
+
+    It takes no harness for the same reason: this is the path for when asking is
+    not the problem. What it writes is a `failed` result, which is what the run
+    was — no numbers, and the story in `detail`, exactly as a harness-reported
+    failure carries it. A run this ends is answered by another attempt, which is
+    what a `failed` result means everywhere else.
+
+    Run again after an interrupted abandonment, it reports the failure already on
+    record. A run that ended some other way is not this operation's redo, and is
+    reported back rather than overwritten.
+    """
+
+    moment = _moment(now)
+    text = _line(
+        reason,
+        "ending a run records why; the record is all a later reader has of a run whose harness never reported, "
+        "and a failure with no reason is indistinguishable from one nobody looked into",
+    )
+
+    with single_writer_lock(config):
+        current = guards.current_cycle(config, now=moment)
+        experiment = guards.require_open_experiment(current, "end a replay of")
+
+        replays = read_replays(config, experiment)
+        if not replays:
+            raise BatchError(
+                f"{experiment.experiment_id} has no recorded run to end; what this records is why a run this "
+                "controller started stopped, and there is none"
+            )
+
+        going = replays[-1]
+        if not going.running:
+            result = going.result
+            if result is not None and result.outcome == RESULT_FAILED and result.detail == text:
+                return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
+            raise BatchError(
+                f"{_describe_replay(going)} of {experiment.experiment_id} already ended "
+                f"{result.outcome!r}: {result.detail!r}; a run ends once, and what is on record is what it "
+                "measured — start another attempt rather than restating how this one finished"
+            )
+
+        stamp = format_rfc3339(moment)
+        concluded = replace(
+            going,
+            result=Result(
+                outcome=RESULT_FAILED,
+                concluded_at=stamp,
+                detail=text,
+                elapsed_seconds=None,
+                metrics=(),
+                regressions=(),
+                ambiguity=None,
+            ),
+        )
+        _write_replays(config, experiment, replays[:-1] + (concluded,))
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_REPLAY_COMPLETED,
+                    recorded_at=stamp,
+                    batch_id=current.batch_id,
+                    experiment_id=experiment.experiment_id,
+                    round=going.round_number,
+                    revision=going.integration.candidate_revision,
+                    detail=RESULT_FAILED,
+                )
+            ],
+        )
+
+    return RunConcluded(experiment_id=experiment.experiment_id, replay=concluded, recorded=True)
+
+
+def _pin(
+    config: EvolutionConfig,
+    experiment: Experiment,
+    candidate: str,
+    source_ref: str,
+    described: str,
+) -> Integration:
+    """The exact tree a run will exercise, or the reason there is none to pin.
+
+    Every one of these refusals happens before a harness is asked for anything,
+    so what an operator gets back is a run that never started rather than one
+    whose record could not be written.
+
+    The name is checked before Git is asked anything, so a name no ref can have
+    is refused as that rather than as a ref this checkout happens not to hold —
+    the two suggest opposite things to whoever reads the refusal, and only one of
+    them is fixed by fetching. The integration is then checked as a whole against
+    the contract's own definition of one, which is also what catches an object id
+    this record cannot hold.
+    """
+
+    _require_source_line_name(config, replays_path(experiment), described, source_ref)
+
+    merge_input = ref_tip(config.repo_root, source_ref)
+    if merge_input is None:
+        raise BatchError(
+            f"{source_ref} is not in this checkout, so there is no source line to integrate {candidate[:12]} "
+            "onto; a replay measures the candidate as a promotion would carry it, which is that candidate "
+            "merged onto the release line rather than the candidate on its own — fetch the ref, or run the "
+            "replay where the source line is"
+        )
+
+    tree, complaint = merge_tree(config.repo_root, merge_input, candidate)
+    if tree is None:
+        raise BatchError(
+            f"{described} of {experiment.experiment_id} has no integration to measure: {complaint}; a candidate "
+            f"that does not merge cleanly onto {source_ref} at {merge_input[:12]} is not one a promotion could "
+            "carry either, so the conflict is resolved in a further round rather than measured around"
+        )
+
+    integration = Integration(
+        base_revision=experiment.base_revision,
+        candidate_revision=candidate,
+        merge_input_revision=merge_input,
+        merge_input_ref=source_ref,
+        tree=tree,
+    )
+    validate_or_raise(
+        _integration_json(integration),
+        definition(load_schema(config.schema_path(REPLAYS_SCHEMA_FILENAME)), "integration"),
+        description=f"the integration pinned for {described} of {experiment.experiment_id}",
+    )
+    return integration
+
+
+def _require_source_line_name(config: EvolutionConfig, path: Path, described: str, ref: str) -> None:
+    """The name a run will record for the source line, checked before anything
+    resolves it.
+
+    Both halves of the rule the reader applies, in the order that gives the
+    useful refusal. The shape comes from the contract's own statement about that
+    field rather than from a pattern restated here: a record naming `HEAD`, a
+    bare branch, or a revision expression answers "where does the source line
+    stand now" from whichever working copy asks it later, and the schema is where
+    that requirement is written down. The rest is what a pattern cannot say, and
+    is asked the same way the reader asks it.
+    """
+
+    integration = definition(load_schema(config.schema_path(REPLAYS_SCHEMA_FILENAME)), "integration")
+    validate_or_raise(
+        ref,
+        integration["properties"]["merge_input_ref"],
+        description=f"the source line named for {described}",
+    )
+    _require_source_line_ref(path, described, ref)
+
+
+def _write_replays(config: EvolutionConfig, experiment: Experiment, replays: Sequence[Replay]) -> Path:
+    """Publish this experiment's runs, through the parser that reads them back.
+
+    The whole file is rewritten because a run's result lands after its pinned
+    inputs did, and one file per experiment is what allocates the attempt. What
+    is never rewritten is what it already says: the parser refuses a list that
+    does not append, so a caller handing back an edited earlier run is refused
+    here rather than discovered as evidence about a tree nobody exercised.
+    """
+
+    record = _serialize(experiment.experiment_id, replays)
+    parse_replays(config, record, experiment)
+    path = replays_path(experiment)
+    atomic_write_text(path, _json(record))
+    return path
+
+
+def _serialize(experiment_id: str, replays: Sequence[Replay]) -> dict[str, Any]:
+    return {
+        "schema_version": REPLAYS_SCHEMA_VERSION,
+        "experiment_id": experiment_id,
+        "replays": [_replay_json(replay) for replay in replays],
+    }
+
+
+def _replay_json(replay: Replay) -> dict[str, Any]:
+    return {
+        "round": replay.round_number,
+        "attempt": replay.attempt,
+        "started_at": replay.started_at,
+        "integration": _integration_json(replay.integration),
+        "cases": {
+            "case_set_id": replay.cases.case_set_id,
+            "case_set_sha256": replay.cases.case_set_sha256,
+            "count": replay.cases.count,
+            "excluded": [
+                {"case_id": exclusion.case_id, "reason": exclusion.reason}
+                for exclusion in replay.cases.excluded
+            ],
+        },
+        "evaluator": {
+            "backend": replay.evaluator.backend,
+            "model": replay.evaluator.model,
+            "rubric_revision": replay.evaluator.rubric_revision,
+        },
+        "harness": {
+            "id": replay.harness.id,
+            "revision": replay.harness.revision,
+            "config_sha256": replay.harness.config_sha256,
+            "handle": replay.harness.handle,
+        },
+        "expectation": replay.expectation,
+        "result": None if replay.result is None else _result_json(replay.result),
+    }
+
+
+def _integration_json(integration: Integration) -> dict[str, Any]:
+    return {
+        "base_revision": integration.base_revision,
+        "candidate_revision": integration.candidate_revision,
+        "merge_input_revision": integration.merge_input_revision,
+        "merge_input_ref": integration.merge_input_ref,
+        "tree": integration.tree,
+    }
+
+
+def _result_json(result: Result) -> dict[str, Any]:
+    return {
+        "outcome": result.outcome,
+        "concluded_at": result.concluded_at,
+        "detail": result.detail,
+        "elapsed_seconds": result.elapsed_seconds,
+        "metrics": [
+            {
+                "metric": measurement.metric,
+                "unit": measurement.unit,
+                "baseline": measurement.baseline,
+                "candidate": measurement.candidate,
+                "better": measurement.better,
+            }
+            for measurement in result.metrics
+        ],
+        "regressions": [
+            {"case_id": regression.case_id, "summary": regression.summary}
+            for regression in result.regressions
+        ],
+        "ambiguity": result.ambiguity,
+    }
+
+
+def _expectation(text: str) -> str:
+    """What this run was expected to show, before it shows anything."""
+
+    return _line(
+        text,
+        "a replay records what it was expected to show, before it shows anything; a run started without one is "
+        "read afterwards against whatever its numbers turn out to be, which is the reading the expectation "
+        "exists to prevent",
+    )
+
+
+def _line(text: str, requirement: str) -> str:
+    """One human sentence a record carries, as one line.
+
+    Collapsed for the reason a decision's reason is collapsed: it travels in a
+    versioned record and is compared there — a redo recognises its own
+    interrupted work by matching what it wrote — and two spellings differing only
+    in how they were wrapped would read as two different statements.
+    """
+
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        raise BatchError(requirement)
+    return collapsed
+
+
+def _moment(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+        raise BatchError("replay time must be timezone-aware; a naive datetime records an ambiguous moment")
+    return now
+
+
+def _json(record: Mapping[str, Any]) -> str:
+    return json.dumps(record, indent=2, sort_keys=True) + "\n"
+
+
 def _merge_input_moved(config: EvolutionConfig, replay: Replay) -> tuple[bool | None, str]:
     """Whether the source line has moved since this run measured it.
 
@@ -555,7 +1106,7 @@ def _read_replay(path: Path, experiment_id: str, item: Mapping[str, Any]) -> Rep
         result=_read_result(path, item["result"], _position(item["round"], item["attempt"])),
     )
     _require_distinct_exclusions(path, replay)
-    _require_source_line_ref(path, replay)
+    _require_source_line_ref(path, _describe_replay(replay), replay.integration.merge_input_ref)
     _require_pollable(path, replay)
     return replay
 
@@ -660,7 +1211,7 @@ def _require_distinct_exclusions(path: Path, replay: Replay) -> None:
         seen.add(exclusion.case_id)
 
 
-def _require_source_line_ref(path: Path, replay: Replay) -> None:
+def _require_source_line_ref(path: Path, described: str, ref: str | None) -> None:
     """The merge input is named by something that means one thing everywhere.
 
     The schema refuses every name that is not a fully-qualified `refs/...` one:
@@ -681,9 +1232,12 @@ def _require_source_line_ref(path: Path, replay: Replay) -> None:
     The trailing `.` is a rule about the whole name and not about each of its
     parts, which is why it is asked separately: Git holds `refs/heads/re./lease`
     and refuses `refs/heads/release.`.
+
+    Asked of a run being read and of one about to be started, from the same rule:
+    the writer refuses the name before a harness is asked to measure anything,
+    and the reader refuses the record wherever it is read afterwards.
     """
 
-    ref = replay.integration.merge_input_ref
     if ref is None:
         return
     if (
@@ -692,7 +1246,7 @@ def _require_source_line_ref(path: Path, replay: Replay) -> None:
         or any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/"))
     ):
         raise BatchError(
-            f"{path}: {_describe_replay(replay)} integrated onto {ref!r}, which is not a name Git can hold "
+            f"{path}: {described} names {ref!r} as the source line, which is not a name Git can hold "
             "(`git check-ref-format`); no ref will ever resolve to it, so whether the source line has moved "
             "since this run could not be answered in any checkout"
         )

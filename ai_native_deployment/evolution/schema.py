@@ -97,6 +97,23 @@ def load_schema(path: Path) -> dict[str, Any]:
     return data
 
 
+def definition(schema: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    """One `$defs` entry of a schema, as a schema in its own right.
+
+    For a writer that has to check part of a record before it can build the
+    whole: a replay's integration is pinned, and refused if it is wrong, before
+    a harness is ever asked to run against it — by which time the record could
+    only be validated after the run it would refuse to record. Checking it
+    against the contract's own definition is what keeps that early refusal from
+    becoming a second copy of the rules, drifting from the file.
+
+    Resolved through the same reference machinery a `$ref` uses, so a name no
+    schema defines is the error it is rather than a check that quietly passes.
+    """
+
+    return _resolve_ref(schema, f"#/$defs/{name}")
+
+
 def parse_json(text: str, *, description: str) -> Any:
     """One persisted document, read with JSON's own number grammar.
 

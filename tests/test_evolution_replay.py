@@ -1,24 +1,31 @@
-"""Replay evidence: its versioned contract, and what it is read to mean.
+"""Replay evidence: its versioned contract, what it is read to mean, and the two
+operations that write it.
 
-Two halves, the way the lineage suite is built.
+Three parts, the way the lineage suite is built.
 
 The first is the schema file, which is the contract (`schema.py`) — so the
-instances here are hand-written rather than produced by the package. Nothing
-writes replay records yet, and a fixture built from the writer would only prove
-the writer agrees with itself.
+instances there are hand-written rather than produced by the package. A fixture
+built from the writer would only prove the writer agrees with itself.
 
-The second is `replay.py`: the reader that checks a run against the round it
-claims to have measured, and the derivation that says whether any of it still
-describes the tree a promotion would carry. The hostile cases are the ones a
-well-formed record can still be wrong in — a candidate that is not the one the
-round's seal pinned, a report carried across a `revise`, a source line that moved
-after the numbers were taken — because each of them reads as ordinary evidence
-right up to the promotion it would justify.
+The second is the reader that checks a run against the round it claims to have
+measured, and the derivation that says whether any of it still describes the tree
+a promotion would carry. The hostile cases are the ones a well-formed record can
+still be wrong in — a candidate that is not the one the round's seal pinned, a
+report carried across a `revise`, a source line that moved after the numbers were
+taken — because each of them reads as ordinary evidence right up to the promotion
+it would justify.
+
+The third is `start` and `conclude`, and there the records are the package's own,
+written against a real batch, a real admission, a real seal, and a real Git
+merge. What those tests are mostly about is order: every refusal lands before the
+harness is asked for anything, so a retry costs nothing, and the one refusal that
+cannot — a plan the record will not hold — names the run it left going.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,20 +35,27 @@ from evolution_fixtures import (
     admitted_task,
     experiment_round,
     git_commit,
+    git_delete_ref,
     git_repo,
     git_rev,
+    git_sibling_commit,
+    git_tree,
+    git_unrelated_commit,
     git_update_ref,
     make_repo,
     measurement,
     replay_entry,
     replay_integration,
     replay_result,
+    write_closure,
+    write_draft,
     write_experiment,
+    write_manifest,
     write_replays,
 )
 
 from ai_native_deployment import evolution
-from ai_native_deployment.evolution import lineage, replay, schema
+from ai_native_deployment.evolution import analysis_task, experiments, lineage, phase, render, replay, schema
 
 SCHEMAS = REPO_ROOT / "evolution" / "schemas"
 REPLAY_SCHEMA = "experiment-replays.schema.json"
@@ -1047,3 +1061,689 @@ def test_revising_leaves_the_previous_rounds_evidence_naming_the_round_it_measur
     assert not evidence.promotable
     assert evidence.replay is not None and evidence.replay.round_number == 1
     assert any("round 1" in line and "round 2" in line for line in evidence.drift)
+
+
+# --- starting and concluding a run -------------------------------------------
+#
+# From here on the records are written by the package rather than by hand, and
+# everything runs against a real batch, a real admission, and a real seal: what
+# `start` pins is a candidate Git actually holds, integrated onto a source line
+# Git actually resolves, and the tree it records is one `git merge-tree`
+# produced. A fixture standing in for any of the three would leave the one thing
+# these operations exist to establish — that the evidence names a tree somebody
+# can check out — proved only against itself.
+
+LIVE_EXPERIMENT = f"{BATCH_ID}-exp-01"
+ANALYSIS_TASK = "2026-07-31-evolution-batch-0007-analysis"
+DRAFT = "loader-fallback"
+NEXT_DRAFT = "hook-side-loader"
+EXPECTED = "fewer remediation rounds, with quality and elapsed time unchanged"
+
+CREATED = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
+SEALED = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
+STARTED = datetime(2026, 8, 7, 9, 0, 0, tzinfo=timezone.utc)
+ENDED = datetime(2026, 8, 7, 17, 30, 0, tzinfo=timezone.utc)
+
+
+class FakeHarness:
+    """A harness that answers, and remembers what it was asked.
+
+    The controller may assume exactly two things about the real one — that it
+    starts a run and names it, and that polling that name eventually reports —
+    so this implements those two and records the requests, which is what the
+    tests check the controller pinned.
+    """
+
+    def __init__(self, *, report: replay.ReplayReport | None = None, plan: replay.ReplayPlan | None = None) -> None:
+        self.requests: list[replay.ReplayRequest] = []
+        self.polled: list[str] = []
+        self.report = report
+        self.plan = plan
+
+    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
+        self.requests.append(request)
+        if self.plan is not None:
+            return self.plan
+        return replay.ReplayPlan(
+            cases=replay.CaseSet(
+                case_set_id="loader-regressions",
+                case_set_sha256="c" * 64,
+                count=12,
+                excluded=(replay.Exclusion(case_id="case-9", reason="needs a credentialed backend"),),
+            ),
+            evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
+            harness=replay.Harness(
+                id="local-replay",
+                revision="0.1.0",
+                config_sha256="d" * 64,
+                handle=f"run-{request.round_number:02d}{request.attempt:02d}",
+            ),
+        )
+
+    def poll(self, handle: str) -> replay.ReplayReport | None:
+        self.polled.append(handle)
+        return self.report
+
+
+def completed_report(**overrides: Any) -> replay.ReplayReport:
+    fields: dict[str, Any] = {
+        "outcome": replay.RESULT_COMPLETED,
+        "detail": "convergence improved; no regression outside the excluded case",
+        "elapsed_seconds": 1820.5,
+        "metrics": (
+            replay.Measurement(
+                metric="remediation-rounds", unit="rounds", baseline=2.4, candidate=1.6, better="lower"
+            ),
+        ),
+        "regressions": (),
+        "ambiguity": None,
+    }
+    fields.update(overrides)
+    return replay.ReplayReport(**fields)
+
+
+@pytest.fixture
+def admitted(config: evolution.EvolutionConfig) -> None:
+    """A current batch whose analysis has closed, with one proposal waiting."""
+
+    write_manifest(
+        config.batches_root,
+        BATCH_ID,
+        ["r1", "r2"],
+        analysis_task_id=ANALYSIS_TASK,
+        runner_protocol_revision="v2.2.0",
+    )
+    # `findings.md` gates the closure: dispositions written beside an
+    # unfinished analysis task are not a completed analysis.
+    (config.batches_root / BATCH_ID / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, BATCH_ID, analysis_task_id=ANALYSIS_TASK)
+    write_draft(config.batches_root, BATCH_ID, DRAFT)
+    write_draft(config.batches_root, BATCH_ID, NEXT_DRAFT)
+
+
+def pinned(config: evolution.EvolutionConfig) -> str:
+    """Admit the proposal, do the work, seal round 1 — the candidate-ready state
+    a replay is the next thing to happen in."""
+
+    admission = experiments.create(config, [DRAFT], now=CREATED)
+    task = analysis_task.task_path(config, admission.admitted[0].task_id)
+    task.write_text(task.read_text(encoding="utf-8").replace("status: pending", "status: completed"), encoding="utf-8")
+    git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, "candidate work"))
+    return experiments.seal_round(config, now=SEALED).candidate_revision
+
+
+def live(config: evolution.EvolutionConfig) -> lineage.Experiment:
+    experiment = lineage.describe(config).current
+    assert experiment is not None and experiment.open_experiment is not None
+    return experiment.open_experiment
+
+
+def written(config: evolution.EvolutionConfig) -> dict[str, Any]:
+    return json.loads((config.experiments_root / LIVE_EXPERIMENT / "replays.json").read_text(encoding="utf-8"))
+
+
+def audit(config: evolution.EvolutionConfig) -> list[str]:
+    return [item["record_type"] for item in evolution.read_records(config)]
+
+
+def run(config: evolution.EvolutionConfig, harness: FakeHarness, **overrides: Any) -> replay.RunStarted:
+    fields: dict[str, Any] = {"source_ref": RELEASE_REF, "expectation": EXPECTED, "now": STARTED}
+    fields.update(overrides)
+    return replay.start(config, harness, **fields)
+
+
+def test_starting_a_run_pins_the_integration_the_harness_is_asked_to_measure(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """The controller owns three commits and the tree they make; the harness owns
+    the cohort, the evaluator, and its own name for the run. The record states
+    both halves, which is what makes it enough to run again."""
+
+    candidate = pinned(config)
+    harness = FakeHarness()
+
+    result = run(config, harness)
+
+    assert result.round_number == 1 and result.attempt == 1
+    assert result.integration.base_revision == git_rev(repo, "HEAD~1")
+    assert result.integration.candidate_revision == candidate
+    assert result.integration.merge_input_revision == release
+    assert result.integration.merge_input_ref == RELEASE_REF
+    # The source line is an ancestor here, so integrating is a fast-forward and
+    # the tree it produces is the candidate's own — asserted against Git rather
+    # than against what the controller wrote.
+    assert result.integration.tree == git_tree(repo, candidate)
+
+    [request] = harness.requests
+    assert request.experiment_id == LIVE_EXPERIMENT
+    assert (request.round_number, request.attempt) == (1, 1)
+    assert request.integration == result.integration
+    # A first run: nothing to reproduce, so the harness selects the cohort.
+    assert request.reproduce is None
+
+    [entry] = written(config)["replays"]
+    assert entry["result"] is None
+    assert entry["started_at"] == "2026-08-07T09:00:00Z"
+    assert entry["harness"]["handle"] == "run-0101"
+    assert entry["expectation"] == EXPECTED
+    assert entry["cases"]["excluded"] == [{"case_id": "case-9", "reason": "needs a credentialed backend"}]
+    # Nothing is audited yet: the record already says a run started, and the
+    # event with something to report is how it ended.
+    assert audit(config) == ["experiment-created", "tasks-admitted", "round-sealed"]
+
+
+def test_a_started_run_reads_as_the_rounds_running_evidence(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The writer publishes through the reader, so what `status` derives from the
+    record is what the operation just wrote — on this machine or another."""
+
+    pinned(config)
+    run(config, FakeHarness())
+
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_RUNNING
+    assert not evidence.promotable
+    assert evidence.replay is not None and evidence.replay.harness.handle == "run-0101"
+
+
+def test_an_expectation_is_collapsed_and_a_missing_one_refuses(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A prediction travels in a versioned record and is read back beside the
+    numbers; two spellings differing only in how they were wrapped would read as
+    two different predictions, and none at all leaves the numbers to be read
+    against whatever they turn out to be."""
+
+    pinned(config)
+    harness = FakeHarness()
+
+    run(config, harness, expectation="fewer remediation rounds,\n  quality unchanged")
+    assert written(config)["replays"][0]["expectation"] == "fewer remediation rounds, quality unchanged"
+    # Deliberately not handed to the thing being measured: a prediction given to
+    # the harness is an instruction.
+    assert not hasattr(harness.requests[0], "expectation")
+
+    with pytest.raises(evolution.BatchError, match="expected to show"):
+        run(config, harness, expectation="   \n ")
+
+
+def test_a_run_refuses_a_round_whose_candidate_is_not_pinned(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Invariant 16 from the writer's side: an open round's tip moves, so a run
+    started against one would describe a tree the record cannot afterwards
+    identify. The refusal comes before the harness is asked for anything."""
+
+    experiments.create(config, [DRAFT], now=CREATED)
+    harness = FakeHarness()
+
+    with pytest.raises(evolution.BatchError, match="still open"):
+        run(config, harness)
+
+    assert harness.requests == []
+    assert not (config.experiments_root / LIVE_EXPERIMENT / "replays.json").exists()
+
+
+def test_a_second_run_refuses_while_one_is_still_going(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """One round is measured against one integration at a time. The refusal is
+    what makes a retried `start` safe: it costs nothing, because the harness is
+    never reached."""
+
+    pinned(config)
+    harness = FakeHarness()
+    run(config, harness)
+
+    with pytest.raises(evolution.BatchError, match="still running"):
+        run(config, harness)
+
+    assert len(harness.requests) == 1
+    assert len(written(config)["replays"]) == 1
+
+
+def test_a_run_refuses_a_candidate_that_does_not_merge_onto_the_source_line(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """A candidate that cannot be integrated is not one a promotion could carry,
+    so the conflict is resolved in a further round rather than measured around —
+    and never measured against the half-merged tree `git merge-tree` still
+    writes for a conflict."""
+
+    pinned(config)
+    git_update_ref(repo, RELEASE_REF, git_sibling_commit(repo, release, "conflicting\n", "release work"))
+    harness = FakeHarness()
+
+    with pytest.raises(evolution.BatchError, match="CONFLICT|conflict"):
+        run(config, harness)
+
+    assert harness.requests == []
+    assert not (config.experiments_root / LIVE_EXPERIMENT / "replays.json").exists()
+
+
+def test_a_run_refuses_a_source_line_this_checkout_does_not_hold(
+    config: evolution.EvolutionConfig, admitted: None
+) -> None:
+    """No `refs/heads/release` here, so there is nothing to integrate onto — the
+    replay is run where the source line is, rather than against the candidate on
+    its own."""
+
+    pinned(config)
+    harness = FakeHarness()
+
+    with pytest.raises(evolution.BatchError, match="not in this checkout"):
+        run(config, harness)
+
+    assert harness.requests == []
+
+
+@pytest.mark.parametrize(
+    "source_ref, complaint",
+    [
+        ("HEAD", "does not match"),
+        ("release", "does not match"),
+        ("refs/heads/release@{1}", "does not match"),
+        ("refs/heads/release.", "not a name Git can hold"),
+    ],
+)
+def test_a_run_refuses_a_source_line_that_is_not_a_ref_meaning_one_thing_everywhere(
+    config: evolution.EvolutionConfig, admitted: None, release: str, source_ref: str, complaint: str
+) -> None:
+    """The recorded name is what a later reader resolves to ask whether the
+    source line moved. `HEAD`, a bare branch, and a revision expression answer
+    from whichever working copy is asking; a name `git check-ref-format` refuses
+    answers nowhere at all. Both are refused before a run exists to record."""
+
+    pinned(config)
+    harness = FakeHarness()
+
+    with pytest.raises((evolution.BatchError, evolution.ValidationError), match=complaint):
+        run(config, harness, source_ref=source_ref)
+
+    assert harness.requests == []
+
+
+def test_a_run_refuses_a_lineage_whose_ref_left_its_recorded_history(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """The same guarded preamble every other write runs. A ref standing off the
+    history its record pins is a lineage no operation writes into, and a run
+    started there would measure a candidate against a record that disagrees with
+    the repository."""
+
+    pinned(config)
+    git_update_ref(repo, f"refs/evolution/experiments/{LIVE_EXPERIMENT}", git_unrelated_commit(repo, "elsewhere"))
+    harness = FakeHarness()
+
+    with pytest.raises(evolution.BatchError, match="does not descend|not on the history"):
+        run(config, harness)
+
+    assert harness.requests == []
+
+
+def test_concluding_records_what_the_harness_reports_and_audits_the_outcome(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The numbers are the harness's; when they were observed is the
+    controller's, the way a round's completion observation is. The audit line is
+    the outcome, which is the event there is something to report."""
+
+    candidate = pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+
+    result = replay.conclude(config, harness, now=ENDED)
+
+    assert result.recorded is True
+    assert result.outcome == replay.RESULT_COMPLETED
+    assert result.round_number == 1 and result.attempt == 1
+    assert harness.polled == ["run-0101"]
+
+    [entry] = written(config)["replays"]
+    assert entry["result"]["concluded_at"] == "2026-08-07T17:30:00Z"
+    assert entry["result"]["elapsed_seconds"] == 1820.5
+    assert entry["result"]["metrics"][0]["metric"] == "remediation-rounds"
+    assert entry["result"]["regressions"] == []
+
+    assert audit(config)[-1] == "replay-completed"
+    line = evolution.read_records(config)[-1]
+    assert line["revision"] == candidate
+    assert line["round"] == 1
+    assert line["detail"] == replay.RESULT_COMPLETED
+    assert line["experiment_id"] == LIVE_EXPERIMENT
+
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_COMPLETE
+    assert evidence.promotable
+
+
+def test_concluding_a_run_that_is_still_going_writes_nothing(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Polling is the ordinary case and not an error, so it can be repeated as
+    often as an operator likes."""
+
+    pinned(config)
+    harness = FakeHarness()
+    run(config, harness)
+
+    result = replay.conclude(config, harness, now=ENDED)
+
+    assert result.recorded is False
+    assert result.running is True
+    assert result.outcome is None
+    assert written(config)["replays"][0]["result"] is None
+    assert "replay-completed" not in audit(config)
+
+
+def test_concluding_again_reports_the_result_already_on_record(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A conclusion whose record landed and whose audit line did not is finished
+    by the same conclusion run again — which reports what is there rather than
+    polling for a second report or appending a second line."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    replay.conclude(config, harness, now=ENDED)
+
+    again = replay.conclude(config, harness, now=ENDED)
+
+    assert again.recorded is False
+    assert again.outcome == replay.RESULT_COMPLETED
+    assert harness.polled == ["run-0101"]
+    assert audit(config).count("replay-completed") == 1
+
+
+def test_a_failed_run_records_why_it_stopped_and_no_numbers(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A partial sweep reads as a cohort result nobody produced, so a failure
+    carries its reason alone — and the round is left with evidence that supports
+    no promotion."""
+
+    pinned(config)
+    harness = FakeHarness(
+        report=completed_report(
+            outcome=replay.RESULT_FAILED, detail="the integration did not build", metrics=(), elapsed_seconds=None
+        )
+    )
+    run(config, harness)
+
+    result = replay.conclude(config, harness, now=ENDED)
+
+    assert result.outcome == replay.RESULT_FAILED
+    assert written(config)["replays"][0]["result"]["metrics"] == []
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_FAILED
+    assert not evidence.promotable
+
+
+def test_a_report_the_record_cannot_hold_leaves_the_run_recorded_as_going(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A harness answering `completed` with nothing measured is refused by the
+    reader the writer publishes through. Nothing lands, the run stays pollable,
+    and the ledger is not told a run finished."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report(metrics=()))
+    run(config, harness)
+
+    with pytest.raises(evolution.BatchError, match="measured nothing"):
+        replay.conclude(config, harness, now=ENDED)
+
+    assert written(config)["replays"][0]["result"] is None
+    assert "replay-completed" not in audit(config)
+
+
+def test_a_plan_the_record_cannot_hold_names_the_run_it_left_going(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The harness is asked before the record can be written, because the record
+    needs the handle that answer carries. So the one thing a refusal after that
+    call must do is name the run nothing is left pointing at."""
+
+    pinned(config)
+    first = FakeHarness()
+    run(config, first)
+    replay.conclude(config, FakeHarness(report=completed_report()), now=ENDED)
+
+    reuses_the_handle = FakeHarness(plan=_plan_of(first))
+    with pytest.raises(evolution.BatchError, match="run-0101"):
+        run(config, reuses_the_handle, now=ENDED)
+
+    assert len(written(config)["replays"]) == 1
+
+
+def _plan_of(harness: FakeHarness) -> replay.ReplayPlan:
+    """The plan a harness already issued, handed back for a second run — which is
+    the collision `_require_distinct_handles` refuses."""
+
+    return harness.start(
+        replay.ReplayRequest(
+            experiment_id=LIVE_EXPERIMENT,
+            round_number=1,
+            attempt=1,
+            integration=replay.Integration(
+                base_revision="a" * 40,
+                candidate_revision="b" * 40,
+                merge_input_revision="e" * 40,
+                merge_input_ref=RELEASE_REF,
+                tree="f" * 40,
+            ),
+        )
+    )
+
+
+def test_a_source_line_that_moved_is_answered_by_a_new_attempt(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """The candidate is immutable and the source line is not, so evidence that
+    was exact yesterday describes nothing today. The answer is another run of the
+    same round — a new attempt, never an edit of the one that measured the older
+    integration."""
+
+    candidate = pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    replay.conclude(config, harness, now=ENDED)
+
+    git_update_ref(repo, RELEASE_REF, candidate)
+    stale = replay.describe_evidence(config, live(config))
+    assert stale.state == replay.EVIDENCE_STALE
+    assert any("has moved" in note for note in stale.drift)
+
+    second = run(config, harness, now=ENDED)
+    assert (second.round_number, second.attempt) == (1, 2)
+    assert second.integration.merge_input_revision == candidate
+    replay.conclude(config, harness, now=ENDED)
+
+    fresh = replay.describe_evidence(config, live(config))
+    assert fresh.state == replay.EVIDENCE_COMPLETE
+    assert fresh.promotable
+    assert fresh.replay is not None and fresh.replay.attempt == 2
+    assert [entry["attempt"] for entry in written(config)["replays"]] == [1, 2]
+
+
+def test_a_run_after_a_revision_measures_the_round_that_revision_opened(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A round is the unit evidence names. The new round's first run is attempt 1
+    of round 2, and it exercises what round 2's seal pinned — the earlier report
+    goes on naming the round it actually measured."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    replay.conclude(config, harness, now=ENDED)
+
+    experiments.revise(config, reason="the candidate regressed on two cases", now=ENDED)
+    experiments.add_tasks(config, [NEXT_DRAFT], now=ENDED)
+    task = analysis_task.task_path(config, written_task_id(config))
+    task.write_text(task.read_text(encoding="utf-8").replace("status: pending", "status: completed"), encoding="utf-8")
+    git_update_ref(
+        config.repo_root,
+        f"refs/evolution/experiments/{LIVE_EXPERIMENT}",
+        git_commit(config.repo_root, "second candidate"),
+    )
+    second = experiments.seal_round(config, now=ENDED).candidate_revision
+
+    started = run(config, harness, now=ENDED)
+
+    assert (started.round_number, started.attempt) == (2, 1)
+    assert started.integration.candidate_revision == second
+    assert [(entry["round"], entry["attempt"]) for entry in written(config)["replays"]] == [(1, 1), (2, 1)]
+
+
+def written_task_id(config: evolution.EvolutionConfig) -> str:
+    """The task id of the admission just made into the open round."""
+
+    return live(config).last_round.tasks[-1].task_id
+
+
+def test_status_reports_what_the_current_round_has_been_measured_by(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """One derivation behind both surfaces: `status` reads the same evidence the
+    promotion gate will refuse on, and shows what this checkout established apart
+    from what it could not answer."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+
+    going = phase.describe(config, now=ENDED)
+    assert going.evidence is not None and going.evidence.state == replay.EVIDENCE_RUNNING
+    payload = going.to_json()
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 4
+    assert payload["replay"]["state"] == replay.EVIDENCE_RUNNING
+    assert payload["replay"]["promotable"] is False
+    assert payload["replay"]["run"]["attempt"] == 1
+    assert payload["replay"]["run"]["outcome"] is None
+    assert "replay" in render.format_status(going)
+
+    replay.conclude(config, harness, now=ENDED)
+    done = phase.describe(config, now=ENDED).to_json()
+    assert done["replay"]["promotable"] is True
+    assert done["replay"]["run"]["outcome"] == replay.RESULT_COMPLETED
+    assert done["replay"]["drift"] == [] and done["replay"]["unverified"] == []
+
+
+def test_a_clone_without_the_source_line_ref_reports_the_check_it_could_not_make(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """A question Git cannot answer here is not agreement. The evidence is still
+    `completed` — that is what the run reported — and it supports no promotion
+    from this checkout."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    replay.conclude(config, harness, now=ENDED)
+    git_delete_ref(repo, RELEASE_REF)
+
+    payload = phase.describe(config, now=ENDED).to_json()
+    assert payload["replay"]["state"] == replay.EVIDENCE_COMPLETE
+    assert payload["replay"]["promotable"] is False
+    assert payload["replay"]["drift"] == []
+    assert any("not in this checkout" in note for note in payload["replay"]["unverified"])
+
+
+def test_a_harness_that_issues_no_handle_leaves_nothing_recorded(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A run still going is a run something can still ask about. A harness that
+    named nothing has started work this controller could never poll, conclude, or
+    find — so the record refuses, and the refusal says what is loose."""
+
+    pinned(config)
+    nameless = FakeHarness(
+        plan=replay.ReplayPlan(
+            cases=replay.CaseSet(case_set_id="loader-regressions", case_set_sha256="c" * 64, count=12, excluded=()),
+            evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
+            harness=replay.Harness(id="local-replay", revision="0.1.0", config_sha256="d" * 64, handle=None),
+        )
+    )
+
+    with pytest.raises(evolution.BatchError, match="carries no harness handle"):
+        run(config, nameless)
+
+    assert len(nameless.requests) == 1
+    assert not (config.experiments_root / LIVE_EXPERIMENT / "replays.json").exists()
+
+
+def test_a_run_whose_harness_cannot_answer_is_ended_with_a_reason(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Age concludes nothing, so a harness that died would leave the run going —
+    and with it the whole experiment, since a round is measured against one
+    integration at a time. The reason is the operator's precisely because the
+    harness is what could not give one, and what is recorded is the `failed` the
+    run was: no numbers, and the story in `detail`."""
+
+    pinned(config)
+    harness = FakeHarness()
+    run(config, harness)
+
+    result = replay.abandon(config, reason="the harness host was rebuilt;\n the run is unrecoverable", now=ENDED)
+
+    assert result.recorded is True
+    assert result.outcome == replay.RESULT_FAILED
+    assert harness.polled == []
+    entry = written(config)["replays"][0]
+    assert entry["result"]["detail"] == "the harness host was rebuilt; the run is unrecoverable"
+    assert entry["result"]["metrics"] == [] and entry["result"]["elapsed_seconds"] is None
+    assert audit(config)[-1] == "replay-completed"
+
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_FAILED
+
+    # And the round is measurable again: what a failure is answered by is another
+    # attempt, which is what a failed run means everywhere else.
+    second = run(config, FakeHarness(), now=ENDED)
+    assert (second.round_number, second.attempt) == (1, 2)
+
+
+def test_ending_a_run_again_reports_the_failure_already_on_record(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The redo rule the other operations follow: the same statement finishes an
+    interrupted one, and a run that ended some other way is reported back rather
+    than overwritten."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    replay.abandon(config, reason="the harness host was rebuilt", now=ENDED)
+
+    again = replay.abandon(config, reason="the harness host was rebuilt", now=ENDED)
+    assert again.recorded is False
+    assert audit(config).count("replay-completed") == 1
+
+    with pytest.raises(evolution.BatchError, match="already ended"):
+        replay.abandon(config, reason="a different story about the same run", now=ENDED)
+
+
+def test_a_run_that_outlived_its_round_still_concludes_and_reads_as_stale(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A conclusion is about the run, not about the round the experiment has
+    since moved to: the numbers are recorded where they belong, and what makes
+    them no longer evidence for a promotion is the round they name."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    run(config, harness)
+    experiments.revise(config, reason="the candidate regressed on two cases", now=ENDED)
+
+    result = replay.conclude(config, harness, now=ENDED)
+
+    assert result.recorded is True
+    assert result.round_number == 1
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.round_number == 2
+    assert evidence.state == replay.EVIDENCE_STALE
+    assert not evidence.promotable

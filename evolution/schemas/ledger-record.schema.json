@@ -21,6 +21,7 @@
         "tasks-admitted",
         "draft-rejected",
         "round-sealed",
+        "replay-completed",
         "experiment-revised",
         "experiment-abandoned",
         "experiment-superseded",
@@ -54,7 +55,7 @@
       "type": "string"
     },
     "revision": {
-      "description": "The commit the event turned on: an experiment's base at creation, the round's pinned candidate at a seal and again at the revision that leaves that candidate behind, the promotion revision when a promotion is decided or concluded.",
+      "description": "The commit the event turned on: an experiment's base at creation, the round's pinned candidate at a seal, again at the replay that measured it, and again at the revision that leaves that candidate behind, the promotion revision when a promotion is decided or concluded.",
       "type": [
         "string",
         "null"

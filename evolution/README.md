@@ -462,6 +462,40 @@ quantity on both the base and the candidate and marks which of them were goals �
 an observation with no baseline is recorded as one rather than as an improvement
 over nothing.
 
+**Starting one, and ending it.** Three operations, guarded like the round
+transitions and taking the same lock. Starting pins the integration — the
+round's already-sealed candidate, the commit the named source-line ref stands
+at, and the tree merging them produces — and then asks the harness to run it; a
+candidate that does not merge cleanly onto that ref is refused rather than
+measured around, because it is not one a promotion could carry either. The
+source line is named by the operator rather than guessed from the checkout: a
+repository cannot tell which of its refs a promotion will land on, and the ref
+is what a later reader asks about the drift with. Concluding polls the run and
+records what it reports; polling a run still going writes nothing and is the
+ordinary case.
+
+The order inside them is fixed by what an interruption may leave. The harness is
+asked first, because the record cannot be written without the handle that answer
+carries and a run nobody can poll is refused — so an interruption leaves a run
+going that no record names, which is nothing this controller can conclude and
+nothing it can mistake for evidence. Recording first would leave the opposite: a
+record claiming a run that was never started, which reads as evidence pending
+forever. Every refusal either operation makes is therefore made before that call,
+so a retry — a second run started while one is going, most of all — costs nothing
+that was already running. A concluded run is reported, not concluded twice; the
+audit line an interrupted conclusion may have cost is not re-appended.
+
+A run whose harness cannot report is ended by the third operation, which
+records why: age concludes nothing, and a harness that died, lost the handle, or
+answers with something the record cannot hold would otherwise leave the run
+going forever — and with it the round, which is measured against one integration
+at a time. What it writes is the `failed` the run was, with the reason in place
+of numbers, and the answer to a failed run is another attempt.
+
+None of the three ends anything above the run. A candidate the numbers argue
+against is answered by a further round or by a terminal decision, both of which
+are operations of their own.
+
 ### Terminal decisions
 
 An experiment ends with exactly one decision, and the decision is what turns it
@@ -591,12 +625,16 @@ Two readings are specifically not that answer:
 ### Guarded operations
 
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
-`seal-round`, `revise`, abandon, supersede, and `conclude-no-change` — writes
+`seal-round`, `revise`, starting, concluding and ending a replay, abandon,
+supersede, and `conclude-no-change` — writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
 decision about work that has already happened, and an abandonment or a
-conclusion writes one record and an audit line for the same reason. They take
+conclusion writes one record and an audit line for the same reason. A replay
+start writes only its record: what an audit would say about it is what the
+record already says, and the run's outcome is the event there is something to
+audit about. They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
 redo, so an interrupted operation is finished by the next run rather than
@@ -609,6 +647,13 @@ attempt — and the revisions that record names quietly stop being reachable wit
 nobody left to say so. A ref this checkout simply does not hold is not that: it
 is the ordinary state of every clone that never fetched the namespace, and it
 stops nothing.
+
+Starting a replay is guarded by that ref state too, and concluding one is
+deliberately not. A run is started against a lineage whose ref still agrees with
+its record; a result is a fact about a run that already happened, and a ref that
+moved since makes that evidence stale rather than wrong — which is derived and
+reported. Refusing to record it would discard the only durable form of the
+measurement and leave the run recorded as going forever.
 
 That lock covers this package's own runs, and the two round transitions and both
 terminal decisions need more than it. Each is decided from one reading of where
@@ -644,8 +689,9 @@ it. Redoing the same operation with the same selection is how it finishes: it
 recognises its own recorded work and writes what is missing, rather than
 admitting anything a second time — a rejection whose record landed and whose
 audit line did not is finished by declining the same drafts for the same reason,
-and a seal or a revision whose record landed reports the pin, or the round, that
-is already there rather than writing a second one. A redo is as guarded as the
+and a seal, a revision, or a replay conclusion whose record landed reports the
+pin, the round, or the result that is already there rather than writing a second
+one. A redo is as guarded as the
 operation it completes, so the ref check that stops a fresh admission stops the
 resumed one too — and a ref that moved while a round was candidate-ready stops
 the redo before it can report that round as though nothing had happened.
@@ -684,6 +730,11 @@ descend from the revision pinned before it, a ref that moved out from under a
 transition since the reading that transition was decided from, a round sealed
 with no candidate or
 carrying a candidate nobody sealed, a round sealed with nothing admitted into it,
+a run started against a round whose candidate is not pinned, a second run started
+while one is still going, a candidate that does not merge onto the named source
+line, a source line named by anything but a fully-qualified ref Git can hold, a
+run recorded under a handle another run already has, a conclusion for a run this
+controller never recorded,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert

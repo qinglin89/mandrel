@@ -18,6 +18,7 @@ from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate
 from .phase import ROUND_CANDIDATE_READY, ROUND_OPEN, LifecycleRevisions, LifecycleStatus
+from .replay import Evidence
 
 FIELD_WIDTH = 13
 
@@ -125,6 +126,7 @@ def format_status(status: LifecycleStatus) -> str:
 
     lines.extend(_gate_lines(status.gate))
     lines.extend(_experiment_lines(status))
+    lines.extend(_replay_lines(status.evidence))
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
     if status.last_promotion is not None:
         promotion = status.last_promotion
@@ -161,6 +163,31 @@ def _gate_lines(gate: Gate | None) -> list[str]:
         lines.append(_field("", f"decided draft(s) no longer on disk: {', '.join(gate.missing)}"))
     if gate.unusable:
         lines.append(_field("", f"file(s) under proposed-tasks/ that are not drafts: {', '.join(gate.unusable)}"))
+    return lines
+
+
+def _replay_lines(evidence: Evidence | None) -> list[str]:
+    """What the current round has been measured by, and what stops it counting.
+
+    The two shortfalls are shown apart because an operator acts on them
+    differently: `drift` is something that happened — a later round, a source
+    line that moved, a run that failed — and is answered by running again;
+    `unverified` is a question this checkout could not put to Git, and is
+    answered by fetching the ref and asking again. A promotion is refused on
+    either.
+    """
+
+    if evidence is None:
+        return []
+    run = evidence.replay
+    where = "" if run is None else f" (round {run.round_number} attempt {run.attempt})"
+    lines = [_field("replay", f"{evidence.state}{where}")]
+    if evidence.promotable and run is not None and run.result is not None:
+        lines.append(_field("", run.result.detail))
+    for note in evidence.drift:
+        lines.append(_field("", note))
+    for note in evidence.unverified:
+        lines.append(_field("", f"unverified here: {note}"))
     return lines
 
 
