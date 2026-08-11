@@ -431,9 +431,11 @@ reproduces that tree rather than trusting the pair of commits to imply it. The
 pinned candidate cannot show the source line moving; the merge input is what
 does, which is why a run that was exact yesterday can describe nothing today
 without anything about the experiment having changed. The merge input is named
-by a fully-qualified ref: `HEAD`, a bare branch name, or a revision expression
-answers from whichever working copy is asking, and a run is not stale in one
-checkout and promotable in another.
+by a fully-qualified ref that Git can hold: `HEAD`, a bare branch name, or a
+revision expression answers from whichever working copy is asking, and a run is
+not stale in one checkout and promotable in another; a name `git
+check-ref-format` refuses resolves nowhere at all, which is a record that can
+never be checked rather than one this clone could not check.
 
 **A record is enough to run again.** The integration is the controller's to pin,
 but the cohort, the evaluator, and the configuration are the harness's own

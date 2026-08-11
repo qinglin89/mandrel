@@ -379,6 +379,32 @@ def test_a_writer_cannot_publish_a_number_the_reader_would_refuse(
         replay.parse_replays(config, instance, experiment)
 
 
+@pytest.mark.parametrize("field", ["elapsed_seconds", "baseline", "candidate"])
+def test_an_integer_too_large_for_a_float_is_still_a_measurement(
+    config: evolution.EvolutionConfig, field: str
+) -> None:
+    """The other side of the same boundary, at both doors. JSON's numbers have
+    no range, and this one is spelled out in digits — `1e400` is the float that
+    is not finite, `10**400` is an ordinary integer literal. Refusing it, or
+    letting the finiteness check convert it to a float and raise out of
+    validation, makes a conforming record unreadable rather than refused."""
+
+    experiment = sealed_experiment(config)
+    huge = 10**400
+    instance = record([replay_entry(1, 1, result=numeric_result(field, huge))])
+    replay.replays_path(experiment).write_text(json.dumps(instance), encoding="utf-8")
+
+    (from_disk,) = replay.read_replays(config, experiment)
+    (from_writer,) = replay.parse_replays(config, instance, experiment)
+    assert from_disk == from_writer
+    measured = (
+        from_disk.result.elapsed_seconds
+        if field == "elapsed_seconds"
+        else getattr(from_disk.result.metrics[0], field)
+    )
+    assert measured == huge
+
+
 def test_evidence_cannot_name_another_experiment(config: evolution.EvolutionConfig) -> None:
     experiment = sealed_experiment(config)
     write_replays(
@@ -785,7 +811,10 @@ def test_a_case_is_held_out_once(config: evolution.EvolutionConfig) -> None:
         replay.read_replays(config, experiment)
 
 
-@pytest.mark.parametrize("ref", ["refs/heads/a..b", "refs/heads/.hidden", "refs/heads/release.lock"])
+@pytest.mark.parametrize(
+    "ref",
+    ["refs/heads/a..b", "refs/heads/.hidden", "refs/heads/release.lock", "refs/heads/release."],
+)
 def test_a_merge_input_ref_git_could_never_hold_is_refused_with_the_reason(
     config: evolution.EvolutionConfig, ref: str
 ) -> None:
@@ -803,6 +832,27 @@ def test_a_merge_input_ref_git_could_never_hold_is_refused_with_the_reason(
 
     with pytest.raises(evolution.BatchError, match="check-ref-format"):
         replay.read_replays(config, experiment)
+
+
+def test_a_dot_ending_a_component_before_the_last_is_a_name_git_holds(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The trailing-`.` rule is about the whole name and not about each of its
+    parts: `git check-ref-format` refuses `refs/heads/release.` and accepts
+    `refs/heads/re./lease`. Reading the rule per component instead would refuse
+    provenance a checkout can resolve — the drift check answered by a name this
+    reader threw away."""
+
+    experiment = sealed_experiment(config)
+    ref = "refs/heads/re./lease"
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, integration=replay_integration(merge_input_ref=ref))],
+    )
+
+    (run,) = replay.read_replays(config, experiment)
+    assert run.integration.merge_input_ref == ref
 
 
 # --- what the evidence currently means ---------------------------------------

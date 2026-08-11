@@ -671,17 +671,26 @@ def _require_source_line_ref(path: Path, replay: Replay) -> None:
     next door — and it is the first of those two that would be acted on.
 
     What a pattern cannot say is the rest of what `git check-ref-format`
-    refuses. A name holding `..`, or a component beginning with `.` or ending in
-    `.lock`, is one no ref can ever have: it resolves nowhere, in every
-    checkout, forever. That reads as the one answer this package is careful to
-    keep separate — a check nobody could make — when it is really a record that
-    can never be checked at all, so it is refused here with the reason.
+    refuses. A name holding `..`, one ending in `.`, or one with a component
+    beginning with `.` or ending in `.lock`, is one no ref can ever have: it
+    resolves nowhere, in every checkout, forever. That reads as the one answer
+    this package is careful to keep separate — a check nobody could make — when
+    it is really a record that can never be checked at all, so it is refused
+    here with the reason.
+
+    The trailing `.` is a rule about the whole name and not about each of its
+    parts, which is why it is asked separately: Git holds `refs/heads/re./lease`
+    and refuses `refs/heads/release.`.
     """
 
     ref = replay.integration.merge_input_ref
     if ref is None:
         return
-    if ".." in ref or any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/")):
+    if (
+        ".." in ref
+        or ref.endswith(".")
+        or any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/"))
+    ):
         raise BatchError(
             f"{path}: {_describe_replay(replay)} integrated onto {ref!r}, which is not a name Git can hold "
             "(`git check-ref-format`); no ref will ever resolve to it, so whether the source line has moved "

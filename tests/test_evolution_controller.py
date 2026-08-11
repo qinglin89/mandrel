@@ -211,6 +211,31 @@ def test_validator_rejects_a_boolean_where_an_integer_is_required() -> None:
 
 @pytest.mark.parametrize(
     "value",
+    [0, 1, -1, 1.5, 10**400, -(10**400)],
+    ids=["zero", "one", "negative", "float", "huge", "huge-negative"],
+)
+def test_a_json_number_has_no_range(value: object) -> None:
+    """`number` is JSON's number, and JSON does not bound one. An `int` is finite
+    whatever its magnitude, but `math.isfinite` converts before it answers, so
+    asking it of one raises `OverflowError` — out of validation entirely, past
+    every caller that handles a malformed document."""
+
+    assert schema.validate(value, {"type": "number"}) == []
+    assert schema.validate(10**400, {"type": "number", "minimum": 0}) == []
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_validator_rejects_a_float_json_has_no_literal_for(value: float) -> None:
+    """The three Python hands over and JSON cannot spell. Naming what arrived
+    matters here: reporting `nan` as "not a number" reads as a type confusion
+    rather than the value it was."""
+
+    (error,) = schema.validate(value, {"type": "number"})
+    assert repr(value) in error
+
+
+@pytest.mark.parametrize(
+    "value",
     ["abc\n", "abc\n\n", "\nabc", "abcd", "ABC"],
     ids=["trailing-newline", "two-newlines", "leading-newline", "suffix", "case"],
 )

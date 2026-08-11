@@ -314,11 +314,19 @@ def _matches_type(value: Any, name: Any) -> bool:
     if name == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if name == "number":
-        # NaN and the infinities are floats Python will hand over and JSON has
-        # no literal for. They are not numbers *here* either: `minimum` and
-        # every other comparison against NaN is false, so a schema that refuses
-        # a negative elapsed time would accept one that is not a time at all.
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if isinstance(value, bool):
+            return False
+        # Only a float can be one of the three values JSON has no literal for.
+        # An `int` is finite whatever its magnitude, and asking `math.isfinite`
+        # anyway converts it to a float first — which raises `OverflowError`, not
+        # a schema error, for a long-but-perfectly-ordinary JSON integer.
+        if isinstance(value, int):
+            return True
+        # NaN and the infinities are floats Python will hand over. They are not
+        # numbers *here* either: `minimum` and every other comparison against
+        # NaN is false, so a schema that refuses a negative elapsed time would
+        # accept one that is not a time at all.
+        return isinstance(value, float) and math.isfinite(value)
     if name == "boolean":
         return isinstance(value, bool)
     if name == "null":
