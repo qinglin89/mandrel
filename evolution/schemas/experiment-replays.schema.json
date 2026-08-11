@@ -28,7 +28,7 @@
   },
   "$defs": {
     "replay": {
-      "description": "One run of the case suite against one round's candidate. The pinned inputs are written when the run starts and never edited; the result is written when it ends. A run is reproducible from what is recorded here — the integration it exercised, the case set and the exclusions applied to it, the evaluator that judged it, and the harness configuration that drove it.",
+      "description": "One run of the case suite against one round's candidate. The pinned inputs are written when the run starts and never edited; the result is written when it ends. A run is reproducible from what is recorded here — the integration it exercised, the case set and the exclusions applied to it, the evaluator that judged it, and the harness configuration that drove it — because a rerun hands those back to the harness as the selections it must reproduce or refuse, rather than asking again for whatever it would select today.",
       "type": "object",
       "required": [
         "round",
@@ -106,12 +106,12 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "merge_input_ref": {
-          "description": "The ref that commit was read from, or null when the run was driven from a detached revision. Recorded because the sha alone says where the source line stood and not where to look for it now: with the name, a later reader can see the input has moved; without it, the drift is invisible until a promotion tries the merge. Null or a name — an empty string is neither, and would read as a ref this checkout simply does not hold.",
+          "description": "The ref that commit was read from, or null when the run was driven from a detached revision. Recorded because the sha alone says where the source line stood and not where to look for it now: with the name, a later reader can see the input has moved; without it, the drift is invisible until a promotion tries the merge. Fully qualified, because the reader resolves it to ask that question and the answer has to be the same everywhere. `HEAD` and the other pseudo-refs, a bare branch name, and a revision expression all resolve against whichever working copy is asking, so a record naming one would read promotable on the machine that ran it and stale in the checkout beside it. Null or a `refs/...` name — an empty string is neither, and would read as a ref this checkout simply does not hold.",
           "type": [
             "string",
             "null"
           ],
-          "minLength": 1
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
         },
         "tree": {
           "description": "The Git tree object the run actually exercised — the result of integrating the candidate onto the merge input. The two revisions say what was combined; this says what came out, which is what a promotion has to reproduce. A different merge strategy or a conflict resolved by hand lands on a different tree from the same pair of commits.",
@@ -223,7 +223,7 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "handle": {
-          "description": "The harness's own name for the run, opaque above this boundary: the controller stores what it was handed and gives it back unread, exactly as it does a feed cursor. It is what a later process polls, so a run still going has one; a concluded run keeps it as provenance, and null records a harness that issued none. Null or a name, never an empty string — a handle nothing can be looked up by is the absence this field spells with null.",
+          "description": "The harness's own name for the run, opaque above this boundary: the controller stores what it was handed and gives it back unread, exactly as it does a feed cursor. It is what a later process polls, so a run still going has one; a concluded run keeps it as provenance, and null records a harness that issued none. One handle names one run within a harness: two runs recorded under the same one would be concluded from a single report, so the controller refuses a repeat — which the implemented JSON Schema subset cannot express. Null or a name, never an empty string — a handle nothing can be looked up by is the absence this field spells with null.",
           "type": [
             "string",
             "null"

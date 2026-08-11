@@ -106,6 +106,19 @@ def record(replays: list[dict], **overrides: Any) -> dict[str, Any]:
     return {"schema_version": 1, "experiment_id": EXPERIMENT_ID, "replays": replays, **overrides}
 
 
+def harness_of(handle: str | None, harness_id: str = "local-replay") -> dict:
+    return {"id": harness_id, "revision": "0.1.0", "config_sha256": "d" * 64, "handle": handle}
+
+
+def numeric_result(field: str, value: float) -> dict:
+    """One result whose only oddity is `field` carrying `value` — the three
+    places this contract holds a number rather than an integer."""
+
+    if field == "elapsed_seconds":
+        return replay_result(elapsed_seconds=value)
+    return replay_result(metrics=[measurement(**{field: value})])
+
+
 # --- the versioned contract --------------------------------------------------
 
 
@@ -206,6 +219,24 @@ def test_a_run_that_is_still_going_and_one_that_finished_both_validate() -> None
             record([replay_entry(integration=replay_integration(merge_input_ref=""))]),
         ),
         (
+            "merge input named by a pseudo-ref, which follows this checkout",
+            record([replay_entry(integration=replay_integration(merge_input_ref="HEAD"))]),
+        ),
+        (
+            "merge input named by a bare branch name",
+            record([replay_entry(integration=replay_integration(merge_input_ref="release"))]),
+        ),
+        (
+            "merge input named by a revision expression",
+            record([replay_entry(integration=replay_integration(merge_input_ref="refs/heads/release~1"))]),
+        ),
+        (
+            "merge input named by a reflog expression",
+            record(
+                [replay_entry(integration=replay_integration(merge_input_ref="refs/heads/release@{yesterday}"))]
+            ),
+        ),
+        (
             "harness handle that is the empty string rather than absent",
             record(
                 [
@@ -269,6 +300,33 @@ def test_the_pinned_inputs_survive_the_round_trip(config: evolution.EvolutionCon
     assert run.request.round_number == 1
 
 
+def test_the_record_is_a_request_that_would_run_the_same_thing_again(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Reproducible from pinned inputs, which the integration alone is not: the
+    cohort, the evaluator, and the configuration are the harness's own
+    selections, so a request naming only the integration is answered by whatever
+    it would select today — a different measurement under this one's
+    provenance."""
+
+    experiment = sealed_experiment(config)
+    write_replays(config.experiments_root, EXPERIMENT_ID, [replay_entry(1, 1)])
+
+    (run,) = replay.read_replays(config, experiment)
+    assert run.request.reproduce == replay.ReplayPlan(
+        cases=run.cases, evaluator=run.evaluator, harness=run.harness
+    )
+    assert run.request.reproduce.cases.case_set_sha256 == run.cases.case_set_sha256
+    assert run.request.reproduce.harness.config_sha256 == run.harness.config_sha256
+    assert run.request.reproduce.evaluator.rubric_revision == run.evaluator.rubric_revision
+    # A first run has nothing to reproduce: the harness selects, and the record
+    # is what makes that selection askable-for afterwards.
+    first = replay.ReplayRequest(
+        experiment_id=EXPERIMENT_ID, round_number=1, attempt=1, integration=run.integration
+    )
+    assert first.reproduce is None
+
+
 @pytest.mark.parametrize(
     ("description", "text"),
     [
@@ -284,6 +342,41 @@ def test_an_unreadable_record_stops_the_read(
 
     with pytest.raises(evolution.BatchError):
         replay.read_replays(config, experiment)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["elapsed_seconds", "baseline", "candidate"])
+def test_a_number_nothing_can_be_compared_against_is_not_a_measurement(
+    config: evolution.EvolutionConfig, field: str, value: float
+) -> None:
+    """Python writes and reads three literals JSON does not have, and each of
+    them passes every check a schema makes of a number: `isinstance` says float,
+    and `minimum` — like every comparison against NaN — is false. A completed run
+    whose metrics are not quantities would otherwise read as promotable."""
+
+    experiment = sealed_experiment(config)
+    replay.replays_path(experiment).write_text(
+        json.dumps(record([replay_entry(1, 1, result=numeric_result(field, value))])), encoding="utf-8"
+    )
+
+    with pytest.raises(evolution.ValidationError, match="not a number JSON has"):
+        replay.read_replays(config, experiment)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["elapsed_seconds", "baseline", "candidate"])
+def test_a_writer_cannot_publish_a_number_the_reader_would_refuse(
+    config: evolution.EvolutionConfig, field: str, value: float
+) -> None:
+    """The other door. A writer validates the next state of the file through
+    this parser as an object, where there is no JSON text for a literal to be
+    refused in — so the value itself is refused instead."""
+
+    experiment = sealed_experiment(config)
+    instance = record([replay_entry(1, 1, result=numeric_result(field, value))])
+
+    with pytest.raises(evolution.ValidationError, match="expected type"):
+        replay.parse_replays(config, instance, experiment)
 
 
 def test_evidence_cannot_name_another_experiment(config: evolution.EvolutionConfig) -> None:
@@ -514,6 +607,74 @@ def test_a_concluded_run_may_keep_its_handle_as_provenance(
     assert run.harness.handle is None
 
 
+def test_one_handle_names_one_run(config: evolution.EvolutionConfig) -> None:
+    """The retry recorded under the handle it was retrying. `poll` takes the
+    handle and nothing else, so the second run would be concluded from the first
+    one's report — and the first would acquire a second record stating an
+    integration it never measured."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, harness=harness_of("run-0001")), replay_entry(1, 2, harness=harness_of("run-0001"))],
+    )
+
+    with pytest.raises(evolution.BatchError, match="handle 'run-0001'"):
+        replay.read_replays(config, experiment)
+
+
+def test_a_retry_across_rounds_cannot_reuse_the_handle_either(
+    config: evolution.EvolutionConfig,
+) -> None:
+    experiment = two_rounds(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, harness=harness_of("run-0001")), second_round_entry(harness=harness_of("run-0001"))],
+    )
+
+    with pytest.raises(evolution.BatchError, match="handle 'run-0001'"):
+        replay.read_replays(config, experiment)
+
+
+def test_two_harnesses_may_number_their_runs_the_same_way(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """A handle only ever means anything to the harness that issued it, so the
+    collision is per harness id."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [
+            replay_entry(1, 1, harness=harness_of("run-1")),
+            replay_entry(1, 2, harness=harness_of("run-1", "hosted-replay")),
+        ],
+    )
+
+    first, second = replay.read_replays(config, experiment)
+    assert first.harness.handle == second.harness.handle
+    assert first.harness.id != second.harness.id
+
+
+def test_a_harness_that_issued_no_name_leaves_nothing_to_collide(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Null is absence rather than identity: it records that there is no handle,
+    which two concluded runs may both do."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, harness=harness_of(None)), replay_entry(1, 2, harness=harness_of(None))],
+    )
+
+    assert len(replay.read_replays(config, experiment)) == 2
+
+
 # --- what a result may say ---------------------------------------------------
 
 
@@ -621,6 +782,26 @@ def test_a_case_is_held_out_once(config: evolution.EvolutionConfig) -> None:
     )
 
     with pytest.raises(evolution.BatchError, match="twice"):
+        replay.read_replays(config, experiment)
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/a..b", "refs/heads/.hidden", "refs/heads/release.lock"])
+def test_a_merge_input_ref_git_could_never_hold_is_refused_with_the_reason(
+    config: evolution.EvolutionConfig, ref: str
+) -> None:
+    """The schema keeps the name fully qualified; what it cannot say is the rest
+    of `git check-ref-format`. A name no ref can have resolves nowhere in every
+    checkout, so the drift check would read as one nobody could make — which is a
+    different fact, and the one that says "try again from a clone that has it"."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1, integration=replay_integration(merge_input_ref=ref))],
+    )
+
+    with pytest.raises(evolution.BatchError, match="check-ref-format"):
         replay.read_replays(config, experiment)
 
 

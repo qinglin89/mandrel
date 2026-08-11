@@ -30,7 +30,10 @@ one pinned integration and answers with what it will run and an opaque handle,
 and the handle is stored and given back unread exactly as a feed cursor is. The
 run's durable state is the record, not a process — a replay started here is
 visible to a `status` run tomorrow, on this machine or another, because nothing
-about it lives in the memory of the process that started it.
+about it lives in the memory of the process that started it. The record is also
+the whole of the request: the selections the harness made travel back to it as
+`ReplayRequest.reproduce`, so running the same thing again is asking for it by
+name rather than hoping the same choice is made twice.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError
 from .lineage import Experiment
 from .revisions import ref_tip
-from .schema import load_schema, validate_or_raise
+from .schema import load_schema, parse_json, validate_or_raise
 
 REPLAYS_FILENAME = "replays.json"
 REPLAYS_SCHEMA_VERSION = 1
@@ -192,11 +195,18 @@ class Replay:
 
     @property
     def request(self) -> ReplayRequest:
-        """What a harness was asked to run, rebuilt from the record.
+        """This run as a request that would run it again.
 
-        The record is the durable form of the request, so polling or repeating a
-        run needs nothing that was held in the memory of the process that started
-        it.
+        The record is the durable form of the request, so repeating a run needs
+        nothing that was held in the memory of the process that started it — and
+        that has to include the selections the harness made, not only the
+        integration the controller pinned. A request naming the integration
+        alone would be answered by whatever cohort, evaluator, and configuration
+        the harness chose this time, which is a different measurement wearing
+        this one's provenance.
+
+        The attempt is the one thing a rerun replaces: a repeat is a new run at
+        the next attempt, never an edit of this record.
         """
 
         return ReplayRequest(
@@ -204,6 +214,7 @@ class Replay:
             round_number=self.round_number,
             attempt=self.attempt,
             integration=self.integration,
+            reproduce=ReplayPlan(cases=self.cases, evaluator=self.evaluator, harness=self.harness),
         )
 
 
@@ -245,8 +256,21 @@ class Evidence:
 
 @dataclass(frozen=True)
 class ReplayRequest:
-    """What a harness is asked to exercise: one pinned integration, and which
-    round of which experiment it belongs to.
+    """What a harness is asked to exercise: one pinned integration, which round
+    of which experiment it belongs to, and — for a rerun — the selections it must
+    reproduce.
+
+    `reproduce` is what makes a record enough to run again. None is a first run:
+    the controller pins the integration, and the harness answers with the cohort,
+    the evaluator, and the configuration it selected, because it owns all three.
+    Set, it carries what an earlier run resolved, and the harness exercises
+    exactly that — resolving the configuration hash back to the configuration it
+    issued for it — or refuses. Selecting the nearest thing it still has would
+    produce a second set of numbers standing under the first one's provenance,
+    which is the one failure a reproduction cannot report.
+
+    The handle inside it names the run being reproduced, not the run being
+    started: a rerun is a new attempt and takes the new handle its harness issues.
 
     The expectation recorded beside a run is deliberately not in here. It is a
     human prediction, kept so the numbers cannot be read back onto it afterwards;
@@ -257,6 +281,7 @@ class ReplayRequest:
     round_number: int
     attempt: int
     integration: Integration
+    reproduce: ReplayPlan | None = None
 
 
 @dataclass(frozen=True)
@@ -265,7 +290,9 @@ class ReplayPlan:
 
     The cohort and the evaluator come from the harness rather than the
     controller, which owns neither the case suite nor the rubric. What the
-    controller owns is the integration it pinned, and the record that states both.
+    controller owns is the integration it pinned, and the record that states
+    both — which is also what a rerun hands back as `ReplayRequest.reproduce`,
+    so a selection made once can be asked for again by name.
     """
 
     cases: CaseSet
@@ -294,7 +321,14 @@ class ReplayHarness(Protocol):
     """The whole of what this controller may assume about a replay harness."""
 
     def start(self, request: ReplayRequest) -> ReplayPlan:
-        """Begin exercising `request.integration`, and say what is being run."""
+        """Begin exercising `request.integration`, and say what is being run.
+
+        With `request.reproduce` set, what is being run is not a choice: the
+        cohort, the evaluator, and the configuration are the ones an earlier run
+        resolved, and a harness that cannot reproduce them — a case set it no
+        longer holds, a configuration it cannot resolve from the hash it issued —
+        raises rather than running the nearest thing it can.
+        """
 
     def poll(self, handle: str) -> ReplayReport | None:
         """The measurements for `handle`, or None while that run is still going."""
@@ -310,7 +344,7 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> tuple[Repla
 
     path = replays_path(experiment)
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = parse_json(path.read_text(encoding="utf-8"), description=f"replay record {path}")
     except FileNotFoundError:
         return ()
     except (OSError, json.JSONDecodeError) as exc:
@@ -335,10 +369,10 @@ def parse_replays(
     The implemented JSON Schema subset has no cross-field conditionals and no
     view of the experiment record at all, so the rules that make these runs one
     readable history live here: runs that only append, one unfinished run at a
-    time, a result whose shape matches how it ended, and — the load-bearing one —
-    a candidate revision that is the one the named round actually pinned. Each is
-    a way for a record to be well-formed on its own and still be evidence about
-    a tree nobody can identify.
+    time, one handle naming one run, a result whose shape matches how it ended,
+    and — the load-bearing one — a candidate revision that is the one the named
+    round actually pinned. Each is a way for a record to be well-formed on its
+    own and still be evidence about a tree nobody can identify.
 
     Public because the writers publish through it: an operation builds the next
     state of this file and validates it here before it lands, so a write cannot
@@ -361,6 +395,7 @@ def parse_replays(
     replays = tuple(_read_replay(path, experiment.experiment_id, item) for item in record["replays"])
     _require_appended_runs(path, replays)
     _require_one_unfinished(path, replays)
+    _require_distinct_handles(path, replays)
     _require_pinned_candidates(path, experiment, replays)
     return replays
 
@@ -520,6 +555,7 @@ def _read_replay(path: Path, experiment_id: str, item: Mapping[str, Any]) -> Rep
         result=_read_result(path, item["result"], _position(item["round"], item["attempt"])),
     )
     _require_distinct_exclusions(path, replay)
+    _require_source_line_ref(path, replay)
     _require_pollable(path, replay)
     return replay
 
@@ -622,6 +658,69 @@ def _require_distinct_exclusions(path: Path, replay: Replay) -> None:
                 "out once, and a second entry is a second reason for one exclusion"
             )
         seen.add(exclusion.case_id)
+
+
+def _require_source_line_ref(path: Path, replay: Replay) -> None:
+    """The merge input is named by something that means one thing everywhere.
+
+    The schema refuses every name that is not a fully-qualified `refs/...` one:
+    `HEAD` and the rest of the pseudo-refs, a bare branch name, a revision
+    expression. Each of those answers "where does the source line stand now"
+    from whatever this working copy happens to be sitting on, so the same record
+    would read promotable on the machine that ran it and stale in the checkout
+    next door — and it is the first of those two that would be acted on.
+
+    What a pattern cannot say is the rest of what `git check-ref-format`
+    refuses. A name holding `..`, or a component beginning with `.` or ending in
+    `.lock`, is one no ref can ever have: it resolves nowhere, in every
+    checkout, forever. That reads as the one answer this package is careful to
+    keep separate — a check nobody could make — when it is really a record that
+    can never be checked at all, so it is refused here with the reason.
+    """
+
+    ref = replay.integration.merge_input_ref
+    if ref is None:
+        return
+    if ".." in ref or any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/")):
+        raise BatchError(
+            f"{path}: {_describe_replay(replay)} integrated onto {ref!r}, which is not a name Git can hold "
+            "(`git check-ref-format`); no ref will ever resolve to it, so whether the source line has moved "
+            "since this run could not be answered in any checkout"
+        )
+
+
+def _require_distinct_handles(path: Path, replays: Sequence[Replay]) -> None:
+    """One handle names one run.
+
+    The handle is the whole of the durable link between a record and the work:
+    `poll` takes it and nothing else. Two records under one handle are two runs
+    a single report answers — the retry concludes with the numbers of the run it
+    was retrying, and that run acquires a second record stating a second
+    integration it never measured. Neither is detectable afterwards, because the
+    reports agree.
+
+    Per harness id, because a handle is only ever meaningful to the harness that
+    issued it, and two of them numbering their runs from 1 have not collided.
+    Null is absence rather than identity and repeats freely: it records a
+    harness that issued no name, which only a concluded run may do
+    (`_require_pollable`).
+    """
+
+    seen: dict[tuple[str, str], str] = {}
+    for replay in replays:
+        handle = replay.harness.handle
+        if handle is None:
+            continue
+        key = (replay.harness.id, handle)
+        earlier = seen.get(key)
+        if earlier is not None:
+            raise BatchError(
+                f"{path}: {_describe_replay(replay)} and {earlier} are both recorded under {replay.harness.id} "
+                f"handle {handle!r}; the handle is what a later process polls, so one naming two runs concludes "
+                "the second from the first one's report — a retry is a new run, with the new handle its harness "
+                "issued for it"
+            )
+        seen[key] = _describe_replay(replay)
 
 
 def _require_pollable(path: Path, replay: Replay) -> None:

@@ -430,7 +430,20 @@ merge input it integrated onto and the tree the two produced, and a promotion
 reproduces that tree rather than trusting the pair of commits to imply it. The
 pinned candidate cannot show the source line moving; the merge input is what
 does, which is why a run that was exact yesterday can describe nothing today
-without anything about the experiment having changed.
+without anything about the experiment having changed. The merge input is named
+by a fully-qualified ref: `HEAD`, a bare branch name, or a revision expression
+answers from whichever working copy is asking, and a run is not stale in one
+checkout and promotable in another.
+
+**A record is enough to run again.** The integration is the controller's to pin,
+but the cohort, the evaluator, and the configuration are the harness's own
+selections — so the record states them, and a rerun hands them back as the
+selections to reproduce rather than asking for whatever would be chosen today. A
+harness that no longer holds that case set, or cannot resolve the configuration
+from the hash it issued, refuses; running the nearest thing it has would put a
+second measurement under the first one's provenance. Each run is identified by
+the handle its harness issued, and one handle names one run: two records sharing
+one would be concluded from a single report.
 
 **Five states, three of them written down.** A record says `running`,
 `completed`, or `failed`. `incomplete` — no run names the round that needs one —
@@ -721,7 +734,12 @@ record, in the run's own record (Replay evidence):
 - Expected directional changes, recorded before the run produced any.
 - Quality and convergence outcomes.
 - Subscription/quota and elapsed-time observations when available.
-- Regressions, ambiguity, and rollback decision.
+- Regressions and ambiguity.
+
+The rollback decision is not among them. A run measures a tree; whether the
+promotion argued from it would be reversed, and how, is a property of that
+promotion and is recorded with it. Keeping it in the run's record would put a
+decision nobody had yet made into the evidence it was going to be made from.
 
 Promotion updates canonical source through the ordinary reviewed workflow and
 then uses `aii-2 deploy`; deployed target files are never edited directly. The

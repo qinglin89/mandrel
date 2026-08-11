@@ -433,13 +433,16 @@ def replay_entry(
         "evaluator": evaluator
         if evaluator is not None
         else {"backend": "claude", "model": "claude-opus-5", "rubric_revision": "r7"},
+        # The default handle is derived from the position rather than shared: one
+        # handle names one run, so two attempts under one name are a collision
+        # the reader refuses, not a fixture detail.
         "harness": harness
         if harness is not None
         else {
             "id": "local-replay",
             "revision": "0.1.0",
             "config_sha256": "d" * 64,
-            "handle": "run-0001",
+            "handle": f"run-{round_number:02d}{attempt:02d}",
         },
         "expectation": expectation,
         "result": None if running else (result if result is not None else replay_result()),

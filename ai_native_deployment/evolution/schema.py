@@ -14,6 +14,7 @@ reports "valid" for data nobody checked.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,30 @@ def load_schema(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SchemaError(f"schema must be a JSON object: {path}")
     return data
+
+
+def parse_json(text: str, *, description: str) -> Any:
+    """One persisted document, read with JSON's own number grammar.
+
+    Python's decoder accepts three literals RFC 8259 does not have — `NaN`,
+    `Infinity`, and `-Infinity` — and each of them then survives everything a
+    schema can ask of a number: `isinstance` says float, and every comparison
+    against NaN is false, `minimum` included. A quantity that is not one would
+    read as a measurement.
+
+    Refused at the two doors separately, because a document arrives through
+    either: here for text being read off disk, and in `_matches_type` for a
+    record handed in as an object, which is the path a writer validates its own
+    next state through.
+    """
+
+    def refuse(literal: str) -> Any:
+        raise ValidationError(
+            f"{description} states {literal}, which is not a number JSON has; a value nothing can be compared "
+            "against is not a quantity, and every check a schema makes of it passes by default"
+        )
+
+    return json.loads(text, parse_constant=refuse)
 
 
 def validate(instance: Any, schema: Mapping[str, Any]) -> list[str]:
@@ -289,7 +314,11 @@ def _matches_type(value: Any, name: Any) -> bool:
     if name == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if name == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        # NaN and the infinities are floats Python will hand over and JSON has
+        # no literal for. They are not numbers *here* either: `minimum` and
+        # every other comparison against NaN is false, so a schema that refuses
+        # a negative elapsed time would accept one that is not a time at all.
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     if name == "boolean":
         return isinstance(value, bool)
     if name == "null":
@@ -311,7 +340,9 @@ def _type_name(value: Any) -> str:
     if isinstance(value, int):
         return "integer"
     if isinstance(value, float):
-        return "number"
+        # `nan` / `inf` / `-inf` rather than "number", so the refusal names what
+        # arrived instead of reporting a number as not being one.
+        return "number" if math.isfinite(value) else repr(value)
     if isinstance(value, str):
         return "string"
     if isinstance(value, list):
