@@ -1230,12 +1230,12 @@ def _pin(
             "replay where the source line is"
         )
 
-    tree, complaint = merge_tree(config.repo_root, merge_input, candidate)
-    if tree is None:
+    merged = merge_tree(config.repo_root, merge_input, candidate)
+    if merged.tree is None:
         raise BatchError(
-            f"{described} of {experiment.experiment_id} has no integration to measure: {complaint}; a candidate "
-            f"that does not merge cleanly onto {source_ref} at {merge_input[:12]} is not one a promotion could "
-            "carry either, so the conflict is resolved in a further round rather than measured around"
+            f"{described} of {experiment.experiment_id} has no integration to measure: {merged.complaint}; a "
+            f"candidate that does not merge cleanly onto {source_ref} at {merge_input[:12]} is not one a promotion "
+            "could carry either, so the conflict is resolved in a further round rather than measured around"
         )
 
     integration = Integration(
@@ -1243,7 +1243,7 @@ def _pin(
         candidate_revision=candidate,
         merge_input_revision=merge_input,
         merge_input_ref=source_ref,
-        tree=tree,
+        tree=merged.tree,
     )
     validate_or_raise(
         _integration_json(integration),

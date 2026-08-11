@@ -825,13 +825,20 @@ A second run therefore asks the record which commit was this operation's, and
 Git whether the line carries it — ancestry, never a shape a hand-made revert
 shares and never the tip, since a line that took further commits still carries
 the rollback. What that record states is recomputed rather than believed, in the
-reader and again before the run acts on it: the line it was made from carries the
-promotion, and reverting the promotion out of that revision produces the tree the
-record names. An in-flight record is what moves the canonical source line, so
-without that a one-parent commit written into a file would be a revision nobody
-checked reaching it. A checkout that cannot recompute the revert reads on and
-says what it could not check; the run about to move the line refuses instead, for
-the reason the built-on question refuses. Where the line has left the prepared inverse behind, the inverse is
+reader and again before the run acts on it, and in the same three terms the
+writer computed it in: the line it was made from carries the promotion, reverting
+the promotion out of that revision produces the tree the record names, and that
+tree is not the one the line already had. An in-flight record is what moves the
+canonical source line, so without that a one-parent commit written into a file
+would be a revision nobody checked reaching it — and a rule only the writer keeps
+is one any file written beside it escapes, which is why the last of the three is
+the reader's too rather than the refusal of a hand-made reversal alone. A checkout
+that cannot recompute the revert reads on and says what it could not check; the
+run about to move the line refuses instead, for the reason the built-on question
+refuses. A revert that *conflicts* is not that case: Git answered, and the answer
+is that no commit is this revert — so the record is refused wherever it is read,
+in the checkout that asked and in the reading that would otherwise retire the
+promotion. Where the line has left the prepared inverse behind, the inverse is
 made **again** from where the line now stands rather than discarded and refused
 as a prepared promotion is: a promotion's merge carries a tree that evidence
 exists about, and a moved line makes that evidence describe something else, while
@@ -1069,8 +1076,10 @@ revision without the merge unit it went as, a prepared promotion naming anything
 but the round it was prepared from or a reason other than the one the decision
 records, a rollback of a promotion its batch did not record or of a batch that
 promoted nothing, a rollback naming the promotion it reverses as its own inverse
-commit or naming a commit Git describes differently, a rollback of a promotion a
-later attempt stands on or of a line that no longer carries it, a second
+commit or naming a commit Git describes differently, a rollback whose revert Git
+says conflicts or whose commit takes nothing back out of the line it was made
+from, a rollback of a promotion a later attempt stands on or of a line that no
+longer carries it, a second
 reversal of a promotion already rolled back, a record of a version this build has
 no reader for,
 a task whose completion this machine cannot observe, a second reason for a round

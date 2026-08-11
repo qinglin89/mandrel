@@ -1573,14 +1573,14 @@ def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, inte
     source line while every recorded revision agreed.
     """
 
-    tree, complaint = merge_tree(
+    merged = merge_tree(
         config.repo_root,
         integration.merge_input_revision,
         integration.candidate_revision,
     )
-    if tree == integration.tree:
+    if merged.tree == integration.tree:
         return
-    found = tree[:12] if tree is not None else f"no tree at all ({complaint})"
+    found = merged.tree[:12] if merged.tree is not None else f"no tree at all ({merged.complaint})"
     raise BatchError(
         f"{experiment.experiment_id}: integrating {integration.candidate_revision[:12]} onto "
         f"{integration.merge_input_revision[:12]} produces {found} here, and the run that justifies this "

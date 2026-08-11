@@ -1070,7 +1070,9 @@ def _require_reversed_promotion(
     clone would take every other reading with it. The same goes for what the
     commit *contains*: `require_inverse` is asked wherever the objects are here,
     and what it could not check is a fact about this clone rather than about the
-    rollback.
+    rollback. What Git did answer is not skipped, whichever way it went — a
+    revert that conflicts is as much an answer about the record as one producing
+    another tree.
     """
 
     path = batch.rollback_path
@@ -1129,11 +1131,15 @@ def require_inverse(
     stating any one-parent commit would otherwise be a way to put an arbitrary
     revision on the canonical line by writing a file.
 
-    Two questions settle it, and they are the two `rollback._prepare` answers
+    Three questions settle it, and they are the three `rollback._prepare` answers
     when it makes the inverse: the line the inverse was made from carries the
-    promotion, and reverting the promotion out of that revision produces the tree
-    the record states. Recomputed rather than remembered, because the tree is the
-    whole content of the operation and the record is exactly what is in doubt.
+    promotion, reverting the promotion out of that revision produces the tree the
+    record states, and that tree is not the one the line already had — the
+    writer's own refusal to record somebody's hand-made reversal as this
+    operation's work. Recomputed rather than remembered, because the tree is the
+    whole content of the operation and the record is exactly what is in doubt;
+    and asked here in the same terms the writer asks them, since a rule only the
+    writer keeps is one any file written beside it escapes.
 
     A finished record is asked the same questions as one still in flight. It is
     the one `promotion_effective` is read from — by `status`, and by the rollback
@@ -1141,12 +1147,15 @@ def require_inverse(
     reversing it — so a record nothing checked can retire a promotion the source
     line is still carrying.
 
-    Returns None when this checkout confirmed both, and otherwise why it could
-    not — a missing object, or a revert this Git cannot compute. A reader takes
-    that for the fact about the clone it is and reads on; the operation about to
-    act on the record refuses on it, for `rollback._require_nothing_built_on`'s
-    reason. What is *contradicted* raises here either way: an answer Git gave is
-    a fact about the rollback, wherever it was asked.
+    Returns None when this checkout confirmed all three, and otherwise why it
+    could not — an object it does not hold, or a Git that cannot compute the
+    revert at all. A reader takes that for the fact about the clone it is and
+    reads on; the operation about to act on the record refuses on it, for
+    `rollback._require_nothing_built_on`'s reason. What is *contradicted* raises
+    here either way: an answer Git gave is a fact about the rollback, wherever it
+    was asked — and a revert that conflicts is such an answer rather than a
+    question this checkout could not put, so it raises instead of being reported
+    as unchecked.
     """
 
     revision = outcome["promotion_revision"]
@@ -1161,14 +1170,29 @@ def require_inverse(
             "its history; an inverse commit is computed from the line as it stood carrying the change, so a "
             "record made from another history describes taking back something that was never there"
         )
-    tree, complaint = revert_tree(config.repo_root, revision=revision, parent=parent, tip=made_from)
-    if tree is None:
-        return f"taking {revision[:12]} back out of {made_from[:12]} produces no tree here: {complaint}"
-    if tree != record["tree"]:
+    reverted = revert_tree(config.repo_root, revision=revision, parent=parent, tip=made_from)
+    if reverted.conflicted:
+        raise BatchError(
+            f"{path}: taking {revision[:12]} back out of {made_from[:12]} conflicts — {reverted.complaint}; "
+            "there is no tree that revert produces, so no commit is it, and what the line should hold instead "
+            "is a person's judgement with a working tree in front of them rather than a record naming one"
+        )
+    if reverted.tree is None:
+        return f"taking {revision[:12]} back out of {made_from[:12]} produces no tree here: {reverted.complaint}"
+    if reverted.tree != record["tree"]:
         raise BatchError(
             f"{path}: records {record['tree'][:12]} as {made_from[:12]} with {revision[:12]} taken back out, "
-            f"and reverting it here produces {tree[:12]}; the content of a rollback is computed from the line "
-            "it was made from, and a record naming another tree names a commit this operation did not make"
+            f"and reverting it here produces {reverted.tree[:12]}; the content of a rollback is computed from "
+            "the line it was made from, and a record naming another tree names a commit this operation did not make"
+        )
+    before = commit_shape(config.repo_root, made_from)
+    if before is None:
+        return f"this checkout does not hold {made_from[:12]}"
+    if before[0] == record["tree"]:
+        raise BatchError(
+            f"{path}: {made_from[:12]} already carries none of the promotion {revision[:12]}, so "
+            f"{record['revision'][:12]} takes nothing back out of it; something outside this controller removed "
+            "that change, and a record adopting its own no-op commit says this operation did what it did not"
         )
     return None
 

@@ -604,6 +604,74 @@ def test_a_commit_that_reverses_nothing_is_not_this_promotions_inverse(
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
 
 
+@pytest.mark.parametrize("reverted_at", [None, REVERSED_AT], ids=["in-flight", "finished"])
+def test_a_revert_that_conflicts_is_an_answer_about_the_record(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, reverted_at: str | None
+) -> None:
+    """Git saying these three commits have no clean revert is a fact about the
+    record, true in every checkout holding them — not a question this one could
+    not put. Read as the second, the record loads: a finished one retires the
+    promotion and the run that would have refused never gets to, reporting it as
+    already rolled back, while an in-flight one is left to be caught by whichever
+    checkout happens to act on it."""
+
+    conflicting = git_sibling_commit(
+        config.repo_root, promoted.promotion_revision, "something else entirely\n", "rewrite the file"
+    )
+    impostor = git_file_commit(config.repo_root, conflicting, "unrelated.txt", "not a revert\n", "unrelated work")
+    written_rollback(
+        config,
+        promotion_revision=promoted.promotion_revision,
+        reverted_from=conflicting,
+        revision=impostor,
+        reverted_at=reverted_at,
+    )
+
+    with pytest.raises(evolution.BatchError, match="conflicts"):
+        lineage.describe(config)
+    with pytest.raises(evolution.BatchError, match="conflicts"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+
+
+@pytest.mark.parametrize("reverted_at", [None, REVERSED_AT], ids=["in-flight", "finished"])
+def test_a_commit_that_takes_nothing_back_out_is_not_this_promotions_inverse(
+    config: evolution.EvolutionConfig,
+    release: str,
+    promoted: experiments.PromotionResult,
+    reverted_at: str | None,
+) -> None:
+    """The refusal the writer makes, asked of a record it did not write. Once the
+    promotion has been taken off the line by hand, reverting it out of that line
+    genuinely produces the line's own tree — so a no-op commit passes both of the
+    other questions, and without this one it is a revision the run puts on the
+    canonical line while claiming somebody else's reversal as its own work."""
+
+    unpromoted = git_file(config.repo_root, release, "file.txt")
+    by_hand = git_file_commit(
+        config.repo_root, promoted.promotion_revision, "file.txt", unpromoted, "revert the promotion, by hand"
+    )
+    git_update_ref(config.repo_root, RELEASE_REF, by_hand)
+    no_op = git_file_commit(config.repo_root, by_hand, "file.txt", unpromoted, "a commit that changes nothing")
+    assert git_tree(config.repo_root, no_op) == git_tree(config.repo_root, by_hand)
+
+    written_rollback(
+        config,
+        promotion_revision=promoted.promotion_revision,
+        reverted_from=by_hand,
+        revision=no_op,
+        reverted_at=reverted_at,
+    )
+
+    with pytest.raises(evolution.BatchError, match="already carries none of the promotion"):
+        lineage.describe(config)
+    with pytest.raises(evolution.BatchError, match="already carries none of the promotion"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == by_hand
+
+
 def test_an_inverse_made_from_a_line_without_the_promotion_is_refused(
     config: evolution.EvolutionConfig, release: str, promoted: experiments.PromotionResult
 ) -> None:
@@ -641,7 +709,11 @@ def test_a_rollback_this_checkout_cannot_recompute_moves_nothing(
     prepared = rollback_record(config)
     monkeypatch.undo()
 
-    monkeypatch.setattr(lineage, "revert_tree", lambda *args, **kwargs: (None, "the objects are not here"))
+    monkeypatch.setattr(
+        lineage,
+        "revert_tree",
+        lambda *args, **kwargs: revisions.MergeAnswer(None, "the objects are not here"),
+    )
 
     latest = lineage.describe(config).last_promoted
     assert latest is not None and latest.rollback is not None
@@ -658,6 +730,33 @@ def test_a_rollback_this_checkout_cannot_recompute_moves_nothing(
 
     assert result.revision == prepared["revision"]
     assert git_rev(config.repo_root, RELEASE_REF) == result.revision
+
+
+def test_a_line_this_checkout_cannot_describe_settles_no_inverse_either(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same parting, for the last of the three questions. Whether the inverse
+    takes anything back out is asked of the commit it was made from, and a
+    checkout that cannot describe that commit has not answered it — so this is
+    reported unchecked rather than passed over, which would hand the run a record
+    confirmed by a question nobody put."""
+
+    stop_after(monkeypatch, "_land")
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+    prepared = rollback_record(config)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(lineage, "commit_shape", lambda *args, **kwargs: None)
+
+    latest = lineage.describe(config).last_promoted
+    assert latest is not None and latest.rollback is not None
+
+    with pytest.raises(evolution.BatchError, match="cannot be settled here"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+    assert rollback_record(config) == prepared
 
 
 # --- what a rollback is refused on -------------------------------------------

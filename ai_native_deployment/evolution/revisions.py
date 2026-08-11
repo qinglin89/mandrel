@@ -274,7 +274,26 @@ def commit_shape(repo_root: Path, revision: str) -> tuple[str, tuple[str, ...]] 
     return fields[0], tuple(fields[1:])
 
 
-def merge_tree(repo_root: Path, ours: str, theirs: str) -> tuple[str | None, str]:
+@dataclass(frozen=True)
+class MergeAnswer:
+    """What one `git merge-tree` run said about two revisions.
+
+    Three-valued for `contains`' reason, and out of the same exit codes: a tree
+    is the merge, a conflict is Git answering that there is none, and anything
+    else is this checkout unable to say. Both failures leave `tree` None, so a
+    caller that only needs the tree refuses them alike — but a caller holding a
+    *record* to Git's answer needs them apart. "These do not merge cleanly" is a
+    fact about the revisions, true in every checkout that holds them; "I could
+    not compute it" is a fact about this clone, and reading the first as the
+    second retires the question instead of answering it.
+    """
+
+    tree: str | None
+    complaint: str
+    conflicted: bool = False
+
+
+def merge_tree(repo_root: Path, ours: str, theirs: str) -> MergeAnswer:
     """The tree merging `theirs` into `ours` produces, or why there is none.
 
     What replay measures is the candidate *as it would be integrated*, and what
@@ -292,18 +311,20 @@ def merge_tree(repo_root: Path, ours: str, theirs: str) -> tuple[str | None, str
 
     Returns the tree and no complaint, or no tree and Git's own words — the
     `create_ref` shape rather than the raise, since a candidate that does not
-    integrate is an ordinary answer an operator acts on. Both failures Git spells
-    the same way (a non-zero exit) are refused the same way, deliberately: a
-    conflict *also* prints a tree, and that tree holds the conflict markers, so
-    taking it would measure a state no promotion could produce. A Git too old
-    for `--write-tree` (2.38) lands here too, saying so in its own usage error,
-    for the reason a Git too old for ref transactions does in `_prepare`.
+    integrate is an ordinary answer an operator acts on. A conflict yields no
+    tree even though Git prints one: that tree holds the conflict markers, so
+    taking it would measure a state no promotion could produce. It is still
+    marked as the answer it is (`MergeAnswer.conflicted`) rather than left
+    indistinguishable from a failure to compute — a Git too old for
+    `--write-tree` (2.38) also lands here, saying so in its own usage error, for
+    the reason a Git too old for ref transactions does in `_prepare`, and the two
+    say opposite things about the revisions themselves.
     """
 
     return _written_tree(repo_root, "--write-tree", ours, theirs)
 
 
-def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> tuple[str | None, str]:
+def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> MergeAnswer:
     """The tree `tip` has once `revision`'s change is taken back out, or why
     there is none.
 
@@ -320,36 +341,67 @@ def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> tup
     line had before it, which is the obvious case and the one this must not be
     written as: pinning that tree would silently discard every commit since.
 
-    A conflict is a non-zero exit and refuses like every other failure here
-    (`merge_tree`): the change cannot be taken back out without deciding
-    something, and deciding it is a person's job with a working tree in front of
-    them. `--merge-base` needs Git 2.40, and one too old for it says so in its
+    A conflict yields no tree, like every other failure here (`merge_tree`): the
+    change cannot be taken back out without deciding something, and deciding it
+    is a person's job with a working tree in front of them. It is nevertheless
+    Git's *answer* about these three commits rather than a question this checkout
+    could not put, which is the distinction a record claiming to be the revert is
+    held to. `--merge-base` needs Git 2.40, and one too old for it says so in its
     own usage error rather than being probed for.
     """
 
     return _written_tree(repo_root, "--write-tree", f"--merge-base={revision}", tip, parent)
 
 
-def _written_tree(repo_root: Path, *arguments: str) -> tuple[str | None, str]:
+def _written_tree(repo_root: Path, *arguments: str) -> MergeAnswer:
     """One `git merge-tree` run and one reading of what it answered.
 
     Shared so that a tree computed for an integration and a tree computed for a
-    revert are refused on the same terms — in particular that a conflict prints a
-    tree and is still not an answer.
+    revert are refused on the same terms — in particular that the tree a conflict
+    prints is not one either of them may take.
+
+    Which exits mean what is `contains`' rule, because it is Git's: 0 and 1 are
+    the two answers (a clean merge, a conflicting one) and every other exit is a
+    failure to ask — a missing object, a `--merge-base` this Git has no option
+    for, a directory that is not a work tree.
+
+    A conflict is reported by its messages rather than by everything it printed.
+    `--write-tree` answers with the tree, then the conflicted paths, a blank
+    line, and its messages; the first two say what the merge *would* have been,
+    which for a conflict is the one thing no caller may use. Reading that layout
+    is what the success path already does in taking the first line as the tree.
     """
 
     if not _is_repository_root(repo_root):
-        return None, f"{repo_root} is not the top of a work tree"
+        return MergeAnswer(None, f"{repo_root} is not the top of a work tree")
     result = _run(repo_root, "merge-tree", *arguments)
     if result is None:
-        return None, "git is not available here"
+        return MergeAnswer(None, "git is not available here")
     written = result.stdout.strip().splitlines()
     if result.returncode == 0:
         if not written:
-            return None, "git merge-tree reported success and wrote no tree"
-        return written[0].strip(), ""
-    complaint = result.stderr.strip() or result.stdout.strip() or f"git merge-tree exited {result.returncode}"
-    return None, " ".join(complaint.split())
+            return MergeAnswer(None, "git merge-tree reported success and wrote no tree")
+        return MergeAnswer(written[0].strip(), "")
+    if result.returncode == 1:
+        said = _said(_after_blank_line(result.stdout)) or _said(result.stderr)
+        return MergeAnswer(None, said or "git merge-tree reports a conflict", conflicted=True)
+    complaint = _said(result.stderr) or _said(result.stdout)
+    return MergeAnswer(None, complaint or f"git merge-tree exited {result.returncode}")
+
+
+def _after_blank_line(output: str) -> str:
+    """`git merge-tree`'s informational messages, or all of it when there is no
+    blank line to find them behind — a Git wording its output differently is
+    quoted whole rather than quoted wrongly."""
+
+    _, separator, messages = output.rstrip().partition("\n\n")
+    return messages if separator else output
+
+
+def _said(output: str) -> str:
+    """Git's words on one line, since they are quoted inside sentences here."""
+
+    return " ".join(output.split())
 
 
 @contextmanager

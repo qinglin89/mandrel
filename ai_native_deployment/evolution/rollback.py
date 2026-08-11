@@ -338,17 +338,18 @@ def _prepare(
             "rollback may quietly record as its own work"
         )
 
-    tree, complaint = revert_tree(
+    reverted = revert_tree(
         config.repo_root,
         revision=revision,
         parent=merge["merge_input_revision"],
         tip=tip,
     )
+    tree = reverted.tree
     if tree is None:
         raise BatchError(
             f"{promoted.batch_id}: taking {revision[:12]} back out of {merge['merge_input_ref']} at "
-            f"{tip[:12]} produces no tree here: {complaint}; a revert that does not apply cleanly is a decision "
-            "about what the line should hold, which is a person's job with a working tree in front of them"
+            f"{tip[:12]} produces no tree here: {reverted.complaint}; a revert that does not apply cleanly is a "
+            "decision about what the line should hold, which is a person's job with a working tree in front of them"
         )
     standing = commit_shape(config.repo_root, tip)
     if standing is not None and standing[0] == tree:
