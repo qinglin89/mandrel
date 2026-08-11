@@ -231,6 +231,27 @@ def promotion_of(**overrides: Any) -> dict:
     return merge
 
 
+def prepared_promotion(**overrides: Any) -> dict:
+    """The merge unit an experiment records its promotion as — the same one the
+    outcome states, plus the commit that carries it and what it was prepared
+    under. Written before the source line moves, which is what lets an
+    interrupted run find its own work again."""
+
+    promotion: dict[str, Any] = {
+        "round": 1,
+        "candidate_revision": "c" * 40,
+        "merge_input_revision": "e" * 40,
+        "merge_input_ref": "refs/heads/release",
+        "tree": "7" * 40,
+        "revision": "f" * 40,
+        "reason": "replay showed fewer remediation rounds with no regression",
+        "planned_targets": [],
+        "prepared_at": "2026-08-05T09:00:00Z",
+    }
+    promotion.update(overrides)
+    return promotion
+
+
 def write_rejected_drafts(batches_root: Path, batch_id: str, rejected: list[dict]) -> Path:
     """The drafts a human declined at this batch's admission gate."""
 
@@ -356,6 +377,12 @@ def write_experiment(
 
     `batch_id` defaults to the batch half of the id, so the ordinary case states
     the identity once and the mismatch cases state it twice on purpose.
+
+    A `promoted` decision brings the rest of a promotion with it — the merge unit
+    on the record, and the completed run that measured it beside the record —
+    because those three are one history and a fixture stating only the decision
+    describes a promotion nothing justified. Pass `promotion` or write a
+    `replays.json` first to state any of them differently on purpose.
     """
 
     record = {
@@ -370,8 +397,42 @@ def write_experiment(
         "decision": decision,
         **overrides,
     }
+    if decision is not None and decision.get("outcome") == "promoted" and "promotion" not in overrides:
+        record["promotion"] = _promotion_for(record, decision)
     _write_json(experiments_root / experiment_id / "experiment.json", record)
+    merge = record.get("promotion")
+    if merge and not (experiments_root / experiment_id / "replays.json").is_file():
+        write_replays(
+            experiments_root,
+            experiment_id,
+            [
+                replay_entry(
+                    round_number=merge["round"],
+                    integration=replay_integration(
+                        base_revision=base_revision,
+                        candidate_revision=merge["candidate_revision"],
+                        merge_input_revision=merge["merge_input_revision"],
+                        merge_input_ref=merge["merge_input_ref"],
+                        tree=merge["tree"],
+                    ),
+                )
+            ],
+        )
     return experiments_root / experiment_id
+
+
+def _promotion_for(record: dict, decision: dict) -> dict:
+    """The merge unit a hand-written `promoted` decision implies, taken from the
+    round it was decided over so the record agrees with itself."""
+
+    last = record["rounds"][-1]
+    seal = last.get("seal") or {}
+    return prepared_promotion(
+        round=last["round"],
+        candidate_revision=seal.get("candidate_revision", "c" * 40),
+        revision=decision.get("promotion_revision") or "f" * 40,
+        reason=decision["reason"],
+    )
 
 
 def measurement(
@@ -793,6 +854,23 @@ def git_rev(root: Path, revision: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def git_worktree(root: Path, directory: Path, ref: str) -> Path:
+    """A second working tree of the same repository, sitting on `ref`.
+
+    What a `HEAD`-only reading of "is this branch checked out" cannot see: the
+    branch belongs to a directory the process asking never looks at, while
+    `update-ref` moves it there just the same.
+    """
+
+    subprocess.run(
+        ["git", "-C", str(root), "worktree", "add", str(directory), ref.split("refs/heads/")[-1]],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return directory.resolve()
 
 
 def git_tree(root: Path, revision: str) -> str:

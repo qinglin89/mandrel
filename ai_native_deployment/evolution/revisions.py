@@ -24,9 +24,12 @@ and the one that holds a ref still while its record catches up with it.
 together, computed without a checkout — the tree replay measures and a promotion
 would carry.
 
-**The promotion** (`commit_merge`, `commit_shape`). The merge unit that carries a
-measured tree onto the source line, and the shape a later run reads back to
-recognise one it made and did not finish recording.
+**The promotion** (`commit_merge`, `commit_shape`, `checked_out_refs`). The merge
+unit that carries a measured tree onto the source line; the shape a promotion
+commit is held to when a record claims it; and which branches some working tree
+is sitting on, asked before this package moves a ref anyone could be standing on.
+Whether a promotion *reached* the line is `contains` — the recorded commit, on
+that line — rather than either of the first two.
 
 What is deliberately *not* here any more is a lifecycle reading built out of
 `HEAD` against that tag. It answered "is this checkout on the release line",
@@ -208,8 +211,8 @@ def commit_merge(
     return written, ""
 
 
-def checked_out_ref(repo_root: Path) -> str | None:
-    """The ref `HEAD` points at, or None for a detached head or no answer.
+def checked_out_refs(repo_root: Path) -> dict[str, str] | None:
+    """Every branch a working tree of this repository is sitting on, and where.
 
     Asked before a ref this package is about to move: moving the branch a work
     tree is on leaves that work tree and its index describing the commit before,
@@ -217,9 +220,35 @@ def checked_out_ref(repo_root: Path) -> str | None:
     reaching for the obvious repair loses whatever else was uncommitted there.
     Nothing else here writes to a ref anyone checks out, which is why this is
     asked in one place rather than by every writer.
+
+    Every worktree rather than this process's own `HEAD`, because `HEAD` answers
+    only for the checkout that asks. A branch handed to a linked worktree
+    (`git worktree add`) is one nothing here would otherwise look at, and
+    low-level `update-ref` moves it with no complaint at all — that worktree is
+    left in exactly the state described above, in a directory the operator who
+    promoted may not even know about.
+
+    None means Git could not say, which is not an empty mapping: a repository
+    whose every worktree is detached answers with one. A guard that cannot get an
+    answer refuses rather than proceeds.
     """
 
-    return _git(repo_root, "symbolic-ref", "--quiet", "HEAD") or None
+    if not _is_repository_root(repo_root):
+        return None
+    listed = _git(repo_root, "worktree", "list", "--porcelain")
+    if listed is None:
+        return None
+    checked_out: dict[str, str] = {}
+    directory = ""
+    for line in listed.splitlines():
+        # A worktree is a `worktree <path>` line and the lines under it; a
+        # detached one carries no `branch` line at all, which is precisely the
+        # case this guard has nothing to say about.
+        if line.startswith("worktree "):
+            directory = line[len("worktree ") :]
+        elif line.startswith("branch "):
+            checked_out[line[len("branch ") :]] = directory
+    return checked_out
 
 
 def commit_shape(repo_root: Path, revision: str) -> tuple[str, tuple[str, ...]] | None:

@@ -43,6 +43,7 @@ from evolution_fixtures import (
     git_update_ref,
     make_record,
     make_repo,
+    promotion_of,
     rejection,
     snapshot,
     write_closure,
@@ -524,19 +525,27 @@ def test_a_concluded_batch_stops_being_current_and_reports_its_promotion(
     result = freeze(config)
     batch_id = result.batch_id or ""
     close_batch(config, batch_id, result.analysis_task_id or "")
+    decision = experiment_decision(
+        "promoted",
+        reason="the candidate held across the replay cohort",
+        promotion_revision="c" * 40,
+    )
     experiment(
         config,
         batch_id,
         rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
-        decision=experiment_decision("promoted", promotion_revision="c" * 40),
+        decision=decision,
     )
     write_outcome(
         config.batches_root,
         batch_id,
         outcome="promoted",
-        reason="the candidate held across the replay cohort",
+        reason=decision["reason"],
         experiment_id=f"{batch_id}-exp-01",
         promotion_revision="c" * 40,
+        # One event, two records: the outcome states the merge unit the
+        # experiment was promoted as, down to the candidate its round pinned.
+        promotion=promotion_of(candidate_revision=CANDIDATE),
     )
 
     status = phase.describe(config, now=NOW)

@@ -621,6 +621,18 @@ def test_an_outcome_states_its_unused_fields_as_null() -> None:
     assert errors(record, "batch-outcome.schema.json")
 
 
+def test_a_conclusion_written_before_the_merge_unit_existed_still_validates() -> None:
+    """The merge unit arrived after this version shipped, and every record
+    written without it is a `no-change` conclusion — promotion had no operation
+    then. A version is bumped when a reader needs something old records cannot
+    supply; requiring this one would instead stop a conclusion loading that was
+    valid when it ended its batch, on content nothing may edit."""
+
+    record = outcome()
+    del record["promotion"]
+    assert errors(record, "batch-outcome.schema.json") == []
+
+
 # --- drafts declined at the gate ---------------------------------------------
 
 
@@ -1258,11 +1270,12 @@ def test_one_task_answers_for_one_admission(
 
 
 def test_a_promotion_names_the_revision_a_round_pinned(config: evolution.EvolutionConfig, batch: Path) -> None:
+    decision = experiment_decision("promoted", promotion_revision=PROMOTION)
     write_experiment(
         config.experiments_root,
         EXP_01,
         rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
-        decision=experiment_decision("promoted", promotion_revision=PROMOTION),
+        decision=decision,
     )
     write_outcome(
         config.batches_root,
@@ -1270,7 +1283,10 @@ def test_a_promotion_names_the_revision_a_round_pinned(config: evolution.Evoluti
         outcome="promoted",
         experiment_id=EXP_01,
         promotion_revision=PROMOTION,
-        reason="replay showed fewer remediation rounds",
+        # The same merge unit and the same reason the experiment records: two
+        # records of one event, which is what the reader holds them to.
+        promotion=promotion_of(candidate_revision=CANDIDATE),
+        reason=decision["reason"],
     )
 
     derived = only(config)
@@ -1501,6 +1517,172 @@ def test_one_batch_promotes_one_candidate(config: evolution.EvolutionConfig, bat
         promotion_revision=PROMOTION,
     )
     with pytest.raises(evolution.BatchError, match="one batch promotes one candidate"):
+        lineage.describe(config)
+
+
+def promoted_batch(config: evolution.EvolutionConfig, **overrides: Any) -> dict:
+    """A batch whose experiment was promoted, with the three records that make a
+    promotion one history: the decision, the merge unit the experiment was
+    prepared as, and the completed run that measured it. `overrides` change what
+    the *outcome* states, which is the record the others are checked against."""
+
+    decision = experiment_decision("promoted", promotion_revision=PROMOTION)
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=decision,
+    )
+    merge = promotion_of(**{"candidate_revision": CANDIDATE, **overrides})
+    write_outcome(
+        config.batches_root,
+        BATCH_ID,
+        outcome="promoted",
+        reason=decision["reason"],
+        experiment_id=EXP_01,
+        promotion_revision=PROMOTION,
+        promotion=merge,
+    )
+    return merge
+
+
+def test_a_promoted_batch_reads_back_when_all_three_records_agree(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The baseline the disagreements below are read against."""
+
+    promoted_batch(config)
+    assert lineage.describe(config).current is None
+    assert only(config).outcome is not None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"round": 2},
+        {"candidate_revision": "d" * 40},
+        {"merge_input_revision": "9" * 40},
+        {"merge_input_ref": "refs/heads/other"},
+        {"tree": "8" * 40},
+        {"planned_targets": ["orch-hub"]},
+    ],
+    ids=["round", "candidate", "merge-input", "source-line", "tree", "planned-targets"],
+)
+def test_an_outcome_states_the_merge_unit_the_experiment_was_promoted_as(
+    config: evolution.EvolutionConfig, batch: Path, overrides: dict
+) -> None:
+    """The outcome's merge unit is what holds the promotion revision to the
+    evidence, and a claim nothing checks is one a schema-valid record makes
+    freely. Every field of it is the promoted experiment's own, which is the
+    record written before the source line moved."""
+
+    promoted_batch(config, **overrides)
+    with pytest.raises(evolution.BatchError, match="differently from the promotion"):
+        lineage.describe(config)
+
+
+def test_a_batch_is_concluded_by_the_reason_it_was_promoted_for(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=experiment_decision("promoted", promotion_revision=PROMOTION),
+    )
+    write_outcome(
+        config.batches_root,
+        BATCH_ID,
+        outcome="promoted",
+        reason="something else entirely",
+        experiment_id=EXP_01,
+        promotion_revision=PROMOTION,
+        promotion=promotion_of(candidate_revision=CANDIDATE),
+    )
+    with pytest.raises(evolution.BatchError, match="one decision, and the batch it ends"):
+        lineage.describe(config)
+
+
+def test_a_promotion_no_run_measured_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
+    """What reaches the source line is a tree a replay measured (invariant 10),
+    and the records that say so are checked rather than believed: two hand-made
+    records agreeing with each other still describe a promotion no evidence
+    justified."""
+
+    promoted_batch(config)
+    replays = config.experiments_root / EXP_01 / "replays.json"
+    written = json.loads(replays.read_text(encoding="utf-8"))
+    written["replays"][0]["integration"]["tree"] = "8" * 40
+    written["replays"][0]["result"]["outcome"] = "failed"
+    written["replays"][0]["result"]["metrics"] = []
+    written["replays"][0]["result"]["elapsed_seconds"] = None
+    replays.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="no completed run of that round measured that integration"):
+        lineage.describe(config)
+
+
+def test_the_commit_on_the_source_line_is_what_the_record_is_held_to(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The one check outside this controller's own records, made wherever the
+    checkout holds the commit: a promotion revision naming a commit that carries
+    another tree, or was made from other commits, is a record Git contradicts."""
+
+    real = git_commit(config.repo_root, "a commit that is not a merge of anything")
+    promoted_batch(config)
+    outcome_path = config.batches_root / BATCH_ID / "outcome.json"
+    written = json.loads(outcome_path.read_text(encoding="utf-8"))
+    written["promotion_revision"] = real
+    outcome_path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    rewrite_decision(config, promotion_revision=real)
+
+    with pytest.raises(evolution.BatchError, match="is what the record is held to"):
+        lineage.describe(config)
+
+
+def rewrite_decision(config: evolution.EvolutionConfig, **changes: Any) -> None:
+    """Restate the promotion an experiment records, keeping its two halves in
+    agreement — the decision names the revision and the merge unit carries it."""
+
+    path = config.experiments_root / EXP_01 / "experiment.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["decision"].update(changes)
+    if "promotion_revision" in changes:
+        written["promotion"]["revision"] = changes["promotion_revision"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_a_conclusion_recorded_before_the_merge_unit_existed_still_ends_its_batch(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The reader's side of the same compatibility: a `no-change` record from
+    before the field existed reads as one stating it null, rather than failing
+    closed and leaving a batch that ended long ago current forever."""
+
+    path = write_outcome(config.batches_root, BATCH_ID, reason="no cluster reached recurrence")
+    written = json.loads(path.read_text(encoding="utf-8"))
+    del written["promotion"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert lineage.describe(config).current is None
+    assert only(config).outcome is not None
+
+
+def test_a_promoted_outcome_still_has_to_state_its_merge_unit(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Optional in the schema is not optional in the record: what makes the merge
+    unit required for a `promoted` conclusion is the pairing rule, which no
+    version of this schema could express anyway."""
+
+    promoted_batch(config)
+    path = config.batches_root / BATCH_ID / "outcome.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    del written["promotion"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="states the experiment it promoted"):
         lineage.describe(config)
 
 

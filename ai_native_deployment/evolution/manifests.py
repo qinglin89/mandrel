@@ -27,6 +27,14 @@ own frozen schema file. Tightening version 1 in place would instead have
 redefined manifests already written under it — a manifest that was valid when
 frozen would stop loading, with no migration possible on content that may not
 be edited.
+
+A version is bumped when the *reader* needs something old records cannot
+supply. A field only newer records can carry is added to the current version as
+optional instead, where absent and null are the same answer — every record
+written before it stays exactly what it claimed to be. The batch outcome's
+merge unit is that case: it describes a promotion, and no record written before
+the promotion operation existed can be one. Requiring it would have been the
+tightening above, arriving as a field rather than as a rule.
 """
 
 from __future__ import annotations
@@ -284,7 +292,10 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
 
     promoted = record["outcome"] == OUTCOME_PROMOTED
     fields = ("experiment_id", "promotion_revision", "promotion")
-    named = {key: record[key] for key in fields if record[key] is not None}
+    # `.get`, because the merge unit arrived after this schema version shipped
+    # and a record written without it is a `no-change` conclusion from before
+    # any promotion could be recorded — absent and null are the same answer.
+    named = {key: record.get(key) for key in fields if record.get(key) is not None}
     if promoted and len(named) != len(fields):
         raise BatchError(
             f"{path}: a {OUTCOME_PROMOTED!r} outcome states the experiment it promoted, the source-line "

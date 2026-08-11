@@ -89,7 +89,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, NoReturn, Sequence
 
 from ..hashing import sha256_bytes
 from . import analysis_task
@@ -117,6 +117,7 @@ from .lineage import (
     Decision,
     Experiment,
     Lineage,
+    PreparedPromotion,
     RefState,
     Round,
     Seal,
@@ -136,9 +137,9 @@ from .manifests import (
 )
 from .replay import Evidence, History, Integration, describe_evidence, read_replays
 from .revisions import (
-    checked_out_ref,
+    checked_out_refs,
     commit_merge,
-    commit_shape,
+    contains,
     create_ref,
     held_at,
     merge_tree,
@@ -708,6 +709,11 @@ def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None)
         current = current_cycle(config, now=moment)
         experiment = require_open_experiment(current, "revise")
         require_consistent_ref(current)
+        # The other operation that can move an experiment out from under a
+        # promotion in flight: opening the next round leaves the prepared merge
+        # naming a round that is no longer the last, which is a promotion nothing
+        # could afterwards record — while the merge may already be on the line.
+        _require_no_prepared_promotion(experiment)
 
         last = experiment.last_round
         if last.seal is None:
@@ -897,6 +903,7 @@ def _end_attempt(
         # "already done" is what would hide it — the ordering a grouped
         # admission and a seal already follow.
         require_consistent_ref(current)
+        _require_no_prepared_promotion(experiment)
         if named is not None and not named.open:
             # A decision explicitly about an attempt that has already ended can
             # only be the supersession that created the one now open, redone.
@@ -938,6 +945,33 @@ def _end_attempt(
 
             append_records(config, _decision_records(current, experiment, successor, outcome, recorded_at=stamp))
         return _decided(current, experiment, outcome, text, stamp, successor=successor, created=True)
+
+
+def _require_no_prepared_promotion(experiment: Experiment) -> None:
+    """An experiment with a promotion in flight is not moved out from under it.
+
+    The one place this controller can create the split it exists to prevent. A
+    prepared promotion may already be on the source line with only its records
+    missing; ending the attempt retires the record that says so, and opening the
+    next round leaves the prepared merge naming a round that is no longer the
+    last — which is a promotion nothing can afterwards record. Either way the
+    canonical line is left carrying a merge no reading explains.
+
+    Deliberately not the boundary accepted for a replay run in flight. That one
+    leaves a record nobody can conclude, which is honest and costs an unanswered
+    question; this one leaves another repository's release line describing
+    something that never happened.
+    """
+
+    prepared = experiment.promotion
+    if prepared is None:
+        return
+    raise BatchError(
+        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto "
+        f"{prepared.merge_input_ref}; moving on now would retire the only record that the line may already be "
+        "carrying it — promote finishes that promotion, or discards it once the line proves it never arrived, "
+        "and this is available afterwards"
+    )
 
 
 def _named_attempt(current: BatchLineage, experiment_id: str | None) -> Experiment | None:
@@ -1298,19 +1332,32 @@ def promote(
     moved, a run still going, a failed run, and a check this clone could not make
     all refuse here, in the reader's own words. Work still in flight refuses too,
     and for a reason of its own: this decision ends the experiment, after which
-    nothing can conclude a run or withdraw a request against it ever again.
+    nothing can conclude a run or withdraw a request against it ever again. Both
+    are asked where a promotion is *made*. A run finishing one already prepared
+    asks neither, because by then the answer would be about what this operation
+    itself did to the source line.
 
-    Two writes make it real and they are made in one order. The merge commit is
-    written first and named by nothing, which leaves an interrupted run an orphan
-    Git collects; then the source-line ref moves, compare-and-swap, under Git's
-    own lock. After that the promotion exists in the world whatever happens to
-    this process — so a run that stops before its records land is finished by
-    running this again, which recognises the merge it already made (the commit
-    that ref now stands at, made from those two parents and carrying that tree)
-    rather than making a second one. The records that follow are written while
-    the line is held where it was put, for the reason a terminal decision holds
-    the experiment's ref: both are read and then recorded, and neither reading
-    survives the write it justifies.
+    Three writes make it real and they are made in one order, because a
+    promotion is the one operation here that changes another repository's line
+    and cannot take that back. The merge commit is written first and named by
+    nothing, so a run stopping there leaves an orphan Git collects. Then the
+    *prepared promotion* is recorded on the experiment — the merge unit and the
+    exact commit — because everything after this point is recoverable only by a
+    run that can say which commit was this operation's. Then the source-line ref
+    moves, compare-and-swap from the revision the replay integrated onto, under
+    Git's own lock.
+
+    After that move the promotion exists in the world whatever happens to this
+    process, and this experiment's evidence is stale from then on — including for
+    the run that comes back to finish it. So a second run asks the prepared
+    record first and Git second: the promotion is on the line if that exact
+    commit is, which stays true when the line has taken further commits since,
+    and a promotion that never got there is discarded rather than guessed at. The
+    line is deliberately *not* held while the records land — the promotion is a
+    fact about a commit, not about where a branch happens to stand afterwards,
+    and holding it would turn an ordinary advance into a promotion nobody can
+    finish. The experiment's ref is held, for the reason every terminal decision
+    holds it: that reading does not survive the write it justifies.
 
     It promises nothing about deployment. `planned_targets` is what the operator
     intends to redeploy, recorded as the plan it is; what any target actually
@@ -1330,7 +1377,7 @@ def promote(
         lineage = settled(config, now=moment)
         current = lineage.current
         if current is None:
-            return _redo_promotion(lineage, text)
+            return _redo_promotion(lineage, text, planned)
         require_stage_ended(config, current)
         require_no_pending_successor(current)
         # The preamble is assembled here rather than inherited from
@@ -1346,108 +1393,117 @@ def promote(
         require_consistent_ref(current)
         _require_gate_settled(current, "promoting")
 
-        history = read_replays(config, experiment)
-        integration, carried = _promotable_merge(config, experiment, history)
-        revision = carried or _carry(config, current, experiment, integration, text)
+        outstanding = experiment.promotion
+        if outstanding is None:
+            integration = _promotable_integration(config, experiment, read_replays(config, experiment))
+            experiment, prepared = _prepare_promotion(config, current, experiment, integration, text, planned, at=stamp)
+        else:
+            _require_same_promotion(experiment, outstanding, text, planned)
+            prepared = outstanding
+        standing = _standing(config, experiment, prepared)
+        if standing == _LOST:
+            _discard_promotion(config, experiment, prepared)
+        if standing == _UNMOVED:
+            _land(config, experiment, prepared)
 
-        with _held(
+        with _unmoved(
             config,
-            integration.merge_input_ref,
-            revision,
-            current.batch_id,
-            "a promotion is recorded as the commit the source line was left standing at",
+            experiment,
+            current.ref.tip if current.ref is not None else None,
+            "a promotion is a terminal decision, and the last reading anyone takes of that ref",
         ):
-            with _unmoved(
+            _decide(
                 config,
                 experiment,
-                current.ref.tip if current.ref is not None else None,
-                "a promotion is a terminal decision, and the last reading anyone takes of that ref",
-            ):
-                _decide(
-                    config,
-                    experiment,
-                    DECISION_PROMOTED,
-                    text,
-                    decided_at=stamp,
-                    successor=None,
-                    promotion_revision=revision,
-                )
-                append_records(
-                    config,
-                    [
-                        build_record(
-                            RECORD_EXPERIMENT_PROMOTED,
-                            recorded_at=stamp,
-                            batch_id=current.batch_id,
-                            experiment_id=experiment.experiment_id,
-                            round=experiment.last_round.number,
-                            revision=revision,
-                        )
-                    ],
-                )
-            path = _conclude_promoted(
-                config,
-                current,
-                experiment,
-                integration,
-                revision,
-                planned,
-                text,
-                at=stamp,
+                DECISION_PROMOTED,
+                prepared.reason,
+                decided_at=stamp,
+                successor=None,
+                promotion_revision=prepared.revision,
             )
+            append_records(
+                config,
+                [
+                    build_record(
+                        RECORD_EXPERIMENT_PROMOTED,
+                        recorded_at=stamp,
+                        batch_id=current.batch_id,
+                        experiment_id=experiment.experiment_id,
+                        round=prepared.round_number,
+                        revision=prepared.revision,
+                    )
+                ],
+            )
+        path = _conclude_promoted(config, current, experiment, prepared, at=stamp)
+
+    return _promoted(current, experiment, prepared, decided_at=stamp, path=path, merged=outstanding is None)
+
+
+def _promoted(
+    current: BatchLineage,
+    experiment: Experiment,
+    prepared: PreparedPromotion,
+    *,
+    decided_at: str,
+    path: Path,
+    merged: bool,
+    recorded: bool = True,
+) -> PromotionResult:
+    """A promotion reported from the record it was prepared as.
+
+    One builder for every way this operation ends, so what a caller is told about
+    a promotion it finished is what it would have been told about the one that
+    made it — the values come from the same record either way.
+    """
 
     return PromotionResult(
         batch_id=current.batch_id,
         experiment_id=experiment.experiment_id,
-        round_number=experiment.last_round.number,
-        reason=text,
-        decided_at=stamp,
-        candidate_revision=integration.candidate_revision,
-        merge_input_revision=integration.merge_input_revision,
-        merge_input_ref=integration.merge_input_ref,
-        tree=integration.tree,
-        promotion_revision=revision,
-        planned_targets=planned,
+        round_number=prepared.round_number,
+        reason=prepared.reason,
+        decided_at=decided_at,
+        candidate_revision=prepared.candidate_revision,
+        merge_input_revision=prepared.merge_input_revision,
+        merge_input_ref=prepared.merge_input_ref,
+        tree=prepared.tree,
+        promotion_revision=prepared.revision,
+        planned_targets=prepared.planned_targets,
         record_path=path,
-        merged=carried is None,
+        merged=merged,
+        recorded=recorded,
     )
 
 
-def _promotable_merge(
+def _promotable_integration(
     config: EvolutionConfig,
     experiment: Experiment,
     history: History,
-) -> tuple[Integration, str | None]:
-    """The integration this promotion carries, and the commit already carrying it.
+) -> Integration:
+    """The integration this promotion may carry, or the refusal that none may be.
 
-    Two readings in one, because the second is what the first cannot be asked
-    after it has happened. A promotion moves the merge input, so the moment the
-    source-line ref is moved this experiment's evidence is stale — every later
-    reading of it, including the one an interrupted run makes when it comes back.
-    Asking whether the line already stands at *this* merge therefore comes first,
-    and only a checkout where it does not goes on to require promotable evidence.
-
-    The recognition is exact and it is the commit's own shape: made from the
-    source line the run integrated onto and the candidate that round pinned, in
-    that order, carrying the tree the run measured. Nothing else is that commit,
-    and no later work on the line is mistaken for it — a further commit has the
-    promotion as a parent, not those two.
+    Every check a fresh promotion makes before anything is written, and it is
+    only ever reached by one: a run finishing a promotion that is already
+    prepared must not come through here at all. A promotion moves the merge
+    input, so from the moment the ref moves this experiment's evidence is stale
+    forever — asking the evidence again would refuse the operation on the
+    strength of what the operation itself did.
     """
 
     _require_nothing_in_flight(experiment, history)
     evidence = describe_evidence(config, experiment)
-    run = evidence.replay
-    if run is not None and run.completed and run.round_number == experiment.last_round.number:
-        carried = _carried(config, run.integration)
-        if carried is not None:
-            return run.integration, carried
     _require_promotable(experiment, evidence)
     integration = evidence.replay.integration
-    # Only on this side of the reading: what this refuses is the move, and the
-    # branch above has already been moved by the run it is finishing.
+    if integration.merge_input_ref is None:
+        # Unreachable through `promotable`, which is a reading about a named ref
+        # this checkout resolved; stated because what follows records that name
+        # as the line it will move.
+        raise BatchError(
+            f"{experiment.experiment_id}: the run justifying this promotion integrated onto a detached revision, "
+            "so there is no source line to move"
+        )
     _require_line_not_checked_out(config, integration.merge_input_ref)
     _require_measured_tree(config, experiment, integration)
-    return integration, None
+    return integration
 
 
 def _require_nothing_in_flight(experiment: Experiment, history: History) -> None:
@@ -1485,15 +1541,22 @@ def _require_nothing_in_flight(experiment: Experiment, history: History) -> None
         )
 
 
-def _require_line_not_checked_out(config: EvolutionConfig, ref: str | None) -> None:
-    """This checkout is not sitting on the line about to be moved.
+def _require_line_not_checked_out(config: EvolutionConfig, ref: str) -> None:
+    """No working tree of this repository is sitting on the line about to be moved.
 
     A promotion moves a ref and touches no working tree, which is what lets it
     run in a repository busy with unrelated work. That is only true while the ref
-    is somebody else's: moving the branch this work tree is on would leave the
-    tree and the index describing the commit before, so everything the promotion
-    brought in reads as a pending deletion — and the obvious repair takes
-    whatever else was uncommitted there with it.
+    is nobody's: moving a branch some work tree is on would leave that tree and
+    its index describing the commit before, so everything the promotion brought
+    in reads as a pending deletion — and the obvious repair takes whatever else
+    was uncommitted there with it.
+
+    Every worktree, not this process's own `HEAD`. A linked worktree
+    (`git worktree add`) holds a branch this checkout never looks at, and
+    `update-ref` moves it there without a word — leaving a directory the operator
+    may not have thought about in exactly the state above. So the question is put
+    to Git once, and a Git that cannot answer it refuses the promotion: the guard
+    is the only thing standing between the move and somebody's working tree.
 
     Refused rather than repaired, because the repair is a checkout and that is a
     far larger promise than promoting makes. It is also the one refusal here an
@@ -1501,12 +1564,20 @@ def _require_line_not_checked_out(config: EvolutionConfig, ref: str | None) -> N
     on the release line.
     """
 
-    if ref is None or checked_out_ref(config.repo_root) != ref:
+    checked_out = checked_out_refs(config.repo_root)
+    if checked_out is None:
+        raise BatchError(
+            f"whether {ref} is checked out anywhere cannot be answered in {config.repo_root}, and a promotion "
+            "moves it without touching a working tree; a work tree sitting on that branch would be left "
+            "describing the commit before, so this refuses rather than move a ref it cannot say is free"
+        )
+    directory = checked_out.get(ref)
+    if directory is None:
         return
     raise BatchError(
-        f"{ref} is the branch this checkout is on, and a promotion moves it without touching a working tree; "
-        "the tree and the index would go on describing the commit before, showing everything the promotion "
-        "carried as a pending deletion — promote from a checkout that is not on the source line"
+        f"{ref} is checked out at {directory}, and a promotion moves it without touching a working tree; that "
+        "tree and its index would go on describing the commit before, showing everything the promotion carried "
+        "as a pending deletion — promote from a checkout that is not on the source line"
     )
 
 
@@ -1557,43 +1628,109 @@ def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, inte
     )
 
 
-def _carried(config: EvolutionConfig, integration: Integration) -> str | None:
-    """The commit the source line already stands at, when that commit is this
-    promotion's own merge.
+def _require_same_promotion(
+    experiment: Experiment,
+    prepared: PreparedPromotion,
+    reason: str,
+    planned: tuple[str, ...],
+) -> None:
+    """A promotion is finished as it was prepared.
 
-    None for every other state, including a line that never moved: the caller
-    then goes on to require promotable evidence, which is what refuses a source
-    line that moved for somebody else's reason.
+    The prepared record is the whole of what this operation is — the candidate,
+    the line, the tree, the reason it was justified by, and the targets it was
+    planned for — so a second run naming any of it differently is asking for a
+    different promotion of a candidate that already has one on the way. Refused
+    naming what is outstanding, the way a replay refuses a request arriving
+    against the one it is already holding: the operator either redoes this
+    promotion or says which of the two they meant.
+
+    Reason and targets are the only parts a caller supplies. The rest was read
+    from the evidence and cannot differ without the line itself having changed,
+    which is `_standing`'s question rather than this one.
     """
 
-    ref = integration.merge_input_ref
-    tip = ref_tip(config.repo_root, ref) if ref is not None else None
+    if prepared.reason == reason and prepared.planned_targets == planned:
+        return
+    raise BatchError(
+        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared for {prepared.reason!r} "
+        f"planning {list(prepared.planned_targets)}, and this request is {reason!r} planning {list(planned)}; a "
+        "promotion is prepared once and finished as it was prepared, so redo it with what is outstanding rather "
+        "than end the batch on a plan the promotion was not made under"
+    )
+
+
+# Where the source line stands relative to a prepared promotion. These three are
+# what a run finishing an interrupted promotion has to tell apart, and the whole
+# reason the merge commit is recorded before the ref moves.
+_LANDED = "landed"
+_UNMOVED = "unmoved"
+_LOST = "lost"
+
+
+def _standing(config: EvolutionConfig, experiment: Experiment, prepared: PreparedPromotion) -> str:
+    """Whether the prepared merge reached the source line, is still waiting to,
+    or never will.
+
+    The identity is the recorded commit and nothing weaker. A commit's *shape* —
+    those two parents, that tree — is not it: a merge made by hand has the same
+    shape, and reading shapes adopts it as a promotion nobody performed. The
+    ref's *tip* is not it either: a line that took another commit after the
+    promotion still carries the promotion, and a run that could not see that
+    would be unable to finish work it had already done. So the question is
+    ancestry — is this commit on that line — which is what those two get wrong in
+    opposite directions.
+
+    `_LOST` is a line standing somewhere the prepared merge is not, which is
+    somebody else's commit arriving between the evidence and the move. Refusing
+    to answer is the fourth case and stays a refusal: a checkout that cannot
+    resolve the line, or cannot compare the two commits, does not know whether a
+    promotion happened, and both things it could do about that are wrong.
+    """
+
+    ref = prepared.merge_input_ref
+    tip = ref_tip(config.repo_root, ref)
     if tip is None:
-        return None
-    shape = commit_shape(config.repo_root, tip)
-    if shape is None:
-        return None
-    tree, parents = shape
-    made_from = (integration.merge_input_revision, integration.candidate_revision)
-    return tip if tree == integration.tree and parents == made_from else None
+        raise BatchError(
+            f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto {ref}, and "
+            "this checkout does not hold that ref; whether the promotion reached the source line is what says "
+            "whether this finishes one or makes one, so finish it from a checkout that has the line"
+        )
+    if tip == prepared.revision:
+        return _LANDED
+    if tip == prepared.merge_input_revision:
+        return _UNMOVED
+    carried = contains(config.repo_root, prepared.revision, tip)
+    if carried is None:
+        raise BatchError(
+            f"{experiment.experiment_id}: whether {prepared.revision[:12]} is on {ref} (now at {tip[:12]}) cannot "
+            "be answered in this checkout, which does not hold both commits; that answer is what says whether "
+            "this promotion happened, so nothing is written until a checkout holding them says so"
+        )
+    return _LANDED if carried else _LOST
 
 
-def _carry(
+def _prepare_promotion(
     config: EvolutionConfig,
     current: BatchLineage,
     experiment: Experiment,
     integration: Integration,
     reason: str,
-) -> str:
-    """Put the measured tree on the source line, and answer with the commit.
+    planned: tuple[str, ...],
+    *,
+    at: str,
+) -> tuple[Experiment, PreparedPromotion]:
+    """Make the merge commit, and record it as this promotion before it is used.
 
-    The commit first and the ref after it, which is the order every write here
-    follows for the same reason: a commit nothing names is inert and collectable,
-    while a ref moved before there was anything to move it to is not a state to
-    be in. The move is a compare-and-swap against the revision the run
-    integrated onto, so a source line that took a commit between the evidence
-    being read and this being written refuses in Git's own words instead of
-    carrying a tree nobody measured.
+    The commit first, because a commit nothing names is inert and collectable, so
+    a run stopping there has done nothing at all. The record second and the ref
+    move third: the record is what makes that commit *this operation's*, and
+    without it a run interrupted around the move would have to recognise its own
+    work by shape and could not tell it from a merge somebody made by hand.
+
+    The order also settles what a retry may re-read, which is nothing. The
+    recorded merge input is the revision the retry moves from — never a fresh
+    reading of the line — because the two can differ, and a retry that re-pinned
+    the line would put a tree measured against the old one onto the new.
     """
 
     revision, complaint = commit_merge(
@@ -1608,13 +1745,74 @@ def _carry(
             "carrying the measured tree, and it is made by whoever promotes — a checkout Git will not commit in "
             "is one this promotion cannot be recorded from"
         )
-    moved = move_ref(config.repo_root, integration.merge_input_ref, revision, integration.merge_input_revision)
+    prepared = PreparedPromotion(
+        round_number=experiment.last_round.number,
+        candidate_revision=integration.candidate_revision,
+        merge_input_revision=integration.merge_input_revision,
+        merge_input_ref=integration.merge_input_ref,
+        tree=integration.tree,
+        revision=revision,
+        reason=reason,
+        planned_targets=planned,
+        prepared_at=at,
+    )
+    written = replace(experiment, promotion=prepared)
+    _write_record(config, written)
+    return written, prepared
+
+
+def _land(config: EvolutionConfig, experiment: Experiment, prepared: PreparedPromotion) -> None:
+    """Move the source line to the prepared merge, or refuse in Git's own words.
+
+    A compare-and-swap from the revision the replay integrated onto: what
+    advances a release line is ordinary Git, which the single-writer lock does
+    not cover, so the reading and the write are one operation rather than a look
+    followed by a leap. A line that took a commit in between refuses here instead
+    of carrying a tree nobody measured.
+
+    The worktree question is asked again rather than inherited from the gate: a
+    run finishing an interrupted promotion never went through that gate, and
+    between the two runs somebody may have checked the line out.
+    """
+
+    _require_line_not_checked_out(config, prepared.merge_input_ref)
+    moved = move_ref(config.repo_root, prepared.merge_input_ref, prepared.revision, prepared.merge_input_revision)
     if moved is None:
-        return revision
+        return
     raise BatchError(
-        f"{integration.merge_input_ref} did not take {revision[:12]}: {moved}; the source line is moved from the "
-        f"commit the replay integrated onto ({integration.merge_input_revision[:12]}) and from no other, so a "
-        "line that has moved since is replayed against where it now stands and promoted from that"
+        f"{prepared.merge_input_ref} did not take {prepared.revision[:12]}: {moved}; the source line is moved "
+        f"from the commit the replay integrated onto ({prepared.merge_input_revision[:12]}) and from no other, "
+        f"so {experiment.experiment_id} is replayed against where the line now stands and promoted from that"
+    )
+
+
+def _discard_promotion(
+    config: EvolutionConfig,
+    experiment: Experiment,
+    prepared: PreparedPromotion,
+) -> NoReturn:
+    """Give up a prepared promotion that demonstrably never reached the line.
+
+    The one state a prepared promotion is dropped from, and dropping it is safe
+    precisely because the state is demonstrable: the merge is not on the line and
+    the line no longer stands where the merge was to be made from, so nothing
+    anywhere carries it and the commit is an unreferenced object Git collects.
+    Keeping it would shut this experiment out of every operation that refuses
+    over an unfinished promotion, on behalf of one that can never be finished —
+    the line has moved, so the evidence behind it describes a tree that is no
+    longer the one in question.
+
+    Written and then refused rather than written and retried: a promotion from
+    here needs evidence measured against the line as it now stands, which is a
+    replay and not something this operation may do on the operator's behalf.
+    """
+
+    _write_record(config, replace(experiment, promotion=None))
+    raise BatchError(
+        f"{experiment.experiment_id}: the promotion prepared as {prepared.revision[:12]} never reached "
+        f"{prepared.merge_input_ref}, which no longer stands at the {prepared.merge_input_revision[:12]} it was "
+        "to be made from; that prepared promotion is discarded, and the evidence behind it now describes a line "
+        "that has moved on — replay this round as the line stands and promote that"
     )
 
 
@@ -1647,10 +1845,7 @@ def _conclude_promoted(
     config: EvolutionConfig,
     current: BatchLineage,
     experiment: Experiment,
-    integration: Integration,
-    revision: str,
-    planned: tuple[str, ...],
-    reason: str,
+    prepared: PreparedPromotion,
     *,
     at: str,
 ) -> Path:
@@ -1661,6 +1856,12 @@ def _conclude_promoted(
     where that one names none of them because there was nothing to name. Which
     of the two a batch got is what every later reading of its lineage is checked
     against.
+
+    Every value comes from the prepared promotion rather than from the caller,
+    which is what makes the record state the promotion that happened. The plan a
+    promotion was made under was named when it was prepared; a run finishing an
+    interrupted one has no standing to name a different one, and one that could
+    would write a plan nobody promoted under as though it were the original.
     """
 
     record = {
@@ -1668,16 +1869,16 @@ def _conclude_promoted(
         "batch_id": current.batch_id,
         "outcome": OUTCOME_PROMOTED,
         "decided_at": at,
-        "reason": reason,
+        "reason": prepared.reason,
         "experiment_id": experiment.experiment_id,
-        "promotion_revision": revision,
+        "promotion_revision": prepared.revision,
         "promotion": {
-            "round": experiment.last_round.number,
-            "candidate_revision": integration.candidate_revision,
-            "merge_input_revision": integration.merge_input_revision,
-            "merge_input_ref": integration.merge_input_ref,
-            "tree": integration.tree,
-            "planned_targets": list(planned),
+            "round": prepared.round_number,
+            "candidate_revision": prepared.candidate_revision,
+            "merge_input_revision": prepared.merge_input_revision,
+            "merge_input_ref": prepared.merge_input_ref,
+            "tree": prepared.tree,
+            "planned_targets": list(prepared.planned_targets),
         },
     }
     path = _write_outcome(config, current, record)
@@ -1689,7 +1890,7 @@ def _conclude_promoted(
                 recorded_at=at,
                 batch_id=current.batch_id,
                 experiment_id=experiment.experiment_id,
-                revision=revision,
+                revision=prepared.revision,
                 detail=OUTCOME_PROMOTED,
             )
         ],
@@ -1708,9 +1909,10 @@ def _finish_promotion(
     The decision is what makes the promotion real and the outcome is what ends
     the batch, so between them is a batch still current with no experiment open —
     a state nothing else may be written over and this operation's own redo. What
-    it writes is the outcome the interrupted run would have, rebuilt from the
-    same records: the decision names the revision, and the run that justified it
-    names the merge unit.
+    it writes is the outcome the interrupted run would have, and it writes it
+    from the promotion's own record: the merge unit, the reason, and the plan it
+    was prepared under are all there, so nothing this run was called with can
+    become part of a decision that was made before it.
 
     The audit line for the decision is not written again. It may have landed and
     nothing can tell, and an audit is not state — the settled rule for every redo
@@ -1722,103 +1924,62 @@ def _finish_promotion(
     decision = last.decision if last is not None else None
     if last is None or decision is None or decision.outcome != DECISION_PROMOTED:
         raise no_open_experiment(current, "promote")
+    prepared = last.promotion
+    if prepared is None:
+        # Unreachable through `parse_experiment`, which refuses a `promoted`
+        # decision stating no merge unit; stated because the outcome below is
+        # written entirely from it.
+        raise BatchError(
+            f"{last.experiment_id} was promoted as {(decision.promotion_revision or '')[:12]} and states no "
+            "merge unit it went as; the outcome that ends this batch is the promotion's own record, so there "
+            "is nothing here to conclude it from"
+        )
     if decision.reason != reason:
         raise BatchError(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
             "recorded once and never edited, so redo the same one to finish an interrupted promotion — the "
             "batch it ends is concluded by the same reason it was promoted for"
         )
-    integration = _promoted_integration(config, last, decision)
+    _require_same_promotion(last, prepared, reason, planned)
     # The moment the decision was made, not the moment this finished it: one
     # promotion, and its two records state when it happened rather than when each
     # of them was written.
-    path = _conclude_promoted(
-        config,
-        current,
-        last,
-        integration,
-        decision.promotion_revision,
-        planned,
-        reason,
-        at=decision.decided_at,
-    )
-    return PromotionResult(
-        batch_id=current.batch_id,
-        experiment_id=last.experiment_id,
-        round_number=last.last_round.number,
-        reason=reason,
-        # The moment the decision was made, not the moment this finished it: one
-        # promotion, and its two records say when it happened rather than when
-        # each of them was written.
-        decided_at=decision.decided_at,
-        candidate_revision=integration.candidate_revision,
-        merge_input_revision=integration.merge_input_revision,
-        merge_input_ref=integration.merge_input_ref,
-        tree=integration.tree,
-        promotion_revision=decision.promotion_revision,
-        planned_targets=planned,
-        record_path=path,
-        merged=False,
-    )
+    path = _conclude_promoted(config, current, last, prepared, at=decision.decided_at)
+    return _promoted(current, last, prepared, decided_at=decision.decided_at, path=path, merged=False)
 
 
-def _promoted_integration(
-    config: EvolutionConfig,
-    experiment: Experiment,
-    decision: Decision,
-) -> Integration:
-    """The merge unit a recorded promotion went as, read back from its evidence.
-
-    The decision names the revision and the round names the candidate; what the
-    source line was and which tree the two produced live in the run that
-    justified the promotion, which is immutable and still there. Rebuilding it
-    from the replay record rather than from the repository is deliberate: the
-    line has moved on by now, and what this record has to state is what was
-    promoted, not what is on the line today.
-    """
-
-    round_ = experiment.last_round
-    candidate = round_.candidate_revision
-    runs = [
-        run
-        for run in read_replays(config, experiment).replays
-        if run.round_number == round_.number and run.completed and run.integration.candidate_revision == candidate
-    ]
-    if not runs:
-        raise BatchError(
-            f"{experiment.experiment_id} records a promotion of {decision.promotion_revision[:12]} and no "
-            f"completed run of round {round_.number} to have justified it; the outcome states the merge unit that "
-            "was promoted, which is the run's, so this promotion cannot be concluded from what is on record"
-        )
-    return runs[-1].integration
-
-
-def _redo_promotion(lineage: Lineage, reason: str) -> PromotionResult:
+def _redo_promotion(lineage: Lineage, reason: str, planned: tuple[str, ...]) -> PromotionResult:
     """The same promotion run again after it finished, or the refusal that
     nothing is current.
 
     The outcome record is what ends the batch, and the audit line follows it — so
     a run interrupted between the two left no batch current, and its own retry
-    would otherwise report that there is nothing to promote. The newest batch
-    promoted for exactly this reason is that operation, already done.
+    would otherwise report that there is nothing to promote. What it reports
+    instead is the batch that retry ended, which is the *newest* one and no
+    other: every batch before it was ended by an operation of its own, and a
+    reason repeated across two cohorts would otherwise fetch back a promotion
+    from a cycle that closed long ago and report it as this request's work.
+
+    Bound to the whole request rather than to the reason alone, for the reason
+    `_finish_promotion` is: a promotion is identified by what it was made under,
+    and a human sentence is evidence rather than the identity of an operation.
     """
 
-    promoted = [
-        item
-        for item in lineage.batches
-        if item.outcome is not None
-        and item.outcome["outcome"] == OUTCOME_PROMOTED
-        and item.outcome["reason"] == reason
-    ]
-    if not promoted:
+    latest = lineage.batches[-1] if lineage.batches else None
+    outcome = latest.outcome if latest is not None else None
+    if latest is None or outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
         raise BatchError(
             "no batch is current, so there is nothing to promote; a batch is current from the freeze of its "
             "manifest until its outcome is recorded (invariant 14), and freezing the next cohort is "
             "`aii-2 evolution start`"
         )
-    latest = promoted[-1]
-    outcome = latest.outcome or {}
     merge = outcome["promotion"]
+    if outcome["reason"] != reason or tuple(merge["planned_targets"]) != planned:
+        raise BatchError(
+            f"no batch is current, so there is nothing to promote; the newest, {latest.batch_id}, was promoted "
+            f"for {outcome['reason']!r} planning {merge['planned_targets']}, which is not this request "
+            f"({reason!r} planning {list(planned)}) redone — freezing the next cohort is `aii-2 evolution start`"
+        )
     return PromotionResult(
         batch_id=latest.batch_id,
         experiment_id=outcome["experiment_id"],
@@ -3066,6 +3227,7 @@ def _serialize(experiment: Experiment) -> dict[str, Any]:
     """
 
     decision = experiment.decision
+    promotion = experiment.promotion
     return {
         "schema_version": EXPERIMENT_SCHEMA_VERSION,
         "experiment_id": experiment.experiment_id,
@@ -3106,6 +3268,23 @@ def _serialize(experiment: Experiment) -> dict[str, Any]:
             "reason": decision.reason,
             "superseded_by": decision.superseded_by,
             "promotion_revision": decision.promotion_revision,
+        },
+        # Written explicitly as null rather than left out, the way every other
+        # absence here is: a reader meeting the key knows no promotion was
+        # prepared, where a missing one would leave it deciding between that and
+        # a record from before the field existed.
+        "promotion": None
+        if promotion is None
+        else {
+            "round": promotion.round_number,
+            "candidate_revision": promotion.candidate_revision,
+            "merge_input_revision": promotion.merge_input_revision,
+            "merge_input_ref": promotion.merge_input_ref,
+            "tree": promotion.tree,
+            "revision": promotion.revision,
+            "reason": promotion.reason,
+            "planned_targets": list(promotion.planned_targets),
+            "prepared_at": promotion.prepared_at,
         },
     }
 

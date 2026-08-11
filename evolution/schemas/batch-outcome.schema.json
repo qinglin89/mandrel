@@ -11,8 +11,7 @@
     "decided_at",
     "reason",
     "experiment_id",
-    "promotion_revision",
-    "promotion"
+    "promotion_revision"
   ],
   "properties": {
     "schema_version": {
@@ -60,7 +59,7 @@
   },
   "$defs": {
     "promotion": {
-      "description": "The merge unit `promotion_revision` names, or null for a `no-change` outcome. A promotion revision on its own says a commit carries the change and nothing about what was measured to justify it: these are the round whose candidate was exercised, the source line it was integrated onto, and the tree the two produced — which is the identity of the thing replay measured, since two commits only imply a merge result. Together they are what makes the commit checkable against the evidence rather than merely recorded beside it, and what lets a run interrupted before this record landed recognise the merge it already made.",
+      "description": "The merge unit `promotion_revision` names, or null for a `no-change` outcome. A promotion revision on its own says a commit carries the change and nothing about what was measured to justify it: these are the round whose candidate was exercised, the source line it was integrated onto, and the tree the two produced — which is the identity of the thing replay measured, since two commits only imply a merge result. Together they are what makes the commit checkable against the evidence rather than merely recorded beside it, and the controller does check them — against the promoted experiment's own prepared promotion, the completed run that measured that integration, and the commit itself wherever the checkout holds it.\n\nOptional rather than required, and absent reads as null. It arrived after this schema version shipped, and every record written before it is a `no-change` conclusion that is exactly what it claims to be — promotion had no operation then. A version is bumped when a reader needs something old records cannot supply; requiring a field only newer records can carry would instead stop a conclusion loading that was valid when it ended its batch, on content nothing may edit. A `promoted` outcome states it all the same: the pairing rule the controller enforces asks for the experiment, the revision, and the merge unit together.",
       "type": [
         "object",
         "null"

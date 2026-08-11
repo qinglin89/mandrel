@@ -41,7 +41,9 @@ from evolution_fixtures import (
     git_try_update_ref,
     git_unrelated_commit,
     git_update_ref,
+    git_worktree,
     make_repo,
+    prepared_promotion,
     rejection,
     snapshot,
     write_closure,
@@ -108,6 +110,13 @@ def batch(config: evolution.EvolutionConfig) -> Path:
 
 def record(config: evolution.EvolutionConfig, experiment_id: str) -> dict:
     return json.loads((config.experiments_root / experiment_id / "experiment.json").read_text(encoding="utf-8"))
+
+
+def candidate_of(config: evolution.EvolutionConfig, experiment_id: str) -> str:
+    """The revision the experiment's last round pinned — what a promotion of it
+    carries, and what any record naming that round has to agree with."""
+
+    return record(config, experiment_id)["rounds"][-1]["seal"]["candidate_revision"]
 
 
 def rewrite(config: evolution.EvolutionConfig, experiment_id: str, **changes) -> None:
@@ -2773,6 +2782,7 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
         config,
         EXP_01,
         decision=experiment_decision("promoted", promotion_revision="f" * 40),
+        promotion=prepared_promotion(candidate_revision=candidate_of(config, EXP_01)),
     )
     experiments.reject(config, ["hook-side-loader", "not-worth-it"], reason="not recurrence", now=LATER)
 
@@ -2873,6 +2883,17 @@ def prepared(config: evolution.EvolutionConfig, *, report: object | None = None)
 
 def outcome_of(config: evolution.EvolutionConfig) -> dict:
     return json.loads((config.batches_root / BATCH_ID / "outcome.json").read_text(encoding="utf-8"))
+
+
+def repoint(config: evolution.EvolutionConfig, ref: str) -> None:
+    """Say the recorded run integrated onto another line. For the cases where
+    what is being tested is which ref a promotion would move, rather than which
+    one the replay fixture happened to use."""
+
+    path = config.experiments_root / EXP_01 / "replays.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["replays"][0]["integration"]["merge_input_ref"] = ref
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def test_promoting_puts_the_measured_tree_on_the_source_line(
@@ -3182,49 +3203,100 @@ def test_only_the_tree_that_was_measured_is_promoted(
 def test_a_source_line_that_moves_under_the_promotion_refuses(
     config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The evidence is read and the line is moved afterwards, and nothing this
-    package locks covers the gap — what advances a release line is ordinary Git.
-    So the move is a compare-and-swap against the revision the run integrated
-    onto, and a line that took a commit in between refuses in Git's own words."""
+    """The line is read and moved afterwards, and nothing this package locks
+    covers the gap — what advances a release line is ordinary Git. So the move
+    is a compare-and-swap against the revision the run integrated onto, and a
+    line that took a commit between the last look and the write refuses in Git's
+    own words rather than carrying a tree nobody measured."""
 
     prepared(config)
-    landed = revisions.commit_merge
+    stood = experiments._standing
 
-    def interleaved(repo_root, tree, parents, message):
-        result = landed(repo_root, tree, parents, message)
+    def interleaved(config_, experiment, prepared_):
+        answer = stood(config_, experiment, prepared_)
         git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "x\n", "meanwhile"))
-        return result
+        return answer
 
-    monkeypatch.setattr(experiments, "commit_merge", interleaved)
+    monkeypatch.setattr(experiments, "_standing", interleaved)
 
     with pytest.raises(evolution.BatchError, match=f"{RELEASE_REF} did not take"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert record(config, EXP_01)["decision"] is None
     assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
+    # The prepared promotion stays: nothing here proves it never landed, and the
+    # next run is what asks the line rather than assuming either way.
+    assert record(config, EXP_01)["promotion"] is not None
 
 
-def test_the_line_this_checkout_is_on_is_not_promoted_onto(
+def test_a_line_that_moved_before_the_merge_landed_gives_up_the_promotion(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same race caught one step earlier, where the answer is different: the
+    merge demonstrably never reached the line, so the prepared promotion is
+    discarded rather than left blocking the experiment for work that can never
+    be finished — the evidence behind it describes a line that has moved on."""
+
+    prepared(config)
+    made = revisions.commit_merge
+
+    def interleaved(repo_root, tree, parents, message):
+        result = made(repo_root, tree, parents, message)
+        git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "x\n", "meanwhile"))
+        return result
+
+    monkeypatch.setattr(experiments, "commit_merge", interleaved)
+
+    with pytest.raises(evolution.BatchError, match="never reached"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert record(config, EXP_01)["promotion"] is None
+    assert record(config, EXP_01)["decision"] is None
+    assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
+    # And the experiment is free again: the guard that refuses to end an attempt
+    # under a prepared promotion has nothing left to hold.
+    experiments.abandon(config, reason="the release line moved on", now=LATEST)
+
+
+def test_the_line_a_working_tree_is_on_is_not_promoted_onto(
     config: evolution.EvolutionConfig, batch: Path, release: str
 ) -> None:
     """A promotion moves a ref and touches no working tree, which is only safe
-    while the ref is somebody else's: moving this one would leave the tree and
-    the index describing the commit before it."""
+    while the ref is nobody's: moving this one would leave that tree and its
+    index describing the commit before it."""
 
     run = prepared(config)
-    checked_out = revisions.checked_out_ref(config.repo_root)
-    assert checked_out is not None and checked_out != RELEASE_REF
-    git_update_ref(config.repo_root, checked_out, run.integration.merge_input_revision)
-    path = config.experiments_root / EXP_01 / "replays.json"
-    written = json.loads(path.read_text(encoding="utf-8"))
-    written["replays"][0]["integration"]["merge_input_ref"] = checked_out
-    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    checked_out = revisions.checked_out_refs(config.repo_root)
+    assert checked_out and RELEASE_REF not in checked_out
+    branch = next(iter(checked_out))
+    git_update_ref(config.repo_root, branch, run.integration.merge_input_revision)
+    repoint(config, branch)
 
-    with pytest.raises(evolution.BatchError, match="is the branch this checkout is on"):
+    with pytest.raises(evolution.BatchError, match="is checked out at"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
-    assert git_rev(config.repo_root, checked_out) == run.integration.merge_input_revision
+    assert git_rev(config.repo_root, branch) == run.integration.merge_input_revision
     assert record(config, EXP_01)["decision"] is None
+    assert record(config, EXP_01)["promotion"] is None
+
+
+def test_a_line_checked_out_by_another_worktree_is_not_promoted_onto(
+    config: evolution.EvolutionConfig, batch: Path, release: str, tmp_path: Path
+) -> None:
+    """`HEAD` answers only for the checkout that asks. A branch handed to a
+    linked worktree is one this process never looks at, and `update-ref` moves
+    it there without a word — leaving a directory the operator may not have
+    thought about describing the commit before."""
+
+    prepared(config)
+    linked = git_worktree(config.repo_root, tmp_path / "linked", RELEASE_REF)
+    assert Path(revisions.checked_out_refs(config.repo_root)[RELEASE_REF]).resolve() == linked
+
+    with pytest.raises(evolution.BatchError, match=f"{RELEASE_REF} is checked out at"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == release
+    assert record(config, EXP_01)["promotion"] is None
 
 
 def test_promoting_needs_an_open_experiment(
@@ -3243,25 +3315,34 @@ def test_promoting_needs_an_open_experiment(
 # --- a promotion whose records did not land ----------------------------------
 
 
+def interrupt(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Stop the promotion at one of its writes, the way a process that dies
+    between two of them does."""
+
+    monkeypatch.setattr(
+        experiments,
+        name,
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+
+
 def test_the_merge_a_promotion_made_is_recognised_rather_than_made_again(
     config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Once the line has moved the promotion exists in the world, and this
     experiment's evidence is stale from then on — including for the run that
-    comes back to finish it. So the redo asks whether the line stands at *this*
-    merge before it asks anything of the evidence."""
+    comes back to finish it. So the second run asks the prepared record which
+    commit was this operation's, and Git whether that commit is on the line,
+    before it asks anything of the evidence."""
 
     run = prepared(config)
-    monkeypatch.setattr(
-        experiments,
-        "_decide",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
-    )
+    interrupt(monkeypatch, "_decide")
     with pytest.raises(OSError):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
     monkeypatch.undo()
     carried = git_rev(config.repo_root, RELEASE_REF)
     assert carried != release
+    assert record(config, EXP_01)["promotion"]["revision"] == carried
 
     result = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
@@ -3275,18 +3356,119 @@ def test_the_merge_a_promotion_made_is_recognised_rather_than_made_again(
     assert outcome_of(config)["promotion_revision"] == carried
 
 
+def test_a_promotion_the_line_has_moved_past_is_still_finished(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line that took another commit after the promotion still carries the
+    promotion. Reading the *tip* would call that unrecognisable and leave the
+    operation half-done for good — the merge on the canonical line with no
+    record of it anywhere — so the question is ancestry."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_decide")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+    carried = git_rev(config.repo_root, RELEASE_REF)
+    later = git_sibling_commit(config.repo_root, carried, "later\n", "ordinary release work")
+    git_update_ref(config.repo_root, RELEASE_REF, later)
+
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert result.merged is False and result.promotion_revision == carried
+    # Nothing rewound: the promotion is a fact about a commit, not about where
+    # the branch happens to stand afterwards.
+    assert git_rev(config.repo_root, RELEASE_REF) == later
+    assert record(config, EXP_01)["decision"]["promotion_revision"] == carried
+    assert outcome_of(config)["promotion"]["merge_input_revision"] == release
+
+
+def test_a_promotion_interrupted_before_the_line_moved_moves_it_next_time(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window the prepared record exists for: a merge commit made, named by
+    the record, and not yet on the line. The next run moves that commit rather
+    than making a second one."""
+
+    prepared(config)
+    interrupt(monkeypatch, "move_ref")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+    made = record(config, EXP_01)["promotion"]["revision"]
+    assert git_rev(config.repo_root, RELEASE_REF) == release
+
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+
+    assert result.promotion_revision == made
+    assert git_rev(config.repo_root, RELEASE_REF) == made
+    assert record(config, EXP_01)["promotion"]["revision"] == made
+    assert outcome_of(config)["promotion_revision"] == made
+
+
+def test_an_attempt_is_not_ended_under_a_prepared_promotion(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one place this controller could create the split it exists to
+    prevent: abandoning the experiment retires the only record saying the line
+    may already be carrying its merge."""
+
+    prepared(config)
+    interrupt(monkeypatch, "move_ref")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+
+    for ending in (
+        lambda: experiments.abandon(config, reason="on reflection, no", now=LATEST),
+        lambda: experiments.supersede(config, reason="try another approach", now=LATEST),
+        # And the other way to move on: a round opened over the prepared merge
+        # leaves it naming a round that is no longer the last, which is a
+        # promotion nothing could afterwards record.
+        lambda: experiments.revise(config, reason="one more pass", now=LATEST),
+    ):
+        with pytest.raises(evolution.BatchError, match="moving on now would retire"):
+            ending()
+
+
 def test_a_line_that_moved_for_somebody_else_is_not_this_promotion(
     config: evolution.EvolutionConfig, batch: Path, release: str
 ) -> None:
-    """The recognition is the commit's own shape — those two parents, that tree.
-    An ordinary commit on the line is not it, and is refused as the stale
-    evidence it makes rather than adopted as a promotion nobody made."""
+    """An ordinary commit on the line is refused as the stale evidence it makes,
+    rather than adopted as a promotion nobody made."""
 
     prepared(config)
     git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "other\n", "release work"))
 
     with pytest.raises(evolution.BatchError, match="is stale and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+
+def test_a_merge_this_operation_did_not_make_is_not_its_promotion(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """The hard case for recognition by shape, and the reason the commit is
+    recorded instead: a merge somebody made by hand has the same two parents and
+    the same tree, down to the last byte but its own identity. Adopting it would
+    record a promotion this controller never performed — with the operator's
+    reason, the plan, and the audit line attached to somebody else's commit."""
+
+    run = prepared(config)
+    by_hand, complaint = revisions.commit_merge(
+        config.repo_root,
+        run.integration.tree,
+        [release, run.integration.candidate_revision],
+        "merge the candidate, by hand",
+    )
+    assert by_hand is not None, complaint
+    git_update_ref(config.repo_root, RELEASE_REF, by_hand)
+
+    with pytest.raises(evolution.BatchError, match="is stale and cannot be promoted"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert record(config, EXP_01)["decision"] is None
+    assert record(config, EXP_01)["promotion"] is None
+    assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
 
 
 def test_a_decision_without_its_outcome_is_finished_by_the_same_promotion(
@@ -3326,17 +3508,71 @@ def test_a_different_reason_after_the_decision_is_not_that_promotion_redone(
     config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared(config)
-    monkeypatch.setattr(
-        experiments,
-        "_conclude_promoted",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")),
-    )
+    interrupt(monkeypatch, "_conclude_promoted")
     with pytest.raises(OSError):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
     monkeypatch.undo()
 
     with pytest.raises(evolution.BatchError, match="already ended as 'promoted'"):
         experiments.promote(config, reason="on reflection, something else", targets=TARGETS, now=LATEST)
+
+
+def test_the_outcome_states_the_plan_the_promotion_was_made_under(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A promotion is identified by everything it was made under, not by its
+    human sentence. A retry naming other targets is refused rather than allowed
+    to write them as the original plan — the record would then say the promotion
+    was made for a set of targets nobody promoted to."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_conclude_promoted")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+
+    with pytest.raises(evolution.BatchError, match="prepared for .* planning"):
+        experiments.promote(config, reason=WHY, targets=("orch-hub",), now=LATEST)
+
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+    assert result.planned_targets == TARGETS
+    assert outcome_of(config)["promotion"]["planned_targets"] == list(TARGETS)
+
+
+def test_a_promotion_from_a_cycle_that_closed_is_not_this_request_redone(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """The redo reports the batch its own first run ended, which is the newest
+    one. Searching every batch for a matching reason fetches back a promotion
+    from a cycle that closed long ago and reports it as this request's work —
+    while what this request actually needs is a batch to promote from."""
+
+    prepared(config)
+    first = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    write_manifest(config.batches_root, SECOND_BATCH, ["r3"], analysis_task_id="2026-08-04-second-analysis")
+    write_closure(config.batches_root, SECOND_BATCH, analysis_task_id="2026-08-04-second-analysis")
+    (config.batches_root / SECOND_BATCH / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    experiments.conclude_no_change(config, reason="the second cohort justified nothing", now=LATEST)
+
+    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+
+    # And the promotion it would have reported is untouched history.
+    assert phase.describe(config, now=LATEST).last_promotion.revision == first.promotion_revision
+
+
+def test_a_finished_promotion_is_reported_only_to_the_request_that_made_it(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """Same rule at the far end: the whole request identifies the operation, so
+    a retry naming other targets is a different promotion of a batch that no
+    longer exists rather than this one, already done."""
+
+    prepared(config)
+    experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+        experiments.promote(config, reason=WHY, targets=("orch-hub",), now=LATEST)
 
 
 def test_promoting_again_reports_the_promotion_rather_than_making_a_second(

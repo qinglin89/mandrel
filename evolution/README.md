@@ -124,7 +124,7 @@ another — a candidate measured against the wrong one measures nothing.
 | Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
 | Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
-| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree | `outcome.json.promotion_revision`, `outcome.json.promotion` |
+| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
 
 The middle two are the pair a promotion is decided from, and neither stands in
@@ -153,7 +153,7 @@ evolution/
   batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   cases/                            curated sanitized regression cases
-  experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, decision
+  experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, prepared promotion, decision
   experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
 
 refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
@@ -632,25 +632,53 @@ way for a promotion to be unjustified:
   own analysis with nobody left to answer it. The same condition holds for a
   `no-change` conclusion, for the same reason.
 
-Then two writes make it real, in one order. The merge commit is written first
+A further check belongs to the repository rather than to the evidence: no
+working tree may be sitting on the source line. A promotion moves a ref and
+touches nothing else, which is what lets it run in a checkout busy with
+unrelated work — and that is only true while the branch is nobody's. Every
+worktree is asked, not the promoting process's own `HEAD`: a branch handed to a
+linked worktree is one nothing here would otherwise look at, and the low-level
+ref update moves it there without a word, leaving that tree and its index
+describing the commit before while everything the promotion carried reads as a
+pending deletion.
+
+Then three writes make it real, in one order. The merge commit is written first
 and named by nothing, so a run that stops there leaves an unreferenced object Git
-collects. Then the source-line ref moves, compare-and-swap from the revision the
-replay integrated onto: what advances a release line is ordinary Git, which no
-lock here covers, so a line that took a commit between the evidence being read
+collects. Then the **prepared promotion** is recorded on the experiment — the
+merge unit, the exact commit, the reason, and the plan — because everything
+after this point is recoverable only by a run that can say which commit was this
+operation's. Then the source-line ref moves, compare-and-swap from the revision
+the replay integrated onto: what advances a release line is ordinary Git, which
+no lock here covers, so a line that took a commit between the evidence being read
 and the merge being put on it refuses instead of carrying something nobody
 measured.
 
 After that move the promotion exists in the world whatever happens to the
 process, and this experiment's evidence is stale from then on — including for
-the run that comes back to finish it. So the redo does not ask the evidence
-first: it asks whether the source line already stands at *this* merge, which is
-the commit's own shape — those two parents, that tree — and nothing else is that
-commit. An ordinary commit on the line is not mistaken for one, and a later
-commit built on the promotion has the promotion as its parent rather than those
-two. The records that follow are written while the line is held where it was put
-and while the experiment's ref is held where it was read, for the same reason
-every other transition holds one: both are read and then recorded, and neither
-reading survives the write it justifies.
+the run that comes back to finish it. So the second run does not ask the
+evidence: it asks the prepared record which commit was this operation's, and Git
+whether that commit is on the line. Neither weaker question works. A commit's
+*shape* — those two parents, that tree — is shared by a merge somebody made by
+hand, and reading shapes records a promotion this controller never performed. The
+ref's *tip* is not it either: a line that took further commits after the
+promotion still carries it, and a run that could not see that would leave the
+canonical line holding a merge with no record of it anywhere. A prepared
+promotion the line demonstrably never took — the merge is not on it, and it no
+longer stands where the merge was to be made from — is discarded, because the
+evidence behind it describes a line that has moved on and nothing can finish it;
+one still waiting is moved by the next run rather than made again.
+
+While a promotion is prepared, the experiment is not ended by anything else.
+Abandoning or superseding it would retire the only record saying the line may
+already be carrying its merge, which is the one way this controller could
+produce the split it exists to prevent.
+
+The records that follow are written while the experiment's ref is held where it
+was read, for the reason every other transition holds one: that reading does not
+survive the write it justifies. The source line is deliberately *not* held. A
+promotion is a fact about a commit rather than about where a branch stands
+afterwards, and holding the line would turn an ordinary advance arriving a moment
+later into a promotion nobody can finish.
 
 A promotion promises nothing about deployment. The outcome records the targets it
 was **planned** for, as names rather than machine-local paths, and that is a plan
@@ -669,7 +697,11 @@ reach it:
   revision, and the merge unit it went as (the round, the candidate, the source
   line and ref it was integrated onto, the tree, and the targets it was planned
   for). The revision alone would be a commit nothing could afterwards be held to;
-  with the merge unit it is checkable against the run that justified it.
+  with the merge unit it is checkable against the run that justified it — and it
+  is checked, on every reading, against the promoted experiment's own prepared
+  promotion, against the completed run that measured that exact integration, and
+  against the commit itself wherever the checkout holds it. A claim nothing
+  checks is one a schema-valid record makes freely.
 - `no-change` — the evidence justified no change to anything (invariant 7). The
   record carries the reason and nothing else: no experiment, no promotion
   revision, and no commit invented to represent a change that was not made.
@@ -709,6 +741,14 @@ re-derived on every read from the committed manifests, closure records,
 experiment records, replay records, rejection records, the experiment refs, and
 Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
 derive the same answer.
+
+Deriving is also where the records are held to each other. A concluded batch and
+its experiments state one history, and the merge unit a promoted outcome carries
+is checked against the promoted experiment's own prepared promotion, the
+completed run that measured that exact integration, and the commit itself
+wherever the checkout holds it. A record whose claim nothing checks is a claim
+any schema-valid file can make, and this one names what reached the canonical
+source line.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run
@@ -754,8 +794,9 @@ conclusion writes one record and an audit line for the same reason. A replay
 start writes only its record, and a withdrawal only takes one back: what an audit
 would say about either is what the record already says, and the run's outcome is
 the event there is something to audit about. A promotion writes further than any
-of them — a commit and a ref on the source line, then two records and two audit
-lines — and it is the one whose first half cannot be undone by this controller.
+of them — a commit, the record naming it, a ref on the source line, then two
+more records and two audit lines — and it is the one whose middle cannot be
+undone by this controller.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
@@ -809,11 +850,17 @@ would disagree are the ones being written. So a seal, a revision, and a terminal
 decision are recorded under Git's own lock on that ref, held at the revision they
 read; one that cannot be held there records nothing and is decided again from
 where the ref now stands. A supersession's successor works on a ref of its own,
-which that hold neither covers nor stands in the way of creating. A promotion
-holds a second ref beside it — the source line, at the commit it has just put
-there — because that revision is being recorded too, and a line moving on before
-the records land leaves the merge unrecognisable to the run that comes back to
-finish them.
+which that hold neither covers nor stands in the way of creating. The source
+line a promotion moves is deliberately not held that way: what makes that
+operation finishable is the commit it recorded before moving anything, so a line
+advancing afterwards is ordinary rather than fatal, and holding it would make
+every such advance a promotion nobody could complete.
+
+An ending is guarded once more, by whether the attempt has a promotion prepared
+on it. That record may name a merge already on the canonical line with only its
+own records missing, so abandoning or superseding retires the one statement that
+this is so — the single way an operation here could leave another repository's
+release line describing something no record explains.
 
 That order is the same throughout. The experiment ref goes first, because it is
 the one thing that must never be created twice or restored afterwards: a clone
