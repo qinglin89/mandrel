@@ -95,6 +95,7 @@ from .guards import (
     require_consistent_ref,
     require_no_pending_successor,
     require_open_experiment,
+    require_readable_evidence,
     require_stage_ended,
     settled,
 )
@@ -1259,6 +1260,12 @@ def conclude_no_change(
             return _redo_conclusion(lineage, text)
         require_stage_ended(config, current)
         require_no_pending_successor(current)
+        # This operation assembles the preamble itself, so the reading
+        # `current_cycle` makes is restated rather than inherited: a conclusion
+        # is what stops a batch being current, and one written over an
+        # unreadable replay record would take that record out of every later
+        # reading along with the batch.
+        require_readable_evidence(config, current)
         _require_nothing_outstanding(current)
 
         stamp = format_rfc3339(moment)

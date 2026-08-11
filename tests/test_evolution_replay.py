@@ -46,6 +46,7 @@ from evolution_fixtures import (
     measurement,
     replay_entry,
     replay_integration,
+    replay_pending,
     replay_result,
     write_closure,
     write_draft,
@@ -117,7 +118,13 @@ def errors(instance: Any) -> list[str]:
 
 
 def record(replays: list[dict], **overrides: Any) -> dict[str, Any]:
-    return {"schema_version": 1, "experiment_id": EXPERIMENT_ID, "replays": replays, **overrides}
+    return {
+        "schema_version": 1,
+        "experiment_id": EXPERIMENT_ID,
+        "pending": None,
+        "replays": replays,
+        **overrides,
+    }
 
 
 def harness_of(handle: str | None, harness_id: str = "local-replay") -> dict:
@@ -267,10 +274,36 @@ def test_a_run_that_is_still_going_and_one_that_finished_both_validate() -> None
             "negative elapsed time",
             record([replay_entry(result=replay_result(elapsed_seconds=-1))]),
         ),
+        ("unknown property on the outstanding request", record([], pending={**replay_pending(), "handle": "run-1"})),
+        (
+            "outstanding request with no expectation",
+            record([], pending={key: value for key, value in replay_pending().items() if key != "expectation"}),
+        ),
+        (
+            "outstanding request naming a source line this checkout would resolve",
+            record([], pending=replay_pending(integration=replay_integration(merge_input_ref="HEAD"))),
+        ),
     ],
 )
 def test_the_schema_refuses_a_record_it_cannot_read_as_evidence(description: str, instance: dict) -> None:
     assert errors(instance), f"{description} was accepted"
+
+
+def test_a_request_the_harness_has_not_answered_for_is_part_of_the_record() -> None:
+    """The request is written before the harness is asked, so the file has a
+    third ordinary state beside a run going and a run finished: a position
+    committed to, with nothing recorded under it yet."""
+
+    assert errors(record([], pending=replay_pending())) == []
+    assert errors(record([replay_entry(1, 1)], pending=replay_pending(1, 2))) == []
+
+
+def test_a_record_that_does_not_say_whether_a_request_stands_is_refused() -> None:
+    """Invariant 4 again: absent and null are different claims. A reader given a
+    record with no `pending` at all would take "nothing outstanding" from a file
+    that never said so, which is the one reading that loses a run."""
+
+    assert errors({key: value for key, value in record([]).items() if key != "pending"})
 
 
 @pytest.mark.parametrize("field", ["ambiguity", "elapsed_seconds", "regressions"])
@@ -291,7 +324,7 @@ def test_an_experiment_nobody_has_measured_reads_as_no_evidence(config: evolutio
     """The ordinary state of every round before its first replay: the absence of
     a file and a file listing nothing are the same fact about the evidence."""
 
-    assert replay.read_replays(config, sealed_experiment(config)) == ()
+    assert replay.read_replays(config, sealed_experiment(config)) == replay.History(replays=(), pending=None)
 
 
 def test_the_pinned_inputs_survive_the_round_trip(config: evolution.EvolutionConfig) -> None:
@@ -302,7 +335,7 @@ def test_the_pinned_inputs_survive_the_round_trip(config: evolution.EvolutionCon
         [replay_entry(1, 1, integration=replay_integration(candidate_revision=CANDIDATE))],
     )
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.round_number == 1 and run.attempt == 1
     assert run.integration.candidate_revision == CANDIDATE
     assert run.integration.base_revision == BASE
@@ -326,7 +359,7 @@ def test_the_record_is_a_request_that_would_run_the_same_thing_again(
     experiment = sealed_experiment(config)
     write_replays(config.experiments_root, EXPERIMENT_ID, [replay_entry(1, 1)])
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.request.reproduce == replay.ReplayPlan(
         cases=run.cases, evaluator=run.evaluator, harness=run.harness
     )
@@ -408,8 +441,8 @@ def test_an_integer_too_large_for_a_float_is_still_a_measurement(
     instance = record([replay_entry(1, 1, result=numeric_result(field, huge))])
     replay.replays_path(experiment).write_text(json.dumps(instance), encoding="utf-8")
 
-    (from_disk,) = replay.read_replays(config, experiment)
-    (from_writer,) = replay.parse_replays(config, instance, experiment)
+    (from_disk,) = replay.read_replays(config, experiment).replays
+    (from_writer,) = replay.parse_replays(config, instance, experiment).replays
     assert from_disk == from_writer
     measured = (
         from_disk.result.elapsed_seconds
@@ -588,6 +621,113 @@ def test_one_round_is_measured_against_one_integration_at_a_time(
         replay.read_replays(config, experiment)
 
 
+@pytest.mark.parametrize(
+    ("description", "entries", "pending", "match"),
+    [
+        (
+            "a request made under a run that has not finished",
+            [replay_entry(1, 1, running=True)],
+            replay_pending(1, 2),
+            "still running",
+        ),
+        (
+            "a request holding a position a recorded run already has",
+            [replay_entry(1, 1)],
+            replay_pending(1, 1),
+            "next attempt is 2",
+        ),
+        (
+            "a request skipping a position",
+            [replay_entry(1, 1)],
+            replay_pending(1, 3),
+            "next attempt is 2",
+        ),
+        (
+            "a request for a round the newest run has already passed",
+            [replay_entry(1, 1), "second"],
+            replay_pending(1, 2),
+            "appended in round order",
+        ),
+    ],
+)
+def test_a_request_stands_where_the_run_it_becomes_will(
+    config: evolution.EvolutionConfig, description: str, entries: list, pending: dict, match: str
+) -> None:
+    """A request that could not be answered is worse than one never made: `start`
+    would resume it and the parser would then refuse the run it wrote, leaving
+    the position stuck. So the position is checked while the request is."""
+
+    experiment = two_rounds(config)
+    resolved = [second_round_entry() if entry == "second" else entry for entry in entries]
+    write_replays(config.experiments_root, EXPERIMENT_ID, resolved, pending=pending)
+
+    with pytest.raises(evolution.BatchError, match=match):
+        replay.read_replays(config, experiment)
+
+
+@pytest.mark.parametrize(
+    ("description", "pending", "match"),
+    [
+        (
+            "a request against a round with nothing pinned",
+            replay_pending(2),
+            "does not have|carries no seal",
+        ),
+        (
+            "a request against a candidate no seal fixed",
+            replay_pending(1, integration=replay_integration(candidate_revision="c" * 40)),
+            "while round 1 pinned",
+        ),
+        (
+            "a request against another batch's base",
+            replay_pending(1, integration=replay_integration(base_revision="7" * 40)),
+            "was created on",
+        ),
+        (
+            "a request naming a source line no ref can hold",
+            replay_pending(1, integration=replay_integration(merge_input_ref="refs/heads/release.lock")),
+            "not a name Git can hold",
+        ),
+    ],
+)
+def test_a_request_is_held_to_the_rules_the_run_it_becomes_will_be(
+    config: evolution.EvolutionConfig, description: str, pending: dict, match: str
+) -> None:
+    """One step earlier than the run: a request the record could not hold once the
+    harness answered is one `start` should never have made, and finding that out
+    at the resume leaves the position blocked instead."""
+
+    experiment = sealed_experiment(config)
+    write_replays(config.experiments_root, EXPERIMENT_ID, [], pending=pending)
+
+    with pytest.raises(evolution.BatchError, match=match):
+        replay.read_replays(config, experiment)
+
+
+def test_a_request_and_the_runs_before_it_are_read_together(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Both halves of one file: the runs recorded, and the position committed to
+    but not yet recorded. Which attempt is next cannot be answered from either
+    alone."""
+
+    experiment = sealed_experiment(config)
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [replay_entry(1, 1)],
+        pending=replay_pending(1, 2, requested_at="2026-08-08T09:00:00Z"),
+    )
+
+    history = replay.read_replays(config, experiment)
+
+    assert [run.attempt for run in history.replays] == [1]
+    assert history.pending is not None
+    assert (history.pending.round_number, history.pending.attempt) == (1, 2)
+    assert history.pending.requested_at == "2026-08-08T09:00:00Z"
+    assert history.pending.integration.candidate_revision == CANDIDATE
+
+
 def test_a_run_that_was_overtaken_is_one_nothing_will_conclude(
     config: evolution.EvolutionConfig,
 ) -> None:
@@ -643,7 +783,7 @@ def test_a_concluded_run_may_keep_its_handle_as_provenance(
         ],
     )
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.harness.handle is None
 
 
@@ -694,7 +834,7 @@ def test_two_harnesses_may_number_their_runs_the_same_way(
         ],
     )
 
-    first, second = replay.read_replays(config, experiment)
+    first, second = replay.read_replays(config, experiment).replays
     assert first.harness.handle == second.harness.handle
     assert first.harness.id != second.harness.id
 
@@ -712,7 +852,7 @@ def test_a_harness_that_issued_no_name_leaves_nothing_to_collide(
         [replay_entry(1, 1, harness=harness_of(None)), replay_entry(1, 2, harness=harness_of(None))],
     )
 
-    assert len(replay.read_replays(config, experiment)) == 2
+    assert len(replay.read_replays(config, experiment).replays) == 2
 
 
 # --- what a result may say ---------------------------------------------------
@@ -783,7 +923,7 @@ def test_an_observation_needs_no_baseline(config: evolution.EvolutionConfig) -> 
         ],
     )
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.result is not None and not run.result.metrics[0].goal
 
 
@@ -795,7 +935,7 @@ def test_a_failed_run_records_why_and_nothing_else(config: evolution.EvolutionCo
         [replay_entry(1, 1, result=replay_result("failed", detail="the harness lost its worker", metrics=[]))],
     )
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.failed and run.result is not None and run.result.detail == "the harness lost its worker"
 
 
@@ -865,7 +1005,7 @@ def test_a_dot_ending_a_component_before_the_last_is_a_name_git_holds(
         [replay_entry(1, 1, integration=replay_integration(merge_input_ref=ref))],
     )
 
-    (run,) = replay.read_replays(config, experiment)
+    (run,) = replay.read_replays(config, experiment).replays
     assert run.integration.merge_input_ref == ref
 
 
@@ -1663,15 +1803,12 @@ def test_a_clone_without_the_source_line_ref_reports_the_check_it_could_not_make
     assert any("not in this checkout" in note for note in payload["replay"]["unverified"])
 
 
-def test_a_harness_that_issues_no_handle_leaves_nothing_recorded(
-    config: evolution.EvolutionConfig, admitted: None, release: str
-) -> None:
-    """A run still going is a run something can still ask about. A harness that
-    named nothing has started work this controller could never poll, conclude, or
-    find — so the record refuses, and the refusal says what is loose."""
+def nameless_harness() -> FakeHarness:
+    """A harness that starts a run and gives it no name — the one answer this
+    record cannot hold, since the handle is the whole of what a later process
+    polls."""
 
-    pinned(config)
-    nameless = FakeHarness(
+    return FakeHarness(
         plan=replay.ReplayPlan(
             cases=replay.CaseSet(case_set_id="loader-regressions", case_set_sha256="c" * 64, count=12, excluded=()),
             evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
@@ -1679,11 +1816,281 @@ def test_a_harness_that_issues_no_handle_leaves_nothing_recorded(
         )
     )
 
+
+def test_a_harness_that_issues_no_handle_leaves_the_request_naming_its_run(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """A run still going is a run something can still ask about, so a harness that
+    named nothing has started work this record refuses to hold. What it does not
+    leave is that work unnamed: the request was written before the harness was
+    asked, and it is still standing when the refusal lands."""
+
+    pinned(config)
+    nameless = nameless_harness()
+
     with pytest.raises(evolution.BatchError, match="carries no harness handle"):
         run(config, nameless)
 
     assert len(nameless.requests) == 1
-    assert not (config.experiments_root / LIVE_EXPERIMENT / "replays.json").exists()
+    outstanding = written(config)["pending"]
+    assert (outstanding["round"], outstanding["attempt"]) == (1, 1)
+    assert outstanding["integration"]["merge_input_revision"] == release
+    assert written(config)["replays"] == []
+
+
+def test_a_request_the_harness_cannot_describe_is_taken_back(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The way out of the window the request covers. A harness that cannot say
+    what it is running leaves `start` unable to finish, and a round is measured
+    against one integration at a time — so the position is released, and what may
+    still be running is reported back for the operator to stop at the harness."""
+
+    pinned(config)
+    with pytest.raises(evolution.BatchError, match="carries no harness handle"):
+        run(config, nameless_harness())
+
+    taken = replay.withdraw(config, now=ENDED)
+
+    assert taken.withdrawn is True
+    assert taken.pending is not None and (taken.pending.round_number, taken.pending.attempt) == (1, 1)
+    assert taken.pending.integration.merge_input_revision == release
+    assert written(config)["pending"] is None
+    # Nothing measured, so nothing is audited: the ledger records outcomes, and a
+    # request that never became a run produced none.
+    assert audit(config) == ["experiment-created", "tasks-admitted", "round-sealed"]
+
+    # Run again, it reports that nothing was outstanding — a single write with
+    # nothing after it either landed or did not, and absence answers both.
+    again = replay.withdraw(config, now=ENDED)
+    assert again.withdrawn is False and again.pending is None
+
+    # And the position is free: no run was recorded, so the next start is attempt
+    # 1 again rather than a gap nothing accounts for.
+    started = run(config, FakeHarness(), now=ENDED)
+    assert (started.round_number, started.attempt) == (1, 1)
+    assert started.resumed is False
+
+
+def test_the_request_is_on_record_before_the_harness_is_asked(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The order the whole recovery rests on. What the harness sees when it is
+    called is a file already naming the run it is about to begin — so an answer
+    that never comes back leaves that run named rather than loose."""
+
+    candidate = pinned(config)
+    harness = Watchful(config)
+
+    result = run(config, harness)
+
+    assert harness.saw is not None
+    assert harness.saw["replays"] == []
+    outstanding = harness.saw["pending"]
+    assert (outstanding["round"], outstanding["attempt"]) == (1, 1)
+    assert outstanding["requested_at"] == "2026-08-07T09:00:00Z"
+    assert outstanding["expectation"] == EXPECTED
+    assert outstanding["integration"]["candidate_revision"] == candidate
+    assert outstanding["integration"]["merge_input_revision"] == release
+    # And the run that answered it stands at exactly that position, with the
+    # request cleared in the same write that recorded the run.
+    assert outstanding["integration"] == written(config)["replays"][0]["integration"]
+    assert written(config)["pending"] is None
+    assert result.resumed is False
+
+
+class Watchful(FakeHarness):
+    """A harness that reads the record it is being asked from.
+
+    What it is for is the one property no assertion after the fact can make: that
+    the request was durable *before* the external thing was started.
+    """
+
+    def __init__(self, config: evolution.EvolutionConfig, **overrides: Any) -> None:
+        super().__init__(**overrides)
+        self._path = config.experiments_root / LIVE_EXPERIMENT / "replays.json"
+        self.saw: dict[str, Any] | None = None
+
+    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
+        self.saw = json.loads(self._path.read_text(encoding="utf-8"))
+        return super().start(request)
+
+
+class LosesTheAnswer(FakeHarness):
+    """A harness whose first answer never reaches the caller.
+
+    The run begins — that is the point — and the controller learns nothing about
+    it. Asked again for the same experiment, round, and attempt, it answers with
+    that run rather than starting a second, which is what `ReplayHarness.start`
+    requires of a real one.
+    """
+
+    def start(self, request: replay.ReplayRequest) -> replay.ReplayPlan:
+        plan = super().start(request)
+        if len(self.requests) == 1:
+            raise RuntimeError("the harness answered, and the answer never arrived")
+        return plan
+
+
+def test_a_start_whose_answer_never_arrived_resumes_the_same_run(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """The failure the request exists for. The harness began a run and the
+    controller never heard; running `start` again asks for that same run rather
+    than starting a second beside it, and records the one answer that comes
+    back."""
+
+    pinned(config)
+    harness = LosesTheAnswer(report=completed_report())
+
+    with pytest.raises(RuntimeError):
+        run(config, harness)
+
+    outstanding = written(config)["pending"]
+    assert (outstanding["round"], outstanding["attempt"]) == (1, 1)
+    assert written(config)["replays"] == []
+
+    resumed = run(config, harness, now=ENDED)
+
+    assert resumed.resumed is True
+    assert (resumed.round_number, resumed.attempt) == (1, 1)
+    # The run began when its integration was pinned, not when the resume finally
+    # heard back about it.
+    assert resumed.started_at == "2026-08-07T09:00:00Z"
+    # One position, asked for twice — never two runs.
+    assert [(item.round_number, item.attempt) for item in harness.requests] == [(1, 1), (1, 1)]
+    [entry] = written(config)["replays"]
+    assert entry["harness"]["handle"] == "run-0101"
+    assert entry["started_at"] == "2026-08-07T09:00:00Z"
+    assert written(config)["pending"] is None
+
+    # And it is an ordinary run from here: the conclusion polls the handle the
+    # resume recorded.
+    replay.conclude(config, harness, now=ENDED)
+    assert harness.polled == ["run-0101"]
+
+
+def test_a_write_that_fails_after_the_harness_answered_leaves_the_run_named(
+    config: evolution.EvolutionConfig, admitted: None, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same window, and the one an exception handler cannot
+    close: the harness answered, the write of that answer failed. The request is
+    already durable, so the run is still named and the retry finishes it."""
+
+    pinned(config)
+    harness = FakeHarness(report=completed_report())
+    writes: list[Path] = []
+    real = replay.atomic_write_text
+
+    def failing(path: Path, text: str) -> None:
+        writes.append(path)
+        if len(writes) == 2:
+            raise OSError("no space left on device")
+        real(path, text)
+
+    monkeypatch.setattr(replay, "atomic_write_text", failing)
+    with pytest.raises(OSError):
+        run(config, harness)
+    monkeypatch.undo()
+
+    assert written(config)["pending"] is not None
+    assert written(config)["replays"] == []
+
+    resumed = run(config, harness, now=ENDED)
+
+    assert resumed.resumed is True and (resumed.round_number, resumed.attempt) == (1, 1)
+    assert [(item.round_number, item.attempt) for item in harness.requests] == [(1, 1), (1, 1)]
+    assert len(written(config)["replays"]) == 1
+
+
+def test_a_resume_measures_what_was_pinned_rather_than_what_stands_now(
+    config: evolution.EvolutionConfig, repo: Path, admitted: None, release: str
+) -> None:
+    """A retry may not re-pin the integration. The harness is running the tree
+    that was pinned when the request was made, so a resume that pinned the source
+    line as it now stands would record a tree nobody measured — and the drift is
+    reported from the record afterwards, which is what a second attempt is for."""
+
+    pinned(config)
+    harness = LosesTheAnswer(report=completed_report())
+    with pytest.raises(RuntimeError):
+        run(config, harness)
+
+    moved = git_commit(repo, "release work")
+    git_update_ref(repo, RELEASE_REF, moved)
+
+    resumed = run(config, harness, now=ENDED)
+
+    assert resumed.integration.merge_input_revision == release
+    assert harness.requests[-1].integration.merge_input_revision == release
+    replay.conclude(config, harness, now=ENDED)
+
+    evidence = replay.describe_evidence(config, live(config))
+    assert evidence.state == replay.EVIDENCE_STALE
+    assert any("has moved" in note for note in evidence.drift)
+
+
+def test_a_resume_answers_the_request_that_stands_or_refuses(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Both arguments restate what was asked for. A mismatch is a request nobody
+    has made yet, and answering it would start a second run of one position while
+    the first goes on unnamed — so it names what is outstanding instead."""
+
+    pinned(config)
+    harness = LosesTheAnswer()
+    with pytest.raises(RuntimeError):
+        run(config, harness)
+
+    with pytest.raises(evolution.BatchError, match="outstanding"):
+        run(config, harness, source_ref="refs/heads/main", now=ENDED)
+    with pytest.raises(evolution.BatchError, match="outstanding"):
+        run(config, harness, expectation="something else entirely", now=ENDED)
+
+    assert len(harness.requests) == 1
+    assert written(config)["pending"] is not None
+
+
+def test_a_conclusion_and_an_ending_both_refuse_while_a_request_stands(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """Neither acts on a request. The newest recorded run is the wrong thing to
+    conclude while a later one may be going, and "no run to conclude" would be
+    the wrong refusal for the same reason — both say what is outstanding and how
+    to clear it."""
+
+    pinned(config)
+    harness = LosesTheAnswer(report=completed_report())
+    with pytest.raises(RuntimeError):
+        run(config, harness)
+
+    with pytest.raises(evolution.BatchError, match="outstanding"):
+        replay.conclude(config, harness, now=ENDED)
+    with pytest.raises(evolution.BatchError, match="outstanding"):
+        replay.abandon(config, reason="the harness host was rebuilt", now=ENDED)
+
+    assert harness.polled == []
+    assert written(config)["replays"] == []
+
+
+def test_a_round_with_a_request_standing_is_not_read_as_one_nobody_ran(
+    config: evolution.EvolutionConfig, admitted: None, release: str
+) -> None:
+    """It measured nothing, so the state is unchanged — but "nothing has replayed
+    this round" and "something may be running and this record does not name it
+    yet" send an operator to different places, so the reading says which."""
+
+    pinned(config)
+    with pytest.raises(RuntimeError):
+        run(config, LosesTheAnswer())
+
+    evidence = replay.describe_evidence(config, live(config))
+
+    assert evidence.state == replay.EVIDENCE_INCOMPLETE
+    assert not evidence.promotable
+    assert any("is outstanding" in note for note in evidence.drift)
+    payload = phase.describe(config, now=ENDED).to_json()
+    assert any("is outstanding" in note for note in payload["replay"]["drift"])
 
 
 def test_a_run_whose_harness_cannot_answer_is_ended_with_a_reason(

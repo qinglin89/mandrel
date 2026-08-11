@@ -424,6 +424,61 @@ def test_a_second_experiment_while_one_is_open_is_refused(
         experiments.create(config, ["hook-side-loader"], now=NOW)
 
 
+def unreadable_replays(config: evolution.EvolutionConfig, experiment_id: str) -> Path:
+    """One experiment's replay evidence, as bytes no reader will accept."""
+
+    path = config.experiments_root / experiment_id / "replays.json"
+    path.write_text("{ this was a replay record\n", encoding="utf-8")
+    return path
+
+
+def test_a_replay_record_nobody_can_read_stops_the_lifecycle(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The preamble's rule applied to the one persisted state these operations do
+    not otherwise touch. Replay's own writes read that file anyway; the
+    lifecycle's never do, so without this an attempt can be added to, revised, or
+    ended over a record nobody can read."""
+
+    seal(config, ["loader-fallback"])
+    unreadable_replays(config, EXP_01)
+
+    for operation in (
+        lambda: experiments.add_tasks(config, ["hook-side-loader"], now=LATEST),
+        lambda: experiments.revise(config, reason="the candidate regressed", now=LATEST),
+        lambda: experiments.abandon(config, reason="the approach does not hold", now=LATEST),
+    ):
+        with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+            operation()
+
+    assert record(config, EXP_01)["decision"] is None
+    assert len(record(config, EXP_01)["rounds"]) == 1
+
+
+def test_ending_an_attempt_cannot_hide_a_replay_record_nobody_can_read(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The reason the reading covers every experiment of the batch rather than the
+    open one. Evidence is derived for the open experiment only, so a decision
+    recorded over an attempt whose replay record is malformed would retire the
+    finding along with it — the file staying on disk, saying something no reader
+    accepts, with nothing left to report it."""
+
+    seal(config, ["loader-fallback"])
+    experiments.abandon(config, reason="the approach does not hold", now=LATEST)
+    unreadable_replays(config, EXP_01)
+
+    # Nothing derives evidence for it any more: this is what would have hidden it.
+    assert phase.describe(config, now=LATEST).evidence is None
+
+    # And it still stops the batch, from the next attempt through the conclusion
+    # that would end the batch over it.
+    with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+        experiments.create(config, ["hook-side-loader"], now=LATEST)
+    with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+        experiments.conclude_no_change(config, reason="the evidence justified no change", now=LATEST)
+
+
 # --- add-tasks ---------------------------------------------------------------
 
 

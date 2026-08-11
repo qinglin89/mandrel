@@ -467,10 +467,31 @@ def write_replays(
     record = {
         "schema_version": 1,
         "experiment_id": declares if declares is not None else experiment_id,
+        "pending": None,
         "replays": replays,
         **overrides,
     }
     return _write_json(experiments_root / experiment_id / "replays.json", record)
+
+
+def replay_pending(
+    round_number: int = 1,
+    attempt: int = 1,
+    *,
+    requested_at: str = "2026-08-04T09:00:00Z",
+    integration: dict | None = None,
+    expectation: str = "fewer remediation rounds, with quality and elapsed time unchanged",
+) -> dict:
+    """A request outstanding on a replay record: the run this controller
+    committed to before the harness answered for it."""
+
+    return {
+        "round": round_number,
+        "attempt": attempt,
+        "requested_at": requested_at,
+        "integration": integration if integration is not None else replay_integration(),
+        "expectation": expectation,
+    }
 
 
 def _draft_body(draft_id: str) -> str:

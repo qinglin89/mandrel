@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "experiment_id",
+    "pending",
     "replays"
   ],
   "properties": {
@@ -18,6 +19,9 @@
       "type": "string",
       "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
     },
+    "pending": {
+      "$ref": "#/$defs/pending"
+    },
     "replays": {
       "description": "Append-only, ordered by round and then attempt. At most one run is still going, and it is the last entry: a round is measured against one integration at a time, and a second run started underneath an unfinished one would leave two answers about the same tree with nothing to choose between them.",
       "type": "array",
@@ -27,6 +31,46 @@
     }
   },
   "$defs": {
+    "pending": {
+      "description": "The run this controller committed to before it asked the harness for one, or null when nothing is outstanding. A harness is an external thing being started, and the record cannot state a run until that harness answers with the cohort, the evaluator, the configuration, and the handle it issued — so an interruption between the two would otherwise leave a run going that nothing here names, findable only in whatever the lost process printed. This is what names it across that window: the integration is pinned and written down first, and the request the harness is then asked for is exactly this one, re-submitted unchanged until it is answered. A harness asked twice for the same experiment, round, and attempt answers with the run it already began rather than starting a second, which is what makes the retry safe; attempts are allocated once and never reused, so there is no second request that legitimately wears one position. It is not a run and never becomes evidence: it holds only what the controller owns, it occupies the position the run it becomes will take, and the write that records that run clears it in the same file.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "round",
+        "attempt",
+        "requested_at",
+        "integration",
+        "expectation"
+      ],
+      "properties": {
+        "round": {
+          "description": "The round this request measures, whose candidate its seal has already pinned — the same binding a run has, checked before the request is made rather than when the run it becomes is written.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "description": "The position the run will take: the next unallocated attempt of that round. Written down because it is half of what the harness is keyed on — a resumed request that allocated a second attempt would be asking for a second run rather than the one already going.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_at": {
+          "description": "When the integration was pinned, which is also when the run it becomes started: a resume records the run it began rather than the moment its answer finally arrived.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
+        },
+        "expectation": {
+          "description": "What the run was expected to show, recorded here for the reason a run records it: before any numbers exist is the only time it can be written without being a reading of them.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "replay": {
       "description": "One run of the case suite against one round's candidate. The pinned inputs are written when the run starts and never edited; the result is written when it ends. A run is reproducible from what is recorded here — the integration it exercised, the case set and the exclusions applied to it, the evaluator that judged it, and the harness configuration that drove it — because a rerun hands those back to the harness as the selections it must reproduce or refuse, rather than asking again for whatever it would select today.",
       "type": "object",

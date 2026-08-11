@@ -154,7 +154,7 @@ evolution/
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, decision
-  experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds
+  experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, and the request outstanding
 
 refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
 
@@ -472,7 +472,7 @@ quantity on both the base and the candidate and marks which of them were goals �
 an observation with no baseline is recorded as one rather than as an improvement
 over nothing.
 
-**Starting one, and ending it.** Three operations, guarded like the round
+**Starting one, and ending it.** Four operations, guarded like the round
 transitions and taking the same lock. Starting pins the integration — the
 round's already-sealed candidate, the commit the named source-line ref stands
 at, and the tree merging them produces — and then asks the harness to run it; a
@@ -484,16 +484,27 @@ is what a later reader asks about the drift with. Concluding polls the run and
 records what it reports; polling a run still going writes nothing and is the
 ordinary case.
 
-The order inside them is fixed by what an interruption may leave. The harness is
-asked first, because the record cannot be written without the handle that answer
-carries and a run nobody can poll is refused — so an interruption leaves a run
-going that no record names, which is nothing this controller can conclude and
-nothing it can mistake for evidence. Recording first would leave the opposite: a
-record claiming a run that was never started, which reads as evidence pending
-forever. Every refusal either operation makes is therefore made before that call,
-so a retry — a second run started while one is going, most of all — costs nothing
-that was already running. A concluded run is reported, not concluded twice; the
-audit line an interrupted conclusion may have cost is not re-appended.
+The order inside them is fixed by what an interruption may leave. A record
+cannot state a run until the harness answers — the cohort, the evaluator, the
+configuration and the handle are all its to choose, and a run nobody can poll is
+refused — so what is written before the harness is asked is not a run but the
+request for one: the round, the attempt it will occupy, the integration pinned
+for it, and the expectation, which is the whole of what the controller owns. An
+answer that never arrives, or a write of it that fails, therefore leaves that run
+named rather than loose. Starting again resumes the request instead of making a
+second: the same experiment, round and attempt reach the harness again, and a
+harness asked twice for one run answers with that run rather than beginning
+another — attempts are allocated once and never reused, so no second request
+legitimately wears one position. The resume may not re-pin the integration, since
+the harness is already measuring the one that was pinned; a source line that has
+moved since is what a further attempt is for, and a resume naming a different one
+is refused with what is outstanding. A pending request is not evidence and never
+becomes any — while one stands, the round it names has been measured by nothing,
+and the write that records the run it became clears it in the same file. Every
+refusal a start makes is still made before the harness is asked, so a retry — a
+second run started while one is going, most of all — costs nothing that was
+already running. A concluded run is reported, not concluded twice; the audit line
+an interrupted conclusion may have cost is not re-appended.
 
 A run whose harness cannot report is ended by the third operation, which
 records why: age concludes nothing, and a harness that died, lost the handle, or
@@ -502,7 +513,15 @@ going forever — and with it the round, which is measured against one integrati
 at a time. What it writes is the `failed` the run was, with the reason in place
 of numbers, and the answer to a failed run is another attempt.
 
-None of the three ends anything above the run. A candidate the numbers argue
+The fourth takes a request back, which is the same door one step earlier: a
+harness that cannot describe what it is running leaves the start unable to
+finish, and the position blocked for the same reason. It records no reason and
+no run — a request that never became one measured nothing, is derived as
+nothing, and leaves nothing for a reason to be attached to — so it reports the
+integration it withdrew, which is what an operator needs to stop that run at the
+harness. Run again it reports that nothing was outstanding.
+
+None of the four ends anything above the run. A candidate the numbers argue
 against is answered by a further round or by a terminal decision, both of which
 are operations of their own.
 
@@ -635,16 +654,16 @@ Two readings are specifically not that answer:
 ### Guarded operations
 
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
-`seal-round`, `revise`, starting, concluding and ending a replay, abandon,
-supersede, and `conclude-no-change` — writes
+`seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
+abandon, supersede, and `conclude-no-change` — writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
 decision about work that has already happened, and an abandonment or a
 conclusion writes one record and an audit line for the same reason. A replay
-start writes only its record: what an audit would say about it is what the
-record already says, and the run's outcome is the event there is something to
-audit about. They take
+start writes only its record, and a withdrawal only takes one back: what an audit
+would say about either is what the record already says, and the run's outcome is
+the event there is something to audit about. They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
 redo, so an interrupted operation is finished by the next run rather than
@@ -663,7 +682,21 @@ deliberately not. A run is started against a lineage whose ref still agrees with
 its record; a result is a fact about a run that already happened, and a ref that
 moved since makes that evidence stale rather than wrong — which is derived and
 reported. Refusing to record it would discard the only durable form of the
-measurement and leave the run recorded as going forever.
+measurement and leave the run recorded as going forever. Resuming a request is
+answering one, not making one, so it is guarded the way a conclusion is: the run
+it records already exists.
+
+Every one of them also reads the replay evidence of every experiment the batch
+holds, and stops on a record no reader accepts. An unreadable record stops the
+operation wherever this contract finds one, and that rule needs stating here
+because the lifecycle operations never touch that file otherwise: an attempt
+could be added to, revised, or ended over evidence nobody can read. Ending it is
+the case that makes this more than tidiness, and it is the shape the ref check
+refuses for the same reason — evidence is derived for the open experiment only,
+so a decision recorded over an attempt whose replay record is malformed retires
+the finding along with the attempt, leaving the file on disk with nothing left
+to report it. Every experiment of the batch rather than the open one, so ending
+an attempt does not end the refusal.
 
 That lock covers this package's own runs, and the two round transitions and both
 terminal decisions need more than it. Each is decided from one reading of where
@@ -744,7 +777,9 @@ a run started against a round whose candidate is not pinned, a second run starte
 while one is still going, a candidate that does not merge onto the named source
 line, a source line named by anything but a fully-qualified ref Git can hold, a
 run recorded under a handle another run already has, a conclusion for a run this
-controller never recorded,
+controller never recorded, a replay request standing anywhere but at the position
+the run it becomes will take, a resumed request answered as a different one, a
+conclusion or an ending taken while a request is outstanding,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert

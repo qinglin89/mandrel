@@ -35,26 +35,37 @@ the whole of the request: the selections the harness made travel back to it as
 `ReplayRequest.reproduce`, so running the same thing again is asking for it by
 name rather than hoping the same choice is made twice.
 
-**Three operations, and the order inside them.** `start` pins the integration
-and asks the harness for a run; `conclude` asks that run for its numbers and
-records them; `abandon` records why a run ended when its harness cannot say,
-which is what keeps a harness that died from leaving the round unmeasurable
-behind a run nothing will ever conclude. All three take the same single-writer
-lock as every other evolution write, run the same guarded preamble, and publish
-through this module's own parser, so a write cannot produce evidence its own
-reader refuses.
+**Four operations, and the order inside them.** `start` pins the integration and
+asks the harness for a run; `conclude` asks that run for its numbers and records
+them; `abandon` records why a run ended when its harness cannot say, which is
+what keeps a harness that died from leaving the round unmeasurable behind a run
+nothing will ever conclude; `withdraw` takes back a request the harness never
+answered for. All four take the same single-writer lock as every other evolution
+write, run the same guarded preamble, and publish through this module's own
+parser, so a write cannot produce evidence its own reader refuses.
 
-The harness call comes before the record, because the record cannot be written
-without the handle that call returns — a running run nothing can poll is refused
-here for the same reason. So an interruption between the two leaves a run going
-in the harness that no record names: nothing this controller can conclude, and
-nothing it can mistake for evidence either. The other order would be worse in
-kind rather than in degree: a record claiming a run that was never started reads
-as evidence pending, forever. Every check either operation makes is therefore
-made *before* that call, so a refusal costs nothing that was already running.
-`abandon` is the way out of the one thing that order can leave: a run whose
-harness answers with something the record cannot hold would otherwise be
-unconcludable, and a round is measured against one integration at a time.
+**The request is durable before the harness is asked.** A record cannot state a
+run until the harness answers, because the cohort, the evaluator, the
+configuration and the handle are all its to choose. So what is written first is
+not a run but the request for one — the round, the attempt it will occupy, the
+integration pinned for it, and the expectation — which is the whole of what the
+controller owns, and is what names that run across the window where the harness
+has begun something this file does not yet describe. `start` run again resumes
+the request instead of making a new one: the same experiment, round, and attempt
+reach the harness a second time, and a harness that already began that run
+answers with it rather than starting another (`ReplayHarness.start`). Attempts
+are allocated once and never reused, so no second request legitimately wears one
+position, and the retry cannot re-pin the integration underneath a run that is
+already measuring the old one.
+
+A pending request is not evidence and never becomes any: nothing has measured
+the round while one stands, and the write that records the run it became clears
+it in the same file. Every check a start makes is still made before the harness
+is asked, so a refusal costs nothing that was already running. What that
+order can still leave is a harness answering with something this record cannot
+hold: `abandon` is the way out of it once a run is recorded and `withdraw` is
+before one is, since a round is measured against one integration at a time and
+either would otherwise block every later run of the experiment.
 """
 
 from __future__ import annotations
@@ -69,7 +80,7 @@ from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError, ValidationError
 from .ledger import append_records, build_record
-from .lineage import Experiment
+from .lineage import BatchLineage, Experiment
 from .revisions import merge_tree, ref_tip
 from .schema import definition, format_rfc3339, load_schema, parse_json, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
@@ -246,6 +257,44 @@ class Replay:
 
 
 @dataclass(frozen=True)
+class PendingRun:
+    """A run this controller committed to before it asked the harness for one.
+
+    Everything here is the controller's own: which round is being measured, the
+    position the run will occupy, the integration pinned for it, and what it was
+    expected to show. Nothing the harness chooses is in it, which is exactly why
+    it can be written before the harness is asked anything — and why it is not a
+    run. Nothing derives evidence from it: while one stands, the round it names
+    has been measured by nothing.
+
+    What it is for is the window in between. The harness is an external thing
+    being started, and an answer that never arrives — a lost process, a write
+    that failed — would otherwise leave a run going that no record names. This
+    names it: `start` run again re-submits this request unchanged, and the
+    harness answers with the run it already began.
+    """
+
+    round_number: int
+    attempt: int
+    requested_at: str
+    integration: Integration
+    expectation: str
+
+
+@dataclass(frozen=True)
+class History:
+    """One experiment's replay file: the runs, and the request that is not one yet.
+
+    Both are read together because they are one file and one sequence — a
+    request occupies the position the run it becomes will take, so which attempt
+    is next cannot be answered from either half alone.
+    """
+
+    replays: tuple[Replay, ...]
+    pending: PendingRun | None
+
+
+@dataclass(frozen=True)
 class Evidence:
     """What the experiment's current round has been measured by, if anything.
 
@@ -350,6 +399,15 @@ class ReplayHarness(Protocol):
     def start(self, request: ReplayRequest) -> ReplayPlan:
         """Begin exercising `request.integration`, and say what is being run.
 
+        Asked twice for one run, it answers twice with that run. The experiment,
+        the round and the attempt name it: attempts are allocated once and never
+        reused, so a second request wearing one position is the first request
+        arriving again — a controller that pinned the integration, wrote the
+        request down, and did not hear back. Starting a second run for it would
+        leave the first going with nothing naming it, which is the one failure
+        the request exists to prevent, so the plan already issued is returned
+        instead — the same handle included.
+
         With `request.reproduce` set, what is being run is not a choice: the
         cohort, the evaluator, and the configuration are the ones an earlier run
         resolved, and a harness that cannot reproduce them — a case set it no
@@ -361,8 +419,9 @@ class ReplayHarness(Protocol):
         """The measurements for `handle`, or None while that run is still going."""
 
 
-def read_replays(config: EvolutionConfig, experiment: Experiment) -> tuple[Replay, ...]:
-    """Every run recorded against one experiment, in the order they were started.
+def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
+    """Every run recorded against one experiment, in the order they were started,
+    and the request that has not become one yet.
 
     Empty covers both "the file lists nothing" and "no file yet": an experiment
     nobody has measured is the ordinary state of every round before its first
@@ -373,7 +432,7 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> tuple[Repla
     try:
         record = parse_json(path.read_text(encoding="utf-8"), description=f"replay record {path}")
     except FileNotFoundError:
-        return ()
+        return History(replays=(), pending=None)
     except (OSError, json.JSONDecodeError) as exc:
         raise BatchError(f"unreadable replay record {path}: {exc}") from exc
     if not isinstance(record, dict):
@@ -389,7 +448,7 @@ def parse_replays(
     config: EvolutionConfig,
     record: Mapping[str, Any],
     experiment: Experiment,
-) -> tuple[Replay, ...]:
+) -> History:
     """One experiment's replay records, validated and checked against the rounds
     they claim to have measured.
 
@@ -397,9 +456,10 @@ def parse_replays(
     view of the experiment record at all, so the rules that make these runs one
     readable history live here: runs that only append, one unfinished run at a
     time, one handle naming one run, a result whose shape matches how it ended,
-    and — the load-bearing one — a candidate revision that is the one the named
-    round actually pinned. Each is a way for a record to be well-formed on its
-    own and still be evidence about a tree nobody can identify.
+    an outstanding request at the position the run it becomes will take, and —
+    the load-bearing one — a candidate revision that is the one the named round
+    actually pinned. Each is a way for a record to be well-formed on its own and
+    still be evidence about a tree nobody can identify.
 
     Public because the writers publish through it: an operation builds the next
     state of this file and validates it here before it lands, so a write cannot
@@ -420,11 +480,13 @@ def parse_replays(
         )
 
     replays = tuple(_read_replay(path, experiment.experiment_id, item) for item in record["replays"])
+    pending = _read_pending(path, record["pending"])
     _require_appended_runs(path, replays)
     _require_one_unfinished(path, replays)
     _require_distinct_handles(path, replays)
-    _require_pinned_candidates(path, experiment, replays)
-    return replays
+    _require_requestable(path, replays, pending)
+    _require_pinned_candidates(path, experiment, replays, pending)
+    return History(replays=replays, pending=pending)
 
 
 def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Evidence:
@@ -440,9 +502,17 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
     4. a completed run that no longer describes the tree in question — the round
        moved on, or the source line did;
     5. nothing yet.
+
+    An outstanding request is none of the five. It measured nothing, so it does
+    not change the state; what it changes is what the two branches reporting an
+    unmeasured round have to say, since "nothing has replayed this round" and
+    "something may be running against it right now and this record does not name
+    it yet" send an operator to different places.
     """
 
-    replays = read_replays(config, experiment)
+    history = read_replays(config, experiment)
+    replays = history.replays
+    awaiting = () if history.pending is None else (_describe_outstanding(history.pending),)
     last = experiment.last_round
     common = {"experiment_id": experiment.experiment_id, "round_number": last.number}
     # No replay can name an unsealed round (`_require_pinned_candidates`), so the
@@ -497,14 +567,15 @@ def describe_evidence(config: EvolutionConfig, experiment: Experiment) -> Eviden
                 f"the newest evidence measured round {stale.round_number}, and this experiment is on round "
                 f"{last.number}; a round's evidence describes the candidate that round pinned and never the "
                 "next one's",
-            ),
+            )
+            + awaiting,
             unverified=(),
         )
     return Evidence(
         **common,
         state=EVIDENCE_INCOMPLETE,
         replay=None,
-        drift=unsealed or (f"round {last.number} has not been replayed",),
+        drift=(unsealed or (f"round {last.number} has not been replayed",)) + awaiting,
         unverified=(),
     )
 
@@ -523,6 +594,25 @@ class RunStarted:
     integration: Integration
     plan: ReplayPlan
     record_path: Path
+    # True when this run answers a request an earlier run of this operation left
+    # outstanding: the integration and the position come from that request, and
+    # the harness was asked for the run it may already have been running.
+    resumed: bool = False
+
+
+@dataclass(frozen=True)
+class RequestWithdrawn:
+    """A request taken back before it ever became a run.
+
+    `withdrawn` is False when there was nothing outstanding — this operation run
+    a second time, or run at all where no request stands. Nothing is left on
+    record either way, which is what makes the redo answerable from absence
+    rather than from a reason matched against what was written.
+    """
+
+    experiment_id: str
+    pending: PendingRun | None
+    withdrawn: bool
 
 
 @dataclass(frozen=True)
@@ -586,6 +676,20 @@ def start(
     Every refusal is made before the harness is asked for anything. A second run
     started while one is going is one of them, so a retry costs nothing: the
     answer is to conclude the run that is going.
+
+    Run again with a request outstanding, this is that request resumed rather
+    than a second one: the integration, the position and the expectation come
+    from the record, the harness is asked for the same run, and the answer lands
+    where the request stood. What it is not free to do is pin the integration
+    again — the source line may have moved since, and a retry that measured the
+    new one would be recording a tree while the harness runs the old. So the
+    arguments are checked against the request rather than acted on, and a
+    different source line or expectation is refused with what is outstanding.
+
+    The ref check belongs to making a request, not to answering one. A resume
+    records a run that already exists, and a ref that moved since is exactly
+    what a second attempt is for; refusing it would leave the run nothing names
+    — the reason `conclude` does not make that check either.
     """
 
     moment = _moment(now)
@@ -594,73 +698,158 @@ def start(
     with single_writer_lock(config):
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "replay")
-        guards.require_consistent_ref(current)
 
-        round_ = experiment.last_round
-        if round_.seal is None:
-            raise BatchError(
-                f"round {round_.number} of {experiment.experiment_id} is still open; a round is measured only "
-                "once its candidate is pinned, because an open round's tip moves and evidence taken against it "
-                "describes a tree the record cannot afterwards identify (invariant 16) — seal the round, and "
-                "this run names what the seal pinned"
+        history = read_replays(config, experiment)
+        replays = history.replays
+        requested = history.pending
+        resumed = requested is not None
+        if requested is None:
+            requested = _request(
+                config,
+                current,
+                experiment,
+                replays,
+                source_ref=source_ref,
+                expectation=predicted,
+                at=format_rfc3339(moment),
             )
+            _write_replays(config, experiment, replays, requested)
+        else:
+            _require_same_request(experiment, requested, source_ref, predicted)
 
-        replays = read_replays(config, experiment)
-        if replays and replays[-1].running:
-            going = replays[-1]
-            raise BatchError(
-                f"{_describe_replay(going)} of {experiment.experiment_id} is still running under "
-                f"{going.harness.id} handle {going.harness.handle!r}; a round is measured against one "
-                "integration at a time, so a second run started under it would leave two answers about one tree "
-                "with nothing to choose between them — conclude that run first"
-            )
-
-        here = [replay for replay in replays if replay.round_number == round_.number]
-        attempt = len(here) + 1
-        described = _position(round_.number, attempt)
-        integration = _pin(config, experiment, round_.seal.candidate_revision, source_ref, described)
-
-        stamp = format_rfc3339(moment)
+        described = _describe_pending(requested)
+        here = [replay for replay in replays if replay.round_number == requested.round_number]
         plan = harness.start(
             ReplayRequest(
                 experiment_id=experiment.experiment_id,
-                round_number=round_.number,
-                attempt=attempt,
-                integration=integration,
+                round_number=requested.round_number,
+                attempt=requested.attempt,
+                integration=requested.integration,
                 reproduce=_reproduce(here),
             )
         )
         started = Replay(
             experiment_id=experiment.experiment_id,
-            round_number=round_.number,
-            attempt=attempt,
-            started_at=stamp,
-            integration=integration,
+            round_number=requested.round_number,
+            attempt=requested.attempt,
+            # When the run began, which is when its integration was pinned — not
+            # the moment a resume finally heard back about it.
+            started_at=requested.requested_at,
+            integration=requested.integration,
             cases=plan.cases,
             evaluator=plan.evaluator,
             harness=plan.harness,
-            expectation=predicted,
+            expectation=requested.expectation,
             result=None,
         )
         try:
-            path = _write_replays(config, experiment, replays + (started,))
+            path = _write_replays(config, experiment, replays + (started,), None)
         except (BatchError, ValidationError) as exc:
             raise BatchError(
                 f"{experiment.experiment_id}: {plan.harness.id} began {described} as handle "
-                f"{plan.harness.handle!r} and described it in a way this record cannot hold ({exc}); nothing was "
-                "written, so that run now answers to nothing here — stop it at the harness rather than starting "
-                "another beside it"
+                f"{plan.harness.handle!r} and described it in a way this record cannot hold ({exc}); the request "
+                "for that run is still on record, so run this again once the harness can describe what it holds "
+                "— or withdraw the request and stop the run at the harness"
             ) from exc
 
     return RunStarted(
         experiment_id=experiment.experiment_id,
-        round_number=round_.number,
-        attempt=attempt,
-        started_at=stamp,
-        integration=integration,
+        round_number=requested.round_number,
+        attempt=requested.attempt,
+        started_at=requested.requested_at,
+        integration=requested.integration,
         plan=plan,
         record_path=path,
+        resumed=resumed,
     )
+
+
+def _request(
+    config: EvolutionConfig,
+    current: BatchLineage,
+    experiment: Experiment,
+    replays: Sequence[Replay],
+    *,
+    source_ref: str,
+    expectation: str,
+    at: str,
+) -> PendingRun:
+    """The request a fresh start makes durable before the harness is asked.
+
+    Every refusal a start has is here, which is what the order is for: the
+    request is written down, and from then on the harness may be running
+    something — so nothing that could refuse may still be waiting to be checked
+    at that point.
+    """
+
+    guards.require_consistent_ref(current)
+
+    round_ = experiment.last_round
+    if round_.seal is None:
+        raise BatchError(
+            f"round {round_.number} of {experiment.experiment_id} is still open; a round is measured only "
+            "once its candidate is pinned, because an open round's tip moves and evidence taken against it "
+            "describes a tree the record cannot afterwards identify (invariant 16) — seal the round, and "
+            "this run names what the seal pinned"
+        )
+    if replays and replays[-1].running:
+        going = replays[-1]
+        raise BatchError(
+            f"{_describe_replay(going)} of {experiment.experiment_id} is still running under "
+            f"{going.harness.id} handle {going.harness.handle!r}; a round is measured against one "
+            "integration at a time, so a second run started under it would leave two answers about one tree "
+            "with nothing to choose between them — conclude that run first"
+        )
+
+    attempt = len([replay for replay in replays if replay.round_number == round_.number]) + 1
+    return PendingRun(
+        round_number=round_.number,
+        attempt=attempt,
+        requested_at=at,
+        integration=_pin(
+            config,
+            experiment,
+            round_.seal.candidate_revision,
+            source_ref,
+            _position(round_.number, attempt),
+        ),
+        expectation=expectation,
+    )
+
+
+def _require_same_request(
+    experiment: Experiment,
+    requested: PendingRun,
+    source_ref: str,
+    expectation: str,
+) -> None:
+    """A resume asks for the run that is outstanding, not for a different one.
+
+    Both arguments are the operator restating what they asked for, and a
+    mismatch is a request they have not made yet: the harness may already be
+    running this one, so answering the new one would start a second run of the
+    same attempt while the first goes on unnamed. The way to ask for something
+    else is to withdraw this request first — which is a decision about a run
+    that may exist, and therefore an operator's to make rather than one taken
+    for them by an argument that happened to differ.
+    """
+
+    described = _describe_pending(requested)
+    integration = requested.integration
+    if integration.merge_input_ref != source_ref:
+        raise BatchError(
+            f"{experiment.experiment_id} has {described} outstanding, integrating onto "
+            f"{integration.merge_input_ref} at {integration.merge_input_revision[:12]}; a request is answered as "
+            f"it was made, because the harness may already be running it — name {integration.merge_input_ref} to "
+            f"resume it, or withdraw it to ask for {source_ref} instead"
+        )
+    if requested.expectation != expectation:
+        raise BatchError(
+            f"{experiment.experiment_id} has {described} outstanding, expected to show "
+            f"{requested.expectation!r}; an expectation is recorded before the numbers exist and this run may "
+            "already be producing them, so the one on record stands — a second prediction over a run in flight "
+            "is the reading it exists to prevent"
+        )
 
 
 def conclude(
@@ -695,7 +884,9 @@ def conclude(
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "conclude a replay of")
 
-        replays = read_replays(config, experiment)
+        history = read_replays(config, experiment)
+        _require_no_request_outstanding(experiment, history, "concluded")
+        replays = history.replays
         if not replays:
             raise BatchError(
                 f"{experiment.experiment_id} has no recorded run to conclude; a conclusion writes the result of "
@@ -724,7 +915,7 @@ def conclude(
                 ambiguity=report.ambiguity,
             ),
         )
-        _write_replays(config, experiment, replays[:-1] + (concluded,))
+        _write_replays(config, experiment, replays[:-1] + (concluded,), None)
         append_records(
             config,
             [
@@ -767,6 +958,11 @@ def abandon(
     Run again after an interrupted abandonment, it reports the failure already on
     record. A run that ended some other way is not this operation's redo, and is
     reported back rather than overwritten.
+
+    It ends a *run*, so a request that never became one is not its business:
+    there is no record to write a failure onto, and inventing one would state a
+    cohort, an evaluator and a harness configuration nobody selected. `withdraw`
+    takes that back instead.
     """
 
     moment = _moment(now)
@@ -780,7 +976,9 @@ def abandon(
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "end a replay of")
 
-        replays = read_replays(config, experiment)
+        history = read_replays(config, experiment)
+        _require_no_request_outstanding(experiment, history, "ended")
+        replays = history.replays
         if not replays:
             raise BatchError(
                 f"{experiment.experiment_id} has no recorded run to end; what this records is why a run this "
@@ -811,7 +1009,7 @@ def abandon(
                 ambiguity=None,
             ),
         )
-        _write_replays(config, experiment, replays[:-1] + (concluded,))
+        _write_replays(config, experiment, replays[:-1] + (concluded,), None)
         append_records(
             config,
             [
@@ -828,6 +1026,71 @@ def abandon(
         )
 
     return RunConcluded(experiment_id=experiment.experiment_id, replay=concluded, recorded=True)
+
+
+def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> RequestWithdrawn:
+    """Take back a request the harness never answered for.
+
+    The way out of the window the request exists to cover. A harness that cannot
+    describe what it is running — a plan this record refuses to hold, a run it no
+    longer knows about — leaves `start` unable to finish and every later run of
+    the experiment blocked behind it, because a round is measured against one
+    integration at a time. This releases that position.
+
+    It takes no reason, and that is the difference from ending a run. A run that
+    happened is history and carries why it stopped; a request that never became
+    one measured nothing, is derived as nothing, and leaves nothing behind for a
+    reason to be attached to. What it does leave, possibly, is a run going at a
+    harness that this controller will never name — so the request is reported
+    back with its integration, which is what an operator needs to stop it there.
+
+    Run again, it reports that nothing was outstanding. That is the whole of its
+    redo: a single write with nothing after it either has landed or has not, and
+    absence is the answer in both directions.
+    """
+
+    moment = _moment(now)
+
+    with single_writer_lock(config):
+        current = guards.current_cycle(config, now=moment)
+        experiment = guards.require_open_experiment(current, "withdraw a replay request of")
+
+        history = read_replays(config, experiment)
+        if history.pending is None:
+            return RequestWithdrawn(
+                experiment_id=experiment.experiment_id,
+                pending=None,
+                withdrawn=False,
+            )
+        _write_replays(config, experiment, history.replays, None)
+
+    return RequestWithdrawn(
+        experiment_id=experiment.experiment_id,
+        pending=history.pending,
+        withdrawn=True,
+    )
+
+
+def _require_no_request_outstanding(experiment: Experiment, history: History, action: str) -> None:
+    """A run is concluded or ended, never a request for one.
+
+    Both operations act on the newest recorded run, and a request standing over
+    it is the state where that is the wrong run to act on: the harness was asked
+    for a further one and its answer never reached this record. Reporting the
+    previous run as the thing to conclude would hide that; so would refusing
+    with "no run to conclude" while one may be going. The way forward is the
+    same either way — resume the start, which records the run the harness began,
+    or withdraw the request.
+    """
+
+    pending = history.pending
+    if pending is None:
+        return
+    raise BatchError(
+        f"{experiment.experiment_id} has {_describe_pending(pending)} outstanding, and no run recorded for it; "
+        f"the harness was asked for that run and its answer never reached this record, so there is nothing here "
+        f"to be {action} — start the replay again to record the run it began, or withdraw the request"
+    )
 
 
 def _pin(
@@ -933,28 +1196,55 @@ def _require_source_line_name(config: EvolutionConfig, path: Path, described: st
     _require_source_line_ref(path, described, ref)
 
 
-def _write_replays(config: EvolutionConfig, experiment: Experiment, replays: Sequence[Replay]) -> Path:
-    """Publish this experiment's runs, through the parser that reads them back.
+def _write_replays(
+    config: EvolutionConfig,
+    experiment: Experiment,
+    replays: Sequence[Replay],
+    pending: PendingRun | None,
+) -> Path:
+    """Publish this experiment's runs and its outstanding request, through the
+    parser that reads them back.
 
     The whole file is rewritten because a run's result lands after its pinned
     inputs did, and one file per experiment is what allocates the attempt. What
     is never rewritten is what it already says: the parser refuses a list that
     does not append, so a caller handing back an edited earlier run is refused
     here rather than discovered as evidence about a tree nobody exercised.
+
+    The request is part of that one write rather than a file beside it, so the
+    transition every operation here makes — a request becoming the run it was
+    for, or being taken back — is one atomic replacement. Two files could be
+    seen holding both at once, and a reader finding a request beside the run it
+    became would have to guess which of them the harness is running.
     """
 
-    record = _serialize(experiment.experiment_id, replays)
+    record = _serialize(experiment.experiment_id, replays, pending)
     parse_replays(config, record, experiment)
     path = replays_path(experiment)
     atomic_write_text(path, _json(record))
     return path
 
 
-def _serialize(experiment_id: str, replays: Sequence[Replay]) -> dict[str, Any]:
+def _serialize(
+    experiment_id: str,
+    replays: Sequence[Replay],
+    pending: PendingRun | None,
+) -> dict[str, Any]:
     return {
         "schema_version": REPLAYS_SCHEMA_VERSION,
         "experiment_id": experiment_id,
+        "pending": None if pending is None else _pending_json(pending),
         "replays": [_replay_json(replay) for replay in replays],
+    }
+
+
+def _pending_json(pending: PendingRun) -> dict[str, Any]:
+    return {
+        "round": pending.round_number,
+        "attempt": pending.attempt,
+        "requested_at": pending.requested_at,
+        "integration": _integration_json(pending.integration),
+        "expectation": pending.expectation,
     }
 
 
@@ -1137,6 +1427,34 @@ def _read_replay(path: Path, experiment_id: str, item: Mapping[str, Any]) -> Rep
     _require_source_line_ref(path, _describe_replay(replay), replay.integration.merge_input_ref)
     _require_pollable(path, replay)
     return replay
+
+
+def _read_pending(path: Path, item: Mapping[str, Any] | None) -> PendingRun | None:
+    """The request outstanding on this file, if one is.
+
+    The source line is checked exactly as a recorded run's is: a request naming
+    something no ref can hold is one no resume could ever answer, and the run it
+    would become would carry that name into the evidence.
+    """
+
+    if item is None:
+        return None
+    integration = item["integration"]
+    pending = PendingRun(
+        round_number=item["round"],
+        attempt=item["attempt"],
+        requested_at=item["requested_at"],
+        integration=Integration(
+            base_revision=integration["base_revision"],
+            candidate_revision=integration["candidate_revision"],
+            merge_input_revision=integration["merge_input_revision"],
+            merge_input_ref=integration["merge_input_ref"],
+            tree=integration["tree"],
+        ),
+        expectation=item["expectation"],
+    )
+    _require_source_line_ref(path, _describe_pending(pending), pending.integration.merge_input_ref)
+    return pending
 
 
 def _read_result(path: Path, result: Mapping[str, Any] | None, described: str) -> Result | None:
@@ -1387,7 +1705,48 @@ def _require_one_unfinished(path: Path, replays: Sequence[Replay]) -> None:
         )
 
 
-def _require_pinned_candidates(path: Path, experiment: Experiment, replays: Sequence[Replay]) -> None:
+def _require_requestable(path: Path, replays: Sequence[Replay], pending: PendingRun | None) -> None:
+    """An outstanding request stands at the position the run it becomes will take.
+
+    Which is the next attempt of its round, with no run unfinished under it. Both
+    halves are the same rule the runs follow, applied one step earlier — a round
+    is measured against one integration at a time, and runs only append — and
+    they are asked here because a request that could not be answered is worse
+    than one that was never made: `start` would resume it, the parser would then
+    refuse the run it wrote, and the position would be stuck with no operation
+    able to clear it but the withdrawal.
+    """
+
+    if pending is None:
+        return
+    described = _describe_pending(pending)
+    if replays and replays[-1].running:
+        raise BatchError(
+            f"{path}: {described} is outstanding while {_describe_replay(replays[-1])} is still running; a round "
+            "is measured against one integration at a time, so a request made under an unfinished run is a "
+            "second answer about one tree waiting to be recorded"
+        )
+    if replays and pending.round_number < replays[-1].round_number:
+        raise BatchError(
+            f"{path}: {described} is outstanding while the newest run measured round "
+            f"{replays[-1].round_number}; runs are appended in round order, so the run this request becomes "
+            "could never be written after the ones already recorded"
+        )
+    attempt = len([replay for replay in replays if replay.round_number == pending.round_number]) + 1
+    if pending.attempt != attempt:
+        raise BatchError(
+            f"{path}: {described} is outstanding, and round {pending.round_number}'s next attempt is {attempt}; "
+            "a request holds the position its run will take, and one holding any other position either skips a "
+            "run or claims a position a recorded run already has"
+        )
+
+
+def _require_pinned_candidates(
+    path: Path,
+    experiment: Experiment,
+    replays: Sequence[Replay],
+    pending: PendingRun | None,
+) -> None:
     """Every run names a round this experiment has, that round is candidate-ready,
     and the run exercised exactly the revision its seal pinned.
 
@@ -1398,12 +1757,22 @@ def _require_pinned_candidates(path: Path, experiment: Experiment, replays: Sequ
     promotion. The base is checked with it, for the same reason the record states
     it: evidence carries its own baseline, and one naming a different base is
     measuring a different comparison.
+
+    An outstanding request is held to the same rule, one step earlier: it is
+    answered by a run, and a request naming a round with nothing pinned would be
+    a run that could not be recorded once the harness answered.
     """
 
     rounds = {round_.number: round_ for round_ in experiment.rounds}
-    for replay in replays:
-        described = _describe_replay(replay)
-        round_ = rounds.get(replay.round_number)
+    for described, round_number, integration in [
+        *((_describe_replay(replay), replay.round_number, replay.integration) for replay in replays),
+        *(
+            ()
+            if pending is None
+            else ((_describe_pending(pending), pending.round_number, pending.integration),)
+        ),
+    ]:
+        round_ = rounds.get(round_number)
         if round_ is None:
             raise BatchError(
                 f"{path}: {described} measures a round {experiment.experiment_id} does not have (it has "
@@ -1416,15 +1785,15 @@ def _require_pinned_candidates(path: Path, experiment: Experiment, replays: Sequ
                 "a tree the record cannot afterwards identify (invariant 16)"
             )
         pinned = round_.seal.candidate_revision
-        if replay.integration.candidate_revision != pinned:
+        if integration.candidate_revision != pinned:
             raise BatchError(
-                f"{path}: {described} exercised {replay.integration.candidate_revision[:12]}, while round "
+                f"{path}: {described} exercised {integration.candidate_revision[:12]}, while round "
                 f"{round_.number} pinned {pinned[:12]}; a round's evidence names the revision that round's seal "
                 "fixed, so evidence for one candidate is never carried over to another"
             )
-        if replay.integration.base_revision != experiment.base_revision:
+        if integration.base_revision != experiment.base_revision:
             raise BatchError(
-                f"{path}: {described} states base {replay.integration.base_revision[:12]}, while "
+                f"{path}: {described} states base {integration.base_revision[:12]}, while "
                 f"{experiment.experiment_id} was created on {experiment.base_revision[:12]}; a candidate is "
                 "measured against the base its batch froze (invariant 15)"
             )
@@ -1439,3 +1808,25 @@ def _position(round_number: int, attempt: int) -> str:
 
 def _describe_replay(replay: Replay) -> str:
     return _position(replay.round_number, replay.attempt)
+
+
+def _describe_pending(pending: PendingRun) -> str:
+    """A request named by the position it holds, and marked as not yet a run."""
+
+    return f"the request for {_position(pending.round_number, pending.attempt)}"
+
+
+def _describe_outstanding(pending: PendingRun) -> str:
+    """What an outstanding request means for a round nothing has measured.
+
+    Not "nothing has run": the harness was asked, and something may be running
+    against that integration right now. The difference matters to whoever reads
+    it, because the two have different next steps — and only one of them is
+    waiting on a machine somewhere.
+    """
+
+    return (
+        f"{_describe_pending(pending)} is outstanding: its integration was pinned at "
+        f"{pending.requested_at} and the harness's answer never reached this record, so a run may be going "
+        "under it — start the replay again to record what the harness holds, or withdraw the request"
+    )

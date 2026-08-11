@@ -2,10 +2,11 @@
 
 The contract's Guarded operations section says each of them settles the same
 questions first — which batch is current, whether its analysis stage has ended,
-whether a supersession left it owing an attempt, which experiment is open, and
-whether that experiment's ref still agrees with its record. Those questions have
-one set of answers and one set of refusals, and they are here rather than in the
-module that happens to write first.
+whether a supersession left it owing an attempt, whether every replay record the
+batch holds can still be read, which experiment is open, and whether that
+experiment's ref still agrees with its record. Those questions have one set of
+answers and one set of refusals, and they are here rather than in the module that
+happens to write first.
 
 Two modules write against this lineage: `experiments.py` moves an attempt
 through its rounds and ends it, and `replay.py` records the runs measured
@@ -54,7 +55,41 @@ def current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = F
     require_stage_ended(config, current)
     if not finishing:
         require_no_pending_successor(current)
+    require_readable_evidence(config, current)
     return current
+
+
+def require_readable_evidence(config: EvolutionConfig, current: BatchLineage) -> None:
+    """Every replay record this batch holds is readable, before anything writes.
+
+    An unreadable record stops the operation — the rule this preamble applies to
+    every other persisted state — and it has to be applied from here rather than
+    from the module that owns the file, because the operations that would step
+    around it are in the other one. Replay's own writes read that file anyway;
+    the lifecycle's writes never touch it, so without this an experiment can be
+    revised or ended over a record nobody can read.
+
+    Ending it is the case that makes this more than tidiness. Evidence is
+    derived for the open experiment only, so a decision recorded over an
+    experiment whose `replays.json` is malformed retires the finding along with
+    the attempt: the file stays on disk, saying something no reader will accept,
+    and nothing reports it again. That is the same shape the ref check refuses
+    for the same reason, and one persisted truth being bypassed by writing
+    another is exactly what neither may allow.
+
+    Every experiment of the batch, not only the open one — a record that has
+    already been ended over is still a record this batch carries, and reading
+    only the open experiment would make the state above unreachable rather than
+    refused.
+    """
+
+    # Locally imported: `replay.py` runs this preamble before its own writes, so
+    # the dependency between the two points that way. What is needed here is its
+    # reader, and a module-level import would close the loop.
+    from .replay import read_replays
+
+    for experiment in current.experiments:
+        read_replays(config, experiment)
 
 
 def settled(config: EvolutionConfig, *, now: datetime) -> Lineage:
