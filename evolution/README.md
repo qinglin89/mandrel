@@ -688,6 +688,14 @@ below; what it cannot be finished from is its own interrupted window, since the
 targets it was planned for were never written down and no later run may state
 them as the original plan.
 
+Every version after that one states the field on every record, null included, and
+the absence of it is read from the version rather than from the record. A current
+record that does not state it is damaged and refuses, because the alternative is
+to read it as an experiment that never prepared a promotion — which for the
+interval this field exists to cover is the one wrong answer available: a merge
+this controller made would be standing on the source line while the experiment
+went back to being one that anything may end, revise, or promote again.
+
 The records that follow are written while the experiment's ref is held where it
 was read, for the reason every other transition holds one: that reading does not
 survive the write it justifies. The source line is deliberately *not* held. A

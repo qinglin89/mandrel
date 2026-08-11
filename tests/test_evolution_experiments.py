@@ -3461,6 +3461,47 @@ def test_an_attempt_is_not_ended_under_a_prepared_promotion(
             ending()
 
 
+def test_a_record_that_lost_its_prepared_promotion_stops_every_operation(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the guard above rests on, from the record's side. The prepared
+    promotion is the whole of what this controller knows about a merge it has
+    made, so a record that no longer states it must fail closed: read as "none
+    prepared", the same three operations would proceed and `promote` would make a
+    second merge for a line that may already be carrying the first.
+
+    The version is what makes that reading available at all — a current record
+    always writes the field — so a lost one is refused where a version-1 record's
+    absent one is read as the shape it is."""
+
+    prepared(config)
+    interrupt(monkeypatch, "move_ref")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+    made = record(config, EXP_01)["promotion"]["revision"]
+
+    path = config.experiments_root / EXP_01 / "experiment.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    del written["promotion"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    for operation in (
+        lambda: experiments.abandon(config, reason="on reflection, no", now=LATEST),
+        lambda: experiments.supersede(config, reason="try another approach", now=LATEST),
+        lambda: experiments.revise(config, reason="one more pass", now=LATEST),
+        lambda: experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST),
+    ):
+        with pytest.raises(evolution.ValidationError, match="missing required property 'promotion'"):
+            operation()
+
+    # Nothing moved on the strength of a record nobody could read: the line still
+    # stands where it did, and the merge that run made is still off it — named by
+    # nothing but the field a repair has to put back.
+    assert git_rev(config.repo_root, RELEASE_REF) == release
+    assert revisions.contains(config.repo_root, made, release) is False
+
+
 def test_a_line_that_moved_for_somebody_else_is_not_this_promotion(
     config: evolution.EvolutionConfig, batch: Path, release: str
 ) -> None:

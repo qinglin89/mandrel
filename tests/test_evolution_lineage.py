@@ -111,6 +111,7 @@ def experiment(**overrides: Any) -> dict[str, Any]:
             },
         ],
         "decision": None,
+        "promotion": None,
     }
     record.update(overrides)
     return record
@@ -399,10 +400,14 @@ def test_an_unrecorded_experiment_field_is_refused() -> None:
 def legacy_experiment(**overrides: Any) -> dict[str, Any]:
     """The record the implementation before the prepared promotion emitted:
     every field its serializer wrote, in the shape it wrote them, and no
-    `promotion` — the field did not exist for it to write."""
+    `promotion` — the field did not exist for it to write. An override states
+    one anyway, for the case about a version claiming a field that version never
+    had."""
 
     record = experiment(schema_version=1, **overrides)
     del record["rounds"][1]
+    if "promotion" not in overrides:
+        del record["promotion"]
     return record
 
 
@@ -425,6 +430,23 @@ def test_a_version_1_record_cannot_carry_a_merge_unit() -> None:
     as the older one would take a field nothing at that version ever wrote."""
 
     assert errors(legacy_experiment(promotion=prepared_promotion()), "experiment-v1.schema.json")
+
+
+def test_a_current_record_states_whether_a_promotion_is_prepared() -> None:
+    """Null is how this version says "none prepared", and it is stated rather
+    than left out — the missing-field shape is version 1's and no other. A
+    version-2 record that lost the key would say exactly what a version-1 record
+    says while claiming the version that always writes it, which is the
+    ambiguity the version split exists to remove: what the field carries while
+    it is set is a merge this controller made, and possibly already put on the
+    source line."""
+
+    assert errors(experiment(), "experiment.schema.json") == []
+    assert errors(experiment(promotion=prepared_promotion(candidate_revision=CANDIDATE)), "experiment.schema.json") == []
+
+    lost = experiment()
+    del lost["promotion"]
+    assert errors(lost, "experiment.schema.json") == ["$: missing required property 'promotion'"]
 
 
 @pytest.mark.parametrize(
@@ -1794,6 +1816,34 @@ def test_a_promoted_outcome_still_has_to_state_its_merge_unit(
         lineage.describe(config)
 
 
+def test_a_current_record_that_lost_its_prepared_promotion_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The in-flight window read from a record that stopped stating it. A
+    prepared promotion is the only record saying this experiment's merge may
+    already be on the source line, so a reader taking the missing key for "none
+    prepared" hands the experiment back to every operation that refuses over one
+    — including a second `promote`, which would go and make a second merge. The
+    version says the field is written, so its absence here is a damaged record
+    and not an older one."""
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        promotion=prepared_promotion(candidate_revision=CANDIDATE, revision=PROMOTION),
+    )
+    assert only(config).experiments[0].promotion is not None
+
+    path = config.experiments_root / EXP_01 / "experiment.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    del written["promotion"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.ValidationError, match="missing required property 'promotion'"):
+        lineage.describe(config)
+
+
 # --- promotions recorded before the merge unit existed ------------------------
 
 
@@ -1862,12 +1912,18 @@ def test_a_version_2_promotion_still_states_its_merge_unit(
 ) -> None:
     """What the version buys: the rule stays absolute for every record this build
     writes, so a promoted record with no merge unit is read as the version-1
-    promotion it is rather than as a version-2 one that dropped it."""
+    promotion it is rather than as a version-2 one that dropped it.
+
+    Stated null rather than deleted, which is the only way a current record says
+    "none prepared" — the missing-field shape belongs to version 1 and is refused
+    before any pairing is asked. This is the pairing itself: the null the schema
+    permits everywhere else is exactly what a `promoted` decision may not carry.
+    """
 
     promoted_batch(config)
     path = config.experiments_root / EXP_01 / "experiment.json"
     written = json.loads(path.read_text(encoding="utf-8"))
-    del written["promotion"]
+    written["promotion"] = None
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(evolution.BatchError, match="not the merge unit it went as"):

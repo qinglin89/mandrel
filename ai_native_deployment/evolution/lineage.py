@@ -1110,10 +1110,20 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     _require_appended_rounds(path, rounds)
     _require_one_admission_per_draft(path, rounds)
     decision = _read_decision(path, record["decision"], last=rounds[-1])
-    # `.get`, because a version-1 record has no such field at all — its schema
-    # refuses one. What that absence means depends on the version, which is why
-    # the version goes with it.
-    promotion = _read_promotion(path, record.get("promotion"), rounds=rounds, decision=decision, version=version)
+    # The version decides whether there is a field to read at all: version 1 has
+    # none — its schema refuses one — and every version after states it, with
+    # null for "no promotion prepared". So the absence is read from the version
+    # and never from the record, which is the difference between a build that
+    # kept no merge unit and a current record that lost one. A default here would
+    # collapse the two, and the state it would silently forget is a merge this
+    # controller made and may already have put on the source line.
+    promotion = _read_promotion(
+        path,
+        record["promotion"] if version > 1 else None,
+        rounds=rounds,
+        decision=decision,
+        version=version,
+    )
 
     return Experiment(
         experiment_id=experiment_id,
@@ -1278,13 +1288,15 @@ def _read_promotion(
     because the revision alone is a commit nothing can afterwards be held to —
     the rule the batch outcome states from its own side.
 
-    That last pairing is the one thing here the version decides. A version-1
-    promotion recorded the revision and no merge unit, because the operation that
-    wrote it kept none; refusing it would make an attempt this controller itself
-    promoted unreadable, and with it every reading of the batch it ended. So it
-    is read as the version-1 promotion it is, and what it went as is checked
-    where that version did record it — the batch outcome, held to the run that
-    measured it and to the commit itself.
+    That last pairing is the one thing here the version decides, and it is why
+    `None` arrives with the version it came from: at version 1 it is a field that
+    never existed, and after it the explicit null a record states when nothing is
+    prepared. A version-1 promotion recorded the revision and no merge unit,
+    because the operation that wrote it kept none; refusing it would make an
+    attempt this controller itself promoted unreadable, and with it every reading
+    of the batch it ended. So it is read as the version-1 promotion it is, and
+    what it went as is checked where that version did record it — the batch
+    outcome, held to the run that measured it and to the commit itself.
     """
 
     if promotion is None:

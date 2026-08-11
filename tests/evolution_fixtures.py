@@ -389,7 +389,9 @@ def write_experiment(
     recorded its merge unit: the field does not exist there, so a version-1
     `promoted` decision states the revision alone and brings nothing with it.
     That is what a current build meets in a repository promoted under the
-    previous one.
+    previous one. Every later version states the field, null included — a record
+    with no field at all is the version-1 shape, and writing one here would be
+    writing a record no current build accepts.
     """
 
     record = {
@@ -402,6 +404,7 @@ def write_experiment(
         "ref": ref if ref is not None else f"refs/evolution/experiments/{experiment_id}",
         "rounds": rounds if rounds is not None else [experiment_round(1)],
         "decision": decision,
+        **({"promotion": None} if version > 1 else {}),
         **overrides,
     }
     if version > 1 and decision is not None and decision.get("outcome") == "promoted" and "promotion" not in overrides:
