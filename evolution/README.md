@@ -818,12 +818,20 @@ afterwards. The inverse commit is made first and named by nothing, so a run
 stopping there leaves an object Git collects. Then the record, with its reversal
 moment still null, which is what makes that commit *this operation's*. Then the
 source-line ref moves, compare-and-swap from the tip the inverse was made on top
-of. Then the moment is written, and the audit line after it.
+of. Then the moment is written under Git's own lock on that line, held where the
+run last saw it, and the audit line after it.
 
 A second run therefore asks the record which commit was this operation's, and
 Git whether the line carries it — ancestry, never a shape a hand-made revert
 shares and never the tip, since a line that took further commits still carries
-the rollback. Where the line has left the prepared inverse behind, the inverse is
+the rollback. What that record states is recomputed rather than believed, in the
+reader and again before the run acts on it: the line it was made from carries the
+promotion, and reverting the promotion out of that revision produces the tree the
+record names. An in-flight record is what moves the canonical source line, so
+without that a one-parent commit written into a file would be a revision nobody
+checked reaching it. A checkout that cannot recompute the revert reads on and
+says what it could not check; the run about to move the line refuses instead, for
+the reason the built-on question refuses. Where the line has left the prepared inverse behind, the inverse is
 made **again** from where the line now stands rather than discarded and refused
 as a prepared promotion is: a promotion's merge carries a tree that evidence
 exists about, and a moved line makes that evidence describe something else, while
@@ -858,9 +866,11 @@ its experiments state one history, and the merge unit a promoted outcome carries
 is checked against the promoted experiment's own prepared promotion, the
 completed run that measured that exact integration, and the commit itself
 wherever the checkout holds it. A rollback is checked the same way, against the
-outcome it reverses and against its own commit's shape. A record whose claim
-nothing checks is a claim any schema-valid file can make, and these name what
-reached the canonical source line and what came back off it.
+outcome it reverses, against its own commit's shape, and against the revert
+itself — that commit's tree is what taking the promotion back out of the line it
+was made from produces. A record whose claim nothing checks is a claim any
+schema-valid file can make, and these name what reached the canonical source line
+and what came back off it.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run
@@ -969,6 +979,18 @@ line a promotion moves is deliberately not held that way: what makes that
 operation finishable is the commit it recorded before moving anything, so a line
 advancing afterwards is ordinary rather than fatal, and holding it would make
 every such advance a promotion nobody could complete.
+
+A rollback's completion is held that way, and the difference is what the two
+records claim. A promotion records that a commit was made and put on the line,
+which stays true whatever the line does next. A rollback's reversal moment
+records that the line *carries* the inverse — the reading every later one takes
+of whether that promotion still stands — so a reset back to the promotion between
+the move and the write would leave a finished rollback beside a line still
+carrying the change. The line is therefore held where the run last saw it, at the
+tip it just made or the one it found the inverse already on, until the record
+catches up; a line that moved in that window writes nothing and leaves the
+rollback in flight, which the next run finishes or re-prepares from where the
+line then stands.
 
 An ending is guarded once more, by whether the attempt has a promotion prepared
 on it. That record may name a merge already on the canonical line with only its

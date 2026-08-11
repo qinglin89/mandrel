@@ -33,6 +33,7 @@ from evolution_fixtures import (
     git_rev,
     git_sibling_commit,
     git_tree,
+    git_try_update_ref,
     git_update_ref,
     git_worktree,
     make_repo,
@@ -41,6 +42,7 @@ from evolution_fixtures import (
     write_draft,
     write_experiment,
     write_manifest,
+    write_rollback,
 )
 
 from ai_native_deployment import evolution
@@ -420,6 +422,109 @@ def test_a_line_that_moved_before_the_inverse_landed_drops_nothing(
     assert git_file(config.repo_root, result.revision, "unrelated.txt") == "meanwhile\n"
 
 
+def test_a_line_reset_after_the_move_leaves_the_rollback_in_flight(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gap the completion is recorded across: the inverse is put on the line,
+    and before the record says so an ordinary Git updater resets the line back to
+    the promotion. Writing the moment from that expired reading would leave a
+    finished rollback beside a line still carrying the change — which is what
+    every later reader takes for the promotion no longer standing."""
+
+    land = rollback._land
+
+    def interleaved(*args, **kwargs):
+        land(*args, **kwargs)
+        git_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision)
+
+    monkeypatch.setattr(rollback, "_land", interleaved)
+    with pytest.raises(evolution.BatchError, match="a finished rollback says the source line carries"):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+
+    assert rollback_record(config)["reverted_at"] is None
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+    assert "promotion-rolled-back" not in ledger_types(config)
+
+    # In flight rather than lost: the line stands where the inverse was made
+    # from, so the next run puts the same commit on it and finishes.
+    monkeypatch.undo()
+    result = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert result.reverted is True and result.revision == rollback_record(config)["revision"]
+    assert git_rev(config.repo_root, RELEASE_REF) == result.revision
+    assert rollback_record(config)["reverted_at"] == LATER_AT
+
+
+def test_a_line_reset_before_an_interrupted_rollback_is_finished_leaves_it_in_flight(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same gap on the recovery path, where the move happened in an earlier
+    run: this one only recognises its own commit on the line, and the reading it
+    would record the completion from expires exactly as fast."""
+
+    stop_after(monkeypatch, "_finish")
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+    prepared = rollback_record(config)
+    monkeypatch.undo()
+
+    standing = rollback._standing
+
+    def interleaved(*args, **kwargs):
+        answer = standing(*args, **kwargs)
+        git_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision)
+        return answer
+
+    monkeypatch.setattr(rollback, "_standing", interleaved)
+    with pytest.raises(evolution.BatchError, match="a finished rollback says the source line carries"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert rollback_record(config)["reverted_at"] is None
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+
+    monkeypatch.undo()
+    result = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert result.revision == prepared["revision"]
+    assert git_rev(config.repo_root, RELEASE_REF) == result.revision
+    assert rollback_record(config)["reverted_at"] == LATER_AT
+
+
+def test_nothing_outside_can_move_the_line_while_the_reversal_is_recorded(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of that guarantee: while the completion is being written,
+    Git itself refuses the update that would open the gap."""
+
+    finish = rollback._finish
+    refused: list[str | None] = []
+
+    def probe(*args, **kwargs):
+        refused.append(git_try_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision))
+        return finish(*args, **kwargs)
+
+    monkeypatch.setattr(rollback, "_finish", probe)
+    result = rollback.rollback(config, reason=WHY, now=REVERSED)
+
+    assert refused[0] is not None and "cannot lock ref" in refused[0]
+    assert result.reverted is True and result.recorded is True
+    assert git_rev(config.repo_root, RELEASE_REF) == result.revision
+    assert rollback_record(config)["reverted_at"] == REVERSED_AT
+
+
+def test_the_line_is_let_go_once_the_rollback_is_recorded(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """Held for the write, not beyond it. What the record says about that line is
+    said, and what happens to it afterwards — a later commit, a fetch — is
+    nobody's finding here."""
+
+    result = rollback.rollback(config, reason=WHY, now=REVERSED)
+
+    later = git_file_commit(config.repo_root, result.revision, "unrelated.txt", "later work\n", "meanwhile")
+    assert git_try_update_ref(config.repo_root, RELEASE_REF, later) is None
+
+
 def test_a_prepared_rollback_is_finished_as_it_was_prepared(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -436,6 +541,123 @@ def test_a_prepared_rollback_is_finished_as_it_was_prepared(
         rollback.rollback(config, reason="something else entirely", now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+
+
+# --- a record that is not the promotion's inverse ------------------------------
+
+
+def written_rollback(
+    config: evolution.EvolutionConfig,
+    *,
+    promotion_revision: str,
+    reverted_from: str,
+    revision: str,
+    reverted_at: str | None = None,
+) -> Path:
+    """A schema-valid rollback record of this batch's promotion, stating the
+    commit's own tree so the record and the commit agree with each other.
+
+    `reverted_at` of None is the state a run acts on by moving the ref; a
+    timestamp is the record every later reading takes for the promotion no longer
+    standing."""
+
+    return write_rollback(
+        config.batches_root,
+        BATCH_ID,
+        experiment_id=EXP_01,
+        promotion_revision=promotion_revision,
+        source_ref=RELEASE_REF,
+        reverted_from=reverted_from,
+        revision=revision,
+        tree=git_tree(config.repo_root, revision),
+        reverted_at=reverted_at,
+    )
+
+
+@pytest.mark.parametrize("reverted_at", [None, REVERSED_AT], ids=["in-flight", "finished"])
+def test_a_commit_that_reverses_nothing_is_not_this_promotions_inverse(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, reverted_at: str | None
+) -> None:
+    """The record agrees with its own commit — that commit carries that tree and
+    was made from that revision — and agreeing with itself proves nothing about
+    the promotion. Without the content being recomputed, any one-parent commit
+    written into this file is a revision the next run puts on the canonical source
+    line, and a finished one is a promotion retired while the line still carries
+    it."""
+
+    impostor = git_file_commit(
+        config.repo_root, promoted.promotion_revision, "unrelated.txt", "not a revert\n", "unrelated work"
+    )
+    written_rollback(
+        config,
+        promotion_revision=promoted.promotion_revision,
+        reverted_from=promoted.promotion_revision,
+        revision=impostor,
+        reverted_at=reverted_at,
+    )
+
+    with pytest.raises(evolution.BatchError, match="reverting it here produces"):
+        lineage.describe(config)
+    with pytest.raises(evolution.BatchError, match="reverting it here produces"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+
+
+def test_an_inverse_made_from_a_line_without_the_promotion_is_refused(
+    config: evolution.EvolutionConfig, release: str, promoted: experiments.PromotionResult
+) -> None:
+    """The other half of the relationship: reverting is computed from the line as
+    it stood *carrying* the change, so a record made from a revision that never
+    had the promotion describes taking back something that was never there."""
+
+    elsewhere = git_file_commit(config.repo_root, release, "unrelated.txt", "elsewhere\n", "another line")
+    written_rollback(
+        config,
+        promotion_revision=promoted.promotion_revision,
+        reverted_from=release,
+        revision=elsewhere,
+    )
+
+    with pytest.raises(evolution.BatchError, match="does not have that promotion in its history"):
+        lineage.describe(config)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+
+
+def test_a_rollback_this_checkout_cannot_recompute_moves_nothing(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where the reader and the operation part. A checkout that cannot recompute
+    the revert — a clone holding neither side of it — reads the record and says
+    so, because a history that stopped loading on a shallow clone would take every
+    other reading with it. The run about to move the source line to that record's
+    commit refuses instead: this is the one place the wrong answer is a revision
+    nobody checked reaching the canonical line."""
+
+    stop_after(monkeypatch, "_land")
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+    prepared = rollback_record(config)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(lineage, "revert_tree", lambda *args, **kwargs: (None, "the objects are not here"))
+
+    latest = lineage.describe(config).last_promoted
+    assert latest is not None and latest.rollback is not None
+
+    with pytest.raises(evolution.BatchError, match="cannot be settled here"):
+        rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+    assert rollback_record(config) == prepared
+
+    # And with the checkout able to answer again, the same record finishes.
+    monkeypatch.undo()
+    result = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert result.revision == prepared["revision"]
+    assert git_rev(config.repo_root, RELEASE_REF) == result.revision
 
 
 # --- what a rollback is refused on -------------------------------------------

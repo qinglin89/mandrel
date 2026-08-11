@@ -22,12 +22,15 @@ commit is made first and named by nothing, so a run stopping there leaves an
 object Git collects. Then the record, with `reverted_at` null — which is what
 makes that commit *this operation's* rather than a revert somebody made by hand.
 Then the source-line ref moves, compare-and-swap from the tip the inverse was
-made on top of. Then `reverted_at` is written, and the audit line after it.
+made on top of. Then `reverted_at` is written under Git's own lock on that ref,
+held where this run last saw it, and the audit line after it.
 
 A second run therefore asks the record which commit was this operation's, and
 Git whether the line carries it. A commit's shape is not that identity — a
 revert made by hand carries the same tree and parent — and the line's tip is not
-either, since a line that took further commits still carries the rollback.
+either, since a line that took further commits still carries the rollback. What
+the record says is checked against Git rather than believed: an in-flight one is
+what the next run moves the line to.
 
 **Why an inverse rather than a reset.** The promotion is history and stays
 history: the record of what was promoted, when, and on what evidence is the
@@ -48,10 +51,11 @@ from typing import Any, Mapping
 
 from .config import ROLLBACK_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError
+from .guards import held
 from .guards import reason as require_reason
 from .guards import require_line_not_checked_out, require_readable_evidence, settled
 from .ledger import append_records, build_record
-from .lineage import BatchLineage, Lineage
+from .lineage import BatchLineage, Lineage, require_inverse
 from .manifests import ROLLBACK_SCHEMA_VERSION
 from .revisions import commit_shape, commit_tree, contains, move_ref, ref_tip, revert_tree
 from .schema import format_rfc3339, load_schema, validate_or_raise
@@ -123,6 +127,12 @@ def rollback(
     - **No working tree is on the line.** The same repository-level guard a
       promotion makes, for the same reason, and worktree-wide.
 
+    A run finishing a rollback another one prepared asks one more thing, of the
+    record rather than of the request: that the commit it names is this
+    promotion taken back out of the line it was made from. That record is what
+    the ref is about to be moved to, so a checkout that cannot recompute the
+    revert refuses rather than trusting it.
+
     The evidence for a rollback is not in the run that justified the promotion.
     A replay measures a tree; whether the promotion argued from it should stand
     is a later judgement against a later cohort, and what this records of it is
@@ -175,6 +185,12 @@ def rollback(
         standing = _standing(config, promoted, recorded, tip)
         prepared = recorded
         reverted = standing != _CARRIED
+        if standing != _STALE:
+            # Everything below acts on a record that came off the disk: the
+            # source line is moved to the commit it names, or recorded as
+            # carrying it. A freshly prepared one is the inverse by
+            # construction, so it is the read one that is asked.
+            _require_confirmed_inverse(config, promoted, outcome, prepared)
         if reverted:
             _require_nothing_built_on(config, lineage, promoted)
             require_line_not_checked_out(config, source_ref, _ACTION)
@@ -182,7 +198,11 @@ def rollback(
                 prepared = _prepare(config, promoted, outcome, tip, text, at=stamp)
             _land(config, promoted, prepared)
 
-        path = _finish(config, promoted, prepared, at=stamp)
+        # Where this run last saw the line, which is what its completion is about
+        # to record the line as carrying: the tip the inverse was already on when
+        # this run read it, or the tip the move just made.
+        carrying = tip if standing == _CARRIED else prepared["revision"]
+        path = _completed(config, promoted, prepared, source_ref, carrying, at=stamp)
 
     return _result(promoted, prepared, reverted_at=stamp, path=path, reverted=reverted)
 
@@ -386,6 +406,74 @@ def _land(config: EvolutionConfig, promoted: BatchLineage, prepared: Mapping[str
         f"line that moved since is rolled back by running this again — {promoted.batch_id}'s promotion stays "
         "where it is until one of them lands"
     )
+
+
+def _require_confirmed_inverse(
+    config: EvolutionConfig,
+    promoted: BatchLineage,
+    outcome: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+) -> None:
+    """The record this run is about to act on is the inverse Git says it is.
+
+    The reader holds every rollback record to this wherever the objects are in
+    the checkout (`lineage.require_inverse`); here a checkout that could not
+    answer refuses as well, for `_require_nothing_built_on`'s reason. What
+    follows is either the canonical source line moved to the commit this record
+    names, or that line recorded as no longer carrying the promotion — and a
+    record acted on that far is one this operation has to have checked rather
+    than read.
+    """
+
+    unanswered = require_inverse(config, promoted.batch.rollback_path, outcome, prepared)
+    if unanswered is None:
+        return
+    raise BatchError(
+        f"{promoted.batch_id}: whether {prepared['revision'][:12]} is {outcome['promotion_revision'][:12]} taken "
+        f"back out of {prepared['reverted_from'][:12]} cannot be settled here — {unanswered}; this record is what "
+        f"moves {prepared['source_ref']} and what says the promotion came off it, so it is acted on from a "
+        "checkout holding the commits it names"
+    )
+
+
+def _completed(
+    config: EvolutionConfig,
+    promoted: BatchLineage,
+    prepared: Mapping[str, Any],
+    source_ref: str,
+    carrying: str,
+    *,
+    at: str,
+) -> Path:
+    """Finish the rollback while the source line is held where this run saw it.
+
+    What `reverted_at` records is not that a commit exists — that is the prepared
+    record, and it stays true whatever the line does afterwards. It records that
+    the line *carries* the inverse, which is where every later reader gets
+    `promotion_effective` from, and a reading of where a ref stands stops being
+    true the moment it is over. Between the move (or the ancestry check that
+    found the inverse already there) and this write, what advances or resets that
+    ref is ordinary Git, which the single-writer lock does not cover: a reset
+    back to the promotion in that gap would leave a completed rollback beside a
+    line still carrying the change.
+
+    So the reading is held rather than taken twice, which would be the same
+    check-then-write one step later (`guards.held`). A line that moved refuses
+    and writes nothing: the record stays in flight, and the next run reads where
+    the line now stands and finishes or re-prepares from there. That is also why
+    an ordinary commit arriving in this window refuses — the run has no way to
+    tell it from the reset, and being run again costs nothing.
+    """
+
+    with held(
+        config,
+        source_ref,
+        carrying,
+        promoted.batch_id,
+        "a finished rollback says the source line carries the inverse commit, which is the reading every later "
+        "one takes of whether the promotion still stands",
+    ):
+        return _finish(config, promoted, prepared, at=at)
 
 
 def _finish(

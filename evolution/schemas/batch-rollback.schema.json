@@ -41,7 +41,7 @@
       "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
     },
     "reverted_from": {
-      "description": "Where the source line stood when the inverse commit was made — its single parent, and the revision the ref move is a compare-and-swap from. Not the promotion revision: the line may have taken any number of commits since, and what a rollback must never do is drop them.",
+      "description": "Where the source line stood when the inverse commit was made — its single parent, and the revision the ref move is a compare-and-swap from. Not the promotion revision: the line may have taken any number of commits since, and what a rollback must never do is drop them. A revision that does not have the promotion in its history is refused wherever the checkout can answer: the change is taken back out of the line as it stood carrying it.",
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
@@ -51,7 +51,7 @@
       "pattern": "^[0-9a-f]{40}$"
     },
     "tree": {
-      "description": "The tree the inverse commit carries — the line as it stood with the promotion's change taken back out, computed as a three-way revert so later commits on the line are kept. Recorded for the reason a promotion records one: two commits only imply a result, and this is the content that actually reached the line.",
+      "description": "The tree the inverse commit carries — the line as it stood with the promotion's change taken back out, computed as a three-way revert so later commits on the line are kept. Recorded for the reason a promotion records one: two commits only imply a result, and this is the content that actually reached the line. Recomputed rather than believed wherever the objects are held, and always before a run acts on a record still in flight: a commit agreeing with its own record proves nothing about the promotion, and this record is what moves the source line.",
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
@@ -66,7 +66,7 @@
       "format": "date-time"
     },
     "reverted_at": {
-      "description": "When this controller recorded the source line as carrying the inverse commit, or null while it has not. Null is an operation in flight and never a rollback that was abandoned: the inverse commit exists, the next run asks Git whether the line took it, and it either finishes the move or makes the inverse again from where the line now stands.",
+      "description": "When this controller recorded the source line as carrying the inverse commit, or null while it has not. Null is an operation in flight and never a rollback that was abandoned: the inverse commit exists, the next run asks Git whether the line took it, and it either finishes the move or makes the inverse again from where the line now stands. Written under Git's own lock on that line, held where the run last saw it: this moment is where every later reader learns the promotion no longer stands, so a line that moved in the meantime leaves the record in flight rather than stating something that expired.",
       "type": [
         "string",
         "null"

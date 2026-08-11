@@ -85,7 +85,7 @@ import os
 import re
 import shutil
 import tempfile
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,9 +94,10 @@ from typing import Any, Iterable, Iterator, Mapping, NoReturn, Sequence
 from ..hashing import sha256_bytes
 from . import analysis_task
 from .config import EvolutionConfig
-from .errors import BatchError, RefHoldError
+from .errors import BatchError
 from .guards import (
     current_cycle,
+    held,
     no_open_experiment,
     reason as require_reason,
     require_consistent_ref,
@@ -142,7 +143,6 @@ from .revisions import (
     commit_tree,
     contains,
     create_ref,
-    held_at,
     merge_tree,
     move_ref,
     ref_tip,
@@ -2306,38 +2306,7 @@ def _unmoved(
     commits the admitted task is being written to make.
     """
 
-    with _held(config, experiment.ref, revision, experiment.experiment_id, requirement):
-        yield
-
-
-@contextmanager
-def _held(
-    config: EvolutionConfig,
-    ref: str,
-    revision: str | None,
-    subject: str,
-    requirement: str,
-) -> Iterator[None]:
-    """Any ref, held where it was observed, for the length of the body.
-
-    The mechanism `_unmoved` applies to an experiment's ref, stated once because
-    a promotion needs it for a second ref of its own: the source line it has just
-    moved, held until the records naming that revision have landed. Both are the
-    same shape — a reading that stops being true the moment it is over, about to
-    be written down — and Git's own lock is the only thing that can span the gap
-    (`revisions.held_at`).
-    """
-
-    holding = ExitStack()
-    try:
-        holding.enter_context(held_at(config.repo_root, ref, revision))
-    except RefHoldError as exc:
-        raise BatchError(
-            f"{subject}: {exc}; {requirement}, so it is recorded while the ref is held there "
-            "rather than from a reading that may already be stale — read the ref as it now stands and decide "
-            "again"
-        ) from exc
-    with holding:
+    with held(config, experiment.ref, revision, experiment.experiment_id, requirement):
         yield
 
 

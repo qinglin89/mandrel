@@ -45,8 +45,10 @@ class FeedError(EvolutionError):
 
 
 class RefHoldError(EvolutionError):
-    """An experiment ref cannot be held where it was observed, so an operation
-    about to record a transition of it has nothing to record from.
+    """A ref cannot be held where it was observed, so an operation about to
+    record something about it has nothing to record from — an experiment ref a
+    transition is decided over, or the source line a rollback is recording as
+    carrying its inverse.
 
     Raised at the Git boundary and translated by the operation, which is what
     knows why that ref had to stay still."""

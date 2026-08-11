@@ -16,10 +16,11 @@ several spellings of the same refusal and let them drift; the alternative —
 importing it from `experiments.py` — points the dependency the wrong way, since
 a promotion has to read replay evidence before it decides.
 
-Two things here are not readings of the lineage at all: the reason a decision
-records, and whether some working tree is sitting on the ref about to move.
-They are here for the same reason as the rest — two operations ask each of them,
-and an operator meets one refusal rather than one per module.
+Three things here are not readings of the lineage at all: the reason a decision
+records, whether some working tree is sitting on the ref about to move, and
+holding a ref where it was observed until the record saying so has landed. They
+are here for the same reason as the rest — two operations ask each of them, and
+an operator meets one refusal rather than one per module.
 
 Nothing here writes. `settled` publishes this machine's analysis closures, which
 is a record catching up with a task lifecycle rather than a change to the
@@ -28,14 +29,16 @@ lineage, and is exactly what the freeze does before it reads.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
+from typing import Iterator
 
 from .batches import awaiting_analysis, record_closures
 from .config import EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, RefHoldError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
-from .revisions import checked_out_refs
+from .revisions import checked_out_refs, held_at
 
 
 def current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = False) -> BatchLineage:
@@ -258,3 +261,45 @@ def require_consistent_ref(current: BatchLineage) -> None:
         f"record pins ({ref.state}); the ref only fast-forwards, and work admitted onto it now would be measured "
         "as part of a candidate nobody can identify"
     )
+
+
+@contextmanager
+def held(
+    config: EvolutionConfig,
+    ref: str,
+    revision: str | None,
+    subject: str,
+    requirement: str,
+) -> Iterator[None]:
+    """Any ref, held where it was observed, for the length of the body.
+
+    A read of a ref answers where it stood, which stops being true the moment the
+    reading is over. Where that answer is about to be *recorded*, the record has
+    to be written while the answer still holds, and no lock this package takes
+    can arrange that: what moves a ref is ordinary Git — a fetch, a push, an
+    operator's own `update-ref` — which the single-writer lock has never covered.
+    Git's own lock is the only thing that spans the gap (`revisions.held_at`),
+    and it is taken from here rather than from either writer because both of them
+    would otherwise spell the same refusal.
+
+    Two refs are held this way, for the same reason and about different claims.
+    An experiment's ref is held while a seal, a revision, or a terminal decision
+    is recorded (`experiments._unmoved`). The source line is held while a
+    rollback records that the line carries its inverse commit — the moment
+    `promotion_effective` is read from afterwards, and a claim about where the
+    line stands rather than about a commit that exists. A promotion's own move is
+    deliberately not held this way: what it records is that a commit was made and
+    put on the line, which a later advance leaves true.
+    """
+
+    holding = ExitStack()
+    try:
+        holding.enter_context(held_at(config.repo_root, ref, revision))
+    except RefHoldError as exc:
+        raise BatchError(
+            f"{subject}: {exc}; {requirement}, so it is recorded while the ref is held there "
+            "rather than from a reading that may already be stale — read the ref as it now stands and decide "
+            "again"
+        ) from exc
+    with holding:
+        yield
