@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/experiment.schema.json",
-  "title": "Evolution experiment record",
-  "description": "One attempt at the change a batch's analysis called for: its identity, the batch base it starts from, its durable ref, its append-only rounds, the promotion it prepared, and the terminal decision that turns it into history (contract: Change lineage). This record — not `.ai-tasks/`, not a branch, not the checkout — is what makes an experiment discoverable, which is why it names its own task selections and candidate revisions rather than pointing at files that are machine-local or archived away.\n\nVersion 2 added the prepared promotion. A version-1 record is read against the frozen `experiment-v1.schema.json` and cannot carry one at all — including a version-1 promotion, which recorded the revision alone because that was the whole of what the operation writing it kept. That is why the field could not simply be made optional here: a reader with no version to go on cannot tell a promotion that recorded no merge unit from one that dropped it.",
+  "$id": "https://ai-native-development.local/evolution/experiment-v1.schema.json",
+  "title": "Evolution experiment record (version 1, frozen)",
+  "description": "The experiment shape this repository shipped before a promotion recorded the merge unit it went as. A version-1 record that ended `promoted` states its promotion revision and no merge unit — not because a field is missing, but because the operation that wrote it recorded none — so the merge unit such a promotion went as is read from the batch outcome and held to the run that measured it. This file is never tightened: it exists so those records keep a defined read path. New records are written at the current version, and any operation that rewrites one writes it at that version.",
   "type": "object",
   "required": [
     "schema_version",
@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "const": 1
     },
     "experiment_id": {
       "description": "`<batch-id>-exp-<NN>`, one past the highest ordinal its batch has ever used. Never reused: a historical experiment's name has to keep naming the attempt it was. The ordinal is a positive number zero-padded to two digits and no wider than it needs to be, so one attempt has exactly one spelling — `00` names no attempt, and `01` and `001` would be two directories for one position in the series. The batch's ordinals run 1..N with none missing and only the newest still open, which the controller enforces across the records the way the schema enforces the spelling of each.",
@@ -59,9 +59,6 @@
     },
     "decision": {
       "$ref": "#/$defs/decision"
-    },
-    "promotion": {
-      "$ref": "#/$defs/promotion"
     }
   },
   "$defs": {
@@ -208,75 +205,6 @@
             "null"
           ],
           "pattern": "^[0-9a-f]{40}$"
-        }
-      },
-      "additionalProperties": false
-    },
-    "promotion": {
-      "description": "The merge unit this experiment's promotion was prepared as, written before the source line moved and never edited afterwards — so it is equally the record of what the promotion went as. Absent or null means no promotion was ever prepared here.\n\nIt exists because a promotion is two writes in another repository's terms — a commit, then a ref move — with the records that explain them arriving afterwards, and a run that stops in between has to be finishable. `revision` is that identity: the exact commit this operation made. A run coming back asks Git whether that commit is on the line, which admits a line that has taken further commits since (an ordinary advance, and the promotion is still on it) and refuses a commit that merely resembles this one. Recognising the merge by its shape instead — those parents, that tree — adopts anything shaped like it, including a merge a human made by hand, and cannot survive the line advancing at all.\n\nThat absence is exact at this version: a record that ended `promoted` carries one, and one that ended any other way carries none. The implemented schema subset has no cross-field conditionals, so the controller holds a record to that pairing; what the schema states on its own is that this shape belongs to version 2, and that a promoted record written before the shape existed is a version-1 record read as the version-1 promotion it is.",
-      "type": [
-        "object",
-        "null"
-      ],
-      "required": [
-        "round",
-        "candidate_revision",
-        "merge_input_revision",
-        "merge_input_ref",
-        "tree",
-        "revision",
-        "reason",
-        "planned_targets",
-        "prepared_at"
-      ],
-      "properties": {
-        "round": {
-          "description": "The round whose seal pinned the promoted candidate — this experiment's last round, and no earlier one. The controller checks it against this record's own rounds: a merge unit naming a round this experiment never sealed describes a candidate nothing here produced, and one naming an earlier sealed round describes a candidate this experiment has already revised past. It is the last round rather than merely a sealed one because nothing may open a round while a promotion is prepared, so the round a promotion is prepared from is still the last one when it is recorded.",
-          "type": "integer",
-          "minimum": 1
-        },
-        "candidate_revision": {
-          "description": "The revision that round's seal pinned and replay exercised — the second parent of `revision`, and never `revision` itself.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "merge_input_revision": {
-          "description": "Where the source line stood when this promotion was prepared: the first parent of `revision`, and the commit the replay integrated onto. What the ref move compares against, so a line that took a commit in between refuses rather than carrying an untested merge.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "merge_input_ref": {
-          "description": "The source-line ref this promotion moves. Fully qualified, for the reason a replay's is: a bare name or a revision expression resolves against whichever working copy asks, and a run finishing this promotion elsewhere has to look at the same line.",
-          "type": "string",
-          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
-        },
-        "tree": {
-          "description": "The tree `revision` carries, which is the tree the replay measured. What identifies the thing promoted: the same two commits merged with a different strategy, or with a conflict resolved by hand, land somewhere else.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "revision": {
-          "description": "The merge commit this promotion made, recorded before the source line was moved to it. The whole of the operation's identity: an interrupted run is finished by finding this commit on the line, and one that never reached it is discarded rather than guessed at.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        },
-        "reason": {
-          "description": "Why the evidence justified the promotion. Recorded here as well as in the decision because this is written first, and a run finishing an interrupted promotion states the reason that was given rather than a new one.",
-          "type": "string",
-          "minLength": 1
-        },
-        "planned_targets": {
-          "description": "The targets this promotion was intended for, held here so the outcome states the plan the promotion was made under rather than whatever a later retry happened to name. Same shape and same meaning as the batch outcome's — names, a plan, never an observation of what any target holds.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-          }
-        },
-        "prepared_at": {
-          "description": "When the merge commit was made — before the ref moved and before any decision was recorded, which is why it is not the decision's moment.",
-          "type": "string",
-          "format": "date-time"
         }
       },
       "additionalProperties": false

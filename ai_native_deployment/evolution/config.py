@@ -32,6 +32,10 @@ CLOSURE_SCHEMA_FILENAME = "batch-closure.schema.json"
 OUTCOME_SCHEMA_FILENAME = "batch-outcome.schema.json"
 REJECTED_DRAFTS_SCHEMA_FILENAME = "rejected-drafts.schema.json"
 EXPERIMENT_SCHEMA_FILENAME = "experiment.schema.json"
+# A promoted experiment record states what a promotion went as, and a version-1
+# one states less than the current reader asks for rather than something
+# different; `lineage.py` picks between them by declared version.
+EXPERIMENT_SCHEMA_V1_FILENAME = "experiment-v1.schema.json"
 REPLAYS_SCHEMA_FILENAME = "experiment-replays.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 

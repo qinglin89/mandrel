@@ -371,6 +371,7 @@ def write_experiment(
     decision: dict | None = None,
     created_at: str = "2026-08-01T09:00:00Z",
     ref: str | None = None,
+    version: int = 2,
     **overrides,
 ) -> Path:
     """One experiment record on disk, in its own directory.
@@ -383,10 +384,16 @@ def write_experiment(
     because those three are one history and a fixture stating only the decision
     describes a promotion nothing justified. Pass `promotion` or write a
     `replays.json` first to state any of them differently on purpose.
+
+    `version=1` writes the shape this repository shipped before a promotion
+    recorded its merge unit: the field does not exist there, so a version-1
+    `promoted` decision states the revision alone and brings nothing with it.
+    That is what a current build meets in a repository promoted under the
+    previous one.
     """
 
     record = {
-        "schema_version": 1,
+        "schema_version": version,
         "experiment_id": experiment_id,
         "batch_id": batch_id if batch_id is not None else experiment_id.split("-exp-")[0],
         "created_at": created_at,
@@ -397,7 +404,7 @@ def write_experiment(
         "decision": decision,
         **overrides,
     }
-    if decision is not None and decision.get("outcome") == "promoted" and "promotion" not in overrides:
+    if version > 1 and decision is not None and decision.get("outcome") == "promoted" and "promotion" not in overrides:
         record["promotion"] = _promotion_for(record, decision)
     _write_json(experiments_root / experiment_id / "experiment.json", record)
     merge = record.get("promotion")

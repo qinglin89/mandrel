@@ -45,6 +45,7 @@ from .config import (
     BATCH_ID_DIGITS,
     BATCH_ID_PREFIX,
     EXPERIMENT_SCHEMA_FILENAME,
+    EXPERIMENT_SCHEMA_V1_FILENAME,
     EvolutionConfig,
 )
 from .errors import BatchError
@@ -59,7 +60,15 @@ from .revisions import commit_shape, contains, ref_tip
 from .schema import load_schema, validate_or_raise
 
 EXPERIMENT_FILENAME = "experiment.json"
-EXPERIMENT_SCHEMA_VERSION = 1
+EXPERIMENT_SCHEMA_VERSION = 2
+# What this build writes, and the schema each version ever written is validated
+# against. Every version keeps its entry: an experiment record is the only
+# durable account of an attempt, so dropping one would make a history unreadable
+# rather than merely outdated — and unreadable is what stops every operation on
+# the batch it belongs to. Version 2 added the prepared promotion; a version-1
+# record is rewritten at the current version by the next operation that touches
+# it, which is why nothing here migrates one on the way in.
+EXPERIMENT_SCHEMA_FILENAMES = {1: EXPERIMENT_SCHEMA_V1_FILENAME, 2: EXPERIMENT_SCHEMA_FILENAME}
 
 # Identity and namespace, mirroring `experiment.schema.json`. The batch half is
 # built from the config's own constants so the two spellings of a batch id
@@ -887,16 +896,24 @@ def _require_checkable_merge_unit(
     and the tree because that is what makes the promotion revision *checkable*
     against the evidence rather than merely recorded beside it — and a claim
     nothing checks is a claim a schema-valid record can make freely. So the
-    values are held to the three places they came from: the experiment's own
-    prepared promotion, the completed replay that justified it, and, where this
-    checkout holds the commit, Git.
+    stated values are held to the places they can be read back from: the
+    completed replay that justified the promotion, the commit itself where this
+    checkout holds it, and the experiment's own prepared promotion.
 
     The commit is the strongest of the three and the only one outside this
     controller's own records, so it is asked whenever it can be — but its
     absence is a fact about the clone, not about the promotion (a repository
     that never fetched the source line holds neither), and a history that stops
-    loading on a shallow clone would take every other reading with it. The two
-    record-side checks answer everywhere.
+    loading on a shallow clone would take every other reading with it. The
+    replay answers everywhere.
+
+    The prepared record is the one of the three a promotion may not have. A
+    version-1 experiment record kept the promotion revision alone, so for those
+    the outcome is the only place the merge unit was ever written — which is
+    exactly why the other two checks are put to the stated values rather than to
+    the prepared ones. What is lost with it is one record agreeing with another;
+    what a version-1 promotion is still held to is the run that measured the
+    tree and the commit that carries it.
 
     Read here rather than at each consumer because `status`, the promotion
     itself, and everything downstream read one derivation: a forged merge unit
@@ -910,63 +927,61 @@ def _require_checkable_merge_unit(
 
     stated = outcome["promotion"]
     prepared = promoted.promotion
-    if prepared is None:
-        # Unreachable through `parse_experiment`, which refuses a `promoted`
-        # decision stating no merge unit. Stated rather than assumed, because
-        # everything below is the check that the outcome is not the only record
-        # of what was promoted.
-        raise BatchError(
-            f"{batch.outcome_path}: names {promoted.experiment_id} as promoted, and that record states no merge "
-            "unit for the outcome to be checked against"
-        )
-    unit = {
-        "round": prepared.round_number,
-        "candidate_revision": prepared.candidate_revision,
-        "merge_input_revision": prepared.merge_input_revision,
-        "merge_input_ref": prepared.merge_input_ref,
-        "tree": prepared.tree,
-        "planned_targets": list(prepared.planned_targets),
-    }
-    differing = sorted(field for field, value in unit.items() if stated[field] != value)
-    if differing:
-        raise BatchError(
-            f"{batch.outcome_path}: states {differing} differently from the promotion {promoted.experiment_id} "
-            f"was prepared as; the outcome states the merge unit that was promoted, which is the one the "
-            "experiment recorded before the source line moved"
-        )
-    if outcome["reason"] != prepared.reason:
+    if prepared is not None:
+        unit = {
+            "round": prepared.round_number,
+            "candidate_revision": prepared.candidate_revision,
+            "merge_input_revision": prepared.merge_input_revision,
+            "merge_input_ref": prepared.merge_input_ref,
+            "tree": prepared.tree,
+            "planned_targets": list(prepared.planned_targets),
+        }
+        differing = sorted(field for field, value in unit.items() if stated[field] != value)
+        if differing:
+            raise BatchError(
+                f"{batch.outcome_path}: states {differing} differently from the promotion "
+                f"{promoted.experiment_id} was prepared as; the outcome states the merge unit that was promoted, "
+                "which is the one the experiment recorded before the source line moved"
+            )
+    # The decision's own sentence rather than the prepared record's, because a
+    # version-1 promotion has only the decision — and the two are one sentence
+    # wherever both exist, which `parse_experiment` is what holds them to.
+    decided = promoted.decision.reason if promoted.decision is not None else None
+    if outcome["reason"] != decided:
         raise BatchError(
             f"{batch.outcome_path}: concludes {outcome['reason']!r} while {promoted.experiment_id} was promoted "
-            f"for {prepared.reason!r}; one decision, and the batch it ends is concluded by the reason it was "
-            "promoted for"
+            f"for {decided!r}; one decision, and the batch it ends is concluded by the reason it was promoted for"
         )
 
+    round_number = stated["round"]
+    tree = stated["tree"]
     measured = [
         run
         for run in read_replays(config, promoted).replays
         if run.completed
-        and run.round_number == prepared.round_number
-        and run.integration.candidate_revision == prepared.candidate_revision
-        and run.integration.merge_input_revision == prepared.merge_input_revision
-        and run.integration.merge_input_ref == prepared.merge_input_ref
-        and run.integration.tree == prepared.tree
+        and run.round_number == round_number
+        and run.integration.candidate_revision == stated["candidate_revision"]
+        and run.integration.merge_input_revision == stated["merge_input_revision"]
+        and run.integration.merge_input_ref == stated["merge_input_ref"]
+        and run.integration.tree == tree
     ]
     if not measured:
         raise BatchError(
-            f"{batch.outcome_path}: promotes the tree {prepared.tree[:12]} that round {prepared.round_number} of "
-            f"{promoted.experiment_id} produced on {prepared.merge_input_ref}, and no completed run of that round "
+            f"{batch.outcome_path}: promotes the tree {tree[:12]} that round {round_number} of "
+            f"{promoted.experiment_id} produced on {stated['merge_input_ref']}, and no completed run of that round "
             "measured that integration; what reaches the source line is a tree a replay measured (invariant 10)"
         )
 
-    shape = commit_shape(config.repo_root, prepared.revision)
+    revision = outcome["promotion_revision"]
+    shape = commit_shape(config.repo_root, revision)
     if shape is None:
         return
-    tree, parents = shape
-    if tree != prepared.tree or parents != (prepared.merge_input_revision, prepared.candidate_revision):
+    carried, parents = shape
+    if carried != tree or parents != (stated["merge_input_revision"], stated["candidate_revision"]):
         raise BatchError(
-            f"{batch.outcome_path}: {prepared.revision[:12]} carries {tree[:12]} made from "
-            f"{[parent[:12] for parent in parents]}, and the promotion is recorded as {prepared.tree[:12]} made "
-            f"from {[prepared.merge_input_revision[:12], prepared.candidate_revision[:12]]}; the commit on the "
+            f"{batch.outcome_path}: {revision[:12]} carries {carried[:12]} made from "
+            f"{[parent[:12] for parent in parents]}, and the promotion is recorded as {tree[:12]} made "
+            f"from {[stated['merge_input_revision'][:12], stated['candidate_revision'][:12]]}; the commit on the "
             "source line is what the record is held to"
         )
 
@@ -1041,9 +1056,14 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     shape tests that make a record one readable history live here: the id it
     sits under, the ref it claims, rounds that only append, a seal that waits
     for its tasks, a decision that carries exactly the fields its outcome means,
-    and a prepared promotion naming a round this record sealed that ends as the
-    decision it belongs to. Each of them is a way for a record to be
+    and a prepared promotion naming the round this record last sealed that ends
+    as the decision it belongs to. Each of them is a way for a record to be
     individually well-formed and still describe two different histories.
+
+    Validated against the schema of the version it declares, for the reason a
+    batch manifest is: what a record had to state is what it was written under,
+    and a build that reads only its own version stops reading the histories it
+    wrote itself a version ago.
 
     Public because the writers publish through it (`experiments.py`): an
     operation builds the next state of a record and validates it here before it
@@ -1054,10 +1074,19 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     """
 
     path = directory / EXPERIMENT_FILENAME
+    version = record.get("schema_version")
+    filename = (
+        EXPERIMENT_SCHEMA_FILENAMES.get(version) if isinstance(version, int) and not isinstance(version, bool) else None
+    )
+    if filename is None:
+        raise BatchError(
+            f"{path}: unsupported experiment record schema_version {version!r}; "
+            f"this build reads {sorted(EXPERIMENT_SCHEMA_FILENAMES)}"
+        )
     validate_or_raise(
         record,
-        load_schema(config.schema_path(EXPERIMENT_SCHEMA_FILENAME)),
-        description=f"experiment record {path}",
+        load_schema(config.schema_path(filename)),
+        description=f"experiment record {path} (schema version {version})",
     )
 
     experiment_id = record["experiment_id"]
@@ -1081,10 +1110,10 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     _require_appended_rounds(path, rounds)
     _require_one_admission_per_draft(path, rounds)
     decision = _read_decision(path, record["decision"], last=rounds[-1])
-    # `.get`, because the field arrived after this schema version shipped: a
-    # record written without it is not a record missing something, it is one
-    # written before any promotion could be prepared.
-    promotion = _read_promotion(path, record.get("promotion"), rounds=rounds, decision=decision)
+    # `.get`, because a version-1 record has no such field at all — its schema
+    # refuses one. What that absence means depends on the version, which is why
+    # the version goes with it.
+    promotion = _read_promotion(path, record.get("promotion"), rounds=rounds, decision=decision, version=version)
 
     return Experiment(
         experiment_id=experiment_id,
@@ -1230,24 +1259,36 @@ def _read_promotion(
     *,
     rounds: tuple[Round, ...],
     decision: Decision | None,
+    version: int,
 ) -> PreparedPromotion | None:
     """The merge unit a promotion was prepared as, checked against the rest of
     the record it sits in.
 
-    Three pairings, and each is a way for the block to be well-formed and still
-    describe a promotion this experiment did not have. It names a round *this*
-    record sealed, at the candidate that seal pinned — a merge unit built on any
-    other revision is evidence about a tree nothing here produced. It survives
-    only into a `promoted` decision: an attempt that ended any other way and
-    still carries a prepared promotion says the source line may be holding a
-    merge for an experiment nobody promoted, which is the split the operation is
-    ordered to prevent. And a `promoted` decision has one, because the revision
-    alone is a commit nothing can afterwards be held to — the rule the batch
-    outcome states from its own side.
+    Four pairings, and each is a way for the block to be well-formed and still
+    describe a promotion this experiment did not have. It names the round this
+    record *last* sealed, at the candidate that seal pinned — an earlier round's
+    candidate is one this experiment has already revised past, and any other
+    revision is evidence about a tree nothing here produced. It states the
+    revision and the reason its decision does, because one promotion is one
+    commit justified by one sentence, and the sentence is what the batch it ends
+    is concluded by. It survives only into a `promoted` decision: an attempt that
+    ended any other way and still carries a prepared promotion says the source
+    line may be holding a merge for an experiment nobody promoted, which is the
+    split the operation is ordered to prevent. And a `promoted` decision has one,
+    because the revision alone is a commit nothing can afterwards be held to —
+    the rule the batch outcome states from its own side.
+
+    That last pairing is the one thing here the version decides. A version-1
+    promotion recorded the revision and no merge unit, because the operation that
+    wrote it kept none; refusing it would make an attempt this controller itself
+    promoted unreadable, and with it every reading of the batch it ended. So it
+    is read as the version-1 promotion it is, and what it went as is checked
+    where that version did record it — the batch outcome, held to the run that
+    measured it and to the commit itself.
     """
 
     if promotion is None:
-        if decision is not None and decision.outcome == DECISION_PROMOTED:
+        if decision is not None and decision.outcome == DECISION_PROMOTED and version > 1:
             raise BatchError(
                 f"{path}: records a promotion of {(decision.promotion_revision or '')[:12]} and not the merge "
                 "unit it went as; a promotion revision on its own is a commit nothing can be held to, so the "
@@ -1267,14 +1308,26 @@ def _read_promotion(
             f"{path}: was promoted as {(decision.promotion_revision or '')[:12]} while the merge unit names "
             f"{revision[:12]}; one promotion, and the decision and the merge unit state the same commit"
         )
+    if decision is not None and decision.reason != promotion["reason"]:
+        raise BatchError(
+            f"{path}: was promoted for {decision.reason!r} while the merge unit was prepared for "
+            f"{promotion['reason']!r}; one promotion is justified by one sentence, and it is the sentence the "
+            "batch this promotion ends is concluded by"
+        )
     number = promotion["round"]
-    sealed = next((round_ for round_ in rounds if round_.number == number), None)
-    if sealed is None or sealed.candidate_revision != promotion["candidate_revision"]:
-        pinned = "no round of that number" if sealed is None else f"{(sealed.candidate_revision or 'nothing')[:12]}"
+    last = rounds[-1]
+    if number != last.number or last.candidate_revision != promotion["candidate_revision"]:
+        pinned = (
+            f"at {last.candidate_revision[:12]}"
+            if last.candidate_revision is not None
+            else "with no candidate pinned"
+        )
         raise BatchError(
             f"{path}: the prepared promotion names round {number} at candidate "
-            f"{promotion['candidate_revision'][:12]}, and this record has {pinned}; what is promoted is the "
-            "revision a candidate-ready round pinned (invariant 16)"
+            f"{promotion['candidate_revision'][:12]}, and this record's last round is {last.number} {pinned}; "
+            "what is promoted is the revision the round it was prepared from pinned, and nothing opens a round "
+            "while a promotion stands — so an earlier round names a candidate this experiment has revised past "
+            "(invariant 16)"
         )
     return PreparedPromotion(
         round_number=number,

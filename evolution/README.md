@@ -124,7 +124,7 @@ another — a candidate measured against the wrong one measures nothing.
 | Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
 | Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
-| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
+| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch. A promotion recorded before the experiment carried a merge unit (`experiment.json` version 1) states the revision alone, and the outcome is the only record of what it went as | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed | target `.ai-deploy-lock.json`; a report's `provenance.effective_revision` |
 
 The middle two are the pair a promotion is decided from, and neither stands in
@@ -668,10 +668,25 @@ longer stands where the merge was to be made from — is discarded, because the
 evidence behind it describes a line that has moved on and nothing can finish it;
 one still waiting is moved by the next run rather than made again.
 
-While a promotion is prepared, the experiment is not ended by anything else.
-Abandoning or superseding it would retire the only record saying the line may
-already be carrying its merge, which is the one way this controller could
-produce the split it exists to prevent.
+While a promotion is prepared, the experiment is not ended by anything else, and
+no round opens under it. Abandoning or superseding it would retire the only
+record saying the line may already be carrying its merge, which is the one way
+this controller could produce the split it exists to prevent; revising past it
+would leave that merge naming a round that is no longer the last. Because
+nothing may open a round while one stands, a prepared promotion names the round
+it was prepared from, which is the experiment's last — an earlier sealed round
+names a candidate this experiment has already revised past, and a completed run
+of that round is exactly what would make promoting it look justified.
+
+Promotions recorded before the experiment carried a merge unit are read as what
+they are rather than refused. That shape is an `experiment.json` at version 1: it
+states the promotion revision and nothing about the merge, because the operation
+that wrote it kept nothing else, and its schema is frozen so those records keep a
+read path. Refusing them would not make one record stricter — it would stop every
+reading of the batch that record ended. What such a promotion is still held to is
+below; what it cannot be finished from is its own interrupted window, since the
+targets it was planned for were never written down and no later run may state
+them as the original plan.
 
 The records that follow are written while the experiment's ref is held where it
 was read, for the reason every other transition holds one: that reading does not
@@ -698,10 +713,14 @@ reach it:
   line and ref it was integrated onto, the tree, and the targets it was planned
   for). The revision alone would be a commit nothing could afterwards be held to;
   with the merge unit it is checkable against the run that justified it — and it
-  is checked, on every reading, against the promoted experiment's own prepared
-  promotion, against the completed run that measured that exact integration, and
-  against the commit itself wherever the checkout holds it. A claim nothing
-  checks is one a schema-valid record makes freely.
+  is checked, on every reading, against the completed run that measured that
+  exact integration, against the commit itself wherever the checkout holds it,
+  and against the promoted experiment's own prepared promotion. A claim nothing
+  checks is one a schema-valid record makes freely. The prepared record is the
+  one of the three a promotion may not have: a version-1 promotion never wrote
+  one, which is why the other two are put to the values the outcome states rather
+  than to the prepared ones. What is lost with it is one record agreeing with
+  another; what is kept is the run and the commit.
 - `no-change` — the evidence justified no change to anything (invariant 7). The
   record carries the reason and nothing else: no experiment, no promotion
   revision, and no commit invented to represent a change that was not made.
@@ -929,7 +948,9 @@ a promotion of a round whose evidence is not promotable, a promotion taken while
 a run is going or a request is outstanding, a candidate whose merge no longer
 produces the tree that was measured, a source line that moved between the
 evidence being read and the merge being put on it, a promoted outcome stating the
-revision without the merge unit it went as,
+revision without the merge unit it went as, a prepared promotion naming anything
+but the round it was prepared from or a reason other than the one the decision
+records, a record of a version this build has no reader for,
 a task whose completion this machine cannot observe, a second reason for a round
 that is already open, a task admitted into a sealed round with
 no completion observation, a draft already consumed, a draft that is not the inert

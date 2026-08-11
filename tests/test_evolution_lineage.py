@@ -36,13 +36,17 @@ from evolution_fixtures import (
     git_unrelated_commit,
     git_update_ref,
     make_repo,
+    prepared_promotion,
     promotion_of,
     rejection,
+    replay_entry,
+    replay_integration,
     write_draft,
     write_experiment,
     write_manifest,
     write_outcome,
     write_rejected_drafts,
+    write_replays,
 )
 
 from ai_native_deployment import evolution
@@ -64,7 +68,7 @@ def experiment(**overrides: Any) -> dict[str, Any]:
     still running."""
 
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment_id": EXPERIMENT_ID,
         "batch_id": BATCH_ID,
         "created_at": "2026-08-01T09:00:00Z",
@@ -367,7 +371,7 @@ def test_a_decision_states_its_unused_fields_as_null() -> None:
         {"ref": f"refs/heads/{EXPERIMENT_ID}"},
         {"ref": "refs/evolution/experiments/../../heads/main"},
         {"rounds": []},
-        {"schema_version": 2},
+        {"schema_version": 3},
     ],
     ids=[
         "truncated-experiment-id",
@@ -390,6 +394,37 @@ def test_an_unrecorded_experiment_field_is_refused() -> None:
     wrong must not read as a fact that was recorded."""
 
     assert errors(experiment(promoted=True), "experiment.schema.json")
+
+
+def legacy_experiment(**overrides: Any) -> dict[str, Any]:
+    """The record the implementation before the prepared promotion emitted:
+    every field its serializer wrote, in the shape it wrote them, and no
+    `promotion` — the field did not exist for it to write."""
+
+    record = experiment(schema_version=1, **overrides)
+    del record["rounds"][1]
+    return record
+
+
+def test_the_shape_a_promotion_was_written_at_before_the_merge_unit_existed_validates() -> None:
+    """A version-1 `promoted` record states its revision and nothing about the
+    merge it went as, because that is the whole of what the operation writing it
+    kept. Its schema is frozen rather than tightened so those records keep a read
+    path: a build that refused them would stop reading histories it wrote
+    itself."""
+
+    promoted = legacy_experiment(decision=experiment_decision("promoted", promotion_revision=PROMOTION))
+    assert "promotion" not in promoted
+    assert errors(promoted, "experiment-v1.schema.json") == []
+    assert errors(promoted, "experiment.schema.json"), "a version-1 record is not a version-2 one"
+
+
+def test_a_version_1_record_cannot_carry_a_merge_unit() -> None:
+    """The other half of the same boundary. A record claiming both the version
+    that had no merge unit and a merge unit is neither version, and reading it
+    as the older one would take a field nothing at that version ever wrote."""
+
+    assert errors(legacy_experiment(promotion=prepared_promotion()), "experiment-v1.schema.json")
 
 
 @pytest.mark.parametrize(
@@ -1311,6 +1346,79 @@ def test_a_promotion_from_an_open_round_is_refused(config: evolution.EvolutionCo
         lineage.describe(config)
 
 
+def revised_experiment(config: evolution.EvolutionConfig, **overrides: Any) -> None:
+    """An attempt that revised once: two sealed rounds, each with its own pinned
+    candidate, promoted after the second. `overrides` restate its prepared
+    promotion, which is the record the rounds are read against."""
+
+    second = "d" * 40
+    decision = experiment_decision("promoted", promotion_revision=PROMOTION)
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[
+            experiment_round(1, tasks=[admitted_task("loader-fallback")], candidate_revision=CANDIDATE),
+            experiment_round(2, tasks=[admitted_task("hook-side-loader")], candidate_revision=second),
+        ],
+        decision=decision,
+        promotion=prepared_promotion(
+            **{
+                "round": 2,
+                "candidate_revision": second,
+                "revision": PROMOTION,
+                "reason": decision["reason"],
+                **overrides,
+            }
+        ),
+    )
+
+
+def test_a_promotion_after_a_revision_names_the_round_that_revision_produced(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The accepted side of the boundary below: two sealed rounds and a promotion
+    of the second is the ordinary shape of an attempt that was revised once."""
+
+    revised_experiment(config)
+    promotion = only(config).experiments[0].promotion
+    assert promotion is not None
+    assert (promotion.round_number, promotion.candidate_revision) == (2, "d" * 40)
+
+
+def test_a_prepared_promotion_names_the_round_it_was_prepared_from(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """An earlier sealed round is not a round this promotion could have been
+    prepared from. Nothing opens a round while a promotion stands, so the round
+    it names is still the last one — and a merge unit naming round 1 after
+    round 2 sealed describes a candidate this experiment has already revised
+    past, with a completed round-1 run to make it look justified."""
+
+    revised_experiment(config, round=1, candidate_revision=CANDIDATE)
+    with pytest.raises(evolution.BatchError, match="revised past"):
+        lineage.describe(config)
+
+
+def test_a_prepared_promotion_names_a_round_this_record_has(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    revised_experiment(config, round=3)
+    with pytest.raises(evolution.BatchError, match="revised past"):
+        lineage.describe(config)
+
+
+def test_a_prepared_promotion_states_the_reason_the_decision_records(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """One promotion is justified by one sentence. The decision's is what the
+    batch outcome is concluded by, so a merge unit prepared for something else
+    leaves two answers to why the source line moved."""
+
+    revised_experiment(config, reason="a different sentence entirely")
+    with pytest.raises(evolution.BatchError, match="one promotion is justified by one sentence"):
+        lineage.describe(config)
+
+
 @pytest.mark.parametrize(
     "decision",
     [
@@ -1683,6 +1791,162 @@ def test_a_promoted_outcome_still_has_to_state_its_merge_unit(
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(evolution.BatchError, match="states the experiment it promoted"):
+        lineage.describe(config)
+
+
+# --- promotions recorded before the merge unit existed ------------------------
+
+
+def legacy_promoted_batch(config: evolution.EvolutionConfig, **overrides: Any) -> dict:
+    """A batch promoted by the implementation that recorded no merge unit on the
+    experiment: the version-1 record with its decision and revision alone, the
+    outcome that did state the unit, and the run that measured it. `overrides`
+    change what the outcome states, which for these records is the only place the
+    merge unit was ever written."""
+
+    decision = experiment_decision("promoted", promotion_revision=PROMOTION)
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        version=1,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=decision,
+    )
+    merge = promotion_of(**{"candidate_revision": CANDIDATE, **overrides})
+    write_replays(
+        config.experiments_root,
+        EXP_01,
+        [
+            replay_entry(
+                round_number=1,
+                integration=replay_integration(
+                    candidate_revision=CANDIDATE,
+                    merge_input_revision=merge["merge_input_revision"],
+                    merge_input_ref=merge["merge_input_ref"],
+                    tree=merge["tree"],
+                ),
+            )
+        ],
+    )
+    write_outcome(
+        config.batches_root,
+        BATCH_ID,
+        outcome="promoted",
+        reason=decision["reason"],
+        experiment_id=EXP_01,
+        promotion_revision=PROMOTION,
+        promotion=merge,
+    )
+    return merge
+
+
+def test_a_promotion_recorded_before_the_merge_unit_existed_still_reads(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The reader's side of the version boundary. This controller promoted these
+    attempts itself, and refusing the shape it wrote them in would not make one
+    record stricter — it would stop every reading of the batch that record ended,
+    which is the whole lineage from `status` down."""
+
+    legacy_promoted_batch(config)
+
+    assert lineage.describe(config).current is None
+    promoted = only(config).experiments[0]
+    assert promoted.decision is not None
+    assert promoted.decision.promotion_revision == PROMOTION
+    assert promoted.promotion is None, "the merge unit was never recorded here, and nothing invents one"
+
+
+def test_a_version_2_promotion_still_states_its_merge_unit(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """What the version buys: the rule stays absolute for every record this build
+    writes, so a promoted record with no merge unit is read as the version-1
+    promotion it is rather than as a version-2 one that dropped it."""
+
+    promoted_batch(config)
+    path = config.experiments_root / EXP_01 / "experiment.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    del written["promotion"]
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="not the merge unit it went as"):
+        lineage.describe(config)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"round": 2},
+        {"candidate_revision": "d" * 40},
+        {"merge_input_revision": "9" * 40},
+        {"merge_input_ref": "refs/heads/other"},
+        {"tree": "8" * 40},
+    ],
+    ids=["round", "candidate", "merge-input", "source-line", "tree"],
+)
+def test_a_version_1_promotion_is_still_held_to_the_run_that_measured_it(
+    config: evolution.EvolutionConfig, batch: Path, overrides: dict
+) -> None:
+    """What is lost with the prepared record is one record agreeing with another.
+    What is not lost is the check that matters most: the outcome's merge unit is
+    still the integration a completed run measured, so a value nothing exercised
+    refuses here as it does for any other promotion."""
+
+    legacy_promoted_batch(config)
+    path = config.batches_root / BATCH_ID / "outcome.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["promotion"].update(overrides)
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="no completed run of that round measured that integration"):
+        lineage.describe(config)
+
+
+def test_a_version_1_promotion_is_still_held_to_the_commit_it_names(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """And to Git, wherever the checkout holds the commit — the one check outside
+    this controller's records, which a version-1 promotion keeps in full."""
+
+    real = git_commit(config.repo_root, "a commit that is not a merge of anything")
+    legacy_promoted_batch(config)
+    for path in (config.batches_root / BATCH_ID / "outcome.json", config.experiments_root / EXP_01 / "experiment.json"):
+        written = json.loads(path.read_text(encoding="utf-8"))
+        if "promotion_revision" in written:
+            written["promotion_revision"] = real
+        else:
+            written["decision"]["promotion_revision"] = real
+        path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="is what the record is held to"):
+        lineage.describe(config)
+
+
+def test_a_batch_promoted_at_version_1_is_concluded_by_the_reason_it_recorded(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The reason comes from the decision rather than the prepared record, which
+    is why this check survives a promotion that prepared no record at all."""
+
+    legacy_promoted_batch(config)
+    path = config.batches_root / BATCH_ID / "outcome.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["reason"] = "something else entirely"
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="one decision, and the batch it ends"):
+        lineage.describe(config)
+
+
+def test_an_experiment_record_of_an_unknown_version_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Fail closed on a version this build has no reader for: a record from a
+    later one states things this code would silently not look at."""
+
+    write_experiment(config.experiments_root, EXP_01, version=3)
+    with pytest.raises(evolution.BatchError, match=r"unsupported experiment record schema_version 3.*reads \[1, 2\]"):
         lineage.describe(config)
 
 

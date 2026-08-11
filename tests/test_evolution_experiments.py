@@ -2778,11 +2778,12 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
     candidate reached the source line concluded by promoting it."""
 
     seal(config, ["loader-fallback"])
+    why = "replay showed fewer remediation rounds with no regression"
     rewrite(
         config,
         EXP_01,
-        decision=experiment_decision("promoted", promotion_revision="f" * 40),
-        promotion=prepared_promotion(candidate_revision=candidate_of(config, EXP_01)),
+        decision=experiment_decision("promoted", reason=why, promotion_revision="f" * 40),
+        promotion=prepared_promotion(candidate_revision=candidate_of(config, EXP_01), reason=why),
     )
     experiments.reject(config, ["hook-side-loader", "not-worth-it"], reason="not recurrence", now=LATER)
 
@@ -2973,6 +2974,35 @@ def test_a_promoted_batch_is_over_and_releases_the_next_cohort(
     assert status.last_promotion.round_number == 1
     assert status.last_promotion.planned_targets == TARGETS
     assert status.to_json()["last_promotion"]["tree"] == result.tree
+
+
+def test_a_promotion_this_controller_made_before_the_merge_unit_existed_still_reports(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """The whole reason a version-1 promoted record is read rather than refused.
+    The experiment that promoted this batch was written by a build that recorded
+    only the revision; the outcome it wrote states the merge unit, and `status`
+    goes on answering — where refusing the record would take the batch it ended,
+    every batch after it, and every operation guarded by that reading."""
+
+    result = prepared_promotion_at_version_1(config)
+
+    assert lineage.current_batch(config) is None
+    status = phase.describe(config, now=PROMOTED)
+    assert status.last_promotion is not None
+    assert status.last_promotion.revision == result.promotion_revision
+    assert status.to_json()["last_promotion"]["tree"] == result.tree
+
+
+def prepared_promotion_at_version_1(config: evolution.EvolutionConfig) -> experiments.PromotionResult:
+    """A promoted batch whose experiment record is the shape the build before the
+    prepared promotion wrote — the promotion made here, then the record put back
+    the way that build would have left it."""
+
+    prepared(config)
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    downgrade(config, EXP_01)
+    return result
 
 
 def test_the_planned_targets_are_a_plan_and_never_a_deployment(
@@ -3502,6 +3532,58 @@ def test_a_decision_without_its_outcome_is_finished_by_the_same_promotion(
     # not state, so it is not written a second time.
     assert ledger_types(config).count("experiment-promoted") == 1
     assert ledger_types(config)[-1] == "batch-concluded"
+
+
+def downgrade(config: evolution.EvolutionConfig, experiment_id: str) -> None:
+    """Put a record back into the shape the build before the prepared promotion
+    wrote: its version, and no merge unit — the field did not exist there."""
+
+    path = config.experiments_root / experiment_id / "experiment.json"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    written["schema_version"] = 1
+    written.pop("promotion", None)
+    path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_a_decision_recorded_before_the_merge_unit_existed_is_reported_not_guessed(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same interrupted window, left by the build that recorded no merge unit
+    on the experiment. The unit itself is recoverable from the run and the commit;
+    the targets that promotion was planned for are recoverable from nowhere,
+    because nothing wrote them down. Taking this run's would state a plan nobody
+    promoted under as the original, so the state is reported instead.
+
+    The lineage still reads throughout — which is the point of accepting the
+    record at all — so `status` answers and only the operation that would have to
+    invent something refuses."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_conclude_promoted")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+    downgrade(config, EXP_01)
+
+    assert lineage.current_batch(config) is not None
+
+    with pytest.raises(evolution.BatchError, match="the plan was never recorded"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+
+
+def test_an_operation_over_a_record_written_at_version_1_writes_it_at_this_one(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Nothing migrates a record on the way in: the next operation that writes one
+    writes the whole record at the current version, which is what the serializer
+    already did with every other field."""
+
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    downgrade(config, EXP_01)
+
+    experiments.add_tasks(config, ["hook-side-loader"], now=LATER)
+
+    assert record(config, EXP_01)["schema_version"] == lineage.EXPERIMENT_SCHEMA_VERSION == 2
 
 
 def test_a_different_reason_after_the_decision_is_not_that_promotion_redone(

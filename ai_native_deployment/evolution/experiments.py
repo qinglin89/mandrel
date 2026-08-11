@@ -1926,13 +1926,19 @@ def _finish_promotion(
         raise no_open_experiment(current, "promote")
     prepared = last.promotion
     if prepared is None:
-        # Unreachable through `parse_experiment`, which refuses a `promoted`
-        # decision stating no merge unit; stated because the outcome below is
-        # written entirely from it.
+        # A version-1 record, whose promotion recorded the revision alone and
+        # stopped before the outcome. The merge unit is recoverable from the
+        # evidence and the commit, and the plan it was made under is recoverable
+        # from nowhere: it was never written down. Taking this run's targets for
+        # it would write a plan nobody promoted under as though it were the
+        # original — the one thing the outcome is trusted to state about intent
+        # — so the state is reported instead of guessed at (design: fail closed
+        # on missing provenance a decision needs).
         raise BatchError(
-            f"{last.experiment_id} was promoted as {(decision.promotion_revision or '')[:12]} and states no "
-            "merge unit it went as; the outcome that ends this batch is the promotion's own record, so there "
-            "is nothing here to conclude it from"
+            f"{last.experiment_id} was promoted as {(decision.promotion_revision or '')[:12]} by a build that "
+            "recorded no merge unit on the experiment, and the outcome that would end this batch states the "
+            "merge unit and the targets that promotion was planned for; the plan was never recorded, so this "
+            "batch cannot be concluded from what is on record rather than from what a later run supposes"
         )
     if decision.reason != reason:
         raise BatchError(
