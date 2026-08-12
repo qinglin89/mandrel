@@ -429,7 +429,12 @@ def promote_candidate(
     was analyzed from to state the revision its targets actually held.
 
     A cycle following an earlier promotion answers that release's gate first
-    (`settle_release`), because no base is frozen until somebody does.
+    (`settle_release`), because no base is frozen until somebody does — and it
+    starts from the line that release is on, because that is what the answer
+    selects (invariant 17). So this leaves the checkout on the promotion it made:
+    an operator's next cycle is worked on a line carrying the release, and a
+    fixture whose `HEAD` stayed behind the promotion would freeze its next base
+    off the line the gate just decided on.
     """
 
     directory = write_manifest(
@@ -454,7 +459,9 @@ def promote_candidate(
     harness = FakeHarness(report=completed_report())
     replay.start(config, harness, source_ref=source_ref, expectation=PROMOTION_EXPECTATION, now=at)
     replay.conclude(config, harness, now=at)
-    return experiments.promote(config, reason=reason, targets=targets, now=at)
+    promotion = experiments.promote(config, reason=reason, targets=targets, now=at)
+    git_follow(config.repo_root, promotion.promotion_revision)
+    return promotion
 
 
 def write_draft(batches_root: Path, batch_id: str, draft_id: str, body: str | None = None) -> Path:
@@ -1112,6 +1119,27 @@ def git_tree(root: Path, revision: str) -> str:
 
 def git_update_ref(root: Path, ref: str, revision: str) -> None:
     subprocess.run(["git", "-C", str(root), "update-ref", ref, revision], check=True)
+
+
+def git_follow(root: Path, revision: str) -> None:
+    """Move the checked-out branch to `revision`, as a checkout following the
+    source line does.
+
+    Only ever called with a commit that already has the branch tip in its
+    history and carries the same tree — the promotion merge of a candidate this
+    branch is on — so the index and the working tree keep describing what is
+    checked out and the untracked evolution records under test are untouched.
+    That is why it is `update-ref` rather than a checkout: `git checkout` would
+    delete them.
+    """
+
+    branch = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    git_update_ref(root, branch, revision)
 
 
 def git_try_update_ref(root: Path, ref: str, revision: str) -> str | None:

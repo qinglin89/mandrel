@@ -379,8 +379,9 @@ def create(
             require_consistent_ref(current)
             return _redo_create(config, current, open_experiment, requested)
 
-        _require_release_settled(config, known, current)
+        settlement = _require_release_settled(config, known, current)
         base_revision, base_release_ref = _base_revision(config, current, base)
+        _require_settled_line(config, settlement, base_revision, base)
         experiment_id = format_experiment_id(batch.batch_id, len(current.experiments) + 1)
         drafts = _collect(config, current, requested)
         stamp = format_rfc3339(moment)
@@ -2744,51 +2745,187 @@ def _base_revision(
     return resolved, release_ref(config.repo_root, resolved)
 
 
-def _require_release_settled(config: EvolutionConfig, known: Lineage, current: BatchLineage) -> None:
+def _require_release_settled(
+    config: EvolutionConfig,
+    known: Lineage,
+    current: BatchLineage,
+) -> assessment.Obligation | None:
     """The release before this batch has been judged, before a base is frozen.
 
     Invariant 17, and it is asked here because this is where the decision would
     otherwise be made by accident. The first experiment of a batch freezes the
     commit every alternative in it starts from (invariant 15), and whether the
-    previous release belongs in that commit is exactly what this batch's reading
-    of it settles: `retain` leaves the release on the line, `rolled-back` puts an
+    previous release belongs in that commit is exactly what the reading of it
+    settles: `retain` leaves the release on the line, `rolled-back` puts an
     inverse commit there first, so the base a freeze then takes is the line as
     the decision left it. Freezing before the answer would take whichever of the
     two the source line happened to be holding.
 
+    The reading it waits on is the *owning* cohort's, which is the first batch
+    frozen after that promotion and not necessarily this one. The two part
+    company as soon as that cohort ends without answering: a batch that concluded
+    `no-change` promoted nothing, so this batch still follows the older release
+    while owing no reading of its own. Asking only whether *this* cohort owes one
+    would find nothing to wait for and freeze a base on a line nobody decided
+    about — the obligation stays where it was, and so does what waits on it.
+
     Only where a base is actually being frozen. A later experiment of the same
     batch takes the frozen commit rather than resolving one, so asking again
     there would gate work on a decision that can no longer change what it starts
-    from — and a batch that owes no reading (no promotion before it, a `no-change`
-    predecessor, or an earlier cohort that already read the release) is not
-    waiting on anything.
+    from — and a batch with no promotion anywhere before it is not waiting on
+    anything.
 
     Nothing else in the batch waits on this either: the reading is taken while
     the analysis is still being written, and drafts, rejections and the closure
     are untouched by it. What waits is the one thing the decision moves.
+
+    Returns the settled obligation, which is what the base is then held to; None
+    where there is no release before this batch to judge.
     """
 
     if current.base_revision is not None:
-        return
-    frame = assessment.describe(config, current.batch, lineage=known)
-    if frame is None or not frame.owed:
-        return
-    reading = assessment.read(config, current.batch, frame=frame)
+        return None
+    owed = assessment.obligation(config, current.batch, lineage=known)
+    if owed is None:
+        return None
+    subject = owed.frame.subject
+    owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the cohort frozen after it, "
+    reading = owed.reading
     if reading is None:
         raise BatchError(
-            f"{current.batch_id} has recorded no reading of the {frame.subject.batch_id} release "
-            f"({frame.subject.revision[:12]}), so there is nothing to freeze a base against; this cohort's "
-            "reports are the first evidence of what that release did, and the commit every experiment of this "
-            "batch starts from is either the line carrying it or the line with it taken back out (invariant 17)"
+            f"{owner or current.batch_id + ' '}has recorded no reading of the {subject.batch_id} release "
+            f"({subject.revision[:12]}), so {current.batch_id} has nothing to freeze a base against; that "
+            "cohort's reports are the first evidence of what the release did, and the commit every experiment "
+            "of this batch starts from is either the line carrying it or the line with it taken back out "
+            "(invariant 17)"
         )
     if reading.settled:
+        return owed
+    raise BatchError(
+        f"{owner or current.batch_id + ' '}reads the {subject.batch_id} release {reading.verdict!r} and nobody "
+        f"has settled it, so {current.batch_id}'s base cannot be frozen yet; the settlement is what says whether "
+        f"the release stays on the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} "
+        f"keeps it, {assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is "
+        "frozen afterwards (invariant 17)"
+    )
+
+
+def _require_settled_line(
+    config: EvolutionConfig,
+    settlement: assessment.Obligation | None,
+    base_revision: str,
+    requested: str | None,
+) -> None:
+    """The base being frozen is the source line as the settlement left it.
+
+    The other half of invariant 17, and without it the gate only asks that
+    somebody answered. What the answer selects is a commit: `retain` says the
+    alternatives are built on the line carrying the release, `rolled-back` says
+    they are built on the line with the inverse commit on it. A base carrying
+    neither — the pre-promotion revision after a `retain`, the promoted revision
+    after a `rolled-back` — is the freeze deciding for itself what the human was
+    asked, which is the accident this gate exists to stop.
+
+    Asked of the resolved base whatever it came from, because `HEAD` and an
+    explicit revision reach the wrong commit the same way: a checkout that never
+    followed the source line, and an operator naming the revision the batch was
+    frozen beside. It is also what keeps a rollback run *after* a recorded
+    `retain` from quietly realigning the base — the reading says the release
+    stays, and a line that no longer carries it is not the line that was decided
+    on.
+
+    Ancestry rather than equality: the base is ordinarily the line's tip and may
+    be anything later built on it, and what matters is whether the commit the
+    decision chose is in it.
+    """
+
+    if settlement is None:
+        return
+    decision = settlement.decision
+    if decision is None:
+        # Unreachable: the gate above refuses an unsettled reading and returns
+        # nothing to hold a base to. Narrowing, not a second rule.
+        return
+    subject = settlement.frame.subject
+    named = "" if requested is None else f" ({requested})"
+    settled_as = f"{settlement.owner_id}'s reading of the {subject.batch_id} release was settled "
+    if decision.settlement == assessment.SETTLEMENT_ROLLED_BACK:
+        reversal = decision.rollback_revision
+        if reversal is None:
+            # Unreachable: the reader refuses a `rolled-back` settlement naming no
+            # inverse commit, and holds the one it names to the rollback record.
+            return
+        _require_carried(
+            config,
+            base_revision,
+            reversal,
+            requested=named,
+            requirement=(
+                f"{settled_as}{assessment.SETTLEMENT_ROLLED_BACK!r}, so the base every experiment of this batch "
+                f"starts from is the line carrying the inverse commit {reversal[:12]}"
+            ),
+        )
+        return
+    _require_carried(
+        config,
+        base_revision,
+        subject.revision,
+        requested=named,
+        requirement=(
+            f"{settled_as}{assessment.SETTLEMENT_RETAIN!r}, so the base every experiment of this batch starts "
+            f"from is the line carrying the promotion {subject.revision[:12]}"
+        ),
+    )
+    reversal = subject.rollback_revision
+    if reversal is not None:
+        # The other direction of the same question, and it is the one a rollback
+        # run after the gate answered arrives at: the decision said the release
+        # stays, so a base that took the reversal is a realignment nobody decided.
+        _require_carried(
+            config,
+            base_revision,
+            reversal,
+            requested=named,
+            carried=False,
+            requirement=(
+                f"{settled_as}{assessment.SETTLEMENT_RETAIN!r}, so the base every experiment of this batch "
+                f"starts from is a line that has not taken the inverse commit {reversal[:12]} back off it"
+            ),
+        )
+
+
+def _require_carried(
+    config: EvolutionConfig,
+    base_revision: str,
+    revision: str,
+    *,
+    requested: str,
+    requirement: str,
+    carried: bool = True,
+) -> None:
+    """Whether the base about to be frozen has one commit in its history, where
+    the settlement says what the answer has to be.
+
+    Unanswerable refuses either way. Everywhere else a Git relation this clone
+    cannot resolve is reported as the fact about the clone that it is; this one
+    stands between a frozen base and every alternative built on it (invariant
+    15), so a checkout that cannot see the relation does not get to assume it.
+    """
+
+    answer = contains(config.repo_root, revision, base_revision)
+    if answer is None:
+        raise BatchError(
+            f"whether {base_revision[:12]}{requested} carries {revision[:12]} cannot be answered in this "
+            f"checkout, which does not hold both commits; {requirement}, so this refuses rather than freeze a "
+            "base it cannot place on the line the decision chose"
+        )
+    if answer is carried:
         return
     raise BatchError(
-        f"{current.batch_id} reads the {frame.subject.batch_id} release {reading.verdict!r} and nobody has "
-        f"settled it, so its base cannot be frozen yet; the settlement is what says whether the release stays on "
-        f"the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} keeps it, "
-        f"{assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is frozen "
-        "afterwards (invariant 17)"
+        f"{base_revision[:12]}{requested} " + ("does not carry" if carried else "carries") + f" {revision[:12]}; "
+        f"{requirement} — a base off the line the settlement chose makes every alternative in this batch an "
+        "attempt against a protocol nobody decided on (invariant 17), so name a revision on it or take the "
+        "decision again"
     )
 
 

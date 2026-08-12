@@ -139,6 +139,30 @@ def rollback(
     the operator's reason (contract: Promotion evidence).
     """
 
+    with single_writer_lock(config):
+        return reverse(config, reason=reason, now=now)
+
+
+def reverse(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> RollbackResult:
+    """`rollback` for a caller already holding the single-writer lock.
+
+    The whole operation, refusals included — the lock is the only thing the
+    entry point above adds, and it is separable because it is not reentrant
+    (`O_CREAT|O_EXCL`): a caller composing this into a longer operation would
+    otherwise have to release its own exclusivity to reach it, leaving a window
+    in which another writer changes the state the composition already checked
+    and the reversal lands for a decision that can no longer be recorded.
+
+    The release-assessment gate is that caller (contract: Release assessment).
+    Nothing else here calls it, and nothing may call it without the lock: every
+    write below assumes it is the only writer.
+    """
+
     moment = _moment(now)
     text = require_reason(
         reason,
@@ -147,62 +171,61 @@ def rollback(
         "sentence and nothing else",
     )
 
-    with single_writer_lock(config):
-        lineage = settled(config, now=moment)
-        promoted = lineage.last_promoted
-        if promoted is None:
-            raise BatchError(
-                "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
-                "reverses the promotion this repository most recently recorded (contract: Rollback)"
-            )
-        outcome = promoted.outcome or {}
-        recorded = promoted.rollback
-        # The lineage's own reading of whether that promotion is still what the
-        # line carries, rather than a second interpretation of the same record: a
-        # promotion nothing reversed and one whose reversal is still in flight
-        # are both effective, and only the first of those is a rollback to make.
-        if not promoted.promotion_effective and recorded is not None:
-            return _redone(promoted, recorded, text)
-        # The batch this acts on is the one whose records are about to be added
-        # to, so its replay evidence is held to the same rule every guarded
-        # operation applies: an unreadable record stops the operation rather than
-        # being written over.
-        require_readable_evidence(config, promoted)
-        if recorded is not None:
-            _require_same_rollback(promoted, recorded, text)
+    lineage = settled(config, now=moment)
+    promoted = lineage.last_promoted
+    if promoted is None:
+        raise BatchError(
+            "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
+            "reverses the promotion this repository most recently recorded (contract: Rollback)"
+        )
+    outcome = promoted.outcome or {}
+    recorded = promoted.rollback
+    # The lineage's own reading of whether that promotion is still what the line
+    # carries, rather than a second interpretation of the same record: a
+    # promotion nothing reversed and one whose reversal is still in flight are
+    # both effective, and only the first of those is a rollback to make.
+    if not promoted.promotion_effective and recorded is not None:
+        return _redone(promoted, recorded, text)
+    # The batch this acts on is the one whose records are about to be added to,
+    # so its replay evidence is held to the same rule every guarded operation
+    # applies: an unreadable record stops the operation rather than being
+    # written over.
+    require_readable_evidence(config, promoted)
+    if recorded is not None:
+        _require_same_rollback(promoted, recorded, text)
 
-        stamp = format_rfc3339(moment)
-        merge = outcome["promotion"]
-        source_ref = merge["merge_input_ref"]
-        tip = ref_tip(config.repo_root, source_ref)
-        if tip is None:
-            raise BatchError(
-                f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {source_ref}, and this "
-                "checkout does not hold that ref; a rollback moves the source line, so it is run from a checkout "
-                "that has the line"
-            )
+    stamp = format_rfc3339(moment)
+    merge = outcome["promotion"]
+    source_ref = merge["merge_input_ref"]
+    tip = ref_tip(config.repo_root, source_ref)
+    if tip is None:
+        raise BatchError(
+            f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {source_ref}, and this "
+            "checkout does not hold that ref; a rollback moves the source line, so it is run from a checkout "
+            "that has the line"
+        )
 
-        standing = _standing(config, promoted, recorded, tip)
-        prepared = recorded
-        reverted = standing != _CARRIED
-        if standing != _STALE:
-            # Everything below acts on a record that came off the disk: the
-            # source line is moved to the commit it names, or recorded as
-            # carrying it. A freshly prepared one is the inverse by
-            # construction, so it is the read one that is asked.
-            _require_confirmed_inverse(config, promoted, outcome, prepared)
-        if reverted:
-            _require_nothing_built_on(config, lineage, promoted)
-            require_line_not_checked_out(config, source_ref, _ACTION)
-            if standing == _STALE:
-                prepared = _prepare(config, promoted, outcome, tip, text, at=stamp)
-            _land(config, promoted, prepared)
+    standing = _standing(config, promoted, recorded, tip)
+    prepared = recorded
+    reverted = standing != _CARRIED
+    if standing != _STALE:
+        # Everything below acts on a record that came off the disk: the source
+        # line is moved to the commit it names, or recorded as carrying it. A
+        # freshly prepared one is the inverse by construction, so it is the read
+        # one that is asked.
+        _require_confirmed_inverse(config, promoted, outcome, prepared)
+    if reverted:
+        _require_nothing_built_on(config, lineage, promoted)
+        require_line_not_checked_out(config, source_ref, _ACTION)
+        if standing == _STALE:
+            prepared = _prepare(config, promoted, outcome, tip, text, at=stamp)
+        _land(config, promoted, prepared)
 
-        # Where this run last saw the line, which is what its completion is about
-        # to record the line as carrying: the tip the inverse was already on when
-        # this run read it, or the tip the move just made.
-        carrying = tip if standing == _CARRIED else prepared["revision"]
-        path = _completed(config, promoted, prepared, source_ref, carrying, at=stamp)
+    # Where this run last saw the line, which is what its completion is about to
+    # record the line as carrying: the tip the inverse was already on when this
+    # run read it, or the tip the move just made.
+    carrying = tip if standing == _CARRIED else prepared["revision"]
+    path = _completed(config, promoted, prepared, source_ref, carrying, at=stamp)
 
     return _result(promoted, prepared, reverted_at=stamp, path=path, reverted=reverted)
 

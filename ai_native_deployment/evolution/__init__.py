@@ -22,10 +22,13 @@ batch's change lineage, the `replay.start` / `replay.conclude` / `replay.abandon
 `replay.withdraw` runs against a round's pinned candidate together with
 `replay.read_replays` / `replay.describe_evidence` and the rest of that module's
 vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
-`rollback.rollback` (the latest promotion taken back off the source line),
-`assessment.describe` / `assessment.read` / `assessment.form` (the comparison a
-batch's frozen provenance supports, the reading it recorded of the release
-before it, and the operation that records one) together with
+`rollback.rollback` (the latest promotion taken back off the source line, with
+`rollback.reverse` as the same operation for a caller already holding the
+single-writer lock),
+`assessment.describe` / `assessment.read` / `assessment.obligation` /
+`assessment.form` (the comparison a batch's frozen provenance supports, the
+reading it recorded of the release before it, which cohort owes that reading and
+what it says, and the operation that records one) together with
 `assessment.measure` / `assessment.conclude` / `assessment.abandon` /
 `assessment.withdraw` / `assessment.resolve` (the pinned two-revision run that
 settles what the release did, the two ways out of one nothing can finish, and

@@ -115,7 +115,7 @@ from .replay import (
 )
 from .revisions import contains, resolve_commit
 from .rollback import RollbackResult
-from .rollback import rollback as reverse_promotion
+from .rollback import reverse as reverse_promotion
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
@@ -681,6 +681,43 @@ class Assessment:
 
 
 @dataclass(frozen=True)
+class Obligation:
+    """The reading of one release, wherever it sits: whose it is and what it says.
+
+    The obligation belongs to the first cohort frozen after the promotion and
+    stays there — a later batch never acquires it — so this pairs that cohort's
+    derived frame with whatever it has recorded so far. Ordinarily the two are
+    the same batch and this says nothing new; it exists for the case where they
+    are not, because the answer a base freeze waits on is the *owner's* and not
+    the freezing cohort's own (invariant 17).
+    """
+
+    frame: Frame
+    reading: Assessment | None
+
+    @property
+    def owner_id(self) -> str:
+        """The cohort that owes the reading."""
+
+        return self.frame.batch_id
+
+    @property
+    def settled(self) -> bool:
+        """Whether the human gate has answered — the one state a base freeze may
+        go ahead on. A reading nobody recorded and one nobody decided about are
+        different states to an operator and both stop a freeze."""
+
+        return self.decision is not None
+
+    @property
+    def decision(self) -> Decision | None:
+        """The answer, where there is one: which line the release left behind is
+        the one later work is built from."""
+
+        return None if self.reading is None else self.reading.decision
+
+
+@dataclass(frozen=True)
 class Formed:
     """One reading recorded, and where it landed."""
 
@@ -915,6 +952,54 @@ def read(
     return parse(config, record, batch, frame=derived)
 
 
+def obligation(
+    config: EvolutionConfig,
+    batch: Batch,
+    *,
+    lineage: Lineage | None = None,
+) -> Obligation | None:
+    """The reading of the release before `batch`, read from the cohort that owes
+    it. None when there is no release before `batch` at all.
+
+    The distinction this exists for: "which release precedes this batch" and
+    "which cohort answers for it" are two questions, and they part company as
+    soon as the owing cohort ends without answering. A batch that concluded
+    `no-change` promoted nothing, so the batch after it still follows the older
+    release — while the obligation to read that release stays with the first
+    cohort frozen after it, which is where the record is and where it stays.
+    Asking `owed_by` of the freezing batch alone would find no obligation there
+    and let the freeze proceed on a line nobody decided about (invariant 17).
+
+    Read-only, and the answer is the whole state: which cohort owes it, the frame
+    its record is checked against, and the record itself where there is one.
+    """
+
+    known = lineage if lineage is not None else describe_lineage(config)
+    assessed = subject(known, batch)
+    if assessed is None:
+        return None
+    owner = _owner(known, assessed)
+    if owner is None:
+        # `batch` is itself after that promotion, so the promotion has at least
+        # one batch after it — this is unreachable, and returning "nothing owed"
+        # rather than raising would be the one answer that quietly skips a gate.
+        raise BatchError(
+            f"{batch.batch_id} follows the {assessed.batch_id} release ({assessed.revision[:12]}), and no batch "
+            "is recorded as frozen after that promotion; the cohort that owes the reading is the first one after "
+            "it, so this lineage cannot say who answers for a release its own batches follow"
+        )
+    frame = describe(config, owner.batch, lineage=known)
+    if frame is None:
+        # Same shape: the owner follows that promotion by construction, so a
+        # frame it cannot derive is a lineage disagreeing with itself.
+        raise BatchError(
+            f"{owner.batch_id} is the cohort that owes a reading of the {assessed.batch_id} release, and no "
+            "release can be derived for it; the batches form a series (invariant 14), so the promotion this "
+            "batch follows is the one that cohort follows too"
+        )
+    return Obligation(frame=frame, reading=read(config, owner.batch, frame=frame))
+
+
 def parse(
     config: EvolutionConfig,
     record: Mapping[str, Any],
@@ -1129,7 +1214,16 @@ def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
 
     Three ways there is nothing here to record, and they are different answers to
     an operator: no cohort is current, the current cohort follows no release, and
-    the reading belongs to an earlier cohort than this one.
+    the reading belongs to an earlier cohort whose answer is already on record.
+
+    The third of those is a refusal only where that earlier cohort *answered*.
+    An obligation it left outstanding — a cohort that ended without reading the
+    release, or read it and was never settled — is still the obligation the next
+    base freeze waits on, and the record still belongs in that cohort's own
+    directory. So these operations follow it there rather than refusing from the
+    cohort that happens to be current: a gate nothing can answer would stop the
+    lineage for good, since what freezes the next cohort is the settlement and
+    what would record the settlement is this.
     """
 
     current = known.current
@@ -1147,17 +1241,21 @@ def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
             "that promoted nothing before this cohort and a predecessor that concluded `no-change` both leave "
             "nothing an upgrade effect could be measured against, and none is invented (invariant 7)"
         )
-    if not frame.owed:
-        promoted = next(item for item in known.batches if item.batch_id == frame.subject.batch_id)
-        # Never empty: this cohort derived that release from a batch frozen before
-        # it, so it is itself one of the batches after it.
-        owner = known.after(promoted)[0].batch_id
-        raise BatchError(
-            f"{frame.batch_id} is not the cohort that owes a reading of the {frame.subject.batch_id} release; "
-            f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
-            "about it, and its reading was taken and settled before this cohort could freeze (invariant 14)"
-        )
-    return frame
+    if frame.owed:
+        return frame
+
+    # Never None: this cohort derived a release just above, so there is one
+    # before it — and where the lineage cannot say which cohort owes that
+    # reading, `obligation` refuses rather than answering.
+    owed = obligation(config, current.batch, lineage=known)
+    if owed is not None and not owed.settled:
+        return owed.frame
+    owner = frame.batch_id if owed is None else owed.owner_id
+    raise BatchError(
+        f"{frame.batch_id} is not the cohort that owes a reading of the {frame.subject.batch_id} release; "
+        f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
+        "about it, and it has read that release and had it settled (invariant 14)"
+    )
 
 
 def _as_assessed(subject: Subject) -> Subject:
@@ -1752,12 +1850,18 @@ def settle(
     made again: the operator may have run the rollback themselves, and a run
     interrupted between the commit and this record finishes by being repeated.
 
-    **Refused before anything is made.** A cohort that recorded no reading has
-    nothing to settle, a gate that answered is not re-answered, evidence still in
-    flight is not settled over, `retain` is refused for a release already off the
-    line, and `rolled-back` is refused where the promotion this reading is about
-    is not the one a rollback reverses. Each of those is asked before the commit,
-    so a refusal costs nothing that had already happened.
+    **Refused before anything is made, and nothing writes in between.** A cohort
+    that recorded no reading has nothing to settle, a gate that answered is not
+    re-answered, evidence still in flight is not settled over, `retain` is
+    refused for a release already off the line, and `rolled-back` is refused
+    where the promotion this reading is about is not the one a rollback
+    reverses. Each of those is asked before the commit, so a refusal costs
+    nothing that had already happened — and the whole settlement runs under one
+    hold of the single-writer lock, so the state they cleared is the state the
+    reversal lands on. A composition that released the lock to reach the
+    rollback's ordinary entry point would let another writer settle, measure or
+    revise the reading in the gap, after which the inverse commit is on the
+    source line for a decision nobody can record.
 
     What it does not do is weaken the rollback's own refusal that later work
     stands on the promotion. That refusal leaves the reading unsettled, and the
@@ -1807,24 +1911,26 @@ def settle(
             return _record_settlement(config, frame, reading, settlement, text, None, moment)
         _require_reversible(known, frame)
 
-    # Outside the lock, because a rollback is a guarded operation in its own
-    # right and takes the same one — which is also what makes the composition
-    # honest: the reversal is that operation's whole self, refusals included,
-    # rather than its steps run again from here. What it leaves behind is durable
-    # either way, so a run stopping between the two is finished by repeating it.
-    reversal = reverse_promotion(config, reason=text, now=moment)
+        # Inside the lock this operation already holds, through the rollback's
+        # own lock-free entry (`rollback.reverse`). The reversal is still that
+        # operation's whole self, refusals included, rather than its steps run
+        # again from here — what the composition adds is that nothing else
+        # writes between the refusals above and the commit they cleared. The
+        # lock is not reentrant, so releasing it to reach the ordinary entry
+        # point would leave exactly the window this gate cannot afford: another
+        # writer settles the reading, starts a run, or revises the verdict, and
+        # the inverse commit then lands on the source line for a decision this
+        # run can no longer record.
+        reversal = reverse_promotion(config, reason=text, now=moment)
 
-    with single_writer_lock(config):
-        # Re-derived rather than carried across the gap: the rollback changed
-        # what the lineage says about this release, and the record about to be
-        # written is checked against the reading as it now is.
+        # Re-derived rather than carried across the reversal: the rollback
+        # changed what the lineage says about this release, and the record about
+        # to be written is checked against the reading as it now is. The reading
+        # itself cannot have moved — nothing else has written since the refusals
+        # above — so what this re-reads is the release, not the judgement.
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         reading = _recorded(config, frame, "settle")
-        decided = reading.decision
-        if decided is not None:
-            return _redone_settlement(frame, reading, decided, settlement, text, reversal)
-        _require_settleable(frame, reading)
         return _record_settlement(config, frame, reading, settlement, text, reversal, moment)
 
 
@@ -1885,7 +1991,6 @@ def _redone_settlement(
     decided: Decision,
     settlement: str,
     reason: str,
-    reversal: RollbackResult | None = None,
 ) -> Settled:
     """The same settlement run again, or the refusal that this gate has answered.
 
@@ -1893,6 +1998,10 @@ def _redone_settlement(
     redo here: the decision either landed or it did not, and the one that landed
     is what a redo is asking for. `decided_at` is when it landed rather than part
     of what was decided, so what is compared is the answer and the reason for it.
+
+    It reports no reversal, because this run made none: a redo reaches here
+    before the composition, and the inverse commit a previous run landed is
+    named by the decision it is reporting back.
     """
 
     if (decided.settlement, decided.reason) == (settlement, reason):
@@ -1901,7 +2010,6 @@ def _redone_settlement(
             assessment=reading,
             decision=decided,
             record_path=frame.batch.assessment_path,
-            reversal=reversal,
             recorded=False,
         )
     raise BatchError(
@@ -2286,9 +2394,22 @@ def _moment(now: datetime | None) -> datetime:
 def _owed(lineage: Lineage, batch: Batch, assessed: Subject) -> bool:
     """Whether `batch` is the first cohort frozen after that promotion."""
 
+    owner = _owner(lineage, assessed)
+    return owner is not None and owner.batch_id == batch.batch_id
+
+
+def _owner(lineage: Lineage, assessed: Subject) -> BatchLineage | None:
+    """The cohort that owes a reading of that release: the first one frozen
+    after the promotion.
+
+    None only where nothing was frozen after it, which is a repository whose
+    newest batch is the one that promoted — there is no cohort yet whose reports
+    could say what the release did.
+    """
+
     promoted = next(item for item in lineage.batches if item.batch_id == assessed.batch_id)
     following = lineage.after(promoted)
-    return bool(following) and following[0].batch_id == batch.batch_id
+    return following[0] if following else None
 
 
 def _last_promoted_before(lineage: Lineage, batch: Batch) -> BatchLineage | None:

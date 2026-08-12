@@ -1752,15 +1752,23 @@ def test_nothing_is_formed_where_there_is_no_release(
     assert (config.batches_root / FIRST / "release-assessment.json").exists() is False
 
 
-def test_a_later_cohort_may_not_read_a_release_for_the_one_that_owes_it(
+def test_a_later_cohort_may_not_reread_a_release_that_was_answered(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The obligation belongs to the first cohort after the promotion. A later
-    one derives the same release — that is how it reads the record — and is told
-    whose reading it is."""
+    """The obligation belongs to the first cohort after the promotion and is
+    discharged there. A later one derives the same release — that is how it reads
+    the record — and is told whose reading it is.
 
-    freeze_second(config, promoted)
+    The refusal is about an obligation that was *answered*, not about who is
+    standing at the keyboard: one the owning cohort left outstanding is followed
+    to where it sits, because a gate nobody could answer would stop the lineage
+    for good.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
     write_outcome(config.batches_root, SECOND, outcome="no-change")
     third = freeze_second(config, promoted, batch_id=THIRD)
 
@@ -1773,6 +1781,7 @@ def test_a_later_cohort_may_not_read_a_release_for_the_one_that_owes_it(
         )
     assert f"the first batch frozen after that promotion is {SECOND}" in str(error.value)
     assert third.assessment_path.exists() is False
+    assert read_reading(config, second).settled is True
 
 
 def test_no_current_cohort_reads_nothing(
@@ -3348,6 +3357,297 @@ def test_a_rollback_a_later_attempt_stands_on_is_refused_and_retaining_stays_ope
     )
     assert kept.recorded is True
     assert read_reading(config, second).settled is True
+
+
+def ended_without_settling(
+    config: evolution.EvolutionConfig,
+    promotion: experiments.PromotionResult,
+    *,
+    reading: bool,
+) -> lineage.Batch:
+    """The assessing cohort ends its own batch without answering the gate.
+
+    Legal at every step and reachable through the real operations: concluding
+    `no-change` asks that nothing about this batch is still open, and an
+    unanswered reading of the release *before* it is not about this batch at all.
+    What it leaves is the state the next freeze has to find — the obligation
+    still sits where it was, on a cohort that is no longer current.
+    """
+
+    (config.batches_root / SECOND / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, SECOND, analysis_task_id=f"2026-08-10-{SECOND}")
+    if reading:
+        form_reading(config)
+    experiments.conclude_no_change(
+        config, reason="the evidence justified no protocol change", now=RESOLVED_AT
+    )
+    return freeze_second(
+        config,
+        promotion,
+        batch_id=THIRD,
+        # Membership of its own: one report belongs to one batch (invariant 3).
+        reports=[
+            make_manifest_report(
+                key=f"c{index}",
+                sequence=index,
+                task_id=f"2026-08-2{index}-task",
+                effective_revision=promotion.promotion_revision,
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+
+
+def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The obligation belongs to the first cohort after the release and does not
+    lapse when that cohort ends.
+
+    `no-change` promotes nothing, so the batch after it still follows the same
+    release while owing no reading of its own. Asking only whether the *freezing*
+    cohort owes one would find nothing to wait for and freeze a base on the line
+    the source happened to be holding — which is invariant 17 defeated by a
+    sequence every step of which is legal.
+
+    The way out is the obligation itself: it stays answerable where it sits, so
+    the gate names a decision somebody can still take rather than one nobody can.
+    """
+
+    second = freeze_second(config, promoted)
+    third = ended_without_settling(config, promoted, reading=True)
+    drafts = open_second(config, third)
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
+    assert SECOND in str(error.value) and "nobody has settled it" in str(error.value)
+    assert lineage.describe(config).current.experiments == ()
+
+    answered = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
+    )
+    admitted = experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
+
+    # Recorded where the obligation is, not where the operator is standing.
+    assert answered.batch_id == SECOND
+    assert read_reading(config, second).settled is True
+    assert third.assessment_path.exists() is False
+    assert admitted.created is True and admitted.base_revision == promoted.promotion_revision
+
+
+def test_a_cohort_that_ended_unread_still_gates_the_next_base(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The same rule one state earlier: the owing cohort recorded nothing at all.
+
+    Two refusals rather than one, because they are two different things for an
+    operator to do — read the release, then settle the reading — and both are
+    still done by the cohort that owes them.
+    """
+
+    second = freeze_second(config, promoted)
+    third = ended_without_settling(config, promoted, reading=False)
+    drafts = open_second(config, third)
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
+    assert SECOND in str(error.value) and "has recorded no reading" in str(error.value)
+
+    formed = form_reading(config)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT)
+    admitted = experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
+
+    assert formed.assessment.batch_id == SECOND
+    assert read_reading(config, second).settled is True
+    assert third.assessment_path.exists() is False
+    assert admitted.created is True
+
+
+def test_nothing_else_writes_between_the_settlement_and_the_reversal_it_composes(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composition holds one lock from the refusals to the record.
+
+    The gap this closes is the one where a settlement checked the reading, let go
+    of the lock to run the rollback, and came back to a reading somebody else had
+    settled, measured or revised — with the inverse commit already on the source
+    line for a decision it could no longer record. The lock is not reentrant, so
+    the proof is that a writer trying to act while the reversal runs meets the
+    lock rather than the reading.
+    """
+
+    second = freeze_second(config, promoted)
+    suspected(config, second)
+    reversing = assessment.reverse_promotion
+    held: list[str] = []
+
+    def watched(config_, **kwargs):  # type: ignore[no-untyped-def]
+        with pytest.raises(evolution.LockError) as blocked:
+            assessment.settle(
+                config_, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
+            )
+        held.append(str(blocked.value))
+        return reversing(config_, **kwargs)
+
+    monkeypatch.setattr(assessment, "reverse_promotion", watched)
+    answered = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+    )
+
+    assert len(held) == 1 and "evolution lock held" in held[0]
+    assert answered.reversal is not None
+    read = read_reading(config, second)
+    assert read.decision is not None
+    assert read.decision.settlement == assessment.SETTLEMENT_ROLLED_BACK
+    assert read.decision.rollback_revision == answered.reversal.revision
+
+
+def test_a_reversal_that_refuses_leaves_the_line_and_the_reading_untouched(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every refusal from the preflight to the commit costs nothing.
+
+    The settlement writes nothing before the reversal — not the decision, not the
+    audit line — so a rollback that refuses leaves the release exactly as it was
+    and the gate still open. The lock goes back too, which is what makes the
+    refusal something an operator can answer rather than a repository to unstick.
+    """
+
+    second = freeze_second(config, promoted)
+    suspected(config, second)
+    line = git_rev(config.repo_root, RELEASE_REF)
+
+    def refusing(config_, **kwargs):  # type: ignore[no-untyped-def]
+        raise evolution.BatchError("the rollback refused after the settlement had checked the reading")
+
+    monkeypatch.setattr(assessment, "reverse_promotion", refusing)
+    with pytest.raises(evolution.BatchError, match="the rollback refused"):
+        assessment.settle(
+            config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+        )
+
+    assert git_rev(config.repo_root, RELEASE_REF) == line
+    assert (config.batches_root / FIRST / "rollback.json").exists() is False
+    assert read_reading(config, second).settled is False
+    assert ledger_records(config, assessment.RECORD_RELEASE_SETTLED) == []
+
+    monkeypatch.undo()
+    kept = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
+    )
+    assert kept.recorded is True
+
+
+def test_a_retained_release_is_not_frozen_out_of_the_base(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """What the settlement selects is a commit, not merely an answer.
+
+    `retain` says the alternatives are built on the line carrying the release, so
+    a base at the revision the line stood at *before* it is the decision undone
+    by the freeze — the accident invariant 17 exists to stop, arriving one step
+    later than the gate that only asks whether somebody answered.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    drafts = open_second(config, second)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, base=promoted.merge_input_revision, now=RESOLVED_AT)
+
+    assert "does not carry" in str(error.value)
+    assert promoted.promotion_revision[:12] in str(error.value)
+    assert lineage.describe(config).current.experiments == ()
+
+
+def test_a_reversed_release_is_not_the_base_it_was_taken_off(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The same rule the other way round: `rolled-back` puts the inverse commit
+    on the line, and the promoted revision the batch was frozen beside is the one
+    commit the decision ruled out."""
+
+    second = freeze_second(config, promoted)
+    suspected(config, second)
+    drafts = open_second(config, second)
+    answered = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+    )
+    assert answered.reversal is not None
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, base=promoted.promotion_revision, now=RESOLVED_AT)
+    assert "does not carry" in str(error.value)
+    assert answered.reversal.revision[:12] in str(error.value)
+
+    admitted = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
+    assert admitted.base_revision == answered.reversal.revision
+
+
+def test_a_rollback_after_a_retained_release_does_not_realign_the_base(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A reversal nobody settled does not become the base by standing on the line.
+
+    The rollback operation is available on its own, and after a `retain` nothing
+    is yet built on the release to stop it. What must not follow is a freeze that
+    quietly takes the reversed line: the recorded decision says the release
+    stays, so a base carrying the inverse commit is a realignment no reading
+    justified.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    drafts = open_second(config, second)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
+    reversal = rollback.rollback(config, reason="reversed outside the gate", now=RESOLVED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
+
+    assert reversal.revision[:12] in str(error.value)
+    assert "carries" in str(error.value) and "has not taken the inverse commit" in str(error.value)
+    assert read_reading(config, second).decision.settlement == assessment.SETTLEMENT_RETAIN
+
+
+def test_a_base_this_checkout_cannot_place_on_the_settled_line_is_refused(
+    config: evolution.EvolutionConfig,
+    release: str,
+) -> None:
+    """The one Git question here answered by refusing.
+
+    Elsewhere a relation this clone cannot resolve is reported as the fact about
+    the clone that it is. This one stands between a frozen base and every
+    alternative built on it, so a checkout that cannot see whether the base
+    carries the decided line does not get to assume it does.
+    """
+
+    build_absent_release(config)
+    # Its own analysis id rather than `open_second`'s: this batch's manifest was
+    # written by a helper that names the task differently, and a closure naming
+    # another one is refused before anything here is reached.
+    (config.batches_root / SECOND / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, SECOND, analysis_task_id="2026-08-10-second")
+    write_draft(config.batches_root, SECOND, "status-orphans")
+    form_reading(config)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, ["status-orphans"], base=RELEASE_REF, now=RESOLVED_AT)
+
+    assert "cannot be answered in this checkout" in str(error.value)
+    assert lineage.describe(config).current.experiments == ()
 
 
 # --- what the generated analysis task says ---------------------------------
