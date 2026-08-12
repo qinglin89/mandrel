@@ -39,10 +39,11 @@ follows is not a weaker artifact but an honest division of labour: the cohorts
 show the base rate and raise the suspicion, and a direction — in either sign — is
 settled by the counterfactual.
 
-**The counterfactual is four operations on one record.** `measure` pins the pair
+**The counterfactual is five operations on one record.** `measure` pins the pair
 and asks the replay harness for a run, `conclude` records the numbers it
-reports, `abandon` records why a run ended when its harness cannot say, and
-`resolve` records the reading those numbers settle. They write where the
+reports, `abandon` records why a run ended when its harness cannot say,
+`withdraw` gives up a request the harness never answered for, and `resolve`
+records the reading those numbers settle. They write where the
 reading is, not where an experiment's runs are, and they move nothing: the
 release ref, the checkout and the frozen membership are untouched, because what
 this controller owns is pinning what gets exercised and recording what came
@@ -50,6 +51,14 @@ back. The request is durable before the harness is asked — a harness may be
 running something this record does not describe yet, and that window is what
 names it — and every refusal is made before the asking, so a refusal costs
 nothing that had already started.
+
+The two ways out of a run nothing can finish are the same two the replay record
+has, and they answer different states: `abandon` ends a run that was recorded,
+`withdraw` gives up a request that never became one. Neither hands the position
+back — a harness that cannot describe what it is running may well be running
+something, so reissuing its key would answer the next request with that run —
+and both leave the reading `inconclusive`, which is what this contract already
+says about a comparison that was never made.
 
 **Vocabulary is shared, not restated.** The case set, evaluator, harness,
 regression and result shapes are the replay record's own value objects: a
@@ -432,6 +441,31 @@ class CounterfactualRequest:
 
 
 @dataclass(frozen=True)
+class WithdrawnRequest:
+    """A position a request held and gave up without ever becoming a run.
+
+    Kept rather than erased, for the reason a replay's withdrawal is: the
+    position is half of what the harness is keyed on, and a withdrawal happens
+    when the harness cannot describe what it is running — which means it may
+    well be running something. A later request reissued at that key would be
+    answered with *that* run, and the numbers of a comparison this record no
+    longer names would arrive under the one it does. So the position stays
+    allocated forever and the next request takes the one after it.
+
+    What it carries is what a withdrawal is about afterwards: the window the
+    stray run would have started in, and the pair pinned for it — which is what
+    an operator has to go on to find that run at the harness and stop it.
+    Deliberately not the expectation: that is a prediction kept to be read back
+    against numbers, and this request produced none.
+    """
+
+    position: Position
+    integration: Pinned
+    requested_at: str
+    withdrawn_at: str
+
+
+@dataclass(frozen=True)
 class Decision:
     """The human settlement of one assessment: the gate between a release and
     the next base freeze."""
@@ -546,10 +580,15 @@ class Assessment:
     rationale: str
     formed_at: str
     decision: Decision | None
-    # The run asked for and not yet answered. Never set beside `counterfactual`:
-    # the write that records the run a request became clears it in the same file,
-    # so a reader is never left choosing which of the two the harness is running.
+    # The run asked for and not yet answered. The write that records the run a
+    # request became clears it in the same file, so the only run one may stand
+    # over is a failed one — which is the retry, at the position after it. Beside
+    # a run still going or a completed one it would leave a reader choosing which
+    # of the two the harness is measuring this release with.
     requested: CounterfactualRequest | None = None
+    # The positions requests held and gave up. Never reissued, so what a further
+    # attempt is numbered from is the run and these together.
+    withdrawn: tuple[WithdrawnRequest, ...] = ()
     path: Path | None = None
 
     @property
@@ -608,6 +647,7 @@ class Assessment:
             "metrics": [_measurement_json(measurement) for measurement in self.metrics],
             "counterfactual": None if self.counterfactual is None else _counterfactual_json(self.counterfactual),
             "counterfactual_request": None if self.requested is None else _request_json(self.requested),
+            "counterfactual_withdrawn": [_withdrawal_json(taken) for taken in self.withdrawn],
             "verdict": self.verdict,
             "confidence": self.confidence,
             "rationale": self.rationale,
@@ -892,7 +932,10 @@ def parse(
     )
     metrics = tuple(_read_measurement(entry) for entry in record["metrics"])
     counterfactual = _read_counterfactual(path, record["counterfactual"], assessed)
-    requested = _read_request(path, record["counterfactual_request"], assessed, counterfactual)
+    withdrawn = tuple(
+        _read_withdrawal(path, entry, assessed) for entry in record["counterfactual_withdrawn"]
+    )
+    requested = _read_request(path, record["counterfactual_request"], assessed, counterfactual, withdrawn)
     # The settlement is held to the rollback record as the lineage reads it now,
     # never to the historical `assessed` block above: the ordinary flow forms the
     # assessment while the promotion stands, and the rollback the reading caused
@@ -904,6 +947,8 @@ def parse(
     # direction with nothing to point away from is a malformed measurement, and an
     # `inconclusive` reading is read by the next cohort like any other.
     _require_distinct_metrics(path, "the cohort comparison", metrics)
+    _require_allocated_once(path, counterfactual, requested, withdrawn)
+    _require_settled_over_evidence(path, decision, counterfactual, requested)
     _require_one_side(path, before, after, excluded)
     # Membership first: everything below reads the frozen manifests through the
     # keys this record states, which is only meaningful once they are known to be
@@ -940,6 +985,7 @@ def parse(
         formed_at=record["formed_at"],
         decision=decision,
         requested=requested,
+        withdrawn=withdrawn,
         path=path,
     )
 
@@ -1198,6 +1244,23 @@ class Concluded:
         return None if self.run.result is None else self.run.result.outcome
 
 
+@dataclass(frozen=True)
+class Withdrawn:
+    """A request given up, and the position it keeps.
+
+    `withdrawn` is False when there was nothing outstanding — this operation run
+    a second time, or run where no request stood. `request` is what was taken
+    back, reported because it names the run that may still be going at a harness
+    this controller will never hear from again.
+    """
+
+    batch_id: str
+    assessment: Assessment
+    request: CounterfactualRequest | None
+    withdrawn: bool
+    record_path: Path
+
+
 def measure(
     config: EvolutionConfig,
     harness: ReplayHarness,
@@ -1236,6 +1299,12 @@ def measure(
     one is not. The release is measured once and a second answer about it would
     leave a reader choosing between them — while a run that never measured
     anything has left nothing to choose.
+
+    What a resume cannot get past is a harness that answers with something this
+    record refuses to hold: the same key comes back with the same answer for as
+    long as the request stands. `withdraw` is the way out of that, and the next
+    attempt is numbered past what it gave up — which is why a position is
+    allocated from the runs and the withdrawals together.
     """
 
     moment = _moment(now)
@@ -1256,7 +1325,7 @@ def measure(
         requested = reading.requested
         resumed = requested is not None
         if requested is None:
-            requested = _request(config, frame, reading.counterfactual, predicted, at=format_rfc3339(moment))
+            requested = _request(config, frame, reading, predicted, at=format_rfc3339(moment))
             reading = _write_assessment(config, batch, replace(reading, requested=requested), frame)
         else:
             _require_same_request(frame, requested, predicted)
@@ -1286,7 +1355,9 @@ def measure(
             raise BatchError(
                 f"{frame.batch_id}: {plan.harness.id} began {described} as handle {plan.harness.handle!r} and "
                 f"described it in a way this record cannot hold ({exc}); the request for that run is still on "
-                "record, so run this again once the harness can describe what it holds"
+                "record, so nothing that may be running has been lost — but a harness answers one key with the "
+                "run it already began, so asking again brings back the same answer: withdraw the request, and "
+                "the next attempt takes the position after it"
             ) from exc
 
     return Measured(
@@ -1335,6 +1406,7 @@ def conclude(
         frame = _owing_frame(config, known)
         batch = frame.batch
         reading = _recorded(config, frame, "conclude a run of")
+        _require_unsettled(frame, reading, "numbers recorded now")
         going = _require_run(frame, reading, "concluded")
         if not going.running:
             return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
@@ -1382,6 +1454,11 @@ def abandon(
     Run again after an interrupted abandonment, it reports the failure already on
     record. A run that ended some other way is not this operation's redo, and is
     reported back rather than overwritten.
+
+    It ends a *run*, so a request that never became one is not its business:
+    there is no record to write a failure onto, and inventing one would state a
+    case set, an evaluator and a harness configuration nobody selected.
+    `withdraw` takes that back instead.
     """
 
     moment = _moment(now)
@@ -1396,6 +1473,7 @@ def abandon(
         frame = _owing_frame(config, known)
         batch = frame.batch
         reading = _recorded(config, frame, "end a run of")
+        _require_unsettled(frame, reading, "a run ended now")
         going = _require_run(frame, reading, "ended")
         if not going.running:
             result = going.result
@@ -1424,6 +1502,79 @@ def abandon(
         _audit_run(config, frame, going, outcome=RESULT_FAILED, at=stamp)
 
     return Concluded(batch_id=frame.batch_id, assessment=recorded, run=concluded, recorded=True)
+
+
+def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Withdrawn:
+    """Take back a request the harness never answered for.
+
+    The way out of the window the request exists to cover, and the only one there
+    is. A harness that cannot describe what it is running — a plan this record
+    refuses to hold, a run it no longer knows about — leaves `measure` unable to
+    finish, and asking again does not help: a conforming harness answers one key
+    with the run it already began, so the same unrecordable answer comes back for
+    as long as that request stands. Nothing else can clear it either, since
+    `conclude` and `abandon` act on a run and there is none. Without this the
+    release would go on being unmeasurable, and with it the one comparison in
+    which the release is the only difference — which is to say the one thing a
+    `regressed` reading can rest on.
+
+    What it does not give up is the position. The harness is keyed on the round
+    and the attempt, and the reason there is a withdrawal at all is that the
+    harness may be running something nobody here can describe — so reissuing that
+    key would answer the next request with the run this one abandoned. The
+    position is recorded as withdrawn instead, and the next request takes the one
+    after it.
+
+    It takes no reason, and that is the difference from ending a run. A run that
+    happened is history and carries why it stopped; a request that never became
+    one measured nothing, is derived as nothing, and has no result to attach a
+    reason to. What the withdrawal does record is what an operator needs to find
+    the run that may be going at a harness this controller will never hear from
+    again: the window it was started in, and the pair pinned for it.
+
+    Run again, it reports that nothing was outstanding. That is the whole of its
+    redo: a single write with nothing after it either has landed or has not, and
+    the request's absence is the answer in both directions.
+    """
+
+    moment = _moment(now)
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+        reading = _recorded(config, frame, "withdraw a run request of")
+        _require_unsettled(frame, reading, "a request given up now")
+
+        requested = reading.requested
+        if requested is None:
+            return Withdrawn(
+                batch_id=frame.batch_id,
+                assessment=reading,
+                request=None,
+                withdrawn=False,
+                record_path=batch.assessment_path,
+            )
+        taken = WithdrawnRequest(
+            position=requested.position,
+            integration=requested.integration,
+            requested_at=requested.requested_at,
+            withdrawn_at=format_rfc3339(moment),
+        )
+        recorded = _write_assessment(
+            config,
+            batch,
+            replace(reading, requested=None, withdrawn=reading.withdrawn + (taken,)),
+            frame,
+        )
+
+    return Withdrawn(
+        batch_id=frame.batch_id,
+        assessment=recorded,
+        request=requested,
+        withdrawn=True,
+        record_path=batch.assessment_path,
+    )
 
 
 def resolve(
@@ -1561,15 +1712,16 @@ def _require_run(frame: Frame, reading: Assessment, action: str) -> Counterfactu
     A request outstanding is the state where the newest thing on record is not a
     run at all: the harness was asked and its answer never reached this record.
     Reporting "no run" there would hide that something may be measuring right
-    now, and the way forward is the same either way — start the run again, which
-    records what the harness began.
+    now — so what is reported instead is the two ways forward: start the run
+    again, which records what the harness began, or give the request up.
     """
 
     if reading.requested is not None:
         raise BatchError(
             f"{frame.batch_id} has {_describe(reading.requested.position)} of its counterfactual outstanding, "
             f"and no run recorded for it; the harness was asked for that run and its answer never reached this "
-            f"record, so there is nothing here to be {action} — start the run again to record what it began"
+            f"record, so there is nothing here to be {action} — start the run again to record what it began, or "
+            "withdraw the request"
         )
     run = reading.counterfactual
     if run is None:
@@ -1584,7 +1736,7 @@ def _require_run(frame: Frame, reading: Assessment, action: str) -> Counterfactu
 def _request(
     config: EvolutionConfig,
     frame: Frame,
-    previous: Counterfactual | None,
+    reading: Assessment,
     expectation: str,
     *,
     at: str,
@@ -1598,12 +1750,14 @@ def _request(
     The position is the promoted experiment's next round, which no run and no
     withdrawn request of that experiment can ever hold: every position it
     allocated names a round it has, and a promoted experiment is terminal — it
-    can never open another. A retry takes the attempt after the failed run's,
-    because the harness answers one key with one run and reissuing that key would
-    be answered with the run that failed.
+    can never open another. A further attempt takes the one after everything this
+    reading has allocated — the failed run and every request it gave up —
+    because the harness answers one key with one run, so a key handed out twice
+    is answered the second time with the first one's run.
     """
 
     subject = frame.subject
+    previous = reading.counterfactual
     if previous is not None and not previous.failed:
         raise BatchError(
             f"{frame.batch_id} has {_describe(previous.position)} of its counterfactual "
@@ -1625,16 +1779,38 @@ def _request(
         tree=subject.tree,
     )
     _require_measurable(config, frame, pinned)
+    round_number = subject.round_number + 1
     return CounterfactualRequest(
         position=Position(
             experiment_id=subject.experiment_id,
-            round_number=subject.round_number + 1,
-            attempt=1 if previous is None else previous.position.attempt + 1,
+            round_number=round_number,
+            attempt=_allocated(previous, reading.withdrawn, round_number) + 1,
         ),
         integration=pinned,
         expectation=expectation,
         requested_at=at,
     )
+
+
+def _allocated(
+    run: Counterfactual | None,
+    withdrawn: Sequence[WithdrawnRequest],
+    round_number: int,
+) -> int:
+    """The last attempt of one round this reading has handed out, to a run or to
+    a request it gave up.
+
+    Read off the highest rather than counted, which is where this differs from
+    the replay history: that record keeps every run it ever wrote, and this one
+    keeps the latest — a retry replaces the failed run it answers. So the
+    attempts on record are not 1..N and the count is not the allocation; the
+    highest one still is, because nothing here ever hands out a lower one.
+    """
+
+    positions = [taken.position.attempt for taken in withdrawn if taken.position.round_number == round_number]
+    if run is not None and run.position.round_number == round_number:
+        positions.append(run.position.attempt)
+    return max(positions, default=0)
 
 
 def _require_measurable(config: EvolutionConfig, frame: Frame, pinned: Pinned) -> None:
@@ -2199,11 +2375,107 @@ def _read_counterfactual(
     )
 
 
+def _read_withdrawal(
+    path: Path,
+    stated: Mapping[str, Any],
+    assessed: Subject,
+) -> WithdrawnRequest:
+    """One position a request held and gave up.
+
+    Held to the same release and the same kind of key a run is, because that is
+    what it is a record of: the position the harness may be running something
+    under. A withdrawal naming another pair of revisions accounts for no request
+    this comparison ever made.
+    """
+
+    return WithdrawnRequest(
+        position=_read_position(path, stated["position"], assessed, "a withdrawn counterfactual request"),
+        integration=_read_pinned(path, stated["integration"], assessed, "a withdrawn counterfactual request"),
+        requested_at=stated["requested_at"],
+        withdrawn_at=stated["withdrawn_at"],
+    )
+
+
+def _require_allocated_once(
+    path: Path,
+    run: Counterfactual | None,
+    requested: CounterfactualRequest | None,
+    withdrawn: Sequence[WithdrawnRequest],
+) -> None:
+    """One position names one request, for good.
+
+    Positions are what the harness is keyed on, so two holders are two requests
+    it cannot tell apart: it answers the second with the run it began for the
+    first, and numbers measured against one thing land under a record stating
+    another. Runs, withdrawals and the outstanding request are counted together
+    because a withdrawal is exactly that — a position allocated, and never to
+    carry a run.
+    """
+
+    holders: dict[tuple[int, int], str] = {}
+    described: list[tuple[str, Position]] = [
+        (f"the withdrawn request at {_describe(taken.position)}", taken.position) for taken in withdrawn
+    ]
+    if run is not None:
+        described.append((f"the run at {_describe(run.position)}", run.position))
+    if requested is not None:
+        described.append((f"the outstanding request at {_describe(requested.position)}", requested.position))
+    for name, position in described:
+        key = (position.round_number, position.attempt)
+        earlier = holders.get(key)
+        if earlier is not None:
+            raise BatchError(
+                f"{path}: {name} and {earlier} both hold round {position.round_number} attempt "
+                f"{position.attempt} of the counterfactual; a position is allocated once and names one request "
+                "for good, because that is what the harness is keyed on — a second request wearing it would be "
+                "answered with the first one's run"
+            )
+        holders[key] = name
+
+
+def _require_settled_over_evidence(
+    path: Path,
+    decision: Decision | None,
+    run: Counterfactual | None,
+    requested: CounterfactualRequest | None,
+) -> None:
+    """A settled reading has nothing still in flight.
+
+    Nothing is added to a reading its gate has answered, which is the rule the
+    operations keep — so a settlement recorded over a run still going, or over a
+    request the harness never answered for, is a decision whose evidence could
+    never be recorded even when it arrives: the numbers would have nowhere to go,
+    and the run would stay going forever with the reading closed above it.
+
+    The states a settlement stands over are therefore all the ones that are over:
+    a completed run, a failed one, and no run at all — that last being the
+    ordinary shape of a retained release nobody suspected of anything.
+    """
+
+    if decision is None:
+        return
+    if requested is not None:
+        raise BatchError(
+            f"{path}: the reading is settled {decision.settlement!r} at {decision.decided_at} while "
+            f"{_describe(requested.position)} of its counterfactual is outstanding; the harness was asked for "
+            "that run and its answer never reached this record, and nothing is added to a reading its gate has "
+            "answered — record the run or withdraw the request, and settle over what came back"
+        )
+    if run is not None and run.running:
+        raise BatchError(
+            f"{path}: the reading is settled {decision.settlement!r} at {decision.decided_at} while "
+            f"{_describe(run.position)} of its counterfactual is still going; nothing is added to a reading its "
+            "gate has answered, so numbers arriving after the settlement could never be recorded — conclude the "
+            "run or end it with a reason, and settle over what it came to"
+        )
+
+
 def _read_request(
     path: Path,
     stated: Mapping[str, Any] | None,
     assessed: Subject,
     run: Counterfactual | None,
+    withdrawn: Sequence[WithdrawnRequest],
 ) -> CounterfactualRequest | None:
     """The run this cohort asked for and has no answer to yet.
 
@@ -2220,10 +2492,11 @@ def _read_request(
     state the write that records a run can produce — it clears the request in the
     same file — so both are a record saying something no operation here did.
 
-    A retry takes the position after the failed run's, in the same round. The
-    harness is keyed on that position, so reissuing the failed one would be
-    answered with the run that failed, and skipping ahead would leave an
-    allocation nothing accounts for.
+    A further attempt takes the position after everything already allocated in
+    that round — the failed run, and every request given up. The harness is keyed
+    on that position, so reissuing an allocated one would be answered with the
+    run it already holds, and skipping ahead would leave an allocation nothing
+    accounts for.
     """
 
     if stated is None:
@@ -2238,13 +2511,20 @@ def _read_request(
                 "request became clears it in the same file, so a record holding both leaves a reader guessing "
                 "which of the two the harness is measuring this release with"
             )
-        expected = (run.position.round_number, run.position.attempt + 1)
-        if (position.round_number, position.attempt) != expected:
+        if position.round_number != run.position.round_number:
             raise BatchError(
                 f"{path}: {_describe(run.position)} of the counterfactual failed and {_describe(position)} is "
-                f"outstanding; another attempt takes round {expected[0]} attempt {expected[1]} — a position is "
-                "allocated once and names one request for good, because that is what the harness is keyed on"
+                f"outstanding; another attempt answers that run in its own round {run.position.round_number}, "
+                "and one in a later round is a second comparison rather than the retry of this one"
             )
+    expected = _allocated(run, withdrawn, position.round_number) + 1
+    if position.attempt != expected:
+        raise BatchError(
+            f"{path}: {_describe(position)} of the counterfactual is outstanding, and round "
+            f"{position.round_number}'s next attempt is {expected}; a request holds the position its run will "
+            "take, and one holding any other position either skips an allocation or claims one a recorded run "
+            "or a withdrawal already has"
+        )
     return CounterfactualRequest(
         position=position,
         integration=_read_pinned(path, stated["integration"], assessed, "the counterfactual request"),
@@ -2790,6 +3070,15 @@ def _request_json(request: CounterfactualRequest) -> dict[str, Any]:
         "integration": _pinned_json(request.integration),
         "expectation": request.expectation,
         "requested_at": request.requested_at,
+    }
+
+
+def _withdrawal_json(taken: WithdrawnRequest) -> dict[str, Any]:
+    return {
+        "position": _position_json(taken.position),
+        "integration": _pinned_json(taken.integration),
+        "requested_at": taken.requested_at,
+        "withdrawn_at": taken.withdrawn_at,
     }
 
 

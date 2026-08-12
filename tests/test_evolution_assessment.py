@@ -2235,6 +2235,234 @@ def test_a_request_beside_a_recorded_run_is_refused(
     assert "clears it in the same file" in str(error.value)
 
 
+def nameless_harness() -> FakeHarness:
+    """A harness that begins a run and gives it no name — the one answer this
+    record cannot hold, since the handle is the whole of what a later process
+    polls."""
+
+    return FakeHarness(
+        plan=replay.ReplayPlan(
+            cases=replay.CaseSet(case_set_id="loader-regressions", case_set_sha256="c" * 64, count=12, excluded=()),
+            evaluator=replay.Evaluator(backend="claude", model="claude-opus-5", rubric_revision="r7"),
+            harness=replay.Harness(id="local-replay", revision="0.1.0", config_sha256="d" * 64, handle=None),
+        )
+    )
+
+
+def withdrawal(frame: assessment.Frame, attempt: int, **overrides) -> assessment.WithdrawnRequest:
+    """A position a request held and gave up, on this release's own pair."""
+
+    subject = frame.subject
+    fields = {
+        "position": assessment.Position(
+            experiment_id=subject.experiment_id,
+            round_number=subject.round_number + 1,
+            attempt=attempt,
+        ),
+        "integration": assessment.Pinned(
+            base_revision=subject.merge_input_revision,
+            candidate_revision=subject.revision,
+            source_ref=subject.merge_input_ref,
+            tree=subject.tree,
+        ),
+        "requested_at": "2026-08-11T07:00:00Z",
+        "withdrawn_at": "2026-08-11T07:30:00Z",
+    }
+    fields.update(overrides)
+    return assessment.WithdrawnRequest(**fields)
+
+
+def failed_run(frame: assessment.Frame, **overrides) -> assessment.Counterfactual:
+    """A run that measured nothing and said why — the one state another attempt
+    answers."""
+
+    return counterfactual(
+        frame,
+        result=assessment.RunResult(
+            outcome=replay.RESULT_FAILED,
+            concluded_at="2026-08-11T08:00:00Z",
+            detail=DIED,
+            elapsed_seconds=None,
+            metrics=(),
+            regressions=(),
+            ambiguity=None,
+        ),
+        **overrides,
+    )
+
+
+def test_a_request_the_harness_cannot_describe_is_taken_back(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The way out of the window the request covers, and the only one there is.
+
+    A harness that cannot say what it is running leaves `measure` unable to
+    finish, and asking again does not help: a conforming harness answers one key
+    with the run it already began, so the same unrecordable answer comes back for
+    as long as that request stands. Nothing else clears it either — the two
+    operations that end a measurement act on a run, and there is none. Without
+    this the release would stay permanently unmeasurable, and with it the only
+    comparison a regression can be settled by.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    nameless = nameless_harness()
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, nameless, expectation=EXPECTATION, now=MEASURED_AT)
+    assert "withdraw the request" in str(error.value)
+
+    # The same key, the same answer: the request is what a harness recognises, so
+    # re-asking cannot be the repair.
+    with pytest.raises(evolution.BatchError):
+        assessment.measure(config, nameless, expectation=EXPECTATION, now=CONCLUDED_AT)
+    assert [request.attempt for request in nameless.requests] == [1, 1]
+    assert read_reading(config, second).counterfactual is None
+    # And neither ending operation reaches it: both act on a recorded run.
+    for ending in (
+        lambda: assessment.conclude(config, FakeHarness(report=completed_report()), now=CONCLUDED_AT),
+        lambda: assessment.abandon(config, reason=DIED, now=CONCLUDED_AT),
+    ):
+        with pytest.raises(evolution.BatchError) as error:
+            ending()
+        assert "no run recorded for it" in str(error.value)
+
+    taken = assessment.withdraw(config, now=CONCLUDED_AT)
+
+    assert taken.withdrawn is True
+    assert taken.request is not None and taken.request.position.attempt == 1
+    reading = read_reading(config, second)
+    assert reading.requested is None
+    # The position is not handed back with the request. What is on record is what
+    # an operator needs to find the run that may be going under it: the window it
+    # would have started in, and the pair it was pinned to.
+    [given_up] = reading.withdrawn
+    assert given_up.position.attempt == 1
+    assert given_up.requested_at == "2026-08-11T07:00:00Z"
+    assert given_up.withdrawn_at == "2026-08-11T12:00:00Z"
+    assert given_up.integration.candidate_revision == promoted.promotion_revision
+    # Nothing measured, so nothing is audited: the ledger records outcomes, and a
+    # request that never became a run produced none.
+    assert ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED) == []
+
+    again = assessment.withdraw(config, now=RESOLVED_AT)
+    assert again.withdrawn is False and again.request is None
+    assert len(read_reading(config, second).withdrawn) == 1
+
+    # The next attempt takes the position after it. Attempt 1 is spoken for: the
+    # harness may have begun a run keyed to it, and issuing it again would ask
+    # that harness for a second run at a name it already answers for.
+    harness = FakeHarness(report=completed_report())
+    started = assessment.measure(config, harness, expectation=EXPECTATION, now=RESOLVED_AT)
+
+    assert started.run.position.attempt == 2
+    assert harness.requests[0].attempt == 2
+    run = read_reading(config, second).counterfactual
+    assert run is not None and run.position.attempt == 2
+
+
+def test_a_position_a_withdrawal_holds_is_never_asked_for_again(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The rule the allocation keeps, kept by the reader too.
+
+    A request wearing a position a withdrawal holds would be answered with that
+    withdrawal's run, and one skipping past the allocation leaves a key nothing
+    accounts for. Both are records no operation here writes.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    given_up = withdrawal(frame, 1)
+    request = assessment.CounterfactualRequest(
+        position=given_up.position,
+        integration=given_up.integration,
+        expectation=EXPECTATION,
+        requested_at="2026-08-11T09:30:00Z",
+    )
+
+    # `inconclusive` throughout: nothing has measured this release while a request
+    # stands, which is exactly what the reading says.
+    def reading(**overrides) -> assessment.Assessment:
+        return build(frame, verdict=assessment.VERDICT_INCONCLUSIVE, withdrawn=(given_up,), **overrides)
+
+    publish(second, reading(requested=request))
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "next attempt is 2" in str(error.value)
+
+    skipped = dataclasses.replace(request, position=dataclasses.replace(request.position, attempt=3))
+    publish(second, reading(requested=skipped))
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "next attempt is 2" in str(error.value)
+
+    # And the position after it reads: a withdrawal is an allocation, so the next
+    # request is numbered past it.
+    retried = dataclasses.replace(request, position=dataclasses.replace(request.position, attempt=2))
+    publish(second, reading(requested=retried))
+    assert read_reading(config, second).requested == retried
+
+
+def test_a_retry_is_numbered_past_the_run_and_the_withdrawals_together(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A request may stand over a failed run — that is what a retry is — and its
+    position counts every attempt the round has handed out, whether it became a
+    run or was given up before it could."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    ended = failed_run(frame)
+    given_up = withdrawal(frame, 2)
+    request = assessment.CounterfactualRequest(
+        position=dataclasses.replace(ended.position, attempt=3),
+        integration=ended.integration,
+        expectation=EXPECTATION,
+        requested_at="2026-08-11T09:30:00Z",
+    )
+
+    def reading(**overrides) -> assessment.Assessment:
+        return build(
+            frame,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            counterfactual=ended,
+            withdrawn=(given_up,),
+            **overrides,
+        )
+
+    publish(second, reading(requested=request))
+    read = read_reading(config, second)
+    assert read.requested == request and read.withdrawn == (given_up,)
+
+    early = dataclasses.replace(request, position=dataclasses.replace(request.position, attempt=2))
+    publish(second, reading(requested=early))
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "next attempt is 3" in str(error.value)
+
+    # A run and a withdrawal wearing one position is the same failure with no
+    # request in it: the harness answers that key with one of the two.
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            counterfactual=ended,
+            withdrawn=(withdrawal(frame, ended.position.attempt),),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "a position is allocated once" in str(error.value)
+
+
 def test_nothing_is_measured_before_the_cohorts_are_read(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
@@ -2400,6 +2628,109 @@ def test_nothing_is_added_to_a_reading_the_gate_has_answered(
             now=RESOLVED_AT,
         )
     assert "was settled 'retain'" in str(error.value)
+
+
+RETAINED = assessment.Decision(
+    settlement=assessment.SETTLEMENT_RETAIN,
+    decided_at=SETTLED_AT,
+    reason="nothing measured said the release did harm, so it stays on the line",
+    rollback_revision=None,
+)
+
+
+def settled_reading(frame: assessment.Frame, **overrides) -> assessment.Assessment:
+    """A reading its gate has answered: inconclusive, retained, and closed."""
+
+    return build(
+        frame,
+        metrics=(),
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        decision=RETAINED,
+        **overrides,
+    )
+
+
+def test_a_settlement_over_a_measurement_still_in_flight_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """Nothing is added to a reading its gate has answered, so a decision taken
+    over a run still going is one whose own evidence could never be recorded: the
+    numbers would arrive with nowhere to go, and the run would stay going forever
+    under a reading that is closed.
+
+    A request the harness never answered for is the same state one field over —
+    something may be measuring this release right now — and the states a
+    settlement does stand over are the ones that are over: a completed run, a
+    failed one, and no run at all.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    run = counterfactual(frame)
+
+    publish(second, settled_reading(frame, counterfactual=dataclasses.replace(run, result=None)))
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "is still going" in str(error.value)
+
+    publish(
+        second,
+        settled_reading(
+            frame,
+            requested=assessment.CounterfactualRequest(
+                position=run.position,
+                integration=run.integration,
+                expectation=EXPECTATION,
+                requested_at="2026-08-11T07:00:00Z",
+            ),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "is outstanding" in str(error.value)
+
+    publish(second, settled_reading(frame, counterfactual=run))
+    assert read_reading(config, second).settled is True
+    publish(second, settled_reading(frame, counterfactual=failed_run(frame)))
+    assert read_reading(config, second).settled is True
+
+
+def test_a_settled_reading_is_neither_concluded_nor_ended(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The gate closes the record to every operation, not only to the two that
+    add a reading to it: a run concluded or ended after the settlement would
+    rewrite the evidence the decision was made from."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    publish(second, settled_reading(frame, counterfactual=counterfactual(frame)))
+    written = second.assessment_path.read_bytes()
+    harness = FakeHarness(report=completed_report())
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.conclude(config, harness, now=RESOLVED_AT)
+    assert "was settled 'retain'" in str(error.value)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.abandon(config, reason=DIED, now=RESOLVED_AT)
+    assert "was settled 'retain'" in str(error.value)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.withdraw(config, now=RESOLVED_AT)
+    assert "was settled 'retain'" in str(error.value)
+
+    # Nothing was written and nothing was even asked: the refusal is made before
+    # the harness is polled.
+    assert second.assessment_path.read_bytes() == written
+    assert harness.polled == []
+    assert ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED) == []
 
 
 def build_absent_release(config: evolution.EvolutionConfig) -> lineage.Batch:

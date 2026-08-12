@@ -27,8 +27,9 @@ vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
 batch's frozen provenance supports, the reading it recorded of the release
 before it, and the operation that records one) together with
 `assessment.measure` / `assessment.conclude` / `assessment.abandon` /
-`assessment.resolve` (the pinned two-revision run that settles what the release
-did, and the reading its numbers settle), and the `render.format_*`
+`assessment.withdraw` / `assessment.resolve` (the pinned two-revision run that
+settles what the release did, the two ways out of one nothing can finish, and
+the reading its numbers settle), and the `render.format_*`
 functions (operator-facing text for the CLI).
 """
 

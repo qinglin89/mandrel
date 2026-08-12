@@ -1024,6 +1024,17 @@ what another attempt answers. A comparison that never gets made leaves the
 reading `inconclusive`, which is the same answer this contract already gives for
 a harness that could not run.
 
+A request the harness never answered for is given up rather than ended: there is
+no run to write a failure onto, and inventing one would state a case set, an
+evaluator and a configuration nobody selected. It is also the state re-asking
+cannot repair — one key is answered with the run it already began, so a harness
+that cannot describe what it is running says the same unrecordable thing every
+time, and neither ending operation reaches a request that never became a run.
+What a withdrawal does not give up is the position: the harness may be running
+something under it, so it stays allocated forever, the record keeps the window
+and the pair for whoever goes looking, and a further attempt is numbered past
+the run and the withdrawals together.
+
 **Reading the run.** The reading a cohort forms is written while the cohorts are
 all there is, and is then settled by the numbers the completed run reports: the
 verdict, the confidence and the sentence saying why, none of which existed when
@@ -1031,8 +1042,16 @@ the reading was formed. That revises the one record rather than adding a second,
 which is the difference from forming it — a formation happens once because two
 records of one release would leave a reader choosing between them, and this is
 the evidence that record was written to be added to. It stops when the gate
-settles: a decision stands on the reading it was made from, so a run started or
-a reading revised afterwards would rewrite the thing that was decided from.
+settles: a decision stands on the reading it was made from, so a run started,
+concluded, ended or given up afterwards, or a reading revised, would rewrite the
+thing that was decided from.
+
+That rule also says what a settlement may stand over: a completed run, a failed
+one, or none at all. Not a run still going and not a request outstanding —
+nothing is added once the gate answers, so numbers arriving after it could never
+be recorded, and the decision would rest on a measurement that is lost. Conclude
+the run, end it with a reason, or withdraw the request, and settle over what came
+back.
 
 **The settlement** is a human decision recorded on the assessment: `retain`
 leaves the release as the line later work builds on, and `rolled-back` names the
@@ -1127,7 +1146,8 @@ Two readings are specifically not that answer:
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
 abandon, supersede, promote, `conclude-no-change`, rollback, recording a release
-assessment, and starting, concluding, ending and resolving its counterfactual —
+assessment, and starting, concluding, ending, withdrawing and resolving its
+counterfactual —
 writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
@@ -1145,8 +1165,9 @@ record and one audit line. A release assessment writes one record and one audit
 line, for the reason a seal does: what it records is a judgement about work that
 has already happened. Its counterfactual writes into that same record and
 nowhere else: the request for a run, then the run — neither audited, for the
-reason a replay start is not — then the run's end with one audit line, and the
-reading its numbers settle with another.
+reason a replay start is not, and a withdrawal that takes a request back is not
+either — then the run's end with one audit line, and the reading its numbers
+settle with another.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to

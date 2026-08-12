@@ -13,6 +13,7 @@
     "metrics",
     "counterfactual",
     "counterfactual_request",
+    "counterfactual_withdrawn",
     "verdict",
     "confidence",
     "rationale",
@@ -49,6 +50,13 @@
     },
     "counterfactual_request": {
       "$ref": "#/$defs/request"
+    },
+    "counterfactual_withdrawn": {
+      "description": "Every position a request held and gave up without becoming a run, and empty for a reading that never gave one up. A withdrawal is what happens when the harness cannot describe what it is running, which means it may well be running something: the position stays allocated forever, and the next attempt takes the one after it. Kept in the record rather than dropped because a reader that could not see them would number a further attempt over a key the harness already answers for.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/withdrawal"
+      }
     },
     "verdict": {
       "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. A verdict resting on that run is the direction the run measured: it supports the way every goal that moved points, goals it left unmoved neither add to that nor stand against it, all of them unmoved is `neutral`, and goals pointing both ways support no direction at all — which quantity a release is judged on is chosen when the run is configured, not by weighing an improvement against a regression afterwards. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
@@ -549,7 +557,7 @@
       "additionalProperties": false
     },
     "request": {
-      "description": "The counterfactual this cohort committed to before the harness answered for it, or null when none is outstanding. Everything in it is the controller's own — the key the run will occupy, the pair pinned for it, and what it was expected to show — which is exactly why it can be written before the harness is asked anything, and why it is not a run: while one stands, nothing has measured this release and no verdict may rest on it.\n\nWhat it is for is the window in between. The harness is an external thing being started, and an answer that never arrives — a lost process, a write that failed — would otherwise leave a run going that no record names. Asking again re-submits this request unchanged, and a conforming harness answers with the run it already began rather than starting a second one against the same key.\n\nA request and a recorded run are never both present: the write that records the run the request became clears it in the same file, and a reader finding both would have to guess which of them the harness is running.",
+      "description": "The counterfactual this cohort committed to before the harness answered for it, or null when none is outstanding. Everything in it is the controller's own — the key the run will occupy, the pair pinned for it, and what it was expected to show — which is exactly why it can be written before the harness is asked anything, and why it is not a run: while one stands, nothing has measured this release and no verdict may rest on it.\n\nWhat it is for is the window in between. The harness is an external thing being started, and an answer that never arrives — a lost process, a write that failed — would otherwise leave a run going that no record names. Asking again re-submits this request unchanged, and a conforming harness answers with the run it already began rather than starting a second one against the same key.\n\nThe one run a request may stand over is a failed one, which is the retry: the write that records the run a request became clears it in the same file, so a request beside a run still going or a completed one would leave a reader guessing which of them the harness is measuring this release with. A retry holds the position after everything that round has allocated — the failed run, and every request withdrawn.",
       "type": [
         "object",
         "null"
@@ -574,6 +582,35 @@
         },
         "requested_at": {
           "description": "When the pair was pinned and the harness first asked, which is also when the run it becomes started. A resume records the run at this moment rather than at the one it finally heard back in.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "withdrawal": {
+      "description": "A position a request held and gave up without ever becoming a run. It carries what an operator needs to find the run that may still be going at a harness this controller will never hear from again — the window it would have started in, and the pair pinned for it — and deliberately not the expectation, which is a prediction kept to be read back against numbers this request produced none of. It is not evidence and never becomes any.",
+      "type": "object",
+      "required": [
+        "position",
+        "integration",
+        "requested_at",
+        "withdrawn_at"
+      ],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
+        },
+        "requested_at": {
+          "description": "When the pair was pinned and the harness first asked — the start of the window a run may have begun in.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "withdrawn_at": {
+          "description": "When the request was given up. The end of the window this controller was still asking about that run, and never a statement that the run stopped: whether the harness ran it is exactly what nobody here can learn.",
           "type": "string",
           "format": "date-time"
         }
@@ -636,7 +673,7 @@
       "additionalProperties": false
     },
     "decision": {
-      "description": "The human settlement of this assessment, or null while it is unsettled. It is the gate between a release assessment and the next base freeze: `retain` leaves the current release as the line every later experiment builds on, and `rolled-back` names the inverse commit the rollback operation made before the next base could pin anything. Recorded on the assessment rather than beside it, because the decision and the evidence it was made from are one fact and a reader that found only one of them would have to guess which.",
+      "description": "The human settlement of this assessment, or null while it is unsettled. It is the gate between a release assessment and the next base freeze: `retain` leaves the current release as the line every later experiment builds on, and `rolled-back` names the inverse commit the rollback operation made before the next base could pin anything. Recorded on the assessment rather than beside it, because the decision and the evidence it was made from are one fact and a reader that found only one of them would have to guess which.\n\nNothing is added to a reading once this answers, which is also what a settlement may stand over: a completed counterfactual, a failed one, or none at all. Not a run still going and not a request the harness never answered for — evidence arriving after the gate could never be recorded, so a decision taken over it is one whose own measurement is lost.",
       "type": [
         "object",
         "null"
