@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_native_deployment.evolution import analysis_task
+from ai_native_deployment.evolution import assessment
 from ai_native_deployment.evolution import experiments
 from ai_native_deployment.evolution import feed as feed_module
 from ai_native_deployment.evolution import replay
@@ -362,6 +363,41 @@ def complete_task(config, task_id: str) -> Path:
     return target
 
 
+def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEMENT_RETAIN) -> bool:
+    """Answer the release gate a cohort frozen after a promotion owes.
+
+    Every base freeze after the first promotion waits on this (invariant 17), so
+    a fixture that wants a second change cycle has to go through it exactly as an
+    operator does: the cohort reads the release, and a human says whether the
+    line keeps it. `inconclusive` and `retain` because that is the ordinary
+    answer — no manifest states the shape of the work, so the cohorts suspect
+    rather than settle, and the release stays the commit the next base is frozen
+    on.
+
+    A no-op where nothing is owed, which is every first batch and every cohort
+    whose predecessor changed nothing. Returns whether it answered anything.
+    """
+
+    frame = assessment.describe_current(config)
+    if frame is None or not frame.owed:
+        return False
+    if assessment.read(config, frame.batch, frame=frame) is None:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="no frozen manifest states what kind of work either cohort did",
+            now=at,
+        )
+    assessment.settle(
+        config,
+        settlement=settlement,
+        reason="the reading found nothing measured against the release",
+        now=at,
+    )
+    return True
+
+
 def promote_candidate(
     config,
     *,
@@ -391,6 +427,9 @@ def promote_candidate(
     `reports` replaces the frozen membership when a caller needs particular
     provenance in it — the release-assessment suite needs the cohort this batch
     was analyzed from to state the revision its targets actually held.
+
+    A cycle following an earlier promotion answers that release's gate first
+    (`settle_release`), because no base is frozen until somebody does.
     """
 
     directory = write_manifest(
@@ -405,6 +444,7 @@ def promote_candidate(
     for draft_id in drafts:
         write_draft(config.batches_root, batch_id, draft_id)
 
+    settle_release(config, at=at)
     admission = experiments.create(config, list(drafts), base=base, now=at)
     for item in admission.admitted:
         complete_task(config, item.task_id)

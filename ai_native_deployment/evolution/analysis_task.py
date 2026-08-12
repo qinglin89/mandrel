@@ -594,6 +594,11 @@ other.
   visible. Retaining or rolling back the release is a human decision recorded on
   that artifact afterwards; this task produces the evidence and the verdict, not
   the settlement.
+- That settlement is what this batch's first experiment waits on (invariant 17):
+  `retain` leaves the release on `{release.merge_input_ref}` and `rolled-back`
+  puts an inverse commit there first, so no base is frozen until the reading is
+  answered. Nothing else here waits on it — the dispositions, the drafts and this
+  task's own completion are unaffected.
 """
 
 

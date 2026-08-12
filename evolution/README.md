@@ -84,6 +84,18 @@ complete an evaluation.
     the ref stays where it was pinned; opening a new round is what lets work
     resume. An experiment dropped before it ever became candidate-ready records
     no candidate at all, in the same spirit as invariant 7.
+17. **Judge the release before freezing the next base.** A batch frozen after a
+    promotion reads what that release did (Release assessment), and a human
+    settles that reading — `retain` or `rolled-back` — before that batch's first
+    experiment freezes a base. The two answers give two different commits to
+    start from: `retain` leaves the release on the source line, `rolled-back`
+    puts the inverse commit there first, and freezing before the answer would
+    take whichever of the two the line happened to be holding. Nothing else in
+    the batch waits on it — the reading is taken while the analysis is still
+    being written, and drafts, rejections and the closure are unaffected. A batch
+    with no promotion before it, one whose predecessor concluded `no-change`, and
+    a later batch whose predecessor's release was already judged owe nothing and
+    wait for nothing.
 
 An exceptional fast path for a severe safety or correctness failure requires a
 human-recorded justification. It does not silently weaken the normal batch
@@ -197,7 +209,9 @@ different moments, and each has its own record:
 - A release assessment is about a *different* batch's promotion, which is why it
   sits in the directory of the cohort that produced the reading rather than the
   one being read (Release assessment). It ends nothing of its own batch's
-  lifecycle; what it settles is whether the release before it stands.
+  lifecycle; what it settles is whether the release before it stands, and the one
+  thing that waits on the answer is that batch's first base freeze (invariant
+  17).
 
 ## Normal workflow
 
@@ -218,7 +232,7 @@ completed archived-task L1+L2 evaluations
   -> human promote | revise (next round) | abandon | supersede (next experiment)
   -> batch outcome: promoted, or no-change
   -> next frozen cohort assesses the release: improved | neutral | regressed | inconclusive
-  -> human settlement: retain, or roll back
+  -> human settlement: retain, or roll back -> that cohort's first base freeze
 ```
 
 `start` may discover too few eligible reports and exit without creating a
@@ -358,6 +372,13 @@ later experiment for the same batch starts from that exact commit; otherwise
 the alternatives are not alternatives but attempts against different protocols.
 A different base is refused rather than reconciled: the batch has one base, and
 which one it is was settled by its first experiment.
+
+That freeze is also where the previous release stops being an open question. A
+batch frozen after a promotion owes a reading of it, and until a human settles
+that reading the first experiment refuses to freeze anything (invariant 17,
+Release assessment): `retain` and `rolled-back` leave two different commits on
+the source line, so a base taken before the answer is the answer made by
+accident. Later experiments of the batch take the frozen commit and ask nothing.
 
 Work happens on the durable ref `refs/evolution/experiments/<experiment-id>`,
 checked out under whatever local branch name suits the operator. The ref only
@@ -790,6 +811,12 @@ repository did afterwards was decided on the line as that promotion left it, and
 an operator who means to reverse something older is reversing a base rather than
 a release. That is ordinary Git and a record of its own, not this operation.
 
+**Who runs it.** An operator, or the release-assessment gate: a settlement of
+`rolled-back` is this operation followed by the decision that names its commit
+(Release assessment). Composed rather than reproduced, so everything below is
+asked once and answered in one place — and a rollback answering no gate is still
+an operation of its own.
+
 Four things are asked before anything is written:
 
 - **There is a promotion, and it is still effective.** A promotion a completed
@@ -1066,6 +1093,38 @@ to guess at the other. The reason is the operator's and not the assessment's —
 `inconclusive` reading is an ordinary ground for retaining a release, and a
 rollback is a judgement the promotion's own evidence never contained (Rollback).
 
+What waits on it is the next base freeze and nothing else (invariant 17). The
+first experiment of the assessing batch freezes the commit every alternative in
+it starts from, and the two settlements give two different commits: the line
+carrying the release, or the line with the inverse commit on it. So the gate sits
+between the reading and that freeze, and nowhere else — the analysis, its drafts,
+its rejections and its closure are all unaffected, and a batch that owes no
+reading waits for nothing.
+
+Recording the settlement composes the reversal rather than repeating it.
+`rolled-back` runs the rollback operation, which takes the reason and nothing
+else: which promotion, which line, whether any later attempt stands on it and
+whether a working tree is sitting on that branch are its own readings, and a
+second spelling of them here would be a second answer to give an operator. A
+reversal already on the line is adopted instead of made again — the operator may
+have run the rollback themselves, and a run interrupted between the commit and
+the record is finished by repeating it. Every refusal is made before the commit:
+a cohort that recorded no reading, a gate that already answered, evidence still
+in flight, a `retain` of a release that is already off the line, and a
+`rolled-back` of anything but the promotion a rollback would reverse. The audit
+line names the cohort, the release and which way the gate went; running the same
+settlement again reports what is on record and appends no second line.
+
+The rollback's own refusal that later work stands on the promotion is not
+weakened by any of this, and the way out of it is recorded rather than worked
+around. Retaining is always available, and its reason is where a release kept
+because a later attempt was already built on it gets explained; the alternative
+is to end that lineage and reverse the change outside this controller, which is
+not an operation here and so is not one this gate can record as its own. In the
+ordinary sequence that state does not arise: the gate answers before the batch's
+first experiment freezes a base, so at the moment a rollback would run there is
+nothing built on the release to take it out from under.
+
 ### What is derived
 
 None of this stores a lifecycle phase, and none of it may be inferred from the
@@ -1074,8 +1133,8 @@ that round is candidate-ready, the candidate revision, a successor a
 supersession recorded and did not create, the drafts still
 waiting at the gate, what the current round has been replayed by, the last
 promotion this repository recorded and whether the source line still carries it,
-which release the current cohort owes a reading of and which of its reports can
-contribute to one
+which release the current cohort owes a reading of, which of its reports can
+contribute to one, and whether that reading has been settled
 are
 re-derived on every read from the committed manifests, closure records,
 experiment records, replay records, rejection records, rollback records,
@@ -1146,8 +1205,8 @@ Two readings are specifically not that answer:
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
 abandon, supersede, promote, `conclude-no-change`, rollback, recording a release
-assessment, and starting, concluding, ending, withdrawing and resolving its
-counterfactual —
+assessment, starting, concluding, ending, withdrawing and resolving its
+counterfactual, and settling it —
 writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
@@ -1167,29 +1226,38 @@ has already happened. Its counterfactual writes into that same record and
 nowhere else: the request for a run, then the run — neither audited, for the
 reason a replay start is not, and a withdrawal that takes a request back is not
 either — then the run's end with one audit line, and the reading its numbers
-settle with another.
+settle with another. Settling that reading writes into it once more, with an
+audit line saying which way the gate went; a `rolled-back` settlement is that
+write with a whole rollback in front of it, run as its own operation rather than
+as steps repeated here, so the widest thing this gate does is what a rollback
+already does and the decision lands after it.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
 redo, so an interrupted operation is finished by the next run rather than
 repaired by hand.
 
-Recording a release assessment, and every operation on its counterfactual, are
-the ones whose preamble is not the whole of the shared one, and the difference is
-which stage they belong to. Every other operation here writes into a batch's
-change lineage, which is why each refuses while the analysis stage is still
-running; this reading *is* part of that stage — the generated analysis task's
-second question — so what guards it is which batch is current (invariant 14, from
-the whole history) and whether that batch is the cohort owing the reading, and
-nothing about the stage's end. None of them moves a ref or touches an experiment,
-so the ref holds below do not reach them either. What they share is the rest: the
-lock, the record before the audit line, and a redo that reports what is already on
-record.
+Recording a release assessment, every operation on its counterfactual, and
+settling it are the ones whose preamble is not the whole of the shared one, and
+the difference is which stage they belong to. Every other operation here writes
+into a batch's change lineage, which is why each refuses while the analysis stage
+is still running; this reading *is* part of that stage — the generated analysis
+task's second question — so what guards it is which batch is current (invariant
+14, from the whole history) and whether that batch is the cohort owing the
+reading, and nothing about the stage's end. None of them moves a ref or touches
+an experiment; a `rolled-back` settlement moves the source line, and it does that
+by running the rollback, under the guards a rollback has. What they share is the
+rest: the lock, the record before the audit line, and a redo that reports what is
+already on record.
 
 They are ordered among themselves by what each one is about. The cohorts are read
 first, because a pinned run answers a suspicion they raised and the reading is
 where that run is recorded; the run's numbers settle a verdict only once it has
-completed; and nothing is added to a reading its gate has already answered.
+completed; the gate answers over evidence that is over, never over a run still
+going or a request outstanding; and nothing is added to a reading its gate has
+already answered. What the answer releases is the next base freeze, which is
+guarded from the other side: the first experiment of the assessing batch refuses
+until that settlement is on record (invariant 17).
 
 An ending is also guarded by the state of the ref it ends over. An experiment's
 ref is described only while that experiment is open, so a decision recorded over

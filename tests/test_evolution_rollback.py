@@ -36,8 +36,10 @@ from evolution_fixtures import (
     git_try_update_ref,
     git_update_ref,
     git_worktree,
+    make_manifest_report,
     make_repo,
     promote_candidate,
+    settle_release,
     write_closure,
     write_draft,
     write_experiment,
@@ -777,7 +779,13 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     """The acceptance's "no later pinned candidate lineage": that attempt was
     developed and measured against a line carrying this change, and taking it
     back out from under it leaves evidence describing a line that no longer
-    exists."""
+    exists.
+
+    The attempt can only stand there because somebody decided it should: no base
+    is frozen until the cohort's reading of the release is settled (invariant
+    17), so `retain` is what put this work on the promoted line in the first
+    place.
+    """
 
     directory = write_manifest(
         config.batches_root, SECOND_BATCH, ["r3"], analysis_task_id=f"2026-08-09-{SECOND_BATCH}"
@@ -785,6 +793,7 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
     write_closure(config.batches_root, SECOND_BATCH, analysis_task_id=f"2026-08-09-{SECOND_BATCH}")
     write_draft(config.batches_root, SECOND_BATCH, "second-idea")
+    assert settle_release(config, at=LATER) is True
     experiments.create(config, ["second-idea"], base=promoted.promotion_revision, now=LATER)
 
     with pytest.raises(evolution.BatchError, match="stands on"):
@@ -843,6 +852,10 @@ def test_only_the_latest_promotion_is_rolled_back(
         config,
         batch_id=SECOND_BATCH,
         drafts=("second-idea",),
+        # Membership of its own: one report belongs to one batch (invariant 3),
+        # and the second cohort's reading of the first release is taken over both
+        # manifests — two batches naming one report is a report on both sides.
+        reports=[make_manifest_report(key="s1", sequence=1, task_id="2026-08-05-second-task")],
         at=LATER,
     )
 

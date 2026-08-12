@@ -60,6 +60,16 @@ something, so reissuing its key would answer the next request with that run —
 and both leave the reading `inconclusive`, which is what this contract already
 says about a comparison that was never made.
 
+**The gate is the last thing written on it.** A reading is evidence until a
+human answers it, and the answer is what the next base freeze waits on: `retain`
+leaves the release as the line every alternative in the assessing batch starts
+from, `rolled-back` takes it off first. The reversal itself is composed rather
+than repeated — the rollback operation reverses the newest promotion, refuses on
+a line later work stands on, and takes the reason and nothing else — so what is
+added here is the decision, its sequencing, and the refusals that have to be made
+before a commit rather than after one. Once it answers, nothing more is added to
+the record: a settlement stands on the reading it was made from.
+
 **Vocabulary is shared, not restated.** The case set, evaluator, harness,
 regression and result shapes are the replay record's own value objects: a
 comparison across two spellings of "who judged this" could not make the
@@ -104,6 +114,8 @@ from .replay import (
     ReplayRequest,
 )
 from .revisions import contains, resolve_commit
+from .rollback import RollbackResult
+from .rollback import rollback as reverse_promotion
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
@@ -111,6 +123,7 @@ ASSESSMENT_SCHEMA_VERSION = 1
 
 RECORD_RELEASE_ASSESSED = "release-assessed"
 RECORD_COUNTERFACTUAL_COMPLETED = "release-counterfactual-completed"
+RECORD_RELEASE_SETTLED = "release-settled"
 
 VERDICT_IMPROVED = "improved"
 VERDICT_NEUTRAL = "neutral"
@@ -128,6 +141,10 @@ CONFIDENCE_LOW = "low"
 
 SETTLEMENT_RETAIN = "retain"
 SETTLEMENT_ROLLED_BACK = "rolled-back"
+# The two answers the gate has. There is no third: a release is either what the
+# next base is frozen on or it is taken back off the line first, and "not yet" is
+# the unsettled reading rather than a decision.
+SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 
 # Why a frozen report is in neither cohort. All three are about what its
 # provenance can be shown to say, never about what its numbers came to.
@@ -724,6 +741,25 @@ def measured_direction(goals: Sequence[Measurement]) -> str | None:
     if not moved:
         return VERDICT_NEUTRAL
     return next(iter(moved)) if len(moved) == 1 else None
+
+
+def settleable(run: Counterfactual | None, requested: CounterfactualRequest | None) -> bool:
+    """Whether a reading carrying this evidence may be settled at all.
+
+    The third rule asked by both sides: the gate asks it of the reading it is
+    about to answer, and every read of a settled record asks it of what that
+    record carries. A settlement stands over evidence that is over — a completed
+    run, a failed one, or none at all — because nothing is added to a reading once
+    its gate answers, so numbers arriving afterwards would have nowhere to go and
+    the decision would rest on a measurement that is lost.
+
+    Asked before the writing rather than only at it, which is what makes it a
+    rule rather than a schema check: settling `rolled-back` puts a commit on the
+    source line before this record is touched, and a refusal that waited for the
+    write would refuse a decision whose release had already come off.
+    """
+
+    return requested is None and (run is None or not run.running)
 
 
 def subject(lineage: Lineage, batch: Batch) -> Subject | None:
@@ -1672,22 +1708,292 @@ def resolve(
     return Formed(batch_id=frame.batch_id, assessment=recorded, record_path=batch.assessment_path)
 
 
+# --- the settlement ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Settled:
+    """The gate answered, and what answering it did to the source line."""
+
+    batch_id: str
+    assessment: Assessment
+    decision: Decision
+    record_path: Path
+    # The reversal this run performed, and None where it performed none: a
+    # retained release, a rollback that had already landed when the gate came to
+    # record it, and a settlement reported back rather than written again.
+    reversal: RollbackResult | None = None
+    # False when this reports the settlement already on record — the same
+    # decision run again after an interruption, recognised by what it says.
+    recorded: bool = True
+
+
+def settle(
+    config: EvolutionConfig,
+    *,
+    settlement: str,
+    reason: str,
+    now: datetime | None = None,
+) -> Settled:
+    """Answer the human gate between a release and the next base freeze.
+
+    What it decides is what the batch's own experiments will start from
+    (invariant 17): `retain` leaves the release as the line every alternative in
+    this batch builds on, and `rolled-back` takes it back off first, so the base
+    the first experiment then freezes is the line as this decision left it. Until
+    it is answered no base is frozen, which is what keeps the decision from being
+    made silently by whatever the source line happened to hold.
+
+    **The reversal is composed, not repeated.** `rolled-back` runs the rollback
+    operation, which takes the reason and nothing else — which promotion, which
+    line, whether anything later stands on it, and whether some working tree is
+    sitting on that branch are all its own readings, and none of them is spelled
+    a second time here. A reversal that already landed is adopted rather than
+    made again: the operator may have run the rollback themselves, and a run
+    interrupted between the commit and this record finishes by being repeated.
+
+    **Refused before anything is made.** A cohort that recorded no reading has
+    nothing to settle, a gate that answered is not re-answered, evidence still in
+    flight is not settled over, `retain` is refused for a release already off the
+    line, and `rolled-back` is refused where the promotion this reading is about
+    is not the one a rollback reverses. Each of those is asked before the commit,
+    so a refusal costs nothing that had already happened.
+
+    What it does not do is weaken the rollback's own refusal that later work
+    stands on the promotion. That refusal leaves the reading unsettled, and the
+    way out of it is recorded rather than worked around: `retain`, whose reason
+    says why a release a later attempt was built on stays on the line, or ending
+    that lineage and reversing outside this controller — which is not an
+    operation here, and so not one this gate can record as its own.
+
+    Run again with the same answer, it reports the settlement on record and
+    appends no second audit line — the rule every redo here follows, because the
+    event happened once. A different answer is refused: the base freeze this gate
+    releases may already have happened, and a decision the line was built on is
+    not one to re-take.
+    """
+
+    moment = _moment(now)
+    if settlement not in SETTLEMENTS:
+        raise BatchError(
+            f"{settlement!r} is not an answer to a release assessment; the gate settles {SETTLEMENT_RETAIN!r} — "
+            f"the release stays the line the next base is frozen on — or {SETTLEMENT_ROLLED_BACK!r}, which takes "
+            "it back off first"
+        )
+    text = require_reason(
+        reason,
+        "a settlement records why the release was kept or taken back; the reading is the evidence and this is "
+        "the judgement made from it, which is the operator's own — an `inconclusive` reading is an ordinary "
+        "ground for either answer",
+    )
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        reading = _recorded(config, frame, "settle")
+        decided = reading.decision
+        if decided is not None:
+            return _redone_settlement(frame, reading, decided, settlement, text)
+        _require_settleable(frame, reading)
+        if settlement == SETTLEMENT_RETAIN:
+            _require_standing(frame)
+            return _record_settlement(config, frame, reading, settlement, text, None, moment)
+        # Already off the line — a completed rollback, since an inverse still in
+        # flight leaves the promotion standing. The commit exists and the line
+        # took it, so what is left to do is say so: an operator who reversed it
+        # themselves and a run of this that stopped before its record are the same
+        # state, and making a second inverse would reverse the reversal.
+        if frame.subject.reversed_promotion:
+            return _record_settlement(config, frame, reading, settlement, text, None, moment)
+        _require_reversible(known, frame)
+
+    # Outside the lock, because a rollback is a guarded operation in its own
+    # right and takes the same one — which is also what makes the composition
+    # honest: the reversal is that operation's whole self, refusals included,
+    # rather than its steps run again from here. What it leaves behind is durable
+    # either way, so a run stopping between the two is finished by repeating it.
+    reversal = reverse_promotion(config, reason=text, now=moment)
+
+    with single_writer_lock(config):
+        # Re-derived rather than carried across the gap: the rollback changed
+        # what the lineage says about this release, and the record about to be
+        # written is checked against the reading as it now is.
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        reading = _recorded(config, frame, "settle")
+        decided = reading.decision
+        if decided is not None:
+            return _redone_settlement(frame, reading, decided, settlement, text, reversal)
+        _require_settleable(frame, reading)
+        return _record_settlement(config, frame, reading, settlement, text, reversal, moment)
+
+
+def _record_settlement(
+    config: EvolutionConfig,
+    frame: Frame,
+    reading: Assessment,
+    settlement: str,
+    reason: str,
+    reversal: RollbackResult | None,
+    moment: datetime,
+) -> Settled:
+    """Write the decision onto the reading, and say in the audit that the gate
+    answered.
+
+    The inverse commit is stated from what this run did where it did something,
+    and from the rollback record's own reading where the reversal was already
+    there. Either way the reader checks it against that record rather than
+    against this write, which is what a settlement naming a commit nothing
+    reversed is refused by.
+    """
+
+    revision = None
+    if settlement == SETTLEMENT_ROLLED_BACK:
+        revision = frame.subject.rollback_revision if reversal is None else reversal.revision
+    decision = Decision(
+        settlement=settlement,
+        decided_at=format_rfc3339(moment),
+        reason=reason,
+        rollback_revision=revision,
+    )
+    recorded = _write_assessment(config, frame.batch, replace(reading, decision=decision), frame)
+    append_records(
+        config,
+        [
+            build_record(
+                RECORD_RELEASE_SETTLED,
+                recorded_at=decision.decided_at,
+                batch_id=frame.batch_id,
+                experiment_id=frame.subject.experiment_id,
+                revision=frame.subject.revision,
+                detail=settlement,
+            )
+        ],
+    )
+    return Settled(
+        batch_id=frame.batch_id,
+        assessment=recorded,
+        decision=decision,
+        record_path=frame.batch.assessment_path,
+        reversal=reversal,
+    )
+
+
+def _redone_settlement(
+    frame: Frame,
+    reading: Assessment,
+    decided: Decision,
+    settlement: str,
+    reason: str,
+    reversal: RollbackResult | None = None,
+) -> Settled:
+    """The same settlement run again, or the refusal that this gate has answered.
+
+    Recognised by what the record says rather than by a marker, like every other
+    redo here: the decision either landed or it did not, and the one that landed
+    is what a redo is asking for. `decided_at` is when it landed rather than part
+    of what was decided, so what is compared is the answer and the reason for it.
+    """
+
+    if (decided.settlement, decided.reason) == (settlement, reason):
+        return Settled(
+            batch_id=frame.batch_id,
+            assessment=reading,
+            decision=decided,
+            record_path=frame.batch.assessment_path,
+            reversal=reversal,
+            recorded=False,
+        )
+    raise BatchError(
+        f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decided.settlement!r} "
+        f"at {decided.decided_at}: {decided.reason!r}; this gate answers once, because what it releases is the "
+        "base every experiment of this batch is frozen on — a release judged again after that is the next "
+        "cohort's reading of the line as it now is"
+    )
+
+
+def _require_settleable(frame: Frame, reading: Assessment) -> None:
+    """The gate answers over evidence that is over (`settleable`)."""
+
+    if settleable(reading.counterfactual, reading.requested):
+        return
+    requested = reading.requested
+    if requested is not None:
+        raise BatchError(
+            f"{frame.batch_id} has {_describe(requested.position)} of its counterfactual outstanding, so its "
+            f"reading of the {frame.subject.batch_id} release is not one to settle yet; nothing is added to a "
+            "reading once its gate answers, so a run this record never heard back about would have nowhere to "
+            "report — start the run again to record what the harness began, or withdraw the request"
+        )
+    run = reading.counterfactual
+    position = "" if run is None else f" ({_describe(run.position)})"
+    raise BatchError(
+        f"{frame.batch_id}'s counterfactual of the {frame.subject.batch_id} release{position} is still going, so "
+        "its reading is not one to settle yet; nothing is added to a reading once its gate answers, and that run "
+        "is the one comparison in which the release is the only difference — conclude it, or end it with a "
+        "reason if its harness cannot report"
+    )
+
+
+def _require_standing(frame: Frame) -> None:
+    """A release is retained while the source line still carries it."""
+
+    assessed = frame.subject
+    if not assessed.reversed_promotion:
+        return
+    raise BatchError(
+        f"{assessed.batch_id}'s promotion {assessed.revision[:12]} is no longer on {assessed.merge_input_ref}: "
+        f"{(assessed.rollback_revision or '')[:12]} took it back out. {SETTLEMENT_RETAIN!r} says the release "
+        f"stays the line the next base is frozen on, and that line now carries the reversal instead — "
+        f"{SETTLEMENT_ROLLED_BACK!r} is what happened, and its reason is where a release taken back for reasons "
+        "this reading never found is explained"
+    )
+
+
+def _require_reversible(known: Lineage, frame: Frame) -> None:
+    """The release this reading is about is the promotion a rollback reverses.
+
+    The rollback operation picks its own target — the newest promotion this
+    repository recorded — and in a lineage whose batches form a series that is
+    this release: nothing can have promoted since, because the cohort holding
+    this reading is the current batch and it has concluded nothing (invariant
+    14). It is asked all the same, because of what is about to happen if it does
+    not hold: a commit lands on the source line reversing some other promotion,
+    and the settlement naming it is then refused for naming a commit this
+    release's own rollback record does not — leaving a line reversed for a
+    decision nobody can record.
+    """
+
+    promoted = known.last_promoted
+    if promoted is not None and promoted.batch_id == frame.subject.batch_id:
+        return
+    raise BatchError(
+        f"{SETTLEMENT_ROLLED_BACK!r} reverses the newest promotion this repository recorded, which is "
+        + ("none at all" if promoted is None else f"{promoted.batch_id}'s")
+        + f", and this reading is of the {frame.subject.batch_id} release ({frame.subject.revision[:12]}); a "
+        "rollback takes the last change off the line and no other, so a reading of an earlier release is "
+        "settled by retaining it or by reversing that change outside this controller and recording why"
+    )
+
+
 def _recorded(config: EvolutionConfig, frame: Frame, action: str) -> Assessment:
     """The reading this cohort has already recorded, or why there is none.
 
     Everything the counterfactual does is done to that record: it is where the
-    run is written, and what the run's numbers afterwards settle. A cohort that
-    has not read the release yet has nothing to add a run to — and the order is
-    the point rather than bookkeeping, since what a pinned run answers is a
-    suspicion the cohorts raised.
+    run is written, and what the run's numbers afterwards settle. So is the human
+    settlement, which is a judgement made from a reading rather than about a
+    release in the abstract. A cohort that has not read the release yet has
+    nothing to add either to — and the order is the point rather than
+    bookkeeping, since what a pinned run answers is a suspicion the cohorts
+    raised, and what the gate answers is the reading that came of it.
     """
 
     reading = read(config, frame.batch, frame=frame)
     if reading is None:
         raise BatchError(
             f"{frame.batch_id} has recorded no reading of the {frame.subject.batch_id} release, so there is "
-            f"nothing to {action}; the cohorts are read first, and what they come to is the suspicion a pinned "
-            "run is started to settle"
+            f"nothing to {action}; the cohorts are read first — what they come to is the suspicion a pinned run "
+            "is started to settle, and the reading it leaves is what the gate answers"
         )
     return reading
 
@@ -2449,10 +2755,12 @@ def _require_settled_over_evidence(
 
     The states a settlement stands over are therefore all the ones that are over:
     a completed run, a failed one, and no run at all — that last being the
-    ordinary shape of a retained release nobody suspected of anything.
+    ordinary shape of a retained release nobody suspected of anything. The rule
+    is `settleable`, which the gate asks before it decides; what is here is the
+    record-shaped refusal for a file that already claims one.
     """
 
-    if decision is None:
+    if decision is None or settleable(run, requested):
         return
     if requested is not None:
         raise BatchError(

@@ -92,7 +92,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, NoReturn, Sequence
 
 from ..hashing import sha256_bytes
-from . import analysis_task
+from . import analysis_task, assessment
 from .config import EvolutionConfig
 from .errors import BatchError
 from .guards import (
@@ -353,11 +353,17 @@ def create(
     Running it again with the same selection is the resume path, not a second
     admission: it finishes whatever the interrupted run left and reports what it
     completed.
+
+    Where a base is being frozen, the release before this batch has to have been
+    judged first (invariant 17): what that decision settles is whether the
+    commit every alternative here starts from carries the previous release or the
+    reversal of it.
     """
 
     moment = _moment(now)
     with single_writer_lock(config):
-        current = current_cycle(config, now=moment)
+        known = settled(config, now=moment)
+        current = current_cycle(config, now=moment, known=known)
         requested = _requested(draft_ids)
         batch = current.batch
 
@@ -373,6 +379,7 @@ def create(
             require_consistent_ref(current)
             return _redo_create(config, current, open_experiment, requested)
 
+        _require_release_settled(config, known, current)
         base_revision, base_release_ref = _base_revision(config, current, base)
         experiment_id = format_experiment_id(batch.batch_id, len(current.experiments) + 1)
         drafts = _collect(config, current, requested)
@@ -2735,6 +2742,54 @@ def _base_revision(
     revision = requested if requested is not None else "HEAD"
     resolved = _resolve(config, revision)
     return resolved, release_ref(config.repo_root, resolved)
+
+
+def _require_release_settled(config: EvolutionConfig, known: Lineage, current: BatchLineage) -> None:
+    """The release before this batch has been judged, before a base is frozen.
+
+    Invariant 17, and it is asked here because this is where the decision would
+    otherwise be made by accident. The first experiment of a batch freezes the
+    commit every alternative in it starts from (invariant 15), and whether the
+    previous release belongs in that commit is exactly what this batch's reading
+    of it settles: `retain` leaves the release on the line, `rolled-back` puts an
+    inverse commit there first, so the base a freeze then takes is the line as
+    the decision left it. Freezing before the answer would take whichever of the
+    two the source line happened to be holding.
+
+    Only where a base is actually being frozen. A later experiment of the same
+    batch takes the frozen commit rather than resolving one, so asking again
+    there would gate work on a decision that can no longer change what it starts
+    from — and a batch that owes no reading (no promotion before it, a `no-change`
+    predecessor, or an earlier cohort that already read the release) is not
+    waiting on anything.
+
+    Nothing else in the batch waits on this either: the reading is taken while
+    the analysis is still being written, and drafts, rejections and the closure
+    are untouched by it. What waits is the one thing the decision moves.
+    """
+
+    if current.base_revision is not None:
+        return
+    frame = assessment.describe(config, current.batch, lineage=known)
+    if frame is None or not frame.owed:
+        return
+    reading = assessment.read(config, current.batch, frame=frame)
+    if reading is None:
+        raise BatchError(
+            f"{current.batch_id} has recorded no reading of the {frame.subject.batch_id} release "
+            f"({frame.subject.revision[:12]}), so there is nothing to freeze a base against; this cohort's "
+            "reports are the first evidence of what that release did, and the commit every experiment of this "
+            "batch starts from is either the line carrying it or the line with it taken back out (invariant 17)"
+        )
+    if reading.settled:
+        return
+    raise BatchError(
+        f"{current.batch_id} reads the {frame.subject.batch_id} release {reading.verdict!r} and nobody has "
+        f"settled it, so its base cannot be frozen yet; the settlement is what says whether the release stays on "
+        f"the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} keeps it, "
+        f"{assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is frozen "
+        "afterwards (invariant 17)"
+    )
 
 
 def _require_requested_base(

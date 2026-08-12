@@ -29,7 +29,8 @@
         "batch-concluded",
         "promotion-rolled-back",
         "release-assessed",
-        "release-counterfactual-completed"
+        "release-counterfactual-completed",
+        "release-settled"
       ]
     },
     "schema_version": {

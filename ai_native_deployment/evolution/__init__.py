@@ -29,7 +29,9 @@ before it, and the operation that records one) together with
 `assessment.measure` / `assessment.conclude` / `assessment.abandon` /
 `assessment.withdraw` / `assessment.resolve` (the pinned two-revision run that
 settles what the release did, the two ways out of one nothing can finish, and
-the reading its numbers settle), and the `render.format_*`
+the reading its numbers settle) and `assessment.settle` (the human gate between
+that reading and the next base freeze, which composes the rollback rather than
+repeating it), and the `render.format_*`
 functions (operator-facing text for the CLI).
 """
 

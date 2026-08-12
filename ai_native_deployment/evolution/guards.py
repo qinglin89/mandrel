@@ -41,7 +41,13 @@ from .lineage import describe as describe_lineage
 from .revisions import checked_out_refs, held_at
 
 
-def current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = False) -> BatchLineage:
+def current_cycle(
+    config: EvolutionConfig,
+    *,
+    now: datetime,
+    finishing: bool = False,
+    known: Lineage | None = None,
+) -> BatchLineage:
     """The batch these operations act on, settled before any of them writes.
 
     Four questions in one, and all of them are the derivation `status` reads
@@ -54,9 +60,15 @@ def current_cycle(config: EvolutionConfig, *, now: datetime, finishing: bool = F
     `finishing` is for the one operation that may act on a batch owing a
     successor: the supersession that is being redone to create it. Every other
     operation would be building on a lineage with no attempt to build in.
+
+    `known` is for a caller that needs the whole lineage as well — the batches
+    before this one, or what the release before it came to. The preamble then
+    runs over that reading rather than taking a second one, so the operation's
+    refusals and the work they guard describe one state of the repository rather
+    than two readings a moment apart.
     """
 
-    current = settled(config, now=now).current
+    current = (known if known is not None else settled(config, now=now)).current
     if current is None:
         raise BatchError(
             "no batch is current, so there is no admission gate to act on; freeze a cohort with "
