@@ -39,6 +39,18 @@ follows is not a weaker artifact but an honest division of labour: the cohorts
 show the base rate and raise the suspicion, and a direction — in either sign — is
 settled by the counterfactual.
 
+**The counterfactual is four operations on one record.** `measure` pins the pair
+and asks the replay harness for a run, `conclude` records the numbers it
+reports, `abandon` records why a run ended when its harness cannot say, and
+`resolve` records the reading those numbers settle. They write where the
+reading is, not where an experiment's runs are, and they move nothing: the
+release ref, the checkout and the frozen membership are untouched, because what
+this controller owns is pinning what gets exercised and recording what came
+back. The request is durable before the harness is asked — a harness may be
+running something this record does not describe yet, and that window is what
+names it — and every refusal is made before the asking, so a refusal costs
+nothing that had already started.
+
 **Vocabulary is shared, not restated.** The case set, evaluator, harness,
 regression and result shapes are the replay record's own value objects: a
 comparison across two spellings of "who judged this" could not make the
@@ -59,7 +71,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, ValidationError
 from .guards import reason as require_reason
 from .guards import settled
 from .ledger import append_records, build_record
@@ -75,7 +87,12 @@ from .replay import (
     Evaluator,
     Exclusion,
     Harness,
+    Integration,
     Regression,
+    ReplayHarness,
+    ReplayPlan,
+    ReplayReport,
+    ReplayRequest,
 )
 from .revisions import contains, resolve_commit
 from .schema import format_rfc3339, load_schema, validate_or_raise
@@ -84,6 +101,7 @@ from .state import atomic_write_text, single_writer_lock
 ASSESSMENT_SCHEMA_VERSION = 1
 
 RECORD_RELEASE_ASSESSED = "release-assessed"
+RECORD_COUNTERFACTUAL_COMPLETED = "release-counterfactual-completed"
 
 VERDICT_IMPROVED = "improved"
 VERDICT_NEUTRAL = "neutral"
@@ -353,6 +371,12 @@ class Counterfactual:
     pre-promotion/promoted pair is neither. The lineage also reads that record on
     every derivation, so an entry it could not account for would stop `status`
     for the whole history instead of for this comparison.
+
+    One run, measuring both revisions. That is the harness boundary's own shape —
+    a report states each quantity on the base and on the candidate — and it is
+    what makes the two halves of this comparison incapable of drifting apart:
+    the case set, the evaluator and the configuration are one selection governing
+    both sides, rather than two selections that have to be shown to have matched.
     """
 
     position: Position
@@ -367,6 +391,44 @@ class Counterfactual:
     @property
     def completed(self) -> bool:
         return self.result is not None and self.result.completed
+
+    @property
+    def running(self) -> bool:
+        """Still going: nothing has concluded it. Age concludes nothing — a
+        harness that died leaves this true until a report says otherwise."""
+
+        return self.result is None
+
+    @property
+    def failed(self) -> bool:
+        """Measured nothing, and said why. The one state another attempt answers:
+        a completed run is the comparison made, and a running one is it being
+        made."""
+
+        return self.result is not None and self.result.outcome == RESULT_FAILED
+
+
+@dataclass(frozen=True)
+class CounterfactualRequest:
+    """A run this cohort committed to before it asked the harness for one.
+
+    Everything here is the controller's own: the key the run will occupy, the
+    pair pinned for it, and what it was expected to show. Nothing the harness
+    chooses is in it, which is why it can be written before the harness is asked
+    anything — and why it is not a run. Nothing derives evidence from it: while
+    one stands, the release has been measured by nothing and no verdict rests on
+    it.
+
+    What it is for is the window in between. The harness is an external thing
+    being started, and an answer that never arrives would otherwise leave a run
+    going that no record names. This names it: `measure` run again re-submits the
+    request unchanged, and the harness answers with the run it already began.
+    """
+
+    position: Position
+    integration: Pinned
+    expectation: str
+    requested_at: str
 
 
 @dataclass(frozen=True)
@@ -484,6 +546,10 @@ class Assessment:
     rationale: str
     formed_at: str
     decision: Decision | None
+    # The run asked for and not yet answered. Never set beside `counterfactual`:
+    # the write that records the run a request became clears it in the same file,
+    # so a reader is never left choosing which of the two the harness is running.
+    requested: CounterfactualRequest | None = None
     path: Path | None = None
 
     @property
@@ -541,6 +607,7 @@ class Assessment:
             },
             "metrics": [_measurement_json(measurement) for measurement in self.metrics],
             "counterfactual": None if self.counterfactual is None else _counterfactual_json(self.counterfactual),
+            "counterfactual_request": None if self.requested is None else _request_json(self.requested),
             "verdict": self.verdict,
             "confidence": self.confidence,
             "rationale": self.rationale,
@@ -825,6 +892,7 @@ def parse(
     )
     metrics = tuple(_read_measurement(entry) for entry in record["metrics"])
     counterfactual = _read_counterfactual(path, record["counterfactual"], assessed)
+    requested = _read_request(path, record["counterfactual_request"], assessed, counterfactual)
     # The settlement is held to the rollback record as the lineage reads it now,
     # never to the historical `assessed` block above: the ordinary flow forms the
     # assessment while the promotion stands, and the rollback the reading caused
@@ -871,6 +939,7 @@ def parse(
         rationale=record["rationale"],
         formed_at=record["formed_at"],
         decision=decision,
+        requested=requested,
         path=path,
     )
 
@@ -1085,6 +1154,639 @@ def _write_assessment(
     parsed = parse(config, record, batch, frame=frame)
     atomic_write_text(batch.assessment_path, json.dumps(record, indent=2, sort_keys=True) + "\n")
     return parsed
+
+
+# --- the counterfactual ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Measured:
+    """A counterfactual this operation started, and the record that names it."""
+
+    batch_id: str
+    assessment: Assessment
+    run: Counterfactual
+    plan: ReplayPlan
+    record_path: Path
+    # True when this run answers a request an earlier run of this operation left
+    # outstanding: the position and the pair come from that request, and the
+    # harness was asked for the run it may already have been running.
+    resumed: bool = False
+
+
+@dataclass(frozen=True)
+class Concluded:
+    """What the counterfactual is, after asking about it.
+
+    Three states reach here and `recorded` tells them apart: the run concluded
+    now (True), a run still going (False, `running`), and a run whose result was
+    already on record (False) — an interrupted conclusion reporting what it wrote
+    rather than writing a second one.
+    """
+
+    batch_id: str
+    assessment: Assessment
+    run: Counterfactual
+    recorded: bool
+
+    @property
+    def running(self) -> bool:
+        return self.run.running
+
+    @property
+    def outcome(self) -> str | None:
+        return None if self.run.result is None else self.run.result.outcome
+
+
+def measure(
+    config: EvolutionConfig,
+    harness: ReplayHarness,
+    *,
+    expectation: str,
+    now: datetime | None = None,
+) -> Measured:
+    """Start the pinned two-revision run that settles what the release did.
+
+    The pair is the release's own merge unit and nothing else: the pre-promotion
+    revision is the merge input the outcome states — the promotion's first parent
+    — and the promoted one is the revision itself. Neither is reconstructed and
+    no integration is computed, because the promotion *is* that integration.
+    What this asks of Git is only that both revisions are here to be exercised;
+    whether the promotion carries the tree and parents the outcome records is the
+    lineage's own reading, already taken by the time this writes anything.
+
+    Nothing here moves a ref, touches the release checkout, or changes what any
+    batch froze. The harness exercises both revisions wherever it likes —
+    temporary worktrees are the ordinary answer — and this controller's whole
+    part is pinning what it exercises and recording what it answered.
+
+    `expectation` is recorded before any numbers exist, which is the only time it
+    can be, and is deliberately not handed to the harness: a prediction given to
+    the thing being measured is an instruction.
+
+    The request is durable before the harness is asked. From the moment it is
+    written the harness may be running something, so every refusal is made first
+    — and run again with a request outstanding, this is that request resumed
+    rather than a second one: the same key reaches the harness, which answers with
+    the run it already began. What a resume may not do is re-pin the pair or
+    restate the prediction, so the argument is checked against the request rather
+    than acted on.
+
+    A failed run is answered by another attempt at the next position; a completed
+    one is not. The release is measured once and a second answer about it would
+    leave a reader choosing between them — while a run that never measured
+    anything has left nothing to choose.
+    """
+
+    moment = _moment(now)
+    predicted = require_reason(
+        expectation,
+        "a counterfactual records what it was expected to show, before it shows anything; a run started without "
+        "one is read afterwards against whatever its numbers turn out to be, which is the reading the "
+        "expectation exists to prevent",
+    )
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+        reading = _recorded(config, frame, "measure against the pre-promotion revision")
+        _require_unsettled(frame, reading, "a run started now")
+
+        requested = reading.requested
+        resumed = requested is not None
+        if requested is None:
+            requested = _request(config, frame, reading.counterfactual, predicted, at=format_rfc3339(moment))
+            reading = _write_assessment(config, batch, replace(reading, requested=requested), frame)
+        else:
+            _require_same_request(frame, requested, predicted)
+
+        described = _describe(requested.position)
+        plan = harness.start(_harness_request(requested))
+        started = Counterfactual(
+            position=requested.position,
+            integration=requested.integration,
+            cases=plan.cases,
+            evaluator=plan.evaluator,
+            harness=plan.harness,
+            expectation=requested.expectation,
+            # When the run began, which is when its pair was pinned — not the
+            # moment a resume finally heard back about it.
+            started_at=requested.requested_at,
+            result=None,
+        )
+        try:
+            recorded = _write_assessment(
+                config,
+                batch,
+                replace(reading, counterfactual=started, requested=None),
+                frame,
+            )
+        except (BatchError, ValidationError) as exc:
+            raise BatchError(
+                f"{frame.batch_id}: {plan.harness.id} began {described} as handle {plan.harness.handle!r} and "
+                f"described it in a way this record cannot hold ({exc}); the request for that run is still on "
+                "record, so run this again once the harness can describe what it holds"
+            ) from exc
+
+    return Measured(
+        batch_id=frame.batch_id,
+        assessment=recorded,
+        run=started,
+        plan=plan,
+        record_path=batch.assessment_path,
+        resumed=resumed,
+    )
+
+
+def conclude(
+    config: EvolutionConfig,
+    harness: ReplayHarness,
+    *,
+    now: datetime | None = None,
+) -> Concluded:
+    """Ask the counterfactual for its numbers, and record them if it has any.
+
+    Polling a run that is still going is the ordinary case and not an error: this
+    reports the run unchanged and writes nothing, so it can be called as often as
+    an operator likes. The clock is the controller's — a harness reports what it
+    measured, and when that was observed is recorded by whoever observed it.
+
+    The numbers cross one boundary on the way in. A run states each quantity as a
+    baseline and a candidate; here the two sides are the line before the release
+    and the release itself, so they are recorded as `before` and `after` — one
+    vocabulary, because a cohort reading and a run's numbers that could not be
+    compared would be two artifacts pretending to be one.
+
+    What it does not do is decide anything. A completed run settles a direction
+    (`measured_direction`), and recording that reading is a separate judgement
+    with a reason of its own — supplying it here would be stating a verdict
+    before the numbers existed, which is what the expectation is kept apart from.
+
+    Run again after an interrupted conclusion, it reports the result already on
+    record rather than polling for a second one; the audit line that interruption
+    may have cost is not re-appended, which is the rule a redone seal follows.
+    """
+
+    moment = _moment(now)
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+        reading = _recorded(config, frame, "conclude a run of")
+        going = _require_run(frame, reading, "concluded")
+        if not going.running:
+            return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
+
+        report = harness.poll(going.harness.handle)
+        if report is None:
+            return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
+
+        stamp = format_rfc3339(moment)
+        concluded = replace(going, result=_result(report, at=stamp))
+        try:
+            recorded = _write_assessment(config, batch, replace(reading, counterfactual=concluded), frame)
+        except (BatchError, ValidationError) as exc:
+            raise BatchError(
+                f"{frame.batch_id}: {going.harness.id} reported {_describe(going.position)} in a way this record "
+                f"cannot hold ({exc}); the run is still recorded as going, so nothing has been lost — ask again "
+                "once the harness can state what it measured, or end the run and record why"
+            ) from exc
+        _audit_run(config, frame, going, outcome=report.outcome, at=stamp)
+
+    return Concluded(batch_id=frame.batch_id, assessment=recorded, run=concluded, recorded=True)
+
+
+def abandon(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> Concluded:
+    """Record why the counterfactual ended when its harness cannot say.
+
+    A run is going until something records that it stopped: age concludes
+    nothing, and a harness that died, lost its handle, or answers with a report
+    this record cannot hold would otherwise leave the run going forever — and
+    with it the only comparison in which the release is the only difference,
+    since a run may not be started under one that is still going.
+
+    It takes no harness, for the same reason `replay.abandon` does: this is the
+    path for when asking is not the problem. What it writes is a `failed` result,
+    which is what the run was — no numbers, and the story in `detail` — and the
+    reason is the operator's because the harness is the thing that could not give
+    one. A run this ends is answered by another attempt, which is what a `failed`
+    result means here as everywhere else.
+
+    Run again after an interrupted abandonment, it reports the failure already on
+    record. A run that ended some other way is not this operation's redo, and is
+    reported back rather than overwritten.
+    """
+
+    moment = _moment(now)
+    text = require_reason(
+        reason,
+        "ending a run records why; the record is all a later reader has of a run whose harness never reported, "
+        "and a failure with no reason is indistinguishable from one nobody looked into",
+    )
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+        reading = _recorded(config, frame, "end a run of")
+        going = _require_run(frame, reading, "ended")
+        if not going.running:
+            result = going.result
+            if result is not None and result.outcome == RESULT_FAILED and result.detail == text:
+                return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
+            raise BatchError(
+                f"{_describe(going.position)} of {frame.batch_id}'s counterfactual already ended "
+                f"{result.outcome!r}: {result.detail!r}; a run ends once, and what is on record is what it "
+                "measured — start another attempt rather than restating how this one finished"
+            )
+
+        stamp = format_rfc3339(moment)
+        concluded = replace(
+            going,
+            result=RunResult(
+                outcome=RESULT_FAILED,
+                concluded_at=stamp,
+                detail=text,
+                elapsed_seconds=None,
+                metrics=(),
+                regressions=(),
+                ambiguity=None,
+            ),
+        )
+        recorded = _write_assessment(config, batch, replace(reading, counterfactual=concluded), frame)
+        _audit_run(config, frame, going, outcome=RESULT_FAILED, at=stamp)
+
+    return Concluded(batch_id=frame.batch_id, assessment=recorded, run=concluded, recorded=True)
+
+
+def resolve(
+    config: EvolutionConfig,
+    *,
+    verdict: str,
+    confidence: str,
+    rationale: str,
+    now: datetime | None = None,
+) -> Formed:
+    """Record the reading the completed counterfactual settles.
+
+    A reading is formed while the cohorts are all there is, and in practice that
+    is `inconclusive`: no manifest states the shape of the work, so the two task
+    sets suspect rather than settle. This is where the pinned run answers — the
+    verdict, the confidence and the sentence that says why, read off numbers that
+    did not exist when the reading was formed.
+
+    The verdict is held to that run by the parser every read uses: it supports
+    the way every goal that moved points, all of them unmoved is `neutral`, and
+    goals pointing both ways settle nothing. So a claim the only comparison
+    supporting it contradicts never reaches the disk.
+
+    This revises the reading rather than adding a second one, which is the
+    difference from forming it: a formation happens once because two records of
+    one release would leave a reader choosing between them, while this is the
+    evidence that record was written to be added to. It stops when the gate
+    settles — a decision stands on the reading it was made from, so evidence and
+    judgement added afterwards would rewrite the thing that was decided from.
+    Run again with the same reading, it reports what is on record and appends no
+    second audit line.
+    """
+
+    moment = _moment(now)
+    text = require_reason(
+        rationale,
+        "a release assessment records why its verdict is that verdict; this one rests on a run whose numbers a "
+        "later reader has, and the sentence is what says which of them the reading turned on",
+    )
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+        reading = _recorded(config, frame, "resolve")
+        _require_unsettled(frame, reading, "a reading recorded now")
+
+        run = reading.counterfactual
+        if run is None or not run.completed:
+            if run is None:
+                found = (
+                    "none has been started, and the pinned run is the comparison in which the release is the "
+                    "only difference"
+                )
+            elif run.running:
+                found = f"{_describe(run.position)} is still going"
+            else:
+                ended = run.result.detail if run.result is not None else ""
+                found = f"{_describe(run.position)} ended {RESULT_FAILED!r}: {ended}"
+            raise BatchError(
+                f"{frame.batch_id} has no completed counterfactual of the {frame.subject.batch_id} release, so "
+                f"there is nothing for a reading to be settled by — {found}; what the cohorts allow on their own "
+                f"is {VERDICT_INCONCLUSIVE!r}"
+            )
+
+        if (reading.verdict, reading.confidence, reading.rationale) == (verdict, confidence, text):
+            return Formed(
+                batch_id=frame.batch_id,
+                assessment=reading,
+                record_path=batch.assessment_path,
+                recorded=False,
+            )
+
+        stamp = format_rfc3339(moment)
+        recorded = _write_assessment(
+            config,
+            batch,
+            replace(reading, verdict=verdict, confidence=confidence, rationale=text, formed_at=stamp),
+            frame,
+        )
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_RELEASE_ASSESSED,
+                    recorded_at=stamp,
+                    batch_id=frame.batch_id,
+                    experiment_id=frame.subject.experiment_id,
+                    revision=frame.subject.revision,
+                    detail=verdict,
+                )
+            ],
+        )
+
+    return Formed(batch_id=frame.batch_id, assessment=recorded, record_path=batch.assessment_path)
+
+
+def _recorded(config: EvolutionConfig, frame: Frame, action: str) -> Assessment:
+    """The reading this cohort has already recorded, or why there is none.
+
+    Everything the counterfactual does is done to that record: it is where the
+    run is written, and what the run's numbers afterwards settle. A cohort that
+    has not read the release yet has nothing to add a run to — and the order is
+    the point rather than bookkeeping, since what a pinned run answers is a
+    suspicion the cohorts raised.
+    """
+
+    reading = read(config, frame.batch, frame=frame)
+    if reading is None:
+        raise BatchError(
+            f"{frame.batch_id} has recorded no reading of the {frame.subject.batch_id} release, so there is "
+            f"nothing to {action}; the cohorts are read first, and what they come to is the suspicion a pinned "
+            "run is started to settle"
+        )
+    return reading
+
+
+def _require_unsettled(frame: Frame, reading: Assessment, described: str) -> None:
+    """Nothing is added to a reading the human gate has already answered."""
+
+    decision = reading.decision
+    if decision is None:
+        return
+    raise BatchError(
+        f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decision.settlement!r} "
+        f"at {decision.decided_at}, so {described} would change the record that decision was made from; a "
+        "settlement stands on the evidence it stood on, and a release read again after its gate has answered is "
+        "the next cohort's reading of the line as it now is"
+    )
+
+
+def _require_run(frame: Frame, reading: Assessment, action: str) -> Counterfactual:
+    """The run these operations act on, or why there is none to act on.
+
+    A request outstanding is the state where the newest thing on record is not a
+    run at all: the harness was asked and its answer never reached this record.
+    Reporting "no run" there would hide that something may be measuring right
+    now, and the way forward is the same either way — start the run again, which
+    records what the harness began.
+    """
+
+    if reading.requested is not None:
+        raise BatchError(
+            f"{frame.batch_id} has {_describe(reading.requested.position)} of its counterfactual outstanding, "
+            f"and no run recorded for it; the harness was asked for that run and its answer never reached this "
+            f"record, so there is nothing here to be {action} — start the run again to record what it began"
+        )
+    run = reading.counterfactual
+    if run is None:
+        raise BatchError(
+            f"{frame.batch_id} has started no counterfactual of the {frame.subject.batch_id} release, so there "
+            f"is no run to be {action}; what these record is the end of a run this controller started, and a "
+            "harness invocation nothing here named is not one it can speak for"
+        )
+    return run
+
+
+def _request(
+    config: EvolutionConfig,
+    frame: Frame,
+    previous: Counterfactual | None,
+    expectation: str,
+    *,
+    at: str,
+) -> CounterfactualRequest:
+    """The request a fresh start makes durable before the harness is asked.
+
+    Every refusal a start has is here, which is what the order is for: once the
+    request is written the harness may be running something, so nothing that
+    could refuse may still be waiting to be checked at that point.
+
+    The position is the promoted experiment's next round, which no run and no
+    withdrawn request of that experiment can ever hold: every position it
+    allocated names a round it has, and a promoted experiment is terminal — it
+    can never open another. A retry takes the attempt after the failed run's,
+    because the harness answers one key with one run and reissuing that key would
+    be answered with the run that failed.
+    """
+
+    subject = frame.subject
+    if previous is not None and not previous.failed:
+        raise BatchError(
+            f"{frame.batch_id} has {_describe(previous.position)} of its counterfactual "
+            + ("still running" if previous.running else "completed")
+            + f" against the {subject.batch_id} release; "
+            + (
+                "a release is measured against one pinned pair at a time, so a second run started under it "
+                "would leave two answers with nothing to choose between them — conclude that run first"
+                if previous.running
+                else "the release is measured once, and a second completed run would leave a reader choosing "
+                "which of two answers the reading rests on"
+            )
+        )
+
+    pinned = Pinned(
+        base_revision=subject.merge_input_revision,
+        candidate_revision=subject.revision,
+        source_ref=subject.merge_input_ref,
+        tree=subject.tree,
+    )
+    _require_measurable(config, frame, pinned)
+    return CounterfactualRequest(
+        position=Position(
+            experiment_id=subject.experiment_id,
+            round_number=subject.round_number + 1,
+            attempt=1 if previous is None else previous.position.attempt + 1,
+        ),
+        integration=pinned,
+        expectation=expectation,
+        requested_at=at,
+    )
+
+
+def _require_measurable(config: EvolutionConfig, frame: Frame, pinned: Pinned) -> None:
+    """This checkout holds both revisions of the pair.
+
+    Asked before a harness is handed them, because a harness cannot exercise what
+    this repository does not have and the refusal an operator can act on is
+    "fetch the release line", not whatever a missing object looks like from
+    inside somebody else's harness.
+
+    Presence is the whole of what is asked here, and deliberately. Whether the
+    promotion carries the tree and the parents the outcome records is checked
+    wherever this checkout can describe that commit — by the lineage derivation,
+    on every read, which this operation has already run before it reaches this
+    point. Asking it a second time would be a second spelling of one refusal,
+    and the case it would be reached in does not exist.
+    """
+
+    for described, revision in (
+        ("the revision the source line stood at before the release", pinned.base_revision),
+        ("the promotion", pinned.candidate_revision),
+    ):
+        if resolve_commit(config.repo_root, revision) is None:
+            raise BatchError(
+                f"{config.repo_root} does not hold {described} ({revision[:12]}) of the {frame.subject.batch_id} "
+                "release, so there is no pair here to measure; a counterfactual exercises both revisions as they "
+                f"are — fetch {pinned.source_ref} and the objects behind it, or run this where they are"
+            )
+
+
+def _require_same_request(frame: Frame, requested: CounterfactualRequest, expectation: str) -> None:
+    """A resume asks for the run that is outstanding, not for a different one.
+
+    The pair needs no checking — it is the release's own merge unit, and the
+    reader holds every recorded request to it — so what an operator can restate
+    differently is the prediction. A mismatch is a request they have not made
+    yet: the harness may already be running this one, and answering the new one
+    would start a second run under a key the first still holds.
+    """
+
+    if requested.expectation == expectation:
+        return
+    raise BatchError(
+        f"{frame.batch_id} has {_describe(requested.position)} of its counterfactual outstanding, expected to "
+        f"show {requested.expectation!r}; an expectation is recorded before the numbers exist and this run may "
+        "already be producing them, so the one on record stands — a second prediction over a run in flight is "
+        "the reading it exists to prevent"
+    )
+
+
+def _harness_request(requested: CounterfactualRequest) -> ReplayRequest:
+    """The counterfactual as the replay boundary is asked for it.
+
+    The boundary's own integration, stated exactly: the merge input is the
+    pre-promotion revision, because the promotion is the candidate merged onto
+    the line at that commit and its tree is what the two produced. So the pair is
+    read off the outcome rather than merged again, and the base a run measures
+    against is the same commit — which is the whole of what a counterfactual is,
+    the release against the line immediately before it.
+
+    Nothing is asked to be reproduced. `reproduce` is how a second run of one
+    comparison asks for the first one's selections by name, and this comparison
+    has one run: a report states each quantity on the base *and* on the
+    candidate, so the cohort, the evaluator and the configuration are one
+    selection governing both halves rather than two that would have to be shown
+    to have matched. Naming the promotion's own replay selections here instead
+    would buy a comparability nothing reads, at the price of a case set that
+    harness no longer holds barring a suspected regression from ever being
+    measured.
+    """
+
+    integration = requested.integration
+    return ReplayRequest(
+        experiment_id=requested.position.experiment_id,
+        round_number=requested.position.round_number,
+        attempt=requested.position.attempt,
+        integration=Integration(
+            base_revision=integration.base_revision,
+            candidate_revision=integration.candidate_revision,
+            merge_input_revision=integration.base_revision,
+            merge_input_ref=integration.source_ref,
+            tree=integration.tree,
+        ),
+        reproduce=None,
+    )
+
+
+def _result(report: ReplayReport, *, at: str) -> RunResult:
+    """A harness's report as this record states it.
+
+    The one place the two vocabularies meet. A run measures a baseline and a
+    candidate; here they are the line before the release and the release, so they
+    are recorded as `before` and `after` — the same names the cohort comparison
+    uses, which is what lets the two be read together at all.
+    """
+
+    return RunResult(
+        outcome=report.outcome,
+        concluded_at=at,
+        detail=report.detail,
+        elapsed_seconds=report.elapsed_seconds,
+        metrics=tuple(
+            Measurement(
+                metric=item.metric,
+                unit=item.unit,
+                before=item.baseline,
+                after=item.candidate,
+                better=item.better,
+            )
+            for item in report.metrics
+        ),
+        regressions=report.regressions,
+        ambiguity=report.ambiguity,
+    )
+
+
+def _audit_run(
+    config: EvolutionConfig,
+    frame: Frame,
+    run: Counterfactual,
+    *,
+    outcome: str,
+    at: str,
+) -> None:
+    """One line for a run that ended, however it ended.
+
+    The release the run was about is the revision, as it is in the reading's own
+    line; the round is the harness key the run occupied, which is what an
+    operator matches against the harness's own history.
+    """
+
+    append_records(
+        config,
+        [
+            build_record(
+                RECORD_COUNTERFACTUAL_COMPLETED,
+                recorded_at=at,
+                batch_id=frame.batch_id,
+                experiment_id=frame.subject.experiment_id,
+                round=run.position.round_number,
+                revision=frame.subject.revision,
+                detail=outcome,
+            )
+        ],
+    )
+
+
+def _describe(position: Position) -> str:
+    """A run named by the key it occupied, which is also its identity to the
+    harness that answered for it."""
+
+    return f"round {position.round_number} attempt {position.attempt}"
 
 
 def _moment(now: datetime | None) -> datetime:
@@ -1417,19 +2119,8 @@ def _read_counterfactual(
     if stated is None:
         return None
 
-    integration = stated["integration"]
-    expected = (
-        ("base_revision", assessed.merge_input_revision),
-        ("candidate_revision", assessed.revision),
-        ("source_ref", assessed.merge_input_ref),
-        ("tree", assessed.tree),
-    )
-    for name, value in expected:
-        if integration[name] != value:
-            raise BatchError(
-                f"{path}: the counterfactual pinned {name} {integration[name]!r}, but this release's "
-                f"{name} is {value!r}; a run of another pair of revisions measured another question"
-            )
+    integration = _read_pinned(path, stated["integration"], assessed, "the counterfactual")
+    position = _read_position(path, stated["position"], assessed, "the counterfactual")
 
     result = stated["result"]
     parsed: RunResult | None = None
@@ -1474,18 +2165,15 @@ def _read_counterfactual(
     cases = stated["cases"]
     evaluator = stated["evaluator"]
     harness = stated["harness"]
+    if parsed is None and harness["handle"] is None:
+        raise BatchError(
+            f"{path}: the counterfactual is still running and carries no harness handle; the handle is what a "
+            "later process polls, so a run recorded without one can never be concluded — record the handle the "
+            "harness issued, or record why the run ended"
+        )
     return Counterfactual(
-        position=Position(
-            experiment_id=stated["position"]["experiment_id"],
-            round_number=stated["position"]["round"],
-            attempt=stated["position"]["attempt"],
-        ),
-        integration=Pinned(
-            base_revision=integration["base_revision"],
-            candidate_revision=integration["candidate_revision"],
-            source_ref=integration["source_ref"],
-            tree=integration["tree"],
-        ),
+        position=position,
+        integration=integration,
         cases=CaseSet(
             case_set_id=cases["case_set_id"],
             case_set_sha256=cases["case_set_sha256"],
@@ -1509,6 +2197,128 @@ def _read_counterfactual(
         started_at=stated["started_at"],
         result=parsed,
     )
+
+
+def _read_request(
+    path: Path,
+    stated: Mapping[str, Any] | None,
+    assessed: Subject,
+    run: Counterfactual | None,
+) -> CounterfactualRequest | None:
+    """The run this cohort asked for and has no answer to yet.
+
+    Held to the same release and the same kind of position a recorded run is:
+    the request is what the run will be recorded as, so a request nobody could
+    answer — the wrong pair of revisions, a key an experiment holds — is refused
+    here rather than discovered once the harness has already begun something.
+
+    The one run a request may stand over is a failed one, which is the retry: a
+    run that measured nothing is over, and another attempt is what answers it.
+    Over a run still going, the two are one comparison being measured twice with
+    nothing to choose between the answers; over a completed one, the release
+    would be measured a second time after it had been measured. Neither is a
+    state the write that records a run can produce — it clears the request in the
+    same file — so both are a record saying something no operation here did.
+
+    A retry takes the position after the failed run's, in the same round. The
+    harness is keyed on that position, so reissuing the failed one would be
+    answered with the run that failed, and skipping ahead would leave an
+    allocation nothing accounts for.
+    """
+
+    if stated is None:
+        return None
+    position = _read_position(path, stated["position"], assessed, "the counterfactual request")
+    if run is not None:
+        if not run.failed:
+            raise BatchError(
+                f"{path}: {_describe(run.position)} of the counterfactual is "
+                + ("still running" if run.running else "completed")
+                + f", and {_describe(position)} is outstanding beside it; the write that records the run a "
+                "request became clears it in the same file, so a record holding both leaves a reader guessing "
+                "which of the two the harness is measuring this release with"
+            )
+        expected = (run.position.round_number, run.position.attempt + 1)
+        if (position.round_number, position.attempt) != expected:
+            raise BatchError(
+                f"{path}: {_describe(run.position)} of the counterfactual failed and {_describe(position)} is "
+                f"outstanding; another attempt takes round {expected[0]} attempt {expected[1]} — a position is "
+                "allocated once and names one request for good, because that is what the harness is keyed on"
+            )
+    return CounterfactualRequest(
+        position=position,
+        integration=_read_pinned(path, stated["integration"], assessed, "the counterfactual request"),
+        expectation=stated["expectation"],
+        requested_at=stated["requested_at"],
+    )
+
+
+def _read_pinned(path: Path, stated: Mapping[str, Any], assessed: Subject, described: str) -> Pinned:
+    """The pair a run pinned, held to the release this assessment is about.
+
+    A run of any other two revisions measured a different question, however
+    well-formed it is — and the pair is not computed here or anywhere else: it is
+    the merge unit the promoted batch's outcome states, so a record naming
+    something else disagrees with the release rather than with this reading.
+    """
+
+    expected = (
+        ("base_revision", assessed.merge_input_revision),
+        ("candidate_revision", assessed.revision),
+        ("source_ref", assessed.merge_input_ref),
+        ("tree", assessed.tree),
+    )
+    for name, value in expected:
+        if stated[name] != value:
+            raise BatchError(
+                f"{path}: {described} pinned {name} {stated[name]!r}, but this release's {name} is {value!r}; "
+                "a run of another pair of revisions measured another question"
+            )
+    return Pinned(
+        base_revision=stated["base_revision"],
+        candidate_revision=stated["candidate_revision"],
+        source_ref=stated["source_ref"],
+        tree=stated["tree"],
+    )
+
+
+def _read_position(path: Path, stated: Mapping[str, Any], assessed: Subject, described: str) -> Position:
+    """The harness key a run occupied, held to the one rule that makes it safe.
+
+    A conforming harness answers one key with one run, so a counterfactual keyed
+    on a position the promoted experiment holds would be answered with that
+    experiment's run — the numbers of a candidate against its base arriving under
+    a record stating the release against the line before it. The positions an
+    experiment holds are its recorded runs *and* the requests it withdrew, since
+    both stay allocated and neither is ever reissued, and every one of them names
+    a round that experiment has: a replay record naming a round the experiment
+    does not have is refused where it is read. So a round beyond the promoted one
+    is held by nothing, and — the promoted experiment being terminal, unable ever
+    to open another round — will go on being held by nothing.
+
+    Machine-independent: the promoted round is the merge unit's own, so this is
+    the same answer in every checkout.
+    """
+
+    position = Position(
+        experiment_id=stated["experiment_id"],
+        round_number=stated["round"],
+        attempt=stated["attempt"],
+    )
+    if position.experiment_id != assessed.experiment_id:
+        raise BatchError(
+            f"{path}: {described} was keyed on {position.experiment_id}, and this release was promoted from "
+            f"{assessed.experiment_id}; the key names the experiment whose positions it has to stay clear of, "
+            "and one naming another experiment says nothing about that"
+        )
+    if position.round_number <= assessed.round_number:
+        raise BatchError(
+            f"{path}: {described} was keyed on round {position.round_number} of {position.experiment_id}, which "
+            f"promoted round {assessed.round_number}; a harness answers one key with one run, so a key inside "
+            "the experiment's own rounds is answered with the run that round was measured by — a candidate "
+            "against its base, standing under a record of the release against the line before it"
+        )
+    return position
 
 
 def _read_decision(path: Path, stated: Mapping[str, Any] | None, derived: Subject) -> Decision | None:
@@ -1974,19 +2784,36 @@ def _measurement_json(measurement: Measurement) -> dict[str, Any]:
     }
 
 
+def _request_json(request: CounterfactualRequest) -> dict[str, Any]:
+    return {
+        "position": _position_json(request.position),
+        "integration": _pinned_json(request.integration),
+        "expectation": request.expectation,
+        "requested_at": request.requested_at,
+    }
+
+
+def _position_json(position: Position) -> dict[str, Any]:
+    return {
+        "experiment_id": position.experiment_id,
+        "round": position.round_number,
+        "attempt": position.attempt,
+    }
+
+
+def _pinned_json(integration: Pinned) -> dict[str, Any]:
+    return {
+        "base_revision": integration.base_revision,
+        "candidate_revision": integration.candidate_revision,
+        "source_ref": integration.source_ref,
+        "tree": integration.tree,
+    }
+
+
 def _counterfactual_json(run: Counterfactual) -> dict[str, Any]:
     return {
-        "position": {
-            "experiment_id": run.position.experiment_id,
-            "round": run.position.round_number,
-            "attempt": run.position.attempt,
-        },
-        "integration": {
-            "base_revision": run.integration.base_revision,
-            "candidate_revision": run.integration.candidate_revision,
-            "source_ref": run.integration.source_ref,
-            "tree": run.integration.tree,
-        },
+        "position": _position_json(run.position),
+        "integration": _pinned_json(run.integration),
         "cases": {
             "case_set_id": run.cases.case_set_id,
             "case_set_sha256": run.cases.case_set_sha256,

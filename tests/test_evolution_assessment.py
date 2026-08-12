@@ -32,6 +32,10 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     RELEASE_REF,
+    FakeHarness,
+    completed_report,
+    experiment_decision,
+    experiment_round,
     git_file_commit,
     git_repo,
     git_rev,
@@ -40,6 +44,8 @@ from evolution_fixtures import (
     make_record,
     make_repo,
     promote_candidate,
+    write_closure,
+    write_experiment,
     write_feed,
     write_manifest,
     write_outcome,
@@ -59,10 +65,17 @@ FINISHED_AT = datetime(2026, 8, 9, 11, 0, 0, tzinfo=timezone.utc)
 FROZEN_AT = datetime(2026, 8, 10, 9, 0, 0, tzinfo=timezone.utc)
 FORMED_AT = "2026-08-11T09:00:00Z"
 SETTLED_AT = "2026-08-11T10:00:00Z"
+# When the counterfactual was pinned, when its numbers came back, and when the
+# reading they settle was recorded — three moments, because the record states
+# each of them and the order between them is what makes it evidence.
+MEASURED_AT = datetime(2026, 8, 11, 7, 0, 0, tzinfo=timezone.utc)
+CONCLUDED_AT = datetime(2026, 8, 11, 12, 0, 0, tzinfo=timezone.utc)
+RESOLVED_AT = datetime(2026, 8, 11, 13, 0, 0, tzinfo=timezone.utc)
 
 WHY = "the cohort produced at the promoted revision converged in fewer rounds"
 EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 REVERSAL = "the counterfactual confirmed the regression"
+DIED = "the harness host was reclaimed mid-run and never reported"
 
 
 @pytest.fixture
@@ -165,6 +178,17 @@ def measurement(**overrides) -> assessment.Measurement:
 # exists for, and every test that reaches it needs a run that actually found one.
 SLOWER = (measurement(before=1.6, after=2.4),)
 WORSE = "the promoted revision took more rounds over the same cases"
+
+
+def slower(**overrides) -> replay.Measurement:
+    """The same quantity as a harness reports it: a baseline and a candidate,
+    which this record reads as the line before the release and the release. The
+    release doing harm, because that is the reading the settlement gate exists
+    for."""
+
+    fields = {"metric": "remediation-rounds", "unit": "rounds", "baseline": 1.6, "candidate": 2.4, "better": "lower"}
+    fields.update(overrides)
+    return replay.Measurement(**fields)
 
 
 def counterfactual(
@@ -1808,6 +1832,627 @@ def test_a_naive_moment_is_refused(
             now=datetime(2026, 8, 11, 9, 0, 0),
         )
     assert "timezone-aware" in str(error.value)
+
+
+# --- the counterfactual -----------------------------------------------------
+
+
+def read_reading(config: evolution.EvolutionConfig, batch: lineage.Batch) -> assessment.Assessment:
+    """The record as the reader loads it back — what every assertion below is
+    made against, rather than the value an operation happened to return."""
+
+    read = assessment.read(config, batch)
+    assert read is not None
+    return read
+
+
+def form_reading(config: evolution.EvolutionConfig) -> assessment.Formed:
+    """The cohort reading a counterfactual is started from.
+
+    `inconclusive` because that is what a real one is: no manifest states the
+    shape of the work, so the two task sets suspect and the pinned run settles.
+    """
+
+    return assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        metrics=(measurement(),),
+    )
+
+
+class Unanswering(FakeHarness):
+    """A harness that cannot say what it is running. Whether it began anything is
+    exactly what nobody here can know, which is what the durable request is for."""
+
+    def start(self, request):  # type: ignore[no-untyped-def]
+        self.requests.append(request)
+        raise RuntimeError("the harness process died before it named the run")
+
+
+def test_the_counterfactual_pins_the_release_and_moves_nothing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The pair is the merge unit the outcome states, handed to the replay
+    boundary as one integration: the promotion is the candidate already merged
+    onto the line at its own first parent, so nothing is merged again here.
+
+    And nothing moves. The release ref, the checkout and the frozen membership
+    are exactly what they were — the harness exercises both revisions wherever it
+    likes, and this controller's whole part is pinning what it exercises.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    before = (git_rev(config.repo_root, RELEASE_REF), git_rev(config.repo_root, "HEAD"))
+    membership = second.manifest_path.read_bytes()
+    harness = FakeHarness()
+
+    started = assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+
+    request = harness.requests[0]
+    assert request.integration == replay.Integration(
+        base_revision=promoted.merge_input_revision,
+        candidate_revision=promoted.promotion_revision,
+        merge_input_revision=promoted.merge_input_revision,
+        merge_input_ref=RELEASE_REF,
+        tree=promoted.tree,
+    )
+    # Nothing to reproduce: one run measures both revisions, so the cohort, the
+    # evaluator and the configuration are one selection governing both halves.
+    assert request.reproduce is None
+
+    run = read_reading(config, second).counterfactual
+    assert run is not None and run.running is True
+    assert run.integration.candidate_revision == promoted.promotion_revision
+    assert run.integration.base_revision == promoted.merge_input_revision
+    assert run.cases == started.plan.cases and run.evaluator == started.plan.evaluator
+    assert run.harness == started.plan.harness
+    assert run.expectation == EXPECTATION
+    assert started.resumed is False
+
+    assert (git_rev(config.repo_root, RELEASE_REF), git_rev(config.repo_root, "HEAD")) == before
+    assert second.manifest_path.read_bytes() == membership
+
+
+def test_the_position_is_one_the_promoted_experiment_can_never_hold(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A harness answers one key with one run, so a counterfactual keyed inside
+    the experiment's own rounds would be answered with that experiment's run.
+
+    Checked against the real replay record rather than against the rule: the
+    positions an experiment holds are its runs *and* the requests it withdrew,
+    and every one of them names a round it has.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+
+    first = next(item for item in lineage.describe(config).batches if item.batch_id == FIRST)
+    experiment = next(item for item in first.experiments if item.experiment_id == promoted.experiment_id)
+    history = replay.read_replays(config, experiment)
+    held = {(item.round_number, item.attempt) for item in history.replays} | {
+        (item.round_number, item.attempt) for item in history.withdrawn
+    }
+    run = read_reading(config, second).counterfactual
+    assert run is not None
+    assert run.position.experiment_id == promoted.experiment_id
+    assert run.position.round_number == max(round_.number for round_ in experiment.rounds) + 1
+    assert (run.position.round_number, run.position.attempt) not in held
+
+
+def test_a_key_inside_the_experiments_rounds_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The rule the writer keeps, kept by the reader too: a record written beside
+    this one by hand escapes nothing."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    run = counterfactual(frame)
+    publish(
+        second,
+        build(
+            frame,
+            counterfactual=dataclasses.replace(
+                run,
+                position=dataclasses.replace(run.position, round_number=frame.subject.round_number),
+            ),
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "answered with the run that round was measured by" in str(error.value)
+
+
+def test_the_request_is_durable_before_the_harness_answers(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The window the request exists for: the harness may be running something
+    this record does not describe yet, so what names that run is written first.
+
+    A resume asks for the same run at the same key — a conforming harness answers
+    with the one it already began — and the run is recorded as having started
+    when its pair was pinned, not when the resume finally heard back.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+
+    with pytest.raises(RuntimeError):
+        assessment.measure(config, Unanswering(), expectation=EXPECTATION, now=MEASURED_AT)
+
+    requested = read_reading(config, second).requested
+    assert requested is not None
+    assert requested.integration.candidate_revision == promoted.promotion_revision
+    assert requested.requested_at == "2026-08-11T07:00:00Z"
+    assert read_reading(config, second).counterfactual is None
+
+    harness = FakeHarness()
+    resumed = assessment.measure(config, harness, expectation=EXPECTATION, now=CONCLUDED_AT)
+
+    assert resumed.resumed is True
+    assert harness.requests[0].attempt == requested.position.attempt
+    run = read_reading(config, second).counterfactual
+    assert run is not None
+    assert run.position == requested.position
+    assert run.started_at == requested.requested_at
+    assert read_reading(config, second).requested is None
+
+
+def test_a_resume_may_not_restate_the_prediction(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """An expectation is recorded before the numbers exist and the run may
+    already be producing them, so the one on record stands."""
+
+    freeze_second(config, promoted)
+    form_reading(config)
+    with pytest.raises(RuntimeError):
+        assessment.measure(config, Unanswering(), expectation=EXPECTATION, now=MEASURED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation="no change either way", now=CONCLUDED_AT)
+    assert "outstanding, expected to show" in str(error.value)
+
+
+def test_a_run_started_under_one_still_going_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    freeze_second(config, promoted)
+    form_reading(config)
+    assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=CONCLUDED_AT)
+    assert "still running" in str(error.value)
+    assert "conclude that run first" in str(error.value)
+
+
+def test_the_release_is_measured_once(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=completed_report())
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+    assessment.conclude(config, harness, now=CONCLUDED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=RESOLVED_AT)
+    assert "the release is measured once" in str(error.value)
+
+
+def test_concluding_records_the_numbers_in_this_records_vocabulary(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A run states a baseline and a candidate; here the two sides are the line
+    before the release and the release, so they are recorded as before and after
+    — the same names the cohort comparison uses, which is what lets the two be
+    read together at all."""
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=completed_report())
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+
+    concluded = assessment.conclude(config, harness, now=CONCLUDED_AT)
+
+    assert concluded.recorded is True and concluded.running is False
+    assert concluded.outcome == replay.RESULT_COMPLETED
+    run = read_reading(config, second).counterfactual
+    assert run is not None and run.completed is True
+    assert run.result is not None
+    assert run.result.metrics == (
+        assessment.Measurement(metric="remediation-rounds", unit="rounds", before=2.4, after=1.6, better="lower"),
+    )
+    assert run.result.concluded_at == "2026-08-11T12:00:00Z"
+
+    lines = ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED)
+    assert len(lines) == 1
+    assert lines[0]["batch_id"] == SECOND
+    assert lines[0]["revision"] == promoted.promotion_revision
+    assert lines[0]["round"] == run.position.round_number
+    assert lines[0]["detail"] == replay.RESULT_COMPLETED
+
+
+def test_polling_a_run_that_is_going_writes_nothing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The ordinary case and not an error, so it can be called as often as an
+    operator likes; and a conclusion run again reports what it already wrote
+    rather than polling for a second result."""
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=None)
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+    written = second.assessment_path.read_bytes()
+
+    still = assessment.conclude(config, harness, now=CONCLUDED_AT)
+
+    assert still.recorded is False and still.running is True
+    assert second.assessment_path.read_bytes() == written
+    assert ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED) == []
+
+    harness.report = completed_report()
+    assessment.conclude(config, harness, now=CONCLUDED_AT)
+    again = assessment.conclude(config, harness, now=RESOLVED_AT)
+    assert again.recorded is False and again.running is False
+    assert len(ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED)) == 1
+
+
+def test_a_report_this_record_cannot_hold_leaves_the_run_where_it_was(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A harness that reached the end of the cohort has numbers to state, and one
+    that did not is a failure with a reason — a report claiming both is neither.
+
+    Nothing is lost by refusing it: the run stays recorded as going, so it can be
+    asked again or ended with a reason.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=None)
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+    harness.report = completed_report(outcome=replay.RESULT_FAILED, metrics=(slower(),))
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.conclude(config, harness, now=CONCLUDED_AT)
+
+    assert "end the run and record why" in str(error.value)
+    run = read_reading(config, second).counterfactual
+    assert run is not None and run.running is True
+    assert ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED) == []
+
+
+def test_a_run_whose_harness_cannot_report_is_ended_and_answered_by_another(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A run is going until something records that it stopped, and a harness that
+    died would otherwise leave the one comparison the release can be settled by
+    unmeasurable behind a run nothing will ever conclude.
+
+    What answers a failure is another attempt, at the next key: the harness is
+    keyed on the position, so reissuing the failed one would be answered with the
+    run that failed.
+    """
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    assessment.measure(config, FakeHarness(report=None), expectation=EXPECTATION, now=MEASURED_AT)
+
+    ended = assessment.abandon(config, reason=DIED, now=CONCLUDED_AT)
+
+    assert ended.recorded is True and ended.outcome == replay.RESULT_FAILED
+    assert ended.run.result is not None and ended.run.result.metrics == ()
+    assert assessment.abandon(config, reason=DIED, now=RESOLVED_AT).recorded is False
+    assert len(ledger_records(config, assessment.RECORD_COUNTERFACTUAL_COMPLETED)) == 1
+
+    harness = FakeHarness(report=completed_report())
+    again = assessment.measure(config, harness, expectation=EXPECTATION, now=RESOLVED_AT)
+
+    assert again.run.position.attempt == 2
+    assert harness.requests[0].attempt == 2
+    run = read_reading(config, second).counterfactual
+    assert run is not None and run.position.attempt == 2
+
+
+def test_a_running_run_with_no_handle_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The handle is the whole of what connects this record to the work: a
+    running run without one can never be concluded or ended."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    run = counterfactual(frame)
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            counterfactual=dataclasses.replace(
+                run,
+                harness=dataclasses.replace(run.harness, handle=None),
+                result=None,
+            ),
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "can never be concluded" in str(error.value)
+
+
+def test_a_request_beside_a_recorded_run_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The write that records the run a request became clears it in the same
+    file, so a record holding both leaves a reader guessing which of the two the
+    harness is running."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    run = counterfactual(frame)
+    publish(
+        second,
+        build(
+            frame,
+            counterfactual=run,
+            requested=assessment.CounterfactualRequest(
+                position=dataclasses.replace(run.position, attempt=2),
+                integration=run.integration,
+                expectation=EXPECTATION,
+                requested_at="2026-08-11T09:30:00Z",
+            ),
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "clears it in the same file" in str(error.value)
+
+
+def test_nothing_is_measured_before_the_cohorts_are_read(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """What a pinned run answers is a suspicion the cohorts raised, so the
+    reading is where the run is recorded and there has to be one."""
+
+    second = freeze_second(config, promoted)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+    assert "recorded no reading" in str(error.value)
+    assert second.assessment_path.exists() is False
+
+
+def test_the_verdict_the_run_settles_is_recorded(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The whole arc: an inconclusive reading of two task sets, a run measuring
+    the release doing harm, and the reading that run settles."""
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=completed_report(metrics=(slower(),)))
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+    assessment.conclude(config, harness, now=CONCLUDED_AT)
+    assert read_reading(config, second).verdict == assessment.VERDICT_INCONCLUSIVE
+
+    settled = assessment.resolve(
+        config,
+        verdict=assessment.VERDICT_REGRESSED,
+        confidence=assessment.CONFIDENCE_HIGH,
+        rationale=WORSE,
+        now=RESOLVED_AT,
+    )
+
+    assert settled.recorded is True
+    recorded = read_reading(config, second)
+    assert recorded.verdict == assessment.VERDICT_REGRESSED
+    assert recorded.confidence == assessment.CONFIDENCE_HIGH and recorded.rationale == WORSE
+    assert recorded.formed_at == "2026-08-11T13:00:00Z"
+    # The cohort reading and the run both stand: the numbers the session judged
+    # are what `confidence` and `rationale` are read against.
+    assert recorded.metrics == (measurement(),)
+    assert recorded.counterfactual is not None and recorded.counterfactual.completed
+
+    lines = ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)
+    assert [line["detail"] for line in lines] == [
+        assessment.VERDICT_INCONCLUSIVE,
+        assessment.VERDICT_REGRESSED,
+    ]
+    again = assessment.resolve(
+        config,
+        verdict=assessment.VERDICT_REGRESSED,
+        confidence=assessment.CONFIDENCE_HIGH,
+        rationale=WORSE,
+        now=FINISHED_AT,
+    )
+    assert again.recorded is False
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 2
+
+
+def test_a_verdict_the_run_contradicts_reaches_no_record(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The run is the evidence the claim rests on, so a direction it measured the
+    other way is an opinion with a run attached."""
+
+    second = freeze_second(config, promoted)
+    form_reading(config)
+    harness = FakeHarness(report=completed_report(metrics=(slower(),)))
+    assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
+    assessment.conclude(config, harness, now=CONCLUDED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_IMPROVED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale="the release converged faster",
+            now=RESOLVED_AT,
+        )
+
+    assert "the run it records measured 'regressed'" in str(error.value)
+    assert read_reading(config, second).verdict == assessment.VERDICT_INCONCLUSIVE
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 1
+
+
+def test_nothing_is_settled_by_a_run_that_measured_nothing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A failed counterfactual is why a suspected regression stays inconclusive:
+    the comparison it was going to settle was not made."""
+
+    freeze_second(config, promoted)
+    form_reading(config)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_REGRESSED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale=WORSE,
+            now=RESOLVED_AT,
+        )
+    assert "none has been started" in str(error.value)
+
+    assessment.measure(config, FakeHarness(report=None), expectation=EXPECTATION, now=MEASURED_AT)
+    assessment.abandon(config, reason=DIED, now=CONCLUDED_AT)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_REGRESSED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale=WORSE,
+            now=RESOLVED_AT,
+        )
+    assert f"ended {replay.RESULT_FAILED!r}" in str(error.value)
+
+
+def test_nothing_is_added_to_a_reading_the_gate_has_answered(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A settlement stands on the evidence it stood on: a run started or a
+    reading revised afterwards would rewrite the record the decision was made
+    from."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    publish(
+        second,
+        build(
+            frame,
+            metrics=(),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+            decision=assessment.Decision(
+                settlement=assessment.SETTLEMENT_RETAIN,
+                decided_at=SETTLED_AT,
+                reason="nothing measured said the release did harm, so it stays on the line",
+                rollback_revision=None,
+            ),
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+    assert "was settled 'retain'" in str(error.value)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_MEDIUM,
+            rationale="reread after the gate had answered",
+            now=RESOLVED_AT,
+        )
+    assert "was settled 'retain'" in str(error.value)
+
+
+def build_absent_release(config: evolution.EvolutionConfig) -> lineage.Batch:
+    """A promoted batch whose revisions this repository has never held.
+
+    Every record a promotion leaves, and no objects behind them — the ordinary
+    state of a clone that holds the evolution history and not the release line.
+    The lineage reads such a promotion without complaint (what the commit carries
+    is checked only where the commit can be described), which is exactly why the
+    run that is about to be handed that pair asks for itself.
+    """
+
+    experiment_id = f"{FIRST}-exp-01"
+    write_manifest(config.batches_root, FIRST, ["b1"], analysis_task_id="2026-07-31-first")
+    write_closure(config.batches_root, FIRST, analysis_task_id="2026-07-31-first")
+    write_experiment(
+        config.experiments_root,
+        experiment_id,
+        rounds=[experiment_round(1, candidate_revision="c" * 40)],
+        decision=experiment_decision("promoted", promotion_revision="f" * 40),
+    )
+    write_outcome(
+        config.batches_root,
+        FIRST,
+        outcome="promoted",
+        experiment_id=experiment_id,
+        promotion_revision="f" * 40,
+        reason="the approach needs a loader change this batch cannot justify",
+    )
+    write_manifest(config.batches_root, SECOND, ["a1"], analysis_task_id="2026-08-10-second")
+    return next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
+
+
+def test_a_release_this_checkout_does_not_hold_is_not_measured(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """A harness cannot exercise what this repository does not have, and the
+    refusal an operator can act on is `fetch the release line` rather than
+    whatever a missing object looks like from inside somebody else's harness.
+
+    Nothing is written by the refusal: no request stands, so no harness was ever
+    asked and there is no run anywhere to go looking for.
+    """
+
+    absent = build_absent_release(config)
+    form_reading(config)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+    assert "does not hold" in str(error.value)
+    assert f"fetch {RELEASE_REF}" in str(error.value)
+    assert read_reading(config, absent).requested is None
+    assert read_reading(config, absent).counterfactual is None
 
 
 # --- what the generated analysis task says ---------------------------------

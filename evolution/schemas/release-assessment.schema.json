@@ -12,6 +12,7 @@
     "comparability",
     "metrics",
     "counterfactual",
+    "counterfactual_request",
     "verdict",
     "confidence",
     "rationale",
@@ -45,6 +46,9 @@
     },
     "counterfactual": {
       "$ref": "#/$defs/counterfactual"
+    },
+    "counterfactual_request": {
+      "$ref": "#/$defs/request"
     },
     "verdict": {
       "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. A verdict resting on that run is the direction the run measured: it supports the way every goal that moved points, goals it left unmoved neither add to that nor stand against it, all of them unmoved is `neutral`, and goals pointing both ways support no direction at all — which quantity a release is judged on is chosen when the run is configured, not by weighing an improvement against a regression afterwards. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
@@ -540,6 +544,38 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "request": {
+      "description": "The counterfactual this cohort committed to before the harness answered for it, or null when none is outstanding. Everything in it is the controller's own — the key the run will occupy, the pair pinned for it, and what it was expected to show — which is exactly why it can be written before the harness is asked anything, and why it is not a run: while one stands, nothing has measured this release and no verdict may rest on it.\n\nWhat it is for is the window in between. The harness is an external thing being started, and an answer that never arrives — a lost process, a write that failed — would otherwise leave a run going that no record names. Asking again re-submits this request unchanged, and a conforming harness answers with the run it already began rather than starting a second one against the same key.\n\nA request and a recorded run are never both present: the write that records the run the request became clears it in the same file, and a reader finding both would have to guess which of them the harness is running.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "position",
+        "integration",
+        "expectation",
+        "requested_at"
+      ],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
+        },
+        "expectation": {
+          "description": "The directional change the run was expected to produce, recorded before it produced any — which is the only time it can be. Deliberately not handed to the harness: a prediction given to the thing being measured is an instruction.",
+          "type": "string",
+          "minLength": 1
+        },
+        "requested_at": {
+          "description": "When the pair was pinned and the harness first asked, which is also when the run it becomes started. A resume records the run at this moment rather than at the one it finally heard back in.",
+          "type": "string",
+          "format": "date-time"
         }
       },
       "additionalProperties": false

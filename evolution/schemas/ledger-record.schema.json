@@ -28,7 +28,8 @@
         "experiment-promoted",
         "batch-concluded",
         "promotion-rolled-back",
-        "release-assessed"
+        "release-assessed",
+        "release-counterfactual-completed"
       ]
     },
     "schema_version": {

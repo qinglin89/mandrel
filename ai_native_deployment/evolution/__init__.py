@@ -25,7 +25,10 @@ vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
 `rollback.rollback` (the latest promotion taken back off the source line),
 `assessment.describe` / `assessment.read` / `assessment.form` (the comparison a
 batch's frozen provenance supports, the reading it recorded of the release
-before it, and the operation that records one), and the `render.format_*`
+before it, and the operation that records one) together with
+`assessment.measure` / `assessment.conclude` / `assessment.abandon` /
+`assessment.resolve` (the pinned two-revision run that settles what the release
+did, and the reading its numbers settle), and the `render.format_*`
 functions (operator-facing text for the CLI).
 """
 

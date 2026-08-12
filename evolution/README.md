@@ -154,7 +154,7 @@ evolution/
   batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   batches/<batch-id>/rollback.json  the inverse commit that took a promoted change back off the source line
-  batches/<batch-id>/release-assessment.json  this cohort's reading of the release before it, and its settlement
+  batches/<batch-id>/release-assessment.json  this cohort's reading of the release before it, the pinned run that settles it, and its settlement
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, prepared promotion, decision
   experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
@@ -983,6 +983,20 @@ case set, one evaluator and one configuration, so that the release is the only
 difference between the two halves. It is the replay boundary, driven in temporary
 worktrees, and it moves no release ref.
 
+The pair is stated rather than computed. The promotion *is* the integration — a
+commit made from the merge input and the candidate, carrying the measured tree —
+so what a run is handed is that merge unit exactly as the outcome records it,
+with the pre-promotion revision as the base it is measured against. A checkout
+that does not hold both revisions measures nothing and says so; whether the
+commit it does hold carries the tree and parents the outcome states is the
+lineage's own reading, taken before this operation writes anything.
+
+One run measures both revisions, which is the harness boundary's own shape: a
+report states each quantity on the base and on the candidate. That is what makes
+the two halves of this comparison incapable of drifting apart — the cohort, the
+evaluator and the configuration are one selection governing both sides, rather
+than two that would have to be shown to have matched afterwards.
+
 It is recorded in the assessment and nowhere near an experiment's `replays.json`.
 That record binds every run to a round of that experiment and to the candidate
 its seal pinned, which a pre-promotion/promoted pair is neither of; the lineage
@@ -993,6 +1007,32 @@ with one run: it has to be a position no experiment holds — neither a recorded
 run nor a request it withdrew, since both stay allocated and neither is ever
 reissued — and a promoted experiment can never open another round, which is what
 makes a round beyond its last unreachable forever.
+
+The request for a run is durable before the harness is asked, exactly as a
+replay's is: from the moment it is written something may be running that this
+record does not describe yet, so what names it is written first and every
+refusal is made before the asking. Asking again re-submits that request
+unchanged. A request is not evidence and no verdict rests on one.
+
+A run that measured nothing is answered by another attempt at the next key, and
+a run that measured the release is not: the release is measured once, and a
+second completed answer would leave a reader choosing which of them the reading
+rests on. A harness that died, lost its handle, or answers with something this
+record cannot hold is ended by recording why — the reason is the operator's,
+because the harness is the thing that could not give one — and that failure is
+what another attempt answers. A comparison that never gets made leaves the
+reading `inconclusive`, which is the same answer this contract already gives for
+a harness that could not run.
+
+**Reading the run.** The reading a cohort forms is written while the cohorts are
+all there is, and is then settled by the numbers the completed run reports: the
+verdict, the confidence and the sentence saying why, none of which existed when
+the reading was formed. That revises the one record rather than adding a second,
+which is the difference from forming it — a formation happens once because two
+records of one release would leave a reader choosing between them, and this is
+the evidence that record was written to be added to. It stops when the gate
+settles: a decision stands on the reading it was made from, so a run started or
+a reading revised afterwards would rewrite the thing that was decided from.
 
 **The settlement** is a human decision recorded on the assessment: `retain`
 leaves the release as the line later work builds on, and `rolled-back` names the
@@ -1042,7 +1082,9 @@ places, the side each report's effective revision puts it on wherever Git can
 answer, and — as rules of the record rather than of whoever wrote it — the
 denominators and the comparability facets its two frozen manifests give, a
 directional verdict resting on evidence that can carry one and pointing the way
-that evidence came to, and a settlement held to a rollback the source line took.
+that evidence came to, a counterfactual pinned to the release's own pair and
+keyed clear of every position its experiment could hold, and a settlement held to
+a rollback the source line took.
 Those denominators and facets are committed content, so they are checked on every
 clone, including one that can resolve no effective revision and place no report
 at all: a reader that skipped them there would accept a cohort size and a
@@ -1084,8 +1126,9 @@ Two readings are specifically not that answer:
 
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
-abandon, supersede, promote, `conclude-no-change`, rollback, and recording a
-release assessment — writes
+abandon, supersede, promote, `conclude-no-change`, rollback, recording a release
+assessment, and starting, concluding, ending and resolving its counterfactual —
+writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
@@ -1100,23 +1143,32 @@ undone by this controller. A rollback is the same shape with one record: a
 commit, the record naming it, the ref, then the moment written into that same
 record and one audit line. A release assessment writes one record and one audit
 line, for the reason a seal does: what it records is a judgement about work that
-has already happened.
+has already happened. Its counterfactual writes into that same record and
+nowhere else: the request for a run, then the run — neither audited, for the
+reason a replay start is not — then the run's end with one audit line, and the
+reading its numbers settle with another.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
 redo, so an interrupted operation is finished by the next run rather than
 repaired by hand.
 
-Recording a release assessment is the one whose preamble is not the whole of the
-shared one, and the difference is which stage it belongs to. Every other
-operation here writes into a batch's change lineage, which is why each refuses
-while the analysis stage is still running; this reading *is* part of that stage —
-the generated analysis task's second question — so what guards it is which batch
-is current (invariant 14, from the whole history) and whether that batch is the
-cohort owing the reading, and nothing about the stage's end. It moves no ref and
-touches no experiment, so the ref holds below do not reach it either. What it
-shares is the rest: the lock, the record before the audit line, and a redo that
-reports the reading already on record.
+Recording a release assessment, and every operation on its counterfactual, are
+the ones whose preamble is not the whole of the shared one, and the difference is
+which stage they belong to. Every other operation here writes into a batch's
+change lineage, which is why each refuses while the analysis stage is still
+running; this reading *is* part of that stage — the generated analysis task's
+second question — so what guards it is which batch is current (invariant 14, from
+the whole history) and whether that batch is the cohort owing the reading, and
+nothing about the stage's end. None of them moves a ref or touches an experiment,
+so the ref holds below do not reach them either. What they share is the rest: the
+lock, the record before the audit line, and a redo that reports what is already on
+record.
+
+They are ordered among themselves by what each one is about. The cohorts are read
+first, because a pinned run answers a suspicion they raised and the reading is
+where that run is recorded; the run's numbers settle a verdict only once it has
+completed; and nothing is added to a reading its gate has already answered.
 
 An ending is also guarded by the state of the ref it ends over. An experiment's
 ref is described only while that experiment is open, so a decision recorded over
