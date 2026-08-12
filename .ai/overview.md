@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Project Overview
@@ -27,7 +27,8 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
   report pool, immutable analysis batches, and derived lifecycle status; the
   domain layer also owns guarded draft admission, experiment rounds, terminal
   decisions, exact-integration replay records, exact-tree promotion, inverse
-  rollback, and batch outcomes on durable artifacts and Git refs.
+  rollback, cross-batch release assessments and settlements, and batch outcomes
+  on durable artifacts and Git refs.
 - One deterministic regression entrypoint shared by local runs, CI, and the
   optional pre-push hook; credentialed live probes remain manual.
 - Project-specific evolution workspace for evidence-batched changes to this

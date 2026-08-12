@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # AI Knowledge Router
@@ -50,3 +50,4 @@ Load only what the current task needs.
 | Evolution experiment | One durable alternative attempted inside a batch, with its own ref, rounds, tasks, and terminal decision |
 | Experiment round | Append-only revision pass; candidate-ready only after task completion is observed and the ref tip is sealed |
 | Evolution revisions | Batch base, moving candidate tip, sealed round candidate, source-line promotion, and per-target effective revision are distinct commits |
+| Release assessment | First post-promotion cohort's durable reading of the prior release: derived provenance frame, pinned counterfactual, and retain/rollback settlement |

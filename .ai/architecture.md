@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Architecture
@@ -20,7 +20,8 @@ archived completed-task L1+L2 evaluation
         │ orch-hub global report feed
         ▼
 evolution runtime/import pool → frozen batch → analysis/change/replay
-        │ reviewed exact-tree promotion; optional inverse rollback
+        │ exact-tree promotion → next-cohort assessment/settlement
+        │ retain or audited inverse rollback → next experiment base
         └──────────────────────► canonical source line
 ```
 
@@ -76,15 +77,20 @@ experiment ref and record, admit task copies, append and seal candidate rounds,
 run durable replays of the exact candidate/source integration tree, record
 terminal experiment decisions, promote only that measured tree, and conclude a
 batch with an outcome. A rollback adds an inverse commit to the latest effective
-promotion without editing the terminal experiment or batch outcome.
+promotion without editing the terminal experiment or batch outcome. The first
+cohort after a promotion owns a release-assessment record derived from frozen
+manifests, per-target effective revisions, and lineage; a pinned counterfactual
+can settle its direction, then a human retain/rollback decision selects the line
+the next experiment base must contain. The obligation remains with that cohort
+if it concludes before answering and stays repeatable for recovery.
 
 One whole-lineage derivation governs both status and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
 the current batch, open attempt, gate, round, and revisions from any checkout.
 `.ai-tasks/` supplies local completion observations, never historical identity;
 the audit ledger is not flow state. Per-experiment replay histories and prepared
-promotions, batch outcomes/rollbacks, durable refs, and Git commits are the
-release-decision state. Versioned `evolution/` holds safe policy, schemas,
+promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
+commits are the release-decision state. Versioned `evolution/` holds safe policy, schemas,
 manifests, lineage, sanitized cases, and audit while raw report content and
 credentials stay ignored. Analysis, canonical implementation, replay,
 promotion, deployment, and rollback remain separate reviewed/human-gated steps.

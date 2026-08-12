@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Design Principles and Decisions
@@ -33,6 +33,15 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 - Rollback preserves the promoted outcome and Git ancestry: it records and lands
   a three-way inverse commit against the current line, never resets history, and
   refuses when later candidate lineage stands on the promotion.
+- A release assessment belongs to the first cohort after a promotion. Its
+  manifest-derived denominator/exclusions stay visible; mixed or missing
+  provenance is inconclusive, never negative evidence. Because manifests carry
+  no task-shape provenance, directional claims rest on a completed pinned
+  counterfactual whose goal metrics agree.
+- The assessment gate answers once with retain or rollback and chooses the line
+  every first experiment base must contain. Its obligation survives an owning
+  cohort's no-change conclusion; identical settlement retries remain idempotent,
+  while evidence mutation closes after the answer.
 
 ## Key Tradeoffs
 
@@ -84,6 +93,10 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
   fact being recorded.
 - Evolution writers publish through the reader's parser so persisted
   cross-field rules are enforced in both directions.
+- Cross-operation release settlement holds one single-writer lock across
+  preflight, optional inverse rollback, lineage re-derivation, and decision
+  publication; an answered earlier-cohort obligation is followed only for the
+  settlement redo path.
 - Config/schema version fields on persisted machine contracts.
 - Fail closed on malformed state, unsafe paths, unsupported config, or missing
   provenance required for a decision.

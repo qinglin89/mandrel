@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Project Map
@@ -23,6 +23,7 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 | Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON v6 |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision services, evolution policy | replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v6 |
+| Release effectiveness gate | assessment/lineage/experiment/rollback services, evolution policy | release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
 | Report publication | external orch-hub | pending global report feed/export |
 
 ## Change Impact
@@ -36,4 +37,5 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 | Orchestrator profile/config | README, print-config JSON, precedence tests, orch-hub contract |
 | Repository check/tool | `scripts/check.sh`, `dev` extra, structural gate tests; CI/hooks call only the gate |
 | Evolution admission/state | evolution contract/config/schema, ledger/batch invariants, `.ai` feature/API snapshot |
+| Release assessment/settlement | assessment schema/reader, replay and rollback boundaries, experiment-base gate, ledger vocabulary, `.ai` feature/API snapshot |
 | orch-hub report contract | import schema/client fixtures and task acceptance |

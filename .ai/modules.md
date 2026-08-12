@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Modules
@@ -24,6 +24,7 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 | Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; phase-v6 rendering |
 | Evolution lineage | `ai_native_deployment/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `ai_native_deployment/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback and Git/ref recovery |
+| Evolution release assessment | `ai_native_deployment/evolution/assessment.py`, `experiments.py` | Derived cross-batch cohort frame; assessment formation/read validation; pinned counterfactual request/run recovery; retain/rollback settlement; first-base sequencing |
 
 ## Boundary Rules
 

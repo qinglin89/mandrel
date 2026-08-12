@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # APIs and Interfaces
@@ -28,6 +28,9 @@ successful outcome when policy is not met.
 
 | Operation | Behavior |
 |---|---|
+| `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion cohort's provenance frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
+| `assessment.measure` / `conclude` / `abandon` / `withdraw` / `resolve` | Allocate an experiment-disjoint replay position, persist/recover the pinned before/after counterfactual, and hold a directional verdict to its goal metrics |
+| `assessment.settle` | Idempotently retain the release or compose its audited rollback under one writer lock; the decision gates and constrains the next first experiment base |
 | `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |
 | `experiments.promote` | Prepare and record the exact replayed merge, compare-and-swap the source ref, and publish agreeing experiment/batch outcomes without implying deployment |
 | `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
@@ -42,13 +45,14 @@ successful outcome when policy is not met.
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
 | `evolution/config.toml` | Versioned evolution admission/storage policy |
-| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, outcome, rollback, rejection, and ledger contracts |
+| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
 | `evolution/batches/<id>/manifest.json` | Immutable committed cohort membership and evaluator/protocol provenance |
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
 | `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |
 | `evolution/batches/<id>/rejected-drafts.json` | Durable terminal decisions for declined draft identities and bytes |
+| `evolution/batches/<id>/release-assessment.json` | First post-promotion cohort's derived frame, visible exclusions/denominators, counterfactual request/run/withdrawals, verdict, and retain/rollback decision |
 | `evolution/experiments/<id>/experiment.json` | Versioned experiment identity/rounds/decision record; v2 explicitly carries nullable prepared-promotion state while frozen v1 remains readable |
 | `evolution/experiments/<id>/replays.json` | Versioned per-experiment replay history: allocated withdrawals, optional pending request, and durable running/failed/completed attempts |
 | `refs/evolution/experiments/<id>` | Durable fast-forward candidate ref; independent of the checked-out branch |

@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
+last-updated: 2026-08-12
+verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 ---
 
 # Features
@@ -23,6 +23,7 @@ verified-against: 120f012b80e48cae8e529199ea88d0444a6814b6
 | Evolution lifecycle CLI | implemented | `aii-2 evolution list|sync|status|start`; human and JSON phase rendering |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes, phase JSON v6 |
 | Replay and release decisions | implemented | durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
+| Cross-batch release assessment | domain implemented; CLI/status exposure pending | derived provenance cohorts/exclusions, durable assessment and counterfactual, retain/rollback settlement, next-base gate |
 
 ## Evolution Behavior Chain
 
@@ -32,12 +33,13 @@ archived tasks acquire complete L1+L2 evaluation artifacts
   → human starts local evolution sync
   → validate/hash/dedupe into pending unique-task pool
   → threshold/age rule freezes immutable batch
-  → pending analysis task cites evolution contract + batch
+  → pending analysis task cites evolution contract + batch and reads the prior release
+  → optional pinned before/after counterfactual → human retain/rollback settlement
   → reviewed dispositions create inert change-task drafts
-  → human admission creates an experiment on the batch's frozen base
+  → human admission creates an experiment on the settlement-selected base
   → append-only task rounds seal an exact candidate revision
   → exact integration replay → human exact-tree promotion or no-change
-  → optional inverse rollback of the latest effective promotion
+  → the next eligible cohort repeats the release-effectiveness gate
 ```
 
 The evolution controller is independent of evaluation trigger policy and only
