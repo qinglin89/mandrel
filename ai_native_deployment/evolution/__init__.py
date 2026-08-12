@@ -22,7 +22,9 @@ batch's change lineage, the `replay.start` / `replay.conclude` / `replay.abandon
 `replay.withdraw` runs against a round's pinned candidate together with
 `replay.read_replays` / `replay.describe_evidence` and the rest of that module's
 vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
-`rollback.rollback` (the latest promotion taken back off the source line), and
+`rollback.rollback` (the latest promotion taken back off the source line),
+`assessment.describe` / `assessment.read` (the comparison a batch's frozen
+provenance supports, and the reading it recorded of the release before it), and
 the `render.format_*` functions (operator-facing text for the CLI).
 """
 

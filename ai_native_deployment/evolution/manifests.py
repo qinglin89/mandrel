@@ -6,14 +6,17 @@ writes, the way it already owns `_write_manifest` against this module's
 `read_manifest`. Whether a batch is *current* is not answered here: that is a
 question about its whole lineage, experiments included (`lineage.py`).
 
-Four records sit beside the manifest and none of them substitutes for another.
+Five records sit beside the manifest and none of them substitutes for another.
 `analysis-complete.json` ends the analysis stage; `outcome.json` ends the batch
 (contract invariant 14), which is a later and different moment — admission, the
 experiments, and their rounds all happen between the two;
 `rejected-drafts.json` ends nothing but is what keeps a declined proposal from
 waiting at the admission gate forever; `rollback.json` comes after the end,
-saying that the promotion the outcome recorded is no longer on the source line.
-All four are committed for the same reason: `.ai-tasks/` and `.ai-evolution/`
+saying that the promotion the outcome recorded is no longer on the source line;
+`release-assessment.json` is about a different batch's promotion entirely — this
+cohort's reading of whether the release before it worked (`assessment.py`), which
+is why it sits in the assessing batch's directory rather than the assessed one's.
+All five are committed for the same reason: `.ai-tasks/` and `.ai-evolution/`
 are machine-local, so a conclusion that lived only there would be unreadable on
 every other clone.
 
@@ -66,6 +69,7 @@ CLOSURE_FILENAME = "analysis-complete.json"
 OUTCOME_FILENAME = "outcome.json"
 REJECTED_DRAFTS_FILENAME = "rejected-drafts.json"
 ROLLBACK_FILENAME = "rollback.json"
+ASSESSMENT_FILENAME = "release-assessment.json"
 
 CLOSURE_SCHEMA_VERSION = 1
 OUTCOME_SCHEMA_VERSION = 1
@@ -126,6 +130,14 @@ class Batch:
     @property
     def rollback_path(self) -> Path:
         return self.directory / ROLLBACK_FILENAME
+
+    @property
+    def assessment_path(self) -> Path:
+        """This batch's reading of the release before it — its own cohort's
+        judgement, which is why it sits here and not with the promotion it is
+        about (`assessment.py`)."""
+
+        return self.directory / ASSESSMENT_FILENAME
 
     @property
     def schema_version(self) -> int | None:
@@ -399,10 +411,12 @@ def read_batch_record(
 ) -> Mapping[str, Any] | None:
     """One committed record from a batch directory, or None when it is absent.
 
-    Absence is a legal answer for all three of them — a stage or a batch that
-    has not ended yet — while an unreadable or foreign one is not: every caller
-    here is deciding whether something has finished, and a record that cannot be
-    read as this batch's finishes it just as effectively as a valid one.
+    Absence is a legal answer for every one of them — a stage or a batch that
+    has not ended yet, a gate nobody has declined anything at, a promotion that
+    stands, a release nobody has assessed — while an unreadable or foreign one is
+    not: every caller here is deciding whether something has happened, and a
+    record that cannot be read as this batch's answers that just as effectively
+    as a valid one.
     """
 
     try:

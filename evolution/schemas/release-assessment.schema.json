@@ -1,0 +1,643 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-development.local/evolution/release-assessment.schema.json",
+  "title": "Evolution release assessment",
+  "description": "One cohort's reading of whether an earlier promotion actually improved the work that came after it (contract: Release assessment). It sits in the directory of the batch that produced the reading — `batch_id` — and names the release it is about in `assessed`, because the promoted batch's records are terminal and a later cohort's judgement is not theirs to carry.\n\nWhat is recorded here is only what cannot be re-derived. The release under assessment, the two cohorts, their denominators, the exclusions, and the comparability facets all follow from two immutable manifests, the promoted batch's outcome, and Git — so they are derived on every read and this record is checked against that derivation. The measurements come from machine-local evaluation artifacts, the counterfactual from a harness run, and the verdict, confidence and rationale from the session that judged them; none of the four can be recomputed, which is exactly why they are committed.\n\nThe cohort fields are restated all the same, rather than left to the derivation. An assessment is evidence for a release decision, and evidence that names no denominator is a directional claim whose sample nobody can see; restating it is also what lets a later reader be told that this record and the repository disagree, instead of quietly reading the current answer as the one that was judged.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "assessed",
+    "cohorts",
+    "comparability",
+    "metrics",
+    "counterfactual",
+    "verdict",
+    "confidence",
+    "rationale",
+    "formed_at",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "batch_id": {
+      "description": "The batch whose frozen reports produced this reading — the directory this record sits in, and never the batch being assessed.",
+      "type": "string",
+      "pattern": "^evolution-batch-[0-9]{4,}$"
+    },
+    "assessed": {
+      "$ref": "#/$defs/assessed"
+    },
+    "cohorts": {
+      "$ref": "#/$defs/cohorts"
+    },
+    "comparability": {
+      "$ref": "#/$defs/comparability"
+    },
+    "metrics": {
+      "description": "What the two report cohorts came to, quantity by quantity. Empty is a reading that measured nothing — the ordinary state of an `inconclusive` assessment formed over cohorts that were never comparable, and refused for every other verdict: a direction with no measured quantity behind it is an opinion wearing an artifact's provenance. Invariant 13 is why this is a set rather than a score: quality, convergence, quota and elapsed time are judged together, and each is recorded with the direction that counts as improvement so an observation is not read as a goal.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/measurement"
+      }
+    },
+    "counterfactual": {
+      "$ref": "#/$defs/counterfactual"
+    },
+    "verdict": {
+      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims and are admissible only from comparable cohorts: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. `regressed` needs the counterfactual as well — a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. `inconclusive` is the answer whenever any of that is missing, and it is a real result rather than a failure: sample insufficiency, mixed provenance and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
+      "enum": [
+        "improved",
+        "neutral",
+        "regressed",
+        "inconclusive"
+      ]
+    },
+    "confidence": {
+      "description": "How much weight the judging session puts on its own verdict. A human reading of the evidence as a whole — cohort size, spread, how much of the change the after cohort could even exercise — and deliberately not derived from the counts, which would restate the admissibility rule as a number and add nothing.",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "rationale": {
+      "description": "Why the verdict is that verdict, in the session's own words: which quantities moved, what the exclusions cost, and — for `inconclusive` — what was missing. What a later reader has instead of the evidence the judging session had in front of it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "formed_at": {
+      "description": "When this reading was recorded. Not when the cohort was frozen and not when the promotion was made: an assessment is a later judgement against a later cohort, and the interval between the three is the thing that makes it one.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    }
+  },
+  "$defs": {
+    "assessed": {
+      "description": "The release this reading is about, restated from the promoted batch's `outcome.json` — the merge unit that outcome states, which is the only record that carries the whole of it (a promotion made at experiment schema version 1 states its revision alone). The pre-promotion revision is `merge_input_revision`, the promotion's first parent, and the promoted one is `revision`: that pair is the before and after this assessment is a reading of, and neither is re-derived from a checkout.",
+      "type": "object",
+      "required": [
+        "batch_id",
+        "experiment_id",
+        "revision",
+        "round",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree",
+        "standing",
+        "rollback_revision"
+      ],
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "revision": {
+          "description": "The promotion revision — the source-line commit carrying the change, and the `after` half of the comparison.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "round": {
+          "description": "The round whose candidate the promotion carried, restated so this record names the evidence the release was argued from.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "description": "Where the source line stood immediately before the promotion — the `before` half of the comparison. Read from the outcome's merge unit rather than computed from a checkout: a promotion's first parent is a fact the record already states, and a repository that has moved on cannot be asked for it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "description": "The source line the promotion went onto, fully qualified, for the reason every other recorded ref here is: a bare name resolves against whichever working copy asks.",
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "description": "The tree the promotion carried, which is the tree its replay measured. Restated because it is what a counterfactual of this release has to exercise: the pair of commits only implies a result.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "standing": {
+          "description": "Whether the source line still carried this promotion when the reading was formed. The two states are different questions rather than the same question with a caveat: a standing promotion is assessed by cohorts produced at a line that has the change, while a reversed one is assessed by cohorts that stop having it partway through — so a record says which of the two it answered instead of leaving a reader to assume the current one.\n\nNot re-derived on read, and deliberately: the ordinary consequence of an assessment finding a regression is the rollback that follows it, and re-reading this field against the lineage would make every such rollback contradict the assessment that justified it. What the line carries now is the lineage's own reading (`status`'s last promotion), and this is what was true when the judgement was made.",
+          "type": "boolean"
+        },
+        "rollback_revision": {
+          "description": "The inverse commit that had already taken this promotion back off the line, or null when the promotion was standing. Paired with `standing` and checked against the promoted batch's own rollback record: a reversal this repository never recorded is not one an assessment may assert.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cohorts": {
+      "description": "The reports the comparison rests on, split by what the target that produced each of them actually held. Membership is drawn from two immutable manifests — the assessed batch's and this one's — and every report either lands in a cohort or is excluded with a reason: a denominator that quietly loses members is the base rate invariant 2 exists to keep knowable.",
+      "type": "object",
+      "required": [
+        "before",
+        "after",
+        "excluded"
+      ],
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/cohort"
+        },
+        "after": {
+          "$ref": "#/$defs/cohort"
+        },
+        "excluded": {
+          "description": "Every report neither cohort could take, each with why. Reports are excluded for what their provenance cannot say — no effective revision, a revision this checkout cannot place, a line that had the change and lost it — and never for disagreeing with the change: dropping a report because its numbers are inconvenient is the one exclusion that cannot be told from the rest without a reason beside it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exclusion"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "cohort": {
+      "description": "One side of the comparison: the reports whose effective revision places them there, and the unique completed tasks they come to. The count is stated rather than left to be counted off the keys, because it is the denominator a directional claim is admissible against and evaluator reruns share one task (invariant 1).",
+      "type": "object",
+      "required": [
+        "report_keys",
+        "task_count"
+      ],
+      "properties": {
+        "report_keys": {
+          "description": "The reports placed on this side, each named by a manifest of the assessed or the assessing batch. A key no manifest names is a member of no frozen cohort, and a key placed twice makes one report evidence on both sides.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "task_count": {
+          "description": "Unique completed tasks among those reports — the unit invariant 1 counts in.",
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "exclusion": {
+      "type": "object",
+      "required": [
+        "report_key",
+        "batch_id",
+        "reason",
+        "detail"
+      ],
+      "properties": {
+        "report_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "batch_id": {
+          "description": "The manifest this report is a member of — the assessed batch's or the assessing one's. Named because the two cohorts are drawn from different frozen manifests and an operator reading an exclusion needs to know which denominator lost a member.",
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "reason": {
+          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-unresolvable`: it says something this checkout cannot resolve to a commit, which is a fact about the clone. `post-rollback-effective-revision`: the target held a line that had already taken the promotion back out, which is neither the release nor the state before it.",
+          "enum": [
+            "effective-revision-absent",
+            "effective-revision-unresolvable",
+            "post-rollback-effective-revision"
+          ]
+        },
+        "detail": {
+          "description": "One line naming what was found — the effective revision as the report stated it, most of all. What an operator has instead of re-reading the manifest.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "comparability": {
+      "description": "Whether the two cohorts are one cohort in every respect but the release (invariant 5). Facet by facet, with the values each side carried, because \"not comparable\" without naming what differed is not something an operator can act on — and because the accounting invariant 5 asks for is exactly this list.",
+      "type": "object",
+      "required": [
+        "coherent",
+        "facets"
+      ],
+      "properties": {
+        "coherent": {
+          "description": "True only when every facet is. What a directional verdict is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision or role model explains a difference in the numbers at least as well as the release does.",
+          "type": "boolean"
+        },
+        "facets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/facet"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "facet": {
+      "type": "object",
+      "required": [
+        "facet",
+        "coherent",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "facet": {
+          "description": "Which respect this is about, as a kebab slug the controller derives: the evaluator's backend, model, rubric revision and schema version, the runner protocol revision, the dev and review role configurations, and the repositories the tasks came from.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "coherent": {
+          "description": "Whether this facet leaves the release as the difference between the cohorts. For every facet but repository coverage that means one value across both sides and none of it missing — a cohort mixing two evaluator models is not one cohort, and a provenance field nothing filled in cannot be shown to match. Repository coverage asks the weaker question its evidence supports: at least one repository present on both sides, or the comparison is between two projects rather than two revisions.",
+          "type": "boolean"
+        },
+        "before": {
+          "description": "The distinct values the before cohort carried, sorted, with a missing one spelled null. Empty for an empty cohort.",
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "description": "One quantity, on the cohort produced before the release and on the cohort produced after it. `better` says which direction counts as improvement and `neither` marks an observation recorded beside the goals — quota and elapsed time are the ordinary examples, and raw token counts compared across providers are not a comparison at all (invariant 13). The spelling is the replay record's, with the two sides named for what they are here: two vocabularies for one fact would put a cohort reading and a run's numbers beyond comparison.",
+      "type": "object",
+      "required": [
+        "metric",
+        "unit",
+        "before",
+        "after",
+        "better"
+      ],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "before": {
+          "description": "The quantity on the pre-release cohort, or null when only the after cohort could be measured. A directional verdict needs one: an improvement claim with nothing to improve on is a number rather than a finding.",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "after": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher",
+            "neither"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "counterfactual": {
+      "description": "The pinned two-revision run that answers a suspected regression, or null when none was needed or none could be made. Not the cohort comparison repeated: it exercises the exact pre-promotion and promoted revisions with one case set, one evaluator and one configuration, so the release is the only difference between the two halves — which is what makes it evidence about the release rather than about the cohorts.\n\nIt is recorded here and nowhere near an experiment's `replays.json`. That record binds every run to a round of that experiment and to the candidate its seal pinned, which a pre-promotion/promoted pair is neither of; and the lineage reads the promoted experiment's replay evidence on every derivation, so an unrelated entry there would stop `status` for the whole history rather than for this comparison. The position the harness was keyed on is still recorded, because that key is what a harness answers idempotently: it has to be one no experiment run or withdrawn request holds, or the counterfactual would be answered with an experiment's run.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "position",
+        "integration",
+        "cases",
+        "evaluator",
+        "harness",
+        "expectation",
+        "started_at",
+        "result"
+      ],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "integration": {
+          "$ref": "#/$defs/integration"
+        },
+        "cases": {
+          "description": "The eligible cohort the run exercised and what was held out of it, in the replay record's vocabulary. Identity and hash together: a case set edited between the two halves makes their numbers incomparable while its name goes on matching — which is why the second half asks for these selections by name rather than for whatever would be chosen again.",
+          "type": "object",
+          "required": [
+            "case_set_id",
+            "case_set_sha256",
+            "count",
+            "excluded"
+          ],
+          "properties": {
+            "case_set_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "case_set_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "excluded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "case_id",
+                  "reason"
+                ],
+                "properties": {
+                  "case_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "evaluator": {
+          "type": "object",
+          "required": [
+            "backend",
+            "model",
+            "rubric_revision"
+          ],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rubric_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "harness": {
+          "type": "object",
+          "required": [
+            "id",
+            "revision",
+            "config_sha256",
+            "handle"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "handle": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "expectation": {
+          "description": "The directional change this run was expected to produce, recorded before it produced any (contract: Promotion evidence). Kept for the same reason a replay keeps one: numbers read back onto a prediction nobody wrote down agree with it every time.",
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "result": {
+          "description": "How the run ended, or null while it is still going. `completed` measured both revisions and carries at least one measurement; `failed` carries none and says in `detail` why — a partial sweep read as a cohort result is a number nobody produced. A failed counterfactual is why a suspected regression stays `inconclusive`: the comparison it was going to settle was not made.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "outcome",
+            "concluded_at",
+            "detail",
+            "elapsed_seconds",
+            "metrics",
+            "regressions",
+            "ambiguity"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "completed",
+                "failed"
+              ]
+            },
+            "concluded_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1
+            },
+            "elapsed_seconds": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/measurement"
+              }
+            },
+            "regressions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "case_id",
+                  "summary"
+                ],
+                "properties": {
+                  "case_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "ambiguity": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "position": {
+      "description": "The harness key this run occupied. A conforming harness answers one key with one run, so the key has to be one no experiment holds — neither a recorded run nor a withdrawn request, since both stay allocated and neither is ever reissued. The promoted experiment is terminal and can never open another round, which is what makes a round beyond its last a position nothing will ever ask for again.",
+      "type": "object",
+      "required": [
+        "experiment_id",
+        "round",
+        "attempt"
+      ],
+      "properties": {
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "integration": {
+      "description": "The two revisions the counterfactual pinned and the tree the promoted half carries. `base_revision` is the pre-promotion commit and `candidate_revision` the promotion itself, so the pair is the assessed release exactly as the outcome states it — a run of any other pair measured a different question and is refused as this assessment's counterfactual.",
+      "type": "object",
+      "required": [
+        "base_revision",
+        "candidate_revision",
+        "source_ref",
+        "tree"
+      ],
+      "properties": {
+        "base_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_ref": {
+          "description": "The source line the promotion went onto, named so a later reader can see which line the pair belongs to. The run itself moves nothing: both revisions are exercised in temporary worktrees, and the release checkout is left where it stands.",
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "description": "The tree the promoted revision carries — the same tree its replay measured, restated so the counterfactual is checkable against the release rather than merely dated after it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "decision": {
+      "description": "The human settlement of this assessment, or null while it is unsettled. It is the gate between a release assessment and the next base freeze: `retain` leaves the current release as the line every later experiment builds on, and `rolled-back` names the inverse commit the rollback operation made before the next base could pin anything. Recorded on the assessment rather than beside it, because the decision and the evidence it was made from are one fact and a reader that found only one of them would have to guess which.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "settlement",
+        "decided_at",
+        "reason",
+        "rollback_revision"
+      ],
+      "properties": {
+        "settlement": {
+          "enum": [
+            "retain",
+            "rolled-back"
+          ]
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "description": "The operator's reason, which is theirs and not the assessment's: an `inconclusive` reading is a perfectly ordinary ground for retaining a release, and a rollback is a judgement the promotion's own evidence never contained (contract: Rollback).",
+          "type": "string",
+          "minLength": 1
+        },
+        "rollback_revision": {
+          "description": "The inverse commit a `rolled-back` settlement produced, and null for `retain`. Restated from the rollback record the operation wrote beside the promoted batch's outcome, which stays the authority on what came off the line.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

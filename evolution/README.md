@@ -154,6 +154,7 @@ evolution/
   batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   batches/<batch-id>/rollback.json  the inverse commit that took a promoted change back off the source line
+  batches/<batch-id>/release-assessment.json  this cohort's reading of the release before it, and its settlement
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, prepared promotion, decision
   experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
@@ -193,6 +194,10 @@ different moments, and each has its own record:
   that the promotion the outcome recorded is no longer what the source line
   carries; the batch stays concluded, the experiment stays promoted, and the
   outcome record is not edited.
+- A release assessment is about a *different* batch's promotion, which is why it
+  sits in the directory of the cohort that produced the reading rather than the
+  one being read (Release assessment). It ends nothing of its own batch's
+  lifecycle; what it settles is whether the release before it stands.
 
 ## Normal workflow
 
@@ -212,7 +217,8 @@ completed archived-task L1+L2 evaluations
   -> replay/canary of that pinned candidate against the base
   -> human promote | revise (next round) | abandon | supersede (next experiment)
   -> batch outcome: promoted, or no-change
-  -> later report cohort measures the result
+  -> next frozen cohort assesses the release: improved | neutral | regressed | inconclusive
+  -> human settlement: retain, or roll back
 ```
 
 `start` may discover too few eligible reports and exit without creating a
@@ -853,6 +859,103 @@ carry what they were last deployed with, and a reversed promotion reaches them
 the same way the promotion did — through `aii-2 deploy`, read from each target's
 own receipt.
 
+### Release assessment
+
+A promotion is not the end of the evidence chain. The last of the revisions in
+play is why: a promoted commit changes nothing an evaluation can see until
+targets carry it, so what a release actually did is a question for the cohort
+whose reports were produced at that effective revision. That cohort is the next
+frozen batch, and its reading is recorded in
+`batches/<assessing-batch-id>/release-assessment.json`
+(`schemas/release-assessment.schema.json`) — in the *assessing* batch's
+directory, because the promoted batch's records are terminal and a later
+cohort's judgement is not theirs to carry.
+
+The obligation belongs to the first batch frozen after a promotion. A later one
+has nothing to assess: the batches form a series (invariant 14), so by the time
+it can freeze, the reading has been taken and settled. A batch whose predecessor
+concluded `no-change` owes nothing either — that conclusion fabricates no
+revision (invariant 7), so there is no upgrade for an effect to be measured
+against and none is invented.
+
+**Derived, then recorded.** The release under assessment, the two cohorts, their
+denominators, the exclusions and the comparability facets all follow from two
+immutable manifests, the promoted batch's outcome, its rollback record if it has
+one, and Git — so they are derived on every read like the rest of the lifecycle,
+and the record is checked against that derivation. What is committed is what
+cannot be re-derived: measurements taken from machine-local evaluation
+artifacts, the counterfactual a harness ran, and the verdict, confidence and
+rationale of the session that judged them. The cohorts are restated all the same,
+because evidence that names no denominator is a directional claim whose sample
+nobody can see.
+
+The release is read from the promoted batch's `outcome.json`. That record carries
+the whole merge unit, which is what makes the pair to compare a reading rather
+than a reconstruction: the pre-promotion revision is the merge input — the
+promotion's first parent — and the promoted one is the revision itself. The
+experiment's own prepared promotion is not the place to read it, since a
+promotion made at experiment schema version 1 states its revision alone.
+
+**Which question is being answered.** A promotion a rollback reversed is a
+different question from a standing one, not the same question with a caveat: the
+cohort produced after the reversal was produced at a revision the change is not
+in. So the record states which of the two it assessed, and it is not re-derived
+afterwards — the ordinary consequence of a regression finding is the rollback
+that follows it, and re-reading that field would make every such rollback
+contradict the assessment that justified it. What the line carries *now* is the
+lineage's own reading.
+
+**Which reports contribute.** Membership comes from the two frozen manifests and
+nothing else (invariant 3). Each report is placed by its own
+`provenance.effective_revision` — the revision that target actually held — asked
+of Git as an ancestry question, so a target redeployed at later work that
+includes the promotion is post-release evidence too. The targets a promotion was
+*planned* for are not that reading and never stand in for it. A report that
+cannot be placed is excluded with a reason and stays in view: no effective
+revision recorded, a revision this checkout cannot resolve, or a line that had
+already taken the change back out. Exclusions are for what provenance cannot say
+and never for what the numbers came to — a cohort narrowed to the reports that
+agreed with the change is the base rate invariants 1 and 2 exist to keep
+knowable.
+
+**Verdicts.** `improved`, `neutral`, `regressed`, or `inconclusive`. The first
+three are directional and admissible only from cohorts that can carry one: every
+comparability facet coherent — one evaluator, rubric, protocol revision and role
+configuration across both sides, and at least one repository present on both —
+both sides at or above the configured minimum unique-task count, and at least one
+goal quantity measured on both sides (invariants 1, 4, 5, 13). `regressed` rests
+on the counterfactual as well.
+
+`inconclusive` is a real result. Mixed provenance, too small a sample, and a
+harness that could not run are reasons to know less, never evidence against a
+release — and the reading that costs somebody a promoted change is the one that
+has to be measured rather than inferred.
+
+**The counterfactual.** A cohort difference can suspect a regression; what
+settles it is the exact pre-promotion and promoted revisions exercised with one
+case set, one evaluator and one configuration, so that the release is the only
+difference between the two halves. It is the replay boundary, driven in temporary
+worktrees, and it moves no release ref.
+
+It is recorded in the assessment and nowhere near an experiment's `replays.json`.
+That record binds every run to a round of that experiment and to the candidate
+its seal pinned, which a pre-promotion/promoted pair is neither of; the lineage
+also reads it on every derivation, so an entry it could not account for would
+stop `status` for the whole history rather than for this comparison. The harness
+key the run occupied is recorded, because a conforming harness answers one key
+with one run: it has to be a position no experiment holds — neither a recorded
+run nor a request it withdrew, since both stay allocated and neither is ever
+reissued — and a promoted experiment can never open another round, which is what
+makes a round beyond its last unreachable forever.
+
+**The settlement** is a human decision recorded on the assessment: `retain`
+leaves the release as the line later work builds on, and `rolled-back` names the
+inverse commit the rollback operation made. The evidence and the decision live in
+one record because a reader finding only one of them would have to guess at the
+other. The reason is the operator's and not the assessment's — an `inconclusive`
+reading is an ordinary ground for retaining a release, and a rollback is a
+judgement the promotion's own evidence never contained (Rollback).
+
 ### What is derived
 
 None of this stores a lifecycle phase, and none of it may be inferred from the
@@ -860,10 +963,13 @@ checkout. The current batch, the open experiment, its last round and whether
 that round is candidate-ready, the candidate revision, a successor a
 supersession recorded and did not create, the drafts still
 waiting at the gate, what the current round has been replayed by, the last
-promotion this repository recorded and whether the source line still carries it
+promotion this repository recorded and whether the source line still carries it,
+which release the current cohort owes a reading of and which of its reports can
+contribute to one
 are
 re-derived on every read from the committed manifests, closure records,
-experiment records, replay records, rejection records, rollback records, the
+experiment records, replay records, rejection records, rollback records,
+release-assessment records, the
 experiment refs, and
 Git — so any clone, on any branch, and a machine that has lost `.ai-tasks/`, all
 derive the same answer.
@@ -878,6 +984,13 @@ itself — that commit's tree is what taking the promotion back out of the line 
 was made from produces. A record whose claim nothing checks is a claim any
 schema-valid file can make, and these name what reached the canonical source line
 and what came back off it.
+
+A release assessment is held to the same treatment, against the frame its own
+batch's provenance supports: the release it names, the frozen membership it
+places, the side each report's effective revision puts it on wherever Git can
+answer, and — as a rule of the record rather than of whoever wrote it — a
+directional verdict its stated cohorts can carry. A reading that could not have
+been formed is not one that may be read back.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run
@@ -1113,6 +1226,9 @@ Every evolution task must:
 - State its runner protocol revision; change tasks also state the batch's base
   revision, and the experiment and draft id they were admitted from.
 - Use only reports named by the batch manifest for batch-level claims.
+- Record, when it analyzes the first batch frozen after a promotion, one reading
+  of that release from its own frozen provenance and the promoted batch's
+  (Release assessment).
 - Keep report content out of the taskfile except bounded summaries and
   references.
 - End with explicit evidence disposition and unresolved-risk statements.

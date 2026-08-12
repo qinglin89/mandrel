@@ -59,6 +59,35 @@ INDEX_PLACEHOLDER = "(none)"
 
 
 @dataclass(frozen=True)
+class ReleaseAssessment:
+    """The release a generated task also owes a reading of, when there is one.
+
+    Identity only, and deliberately: the two cohorts, their exclusions and their
+    comparability are derived from frozen manifests and Git on every read
+    (`assessment.py`), and a clone that cannot resolve what some target held
+    derives different exclusions from the machine that froze the batch. Rendering
+    them into the task text would make the file machine-dependent — a repair on
+    another machine would write a different task — and would freeze a reading the
+    session is supposed to take for itself.
+
+    `standing` is left out for the same reason twice over: a rollback landing
+    between the freeze and the reading changes it, and the answer is the
+    lineage's to give (`aii-2 evolution status`).
+    """
+
+    batch_id: str
+    experiment_id: str
+    revision: str
+    round_number: int
+    candidate_revision: str
+    merge_input_revision: str
+    merge_input_ref: str
+    tree: str
+    planned_targets: tuple[str, ...]
+    assessment_relative_path: str
+
+
+@dataclass(frozen=True)
 class AnalysisTaskSpec:
     """Everything the generated task states about its batch.
 
@@ -79,18 +108,32 @@ class AnalysisTaskSpec:
     config_sha256: str
     forced: bool
     force_justification: str | None
+    # The release this batch is the first cohort after, when it follows one. None
+    # for the first batch a repository ever freezes and for every batch whose
+    # predecessor changed nothing — a `no-change` conclusion fabricates no
+    # revision (invariant 7), so there is no upgrade effect to look for.
+    release: ReleaseAssessment | None = None
 
     @property
     def summary(self) -> str:
+        tail = (
+            f" Assess the {self.release.batch_id} release from this cohort."
+            if self.release is not None
+            else ""
+        )
         return (
             f"Classify and dispose the evidence in {self.batch_id} "
-            f"({self.task_count} unique completed tasks); dispositions only, no canonical edits."
+            f"({self.task_count} unique completed tasks); dispositions only, no canonical edits.{tail}"
         )
 
     @property
     def session_est_total(self) -> int:
+        """One session per bounded group of reports, plus one for a release
+        assessment when the batch owes one: it is a second reading of the same
+        cohort against a different question, not a paragraph in the first."""
+
         needed = -(-max(self.task_count, 1) // TASKS_PER_SESSION)
-        return min(needed, MAX_SESSION_EST)
+        return min(needed + (1 if self.release is not None else 0), MAX_SESSION_EST)
 
 
 def analysis_task_id(batch_id: str, created_at: datetime) -> str:
@@ -394,6 +437,8 @@ def render(spec: AnalysisTaskSpec) -> str:
     # manifest keeps the operator's text verbatim.
     justification = " ".join((spec.force_justification or "").split())
     force_line = f"- Below-target batch, frozen on human justification: {justification}\n" if spec.forced else ""
+    release_scope = _release_scope(spec.release)
+    release_acceptance = _release_acceptance(spec.release)
     return f"""---
 id: {spec.task_id}
 status: pending
@@ -463,7 +508,7 @@ justified is a valid outcome (invariant 7).
   gate (invariant 9).
 - Analysis is not implementation: this task must not edit `canonical/`
   (invariant 6). Accepted recommendations become separate admitted tasks.
-
+{release_scope}
 ## Acceptance
 
 - `{spec.findings_relative_path}` records every finding cluster with exactly one
@@ -476,6 +521,85 @@ justified is a valid outcome (invariant 7).
   under `{spec.proposed_tasks_relative_path}/`, and `.ai-tasks/` gains no file
   from this session.
 - Unresolved risks and open evidence questions are stated explicitly.
-
+{release_acceptance}
 ## Session log
+"""
+
+
+def _release_scope(release: ReleaseAssessment | None) -> str:
+    """What a post-release batch owes beyond its dispositions.
+
+    Empty for a batch that follows no promotion, so the ordinary generated task
+    is exactly what it was. The identity here is the promoted batch's outcome
+    restated; everything derived — the cohorts, the exclusions, the comparability
+    — is left to be read at the time, because it depends on Git and on the
+    machine reading it.
+    """
+
+    if release is None:
+        return ""
+    targets = ", ".join(release.planned_targets) or "none recorded"
+    return f"""
+### Release assessment — {release.batch_id}
+
+This is the first frozen cohort after a promotion, so it also owes one reading of
+whether that release improved the work (contract: Release assessment). It is a
+separate question from the dispositions above and neither answer decides the
+other.
+
+- The release: batch `{release.batch_id}`, experiment `{release.experiment_id}`,
+  round {release.round_number}, on source line `{release.merge_input_ref}`.
+  Promotion revision:
+  `{release.revision}`. Candidate measured:
+  `{release.candidate_revision}`. Tree carried:
+  `{release.tree}`.
+- The pair to compare is stated, not reconstructed. The pre-promotion revision is
+  the promotion's merge input:
+  `{release.merge_input_revision}`; the promoted one is the promotion revision
+  above. Read both from that batch's `outcome.json`, never from the experiment's
+  own promotion record — a promotion made at experiment schema version 1 states
+  its revision alone.
+- Ask `aii-2 evolution status` whether the source line still carries it. A
+  promotion a rollback reversed is a different question from a standing one — the
+  cohort after the reversal was produced at a revision the change is not in — and
+  the assessment states which of the two it answered.
+- Cohorts come from frozen manifests only: this batch's and
+  `{release.batch_id}`'s. Which side a report is on is a per-report reading of
+  `provenance.effective_revision` — what that target actually held — and never
+  the targets the promotion was *planned* for ({targets}), which is a plan and
+  not a deployment.
+- Verdicts are `improved`, `neutral`, `regressed`, or `inconclusive`. The first
+  three are directional and need comparable cohorts: one evaluator, rubric,
+  protocol revision and role configuration across both sides, both sides at or
+  above the configured minimum unique-task count, and a goal quantity measured on
+  both. Mixed provenance and too small a sample are reasons to know less, never
+  evidence against the release, so they produce `inconclusive` (invariants 1, 4,
+  5). `regressed` additionally rests on the pinned two-revision counterfactual —
+  a cohort difference suspects a regression; measuring both revisions under one
+  configuration is what settles it.
+- Record the reading at
+  `{release.assessment_relative_path}`, with the denominators and every exclusion
+  visible. Retaining or rolling back the release is a human decision recorded on
+  that artifact afterwards; this task produces the evidence and the verdict, not
+  the settlement.
+"""
+
+
+def _release_acceptance(release: ReleaseAssessment | None) -> str:
+    """The acceptance lines that go with `_release_scope`, or none at all.
+
+    Ends with a newline so the section that follows keeps its blank line: the
+    empty case supplies it from the template, and a non-empty one has to bring
+    its own.
+    """
+
+    if release is None:
+        return ""
+    return f"""- `{release.assessment_relative_path}`
+  records one reading of the `{release.batch_id}` release: the cohorts and their
+  denominators, every exclusion with its reason, the comparability facets, the
+  verdict, and the rationale — or an explicit `inconclusive` with what was
+  missing.
+- No directional verdict rests on mixed provenance, an under-sized cohort, or an
+  unmeasured quantity.
 """

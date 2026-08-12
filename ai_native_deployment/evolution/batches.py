@@ -55,7 +55,9 @@ from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
 from .lineage import current_batch
+from .lineage import describe as describe_lineage
 from .manifests import (
+    ASSESSMENT_FILENAME,
     BATCH_SCHEMA_VERSION,
     CLOSURE_FILENAME,
     CLOSURE_SCHEMA_VERSION,
@@ -984,8 +986,15 @@ def _task_spec(
     task_id: str,
     batch_id: str,
 ) -> AnalysisTaskSpec:
-    """Describe the generated task from the manifest alone, so a reconstructed
-    task says exactly what the original said."""
+    """Describe the generated task from the manifest and the batch series, so a
+    reconstructed task says exactly what the original said.
+
+    The one thing outside the manifest is the release this cohort follows, and it
+    is stable for exactly as long as this batch is current: a promotion is
+    recorded by a terminal outcome that is never edited, and no later batch can
+    promote while this one has not concluded (invariant 14). So the repair path
+    below derives the same subject the freeze did.
+    """
 
     reports = tuple(manifest.get("reports") or ())
     directory = f"{config.storage.batches}/{batch_id}"
@@ -1004,6 +1013,51 @@ def _task_spec(
         config_sha256=str(manifest.get("config_sha256") or ""),
         forced=bool(manifest.get("forced")),
         force_justification=_optional_string(justification),
+        release=_release_spec(config, batch_id, directory=directory),
+    )
+
+
+def _release_spec(
+    config: EvolutionConfig,
+    batch_id: str,
+    *,
+    directory: str,
+) -> analysis_task.ReleaseAssessment | None:
+    """The release this batch is the first cohort after, or None when it follows
+    none.
+
+    Derived from the whole lineage, which by this point includes this batch's own
+    manifest: the obligation belongs to the first cohort frozen after a promotion,
+    and that is a position in the batch series rather than a property of one
+    manifest. Identity only — the cohorts and their comparability are read when
+    the assessment is formed, not baked into a task file that a repair on another
+    machine would then have to reproduce.
+    """
+
+    # Locally imported for the reason `lineage` imports `replay` that way: the
+    # assessment layer reads this module's batches and the replay vocabulary
+    # above it, so the dependency between the two points that way and a
+    # module-level import here would close the loop.
+    from . import assessment
+
+    known = describe_lineage(config)
+    batch = next((item.batch for item in known.batches if item.batch_id == batch_id), None)
+    if batch is None:
+        return None
+    assessed = assessment.owed_by(known, batch)
+    if assessed is None:
+        return None
+    return analysis_task.ReleaseAssessment(
+        batch_id=assessed.batch_id,
+        experiment_id=assessed.experiment_id,
+        revision=assessed.revision,
+        round_number=assessed.round_number,
+        candidate_revision=assessed.candidate_revision,
+        merge_input_revision=assessed.merge_input_revision,
+        merge_input_ref=assessed.merge_input_ref,
+        tree=assessed.tree,
+        planned_targets=assessed.planned_targets,
+        assessment_relative_path=f"{directory}/{ASSESSMENT_FILENAME}",
     )
 
 

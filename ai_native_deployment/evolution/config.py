@@ -32,6 +32,7 @@ CLOSURE_SCHEMA_FILENAME = "batch-closure.schema.json"
 OUTCOME_SCHEMA_FILENAME = "batch-outcome.schema.json"
 ROLLBACK_SCHEMA_FILENAME = "batch-rollback.schema.json"
 REJECTED_DRAFTS_SCHEMA_FILENAME = "rejected-drafts.schema.json"
+ASSESSMENT_SCHEMA_FILENAME = "release-assessment.schema.json"
 EXPERIMENT_SCHEMA_FILENAME = "experiment.schema.json"
 # A promoted experiment record states what a promotion went as, and a version-1
 # one states less than the current reader asks for rather than something

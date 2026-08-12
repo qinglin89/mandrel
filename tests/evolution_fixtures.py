@@ -65,7 +65,12 @@ def make_record(
     runner_protocol_revision: str = "v2.2.0",
     rubric_revision: str = "r7",
     dev_model: str = "claude-opus-5",
+    effective_revision: str | None = "e1",
 ) -> dict:
+    """One feed record. `effective_revision` is what the target that produced it
+    actually held — the reading a release assessment places a report by, and null
+    for a report whose provenance never said."""
+
     bodies = bodies or ARTIFACT_BODIES
     return {
         "schema_version": 1,
@@ -98,27 +103,40 @@ def make_record(
             "runner_protocol_revision": runner_protocol_revision,
             "deploy_lock_hash": "a" * 64,
             "config_revision": "c1",
-            "effective_revision": "e1",
+            "effective_revision": effective_revision,
             "dev": {"agent": "claude", "model": dev_model, "effort": "high", "profile": "dev"},
             "review": {"agent": "codex", "model": "gpt-x", "effort": "high", "profile": "review"},
         },
     }
 
 
-def make_manifest_report(*, key: str, sequence: int = 1, task_id: str = "2026-07-01-task", version: int = 2) -> dict:
-    """One membership entry, in the shape the given manifest version requires."""
+def make_manifest_report(
+    *,
+    key: str,
+    sequence: int = 1,
+    task_id: str = "2026-07-01-task",
+    repo_id: str = "repo-alpha",
+    version: int = 2,
+    **record_overrides,
+) -> dict:
+    """One membership entry, in the shape the given manifest version requires.
+
+    `record_overrides` reach `make_record`, which owns the evaluator and
+    provenance a version-2 entry restates: what a release assessment reads off a
+    frozen manifest is exactly this half of the imported report.
+    """
 
     item = {
         "report_key": key,
         "sequence": sequence,
-        "repo_id": "repo-alpha",
+        "repo_id": repo_id,
         "task_id": task_id,
         "evaluation_id": f"eval-{key}",
         "bundle_sha256": "b" * 64,
     }
     if version == 1:
         return item
-    record = make_record(key=key, sequence=sequence, task_id=task_id)
+    record = make_record(key=key, sequence=sequence, task_id=task_id, repo_id=repo_id, **record_overrides)
     return {
         **item,
         "generated_at": record["generated_at"],
@@ -353,6 +371,7 @@ def promote_candidate(
     reason: str = PROMOTION_REASON,
     targets: tuple[str, ...] = ("orch-hub",),
     base: str | None = None,
+    reports: list[dict] | None = None,
     at: datetime,
 ) -> Any:
     """A whole change cycle, from a frozen cohort to a commit on the source line.
@@ -368,9 +387,19 @@ def promote_candidate(
     of these steps and the rollback suite needs the state after all of them, and
     a second way of reaching it would be a second account of what a promotion
     leaves behind.
+
+    `reports` replaces the frozen membership when a caller needs particular
+    provenance in it — the release-assessment suite needs the cohort this batch
+    was analyzed from to state the revision its targets actually held.
     """
 
-    directory = write_manifest(config.batches_root, batch_id, ["r1", "r2"], analysis_task_id=f"2026-07-31-{batch_id}")
+    directory = write_manifest(
+        config.batches_root,
+        batch_id,
+        ["r1", "r2"],
+        analysis_task_id=f"2026-07-31-{batch_id}",
+        **({} if reports is None else {"reports": reports}),
+    )
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
     write_closure(config.batches_root, batch_id, analysis_task_id=f"2026-07-31-{batch_id}")
     for draft_id in drafts:
