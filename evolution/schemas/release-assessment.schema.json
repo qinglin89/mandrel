@@ -47,7 +47,7 @@
       "$ref": "#/$defs/counterfactual"
     },
     "verdict": {
-      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims and are admissible only from comparable cohorts: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. `regressed` needs the counterfactual as well — a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. `inconclusive` is the answer whenever any of that is missing, and it is a real result rather than a failure: sample insufficiency, mixed provenance and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
+      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
       "enum": [
         "improved",
         "neutral",
@@ -238,7 +238,7 @@
       ],
       "properties": {
         "coherent": {
-          "description": "True only when every facet is. What a directional verdict is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision or role model explains a difference in the numbers at least as well as the release does.",
+          "description": "True only when every facet is. What a directional verdict resting on the cohorts is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision, role model or the shape of the work explains a difference in the numbers at least as well as the release does. A direction may instead rest on a completed counterfactual, which is evidence about two revisions rather than about these cohorts.",
           "type": "boolean"
         },
         "facets": {
@@ -261,12 +261,12 @@
       ],
       "properties": {
         "facet": {
-          "description": "Which respect this is about, as a kebab slug the controller derives: the evaluator's backend, model, rubric revision and schema version, the runner protocol revision, the dev and review role configurations, and the repositories the tasks came from.",
+          "description": "Which respect this is about, as a kebab slug the controller derives: the evaluator's backend, model, rubric revision and schema version, the runner protocol revision, the dev and review role configurations, the shape of the work, and the repositories the tasks came from. The set is derived from the two frozen manifests and the sides the record states — a record states its facets rather than choosing them, and a reader that took the list on the record's word would let one invented coherent facet stand in for the accounting invariant 5 asks for.",
           "type": "string",
           "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
         },
         "coherent": {
-          "description": "Whether this facet leaves the release as the difference between the cohorts. For every facet but repository coverage that means one value across both sides and none of it missing — a cohort mixing two evaluator models is not one cohort, and a provenance field nothing filled in cannot be shown to match. Repository coverage asks the weaker question its evidence supports: at least one repository present on both sides, or the comparison is between two projects rather than two revisions.",
+          "description": "Whether this facet leaves the release as the difference between the cohorts. For every facet but repository coverage that means one value across both sides and none of it missing — a cohort mixing two evaluator models is not one cohort, and a provenance field nothing filled in cannot be shown to match. Repository coverage asks the weaker question its evidence supports: at least one repository present on both sides, or the comparison is between two projects rather than two revisions. Task shape is the facet no manifest version fills in: an entry states identity, hashes, evaluator and deployment provenance and nothing about the kind of task judged, so it is carried as unknown on both sides rather than approximated by repository coverage — which is why a direction is ordinarily settled by the counterfactual.",
           "type": "boolean"
         },
         "before": {

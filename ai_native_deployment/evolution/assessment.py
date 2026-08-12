@@ -28,6 +28,14 @@ suspected regression is answered by the counterfactual — the exact
 pre-promotion and promoted revisions, one case set, one evaluator — because that
 is the only comparison in which the release is the only difference.
 
+The shape of the work is the difference nothing frozen states. Two cohorts are
+two different task sets by construction, and no manifest version records what
+kind of task each report judged, so that facet is carried as the unknown it is
+rather than approximated by "the same repository appears on both sides". What
+follows is not a weaker artifact but an honest division of labour: the cohorts
+show the base rate and raise the suspicion, and a direction — in either sign — is
+settled by the counterfactual.
+
 **Vocabulary is shared, not restated.** The case set, evaluator, harness,
 regression and result shapes are the replay record's own value objects: a
 comparison across two spellings of "who judged this" could not make the
@@ -101,6 +109,20 @@ FACET_EVALUATOR_SCHEMA = "evaluator-schema-version"
 FACET_RUNNER_REVISION = "runner-protocol-revision"
 FACET_DEV_ROLE = "dev-role"
 FACET_REVIEW_ROLE = "review-role"
+# Whether the two cohorts did the same kind of work — and it is unknown on every
+# manifest version. A frozen entry states identity, hashes, evaluator and
+# deployment provenance and nothing about the shape of the task it judged, so
+# invariant 4 keeps this missing rather than assumed. It is recorded all the same
+# because of what its absence would otherwise be read as: the two cohorts are
+# necessarily two different task sets (one report per completed task), so a
+# difference in their numbers is explained by the work at least as well as by the
+# release, and "at least one repository on both sides" is coverage rather than
+# evidence that the work matched. A direction therefore cannot rest on the
+# cohorts alone here; what settles one is the counterfactual, where the case set
+# is pinned and the release is the only difference. The facet becomes answerable
+# the day a manifest version carries durable task-shape provenance — a change to
+# what the feed reports, not to this reading.
+FACET_TASK_SHAPE = "task-shape"
 # The weaker question the evidence supports, and the one facet whose rule is not
 # equality: at least one repository present on both sides. Requiring the same set
 # would refuse every real comparison, and requiring nothing would compare two
@@ -360,6 +382,14 @@ class Frame:
     after: Cohort
     excluded: tuple[Excluded, ...]
     comparability: Comparability
+    # Every report the two frozen manifests name, placed or not. Which side a
+    # report is on is a reading of Git and differs between clones; this is the
+    # committed membership, which does not — so the checks that have to hold
+    # everywhere are taken from here rather than from what this checkout placed:
+    # the denominators (unique completed tasks) and the comparability facets are
+    # both manifest facts, and a clone missing an object would otherwise skip them
+    # and accept a count or a facet list nobody could have derived.
+    catalog: tuple[Member, ...]
     # The unique-task count each cohort needs before a directional claim is
     # admissible. The analysis policy's own minimum cluster size: a claim about
     # the release is a cluster-level claim about unique completed tasks, and a
@@ -385,9 +415,14 @@ class Frame:
         )
 
     @property
-    def supports_direction(self) -> bool:
-        """Whether this frame could carry `improved`, `neutral` or `regressed`
-        at all — before any measurement is taken."""
+    def cohorts_support_direction(self) -> bool:
+        """Whether the two cohorts could carry `improved`, `neutral` or
+        `regressed` between them — before any measurement is taken.
+
+        The cohorts alone, deliberately: a direction may also rest on a completed
+        counterfactual, which is evidence a frame knows nothing about. False for
+        every frame while no manifest states the shape of the work.
+        """
 
         return directional_admissible(
             coherent=self.comparability.coherent,
@@ -515,12 +550,16 @@ def directional_admissible(
     after_task_count: int,
     minimum: int,
 ) -> bool:
-    """Whether cohorts of this shape may carry a directional verdict.
+    """Whether cohorts of this shape may carry a directional verdict on their own.
 
     One rule, asked by both sides of the artifact: formation asks it of the
     frame it derived, and every read asks it of the cohorts the record states.
     Two answers to "may this claim be made" would let a record be written that
     nothing afterwards accepts, or accepted where it could not have been written.
+
+    A direction may also rest on a completed counterfactual, which is not a
+    property of the cohorts and so is not asked here — the reader composes the
+    two paths.
     """
 
     return coherent and before_task_count >= minimum and after_task_count >= minimum
@@ -629,6 +668,7 @@ def describe(
         after=after_cohort,
         excluded=tuple(excluded),
         comparability=_comparability(before_cohort, after_cohort),
+        catalog=members,
         minimum_task_count=config.analysis.minimum_cluster_task_count,
         owed=_owed(known, batch, assessed),
     )
@@ -731,21 +771,29 @@ def parse(
     )
     metrics = tuple(_read_measurement(entry) for entry in record["metrics"])
     counterfactual = _read_counterfactual(path, record["counterfactual"], assessed)
-    decision = _read_decision(path, record["decision"], assessed)
+    # The settlement is held to the rollback record as the lineage reads it now,
+    # never to the historical `assessed` block above: the ordinary flow forms the
+    # assessment while the promotion stands, and the rollback the reading caused
+    # comes afterwards. Validating the decision against the state at formation
+    # time would refuse every settlement this gate actually produces.
+    decision = _read_decision(path, record["decision"], frame.subject)
 
-    _require_stated_coherence(path, record["comparability"], comparability)
     # Asked of every record, whatever it concluded: a quantity stated twice or a
     # direction with nothing to point away from is a malformed measurement, and an
     # `inconclusive` reading is read by the next cohort like any other.
     _require_distinct_metrics(path, "the cohort comparison", metrics)
     _require_one_side(path, before, after, excluded)
+    # Membership first: everything below reads the frozen manifests through the
+    # keys this record states, which is only meaningful once they are known to be
+    # keys the manifests have.
     _require_membership(path, before, after, excluded, frame)
+    _require_stated_comparability(path, record["comparability"], comparability, before, after, frame)
     _require_counts(path, record, before, after, frame)
     _require_placement(path, before, after, excluded, frame)
     _require_supported_verdict(
         path,
         verdict=record["verdict"],
-        coherent=comparability.coherent,
+        comparability=comparability,
         before_task_count=cohorts["before"]["task_count"],
         after_task_count=cohorts["after"]["task_count"],
         minimum=frame.minimum_task_count,
@@ -827,6 +875,11 @@ def _members(batch: Batch) -> list[Member]:
                     FACET_RUNNER_REVISION: _text(provenance.get("runner_protocol_revision")),
                     FACET_DEV_ROLE: _role(provenance.get("dev")),
                     FACET_REVIEW_ROLE: _role(provenance.get("review")),
+                    # Nothing to read: no manifest version has a field for the
+                    # shape of the work, and both close `additionalProperties`.
+                    # The honest value is the missing one (see the constant), and
+                    # this is the single place a later version would be read.
+                    FACET_TASK_SHAPE: None,
                     FACET_REPOSITORY_COVERAGE: str(report["repo_id"]),
                 },
             )
@@ -925,6 +978,12 @@ def _comparability(before: Cohort, after: Cohort) -> Comparability:
     instead, which is the weakest fact that makes the comparison about a protocol
     revision rather than about two projects — and, being an overlap, it is also
     what an empty cohort fails.
+
+    Task shape is an equality facet nothing fills in, so it is the facet no
+    cohort comparison currently passes. That is the reading rather than a gap in
+    it: the cohorts are two different task sets, and until a manifest states what
+    kind of work each report judged, a direction is settled by the counterfactual
+    and not by the numbers the two sets came to.
     """
 
     facets: list[Facet] = []
@@ -936,6 +995,7 @@ def _comparability(before: Cohort, after: Cohort) -> Comparability:
         FACET_RUNNER_REVISION,
         FACET_DEV_ROLE,
         FACET_REVIEW_ROLE,
+        FACET_TASK_SHAPE,
         FACET_REPOSITORY_COVERAGE,
     ):
         before_values = _values(before, name)
@@ -947,6 +1007,23 @@ def _comparability(before: Cohort, after: Cohort) -> Comparability:
             coherent = len(union) == 1 and None not in union
         facets.append(Facet(facet=name, coherent=coherent, before=before_values, after=after_values))
     return Comparability(facets=tuple(facets))
+
+
+def _stated_comparability(frame: Frame, before: Sequence[str], after: Sequence[str]) -> Comparability:
+    """The facets the cohorts a record states come to, read off the frozen
+    manifests alone.
+
+    The same derivation `describe` runs, over the record's own sides rather than
+    the ones this checkout placed — which is what makes it answerable on a clone
+    that cannot resolve an effective revision. Every key is a member here because
+    membership was established first.
+    """
+
+    catalog = {member.report_key: member for member in frame.catalog}
+    return _comparability(
+        Cohort(members=tuple(catalog[key] for key in before)),
+        Cohort(members=tuple(catalog[key] for key in after)),
+    )
 
 
 def _values(cohort: Cohort, facet: str) -> tuple[str | None, ...]:
@@ -1152,7 +1229,7 @@ def _read_counterfactual(
     )
 
 
-def _read_decision(path: Path, stated: Mapping[str, Any] | None, assessed: Subject) -> Decision | None:
+def _read_decision(path: Path, stated: Mapping[str, Any] | None, derived: Subject) -> Decision | None:
     """The human settlement, with the pairing the schema subset cannot state.
 
     A `rolled-back` settlement names the inverse commit, and it is the one the
@@ -1160,6 +1237,15 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, assessed: Subje
     rollback operation's, and a settlement naming something else describes a
     reversal nothing performed. `retain` names none — a release left standing has
     no inverse commit to point at.
+
+    `derived` is the lineage's current reading of the release and not the
+    record's own `assessed` block, because the two describe different moments. An
+    assessment is ordinarily formed while the promotion stands — its `assessed`
+    block says so, and stays saying so, since re-deriving that field would make
+    the rollback contradict the finding that justified it — and the settlement is
+    appended after the rollback operation has run. The record the settlement is
+    checked against is therefore the one written last: `rollback.json` beside the
+    promoted batch's outcome.
     """
 
     if stated is None:
@@ -1178,13 +1264,13 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, assessed: Subje
                 f"{path}: the assessment is settled {SETTLEMENT_ROLLED_BACK!r} and names no inverse commit; "
                 "a rollback is a commit, and the settlement states which one it made"
             )
-        if assessed.rollback_revision != revision:
+        if derived.rollback_revision != revision:
             raise BatchError(
                 f"{path}: the settlement names the inverse commit {revision[:12]}, which "
                 + (
                     "no rollback record beside the promoted batch's outcome names"
-                    if assessed.rollback_revision is None
-                    else f"disagrees with the rollback record's own {assessed.rollback_revision[:12]}"
+                    if derived.rollback_revision is None
+                    else f"disagrees with the rollback record's own {derived.rollback_revision[:12]}"
                 )
                 + "; the rollback record stays the authority on what came off the line"
             )
@@ -1196,13 +1282,46 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, assessed: Subje
     )
 
 
-def _require_stated_coherence(path: Path, stated: Mapping[str, Any], comparability: Comparability) -> None:
-    """The stated summary must be the facets it summarizes.
+def _require_stated_comparability(
+    path: Path,
+    stated: Mapping[str, Any],
+    comparability: Comparability,
+    before: Sequence[str],
+    after: Sequence[str],
+    frame: Frame,
+) -> None:
+    """The recorded facets must be the ones this record's own cohorts produce.
 
-    Recorded as well as derivable because it is what the verdict is judged
-    against, and a record whose summary disagrees with its own facet list makes
-    an unsupported verdict look admissible.
+    Derived from the frozen manifests and the sides the record itself states, so
+    the check holds on every clone: what makes a facet coherent is evaluator and
+    provenance metadata a manifest committed, never something Git has to place.
+
+    Checking the summary against the record's own facet list would leave that
+    list unchecked, and the list is where the whole rule lives: a record over
+    cohorts that mix rubric revisions could drop the seven honest facets, state
+    one invented coherent one, and carry `improved` past every remaining check.
+    The facets are also the accounting invariant 5 asks for, which is not
+    something a record chooses.
     """
+
+    derived = _stated_comparability(frame, before, after)
+    expected = {facet.facet: facet for facet in derived.facets}
+    recorded = {facet.facet: facet for facet in comparability.facets}
+    if set(recorded) != set(expected):
+        raise BatchError(
+            f"{path}: the assessment records the comparability facets {sorted(recorded)}, and the cohorts it "
+            f"states are compared in {sorted(expected)}; the facets are derived from the frozen manifests, so "
+            "a record states the reading rather than choosing it"
+        )
+    for name, facet in expected.items():
+        found = recorded[name]
+        if (found.coherent, found.before, found.after) != (facet.coherent, facet.before, facet.after):
+            raise BatchError(
+                f"{path}: the {name!r} facet is recorded coherent={found.coherent!r} over before "
+                f"{list(found.before)} / after {list(found.after)}, and the frozen manifests of "
+                f"{frame.subject.batch_id} and {frame.batch_id} give coherent={facet.coherent!r} over before "
+                f"{list(facet.before)} / after {list(facet.after)}"
+            )
 
     if stated["coherent"] != comparability.coherent:
         raise BatchError(
@@ -1250,17 +1369,17 @@ def _require_counts(
     a directional verdict is admissible against: a cohort of four reports from
     one task is one task's evidence however it is counted.
 
-    Counted only where this checkout placed the same reports. A record may
-    legitimately place one this clone cannot resolve at all, and a count taken
-    over the rest of the cohort would refuse a record for the objects the clone
-    is missing.
+    Counted from the frozen membership and not from what this checkout placed. A
+    report's `(repo_id, task_id)` is committed content, so the count is the same
+    answer everywhere — including on the clone that cannot resolve one effective
+    revision, which would otherwise skip the side entirely and accept whatever
+    denominator the record claimed, up to and including one that lifts a thin
+    cohort over the minimum.
     """
 
-    tasks = {member.report_key: (member.repo_id, member.task_id) for member in frame.members}
+    tasks = {member.report_key: (member.repo_id, member.task_id) for member in frame.catalog}
     for side, keys in ((SIDE_BEFORE, before), (SIDE_AFTER, after)):
         stated = record["cohorts"][side]["task_count"]
-        if any(key not in tasks for key in keys):
-            continue
         known = {tasks[key] for key in keys}
         if len(known) != stated:
             raise BatchError(
@@ -1286,8 +1405,7 @@ def _require_membership(
     keep knowable.
     """
 
-    members = {member.report_key: member.batch_id for member in frame.members}
-    members.update({item.report_key: item.batch_id for item in frame.excluded})
+    members = {member.report_key: member.batch_id for member in frame.catalog}
     named = set(before) | set(after) | {item.report_key for item in excluded}
 
     unknown = sorted(named - set(members))
@@ -1373,63 +1491,89 @@ def _require_supported_verdict(
     path: Path,
     *,
     verdict: str,
-    coherent: bool,
+    comparability: Comparability,
     before_task_count: int,
     after_task_count: int,
     minimum: int,
     metrics: Sequence[Measurement],
     counterfactual: Counterfactual | None,
 ) -> None:
-    """A directional verdict must be one these cohorts can carry.
+    """A directional verdict must rest on evidence that can carry one.
 
-    Three requirements, and each of them is a way for a direction to be an
-    artefact of something other than the release. Incomparable cohorts differ in
-    the evaluator, the protocol revision or the work itself, any of which explains
-    a difference at least as well. A cohort below the minimum unique-task count is
-    the anecdote invariant 1 refuses. And a direction with no goal quantity
-    measured on both sides is a sentence rather than a finding.
+    Two kinds of evidence, and a record needs one of them. The **counterfactual**
+    is the stronger: the exact pre-promotion and promoted revisions exercised
+    over one case set by one evaluator, which is the only comparison in which the
+    release is the only difference. A completed run carrying a goal quantity on
+    both revisions settles a direction whatever the cohorts came to, because the
+    claim is no longer resting on them.
 
-    `regressed` carries a fourth: the counterfactual, completed. A cohort
-    difference can *suspect* a regression, and what settles it is the exact
-    pre-promotion and promoted revisions measured under one configuration — so a
-    run that failed, is still going, or was never made leaves the reading
-    `inconclusive`. That is the point of the rule rather than a formality: the
-    verdict that costs somebody a promoted change is the one that has to be
-    measured rather than inferred.
+    The **cohorts** carry one only when nothing else explains the difference:
+    every comparability facet coherent, both sides at or above the minimum
+    unique-task count (invariant 1's anecdote rule), and a goal quantity measured
+    on both. Incomparable cohorts differ in the evaluator, the protocol revision
+    or the work itself, any of which explains a difference at least as well. That
+    includes the shape of the work, which no manifest states — so in practice the
+    cohorts suspect and the counterfactual settles, which is the standing this
+    evidence has rather than a rule added on top of it.
+
+    `regressed` is checked before either: it always rests on the counterfactual,
+    completed, because it is the verdict that costs somebody a promoted change
+    and the one that therefore has to be measured rather than inferred.
     """
 
     if verdict not in DIRECTIONAL_VERDICTS:
         return
 
-    if not directional_admissible(
-        coherent=coherent,
-        before_task_count=before_task_count,
-        after_task_count=after_task_count,
-        minimum=minimum,
-    ):
-        raise BatchError(
-            f"{path}: {verdict!r} is a directional claim, and these cohorts do not support one — "
-            + (
-                f"before {before_task_count} / after {after_task_count} unique completed task(s) against a "
-                f"minimum of {minimum}"
-                if coherent
-                else "the cohorts are not comparable"
-            )
-            + f"; the reading a repository may record from evidence like this is {VERDICT_INCONCLUSIVE!r}"
-        )
-    if not any(measurement.directional for measurement in metrics):
-        raise BatchError(
-            f"{path}: {verdict!r} states a direction and no measurement carries one — a goal quantity with a "
-            f"before and an after; an observation recorded as {BETTER_NEITHER!r}, or a side that was never "
-            "measured, is not something a release can be judged by (invariant 13)"
-        )
-    if verdict == VERDICT_REGRESSED and (counterfactual is None or not counterfactual.completed):
+    run = counterfactual.result if counterfactual is not None and counterfactual.completed else None
+    if verdict == VERDICT_REGRESSED and run is None:
         raise BatchError(
             f"{path}: {verdict!r} rests on the counterfactual, and this record has "
             + ("none" if counterfactual is None else "one that did not complete")
             + "; a suspected regression is settled by measuring the pre-promotion and promoted revisions "
             f"under one configuration, and until that is done the reading is {VERDICT_INCONCLUSIVE!r}"
         )
+    if run is not None:
+        if not any(measurement.directional for measurement in run.metrics):
+            raise BatchError(
+                f"{path}: {verdict!r} rests on the counterfactual, and the run it records measured no goal "
+                f"quantity on both revisions — every number it states is an observation ({BETTER_NEITHER!r}) "
+                f"or missing a side, which settles nothing about the release (invariant 13)"
+            )
+        return
+
+    measured = any(measurement.directional for measurement in metrics)
+    admissible = directional_admissible(
+        coherent=comparability.coherent,
+        before_task_count=before_task_count,
+        after_task_count=after_task_count,
+        minimum=minimum,
+    )
+    if admissible and measured:
+        return
+
+    # The gate is the shared predicate above; these are the same three conditions
+    # said out loud, because "not supported" without them is not something an
+    # operator or a rationale can act on.
+    unmet: list[str] = []
+    if not comparability.coherent:
+        unmet.append(f"the cohorts are not comparable ({', '.join(comparability.incoherent)} differ)")
+    if before_task_count < minimum or after_task_count < minimum:
+        unmet.append(
+            f"before {before_task_count} / after {after_task_count} unique completed task(s) against a "
+            f"minimum of {minimum}"
+        )
+    if not measured:
+        unmet.append(
+            "no measurement carries one — a goal quantity with a before and an after, rather than an "
+            f"observation recorded as {BETTER_NEITHER!r} or a side never measured (invariant 13)"
+        )
+    raise BatchError(
+        f"{path}: {verdict!r} is a directional claim resting on the cohorts alone, and they do not "
+        "support one — "
+        + "; ".join(unmet)
+        + f"; what this evidence allows is {VERDICT_INCONCLUSIVE!r}, or a direction settled by a "
+        "completed counterfactual"
+    )
 
 
 def _require_distinct_metrics(path: Path, described: str, metrics: Sequence[Measurement]) -> None:

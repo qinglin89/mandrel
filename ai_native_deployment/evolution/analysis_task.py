@@ -569,14 +569,21 @@ other.
   the targets the promotion was *planned* for ({targets}), which is a plan and
   not a deployment.
 - Verdicts are `improved`, `neutral`, `regressed`, or `inconclusive`. The first
-  three are directional and need comparable cohorts: one evaluator, rubric,
-  protocol revision and role configuration across both sides, both sides at or
-  above the configured minimum unique-task count, and a goal quantity measured on
-  both. Mixed provenance and too small a sample are reasons to know less, never
-  evidence against the release, so they produce `inconclusive` (invariants 1, 4,
-  5). `regressed` additionally rests on the pinned two-revision counterfactual —
-  a cohort difference suspects a regression; measuring both revisions under one
-  configuration is what settles it.
+  three are directional and rest on one of two kinds of evidence. The cohorts
+  carry a direction only when nothing else explains it: one evaluator, rubric,
+  protocol revision and role configuration across both sides, the same shape of
+  work, both sides at or above the configured minimum unique-task count, and a
+  goal quantity measured on both. Mixed provenance and too small a sample are
+  reasons to know less, never evidence against the release, so they produce
+  `inconclusive` (invariants 1, 4, 5).
+- Expect the shape of the work to be the facet that stops a cohort-only claim. No
+  manifest states what kind of task a report judged, and the two cohorts are two
+  different task sets, so the numbers they came to are explained by the work at
+  least as well as by the release. A direction — in either sign — is settled by
+  the pinned two-revision counterfactual: the pre-promotion and promoted
+  revisions over one case set with one evaluator, which is the only comparison in
+  which the release is the only difference. `regressed` rests on it in every
+  case. Without one, record what the cohorts show and read it `inconclusive`.
 - Record the reading at
   `{release.assessment_relative_path}`, with the denominators and every exclusion
   visible. Retaining or rolling back the release is a human decision recorded on
@@ -600,6 +607,8 @@ def _release_acceptance(release: ReleaseAssessment | None) -> str:
   denominators, every exclusion with its reason, the comparability facets, the
   verdict, and the rationale — or an explicit `inconclusive` with what was
   missing.
-- No directional verdict rests on mixed provenance, an under-sized cohort, or an
-  unmeasured quantity.
+- No directional verdict rests on mixed provenance, work whose shape nothing
+  states, an under-sized cohort, or an unmeasured quantity — a direction the
+  cohorts cannot carry is either settled by a completed counterfactual or read
+  `inconclusive`.
 """

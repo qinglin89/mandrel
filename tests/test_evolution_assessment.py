@@ -9,11 +9,13 @@ agrees with itself.
 Two properties get most of the attention, because they are what this artifact
 exists for:
 
-- **A directional claim needs cohorts that can carry one.** Mixed provenance, a
-  cohort below the minimum unique-task count, an unmeasured quantity, and a
-  regression nobody counterfactually measured are each refused — in the record as
-  well as in the derivation, since a rule only the writer keeps is one any file
-  written beside it escapes.
+- **A directional claim needs evidence that can carry one.** Mixed provenance,
+  work whose shape no manifest states, a cohort below the minimum unique-task
+  count, an unmeasured quantity, and a regression nobody counterfactually
+  measured are each refused — in the record as well as in the derivation, since a
+  rule only the writer keeps is one any file written beside it escapes. What the
+  cohorts cannot carry, a completed counterfactual can: it is the one comparison
+  in which the release is the only difference.
 - **Nothing is invented where there is nothing to assess.** A repository that
   never promoted, a `no-change` predecessor, and a batch whose predecessor's
   release was already assessed all produce no frame at all rather than an
@@ -272,8 +274,13 @@ def test_frame_splits_the_cohorts_by_what_each_target_held(
     assert frame.before.task_count == 3
     assert frame.after.task_count == 3
     assert frame.excluded == ()
-    assert frame.comparability.coherent is True
-    assert frame.supports_direction is True
+    # Every respect a frozen manifest states agrees. The one it does not state is
+    # what kind of work each cohort did, and that is not a detail: these are two
+    # different task sets, so the numbers they came to are explained by the work
+    # unless something pins it. The cohorts raise the question; the counterfactual
+    # answers it.
+    assert frame.comparability.incoherent == (assessment.FACET_TASK_SHAPE,)
+    assert frame.cohorts_support_direction is False
 
 
 def test_a_later_revision_still_carries_the_release(
@@ -295,7 +302,7 @@ def test_a_later_revision_still_carries_the_release(
 
     assert frame is not None
     assert frame.after.report_keys == ("a1", "a2", "a3")
-    assert frame.comparability.coherent is True
+    assert frame.placement("a1") == assessment.SIDE_AFTER
 
 
 def test_reports_without_an_effective_revision_are_excluded(
@@ -319,7 +326,7 @@ def test_reports_without_an_effective_revision_are_excluded(
     ]
     # One report short of the minimum, so nothing directional may be claimed —
     # the exclusion narrows the denominator and says so.
-    assert frame.supports_direction is False
+    assert frame.cohorts_support_direction is False
 
 
 def test_an_unresolvable_effective_revision_is_unverified_rather_than_placed(
@@ -336,10 +343,13 @@ def test_an_unresolvable_effective_revision_is_unverified_rather_than_placed(
     assert frame.after.report_keys == ()
     assert frame.unverified == ("a1", "a2", "a3")
     assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_UNRESOLVABLE}
-    assert frame.supports_direction is False
+    assert frame.cohorts_support_direction is False
     # An empty side is not "every facet agrees": the one facet that asks for an
     # overlap is what says there is nothing to compare.
-    assert frame.comparability.incoherent == (assessment.FACET_REPOSITORY_COVERAGE,)
+    assert frame.comparability.incoherent == (
+        assessment.FACET_TASK_SHAPE,
+        assessment.FACET_REPOSITORY_COVERAGE,
+    )
 
 
 def test_mixed_provenance_is_named_facet_by_facet(
@@ -364,8 +374,11 @@ def test_mixed_provenance_is_named_facet_by_facet(
 
     assert frame is not None
     assert frame.after.task_count == 3
-    assert frame.comparability.incoherent == (assessment.FACET_EVALUATOR_RUBRIC,)
-    assert frame.supports_direction is False
+    assert frame.comparability.incoherent == (
+        assessment.FACET_EVALUATOR_RUBRIC,
+        assessment.FACET_TASK_SHAPE,
+    )
+    assert frame.cohorts_support_direction is False
     facet = next(item for item in frame.comparability.facets if item.facet == assessment.FACET_EVALUATOR_RUBRIC)
     assert facet.before == ("r7",)
     assert facet.after == ("r7", "r8")
@@ -392,8 +405,11 @@ def test_a_repository_present_on_only_one_side_is_not_a_comparison(
     frame = assessment.describe(config, second)
 
     assert frame is not None
-    assert frame.comparability.incoherent == (assessment.FACET_REPOSITORY_COVERAGE,)
-    assert frame.supports_direction is False
+    assert frame.comparability.incoherent == (
+        assessment.FACET_TASK_SHAPE,
+        assessment.FACET_REPOSITORY_COVERAGE,
+    )
+    assert frame.cohorts_support_direction is False
 
 
 def test_a_version_one_manifest_carries_no_cohort_provenance(
@@ -436,7 +452,7 @@ def test_a_reversed_promotion_is_a_different_question(
     assert frame.subject.rollback_revision == reversal.revision
     assert frame.after.report_keys == ()
     assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_POST_ROLLBACK}
-    assert frame.supports_direction is False
+    assert frame.cohorts_support_direction is False
 
 
 def test_only_the_first_cohort_after_a_release_owes_the_reading(
@@ -536,11 +552,12 @@ def test_a_directional_verdict_over_incomparable_cohorts_is_refused(
     )
     frame = assessment.describe(config, second)
     assert frame is not None
-    publish(second, build(frame, verdict=assessment.VERDICT_REGRESSED))
+    publish(second, build(frame, verdict=assessment.VERDICT_IMPROVED))
 
     with pytest.raises(evolution.BatchError) as error:
         assessment.read(config, second)
     assert "not comparable" in str(error.value)
+    assert assessment.FACET_EVALUATOR_RUBRIC in str(error.value)
     assert assessment.VERDICT_INCONCLUSIVE in str(error.value)
 
 
@@ -569,6 +586,36 @@ def test_a_directional_verdict_below_the_minimum_cohort_is_refused(
     assert "unique completed task(s) against a minimum of 3" in str(error.value)
 
 
+def test_a_direction_the_cohorts_cannot_carry_rests_on_the_counterfactual(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """Two cohorts agreeing in every respect a frozen manifest states, and the one
+    it does not state is what kind of work each of them did.
+
+    They are two different task sets by construction — one report per completed
+    task — so a difference in their numbers is explained by the work at least as
+    well as by the release, and repository coverage is coverage rather than a
+    task-shape match. What that evidence supports is `inconclusive`; the pinned
+    two-revision run is what turns it into a direction.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert frame.comparability.incoherent == (assessment.FACET_TASK_SHAPE,)
+    publish(second, build(frame, verdict=assessment.VERDICT_IMPROVED))
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert assessment.FACET_TASK_SHAPE in str(error.value)
+    assert assessment.VERDICT_INCONCLUSIVE in str(error.value)
+
+    publish(second, build(frame, verdict=assessment.VERDICT_IMPROVED, counterfactual=counterfactual(frame)))
+    read = assessment.read(config, second)
+    assert read is not None and read.verdict == assessment.VERDICT_IMPROVED
+
+
 def test_a_summary_that_disagrees_with_its_own_facets_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
@@ -579,26 +626,103 @@ def test_a_summary_that_disagrees_with_its_own_facets_is_refused(
     second = freeze_second(config, promoted)
     frame = assessment.describe(config, second)
     assert frame is not None
-    broken = dataclasses.replace(
-        frame.comparability,
-        facets=tuple(
-            dataclasses.replace(facet, coherent=False) if facet.facet == assessment.FACET_EVALUATOR_MODEL else facet
-            for facet in frame.comparability.facets
-        ),
+    record = build(frame).to_json()
+    record["comparability"]["coherent"] = True
+    second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "comparability is recorded True while its own facets say False" in str(error.value)
+    assert assessment.FACET_TASK_SHAPE in str(error.value)
+
+
+def test_invented_comparability_facets_are_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The facet list is derived, never taken on the record's word.
+
+    Two rubric revisions in the after cohort is exactly the mixed provenance a
+    directional claim may not rest on. A record that drops the derived facets and
+    states one coherent one of its own would otherwise carry `improved` past every
+    remaining check — the summary agrees with the list it came with, the cohorts
+    are frozen members, the counts are right, and Git places every report where
+    the record says.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id=f"2026-08-0{index}-task",
+                effective_revision=promoted.promotion_revision,
+                rubric_revision="r7" if index < 3 else "r8",
+            )
+            for index in (1, 2, 3)
+        ],
     )
-    built = build(frame)
-    record = built.to_json()
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert assessment.FACET_EVALUATOR_RUBRIC in frame.comparability.incoherent
+    record = build(frame).to_json()
     record["comparability"] = {
         "coherent": True,
-        "facets": json.loads(json.dumps(dataclasses.replace(built, comparability=broken).to_json()))["comparability"][
-            "facets"
+        "facets": [
+            {
+                "facet": assessment.FACET_EVALUATOR_RUBRIC,
+                "coherent": True,
+                "before": ["r7"],
+                "after": ["r7"],
+            }
         ],
     }
     second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(evolution.BatchError) as error:
         assessment.read(config, second)
-    assert "comparability is recorded True while its own facets say False" in str(error.value)
+    assert "the facets are derived from the frozen manifests" in str(error.value)
+
+
+def test_a_facet_recorded_against_its_own_manifests_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The whole list is there and one entry lies about what the manifests hold.
+
+    Checkable everywhere: what makes a facet coherent is evaluator and provenance
+    metadata a manifest committed, so a clone that can place no report at all
+    still reads this the same way.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id=f"2026-08-0{index}-task",
+                effective_revision=promoted.promotion_revision,
+                rubric_revision="r7" if index < 3 else "r8",
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    record = build(frame, verdict=assessment.VERDICT_INCONCLUSIVE, metrics=()).to_json()
+    for facet in record["comparability"]["facets"]:
+        if facet["facet"] == assessment.FACET_EVALUATOR_RUBRIC:
+            facet.update({"coherent": True, "after": ["r7"]})
+    second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert f"the {assessment.FACET_EVALUATOR_RUBRIC!r} facet is recorded coherent=True" in str(error.value)
+    assert "['r7', 'r8']" in str(error.value)
 
 
 def test_a_direction_with_no_measured_goal_is_refused(
@@ -690,6 +814,36 @@ def test_regressed_stands_on_a_completed_counterfactual(
 
     read = assessment.read(config, second)
     assert read is not None and read.verdict == assessment.VERDICT_REGRESSED
+
+
+def test_a_counterfactual_that_measured_no_goal_carries_no_direction(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A run that reached the end of both revisions and recorded only observations
+    settles nothing: the direction has to be in what the run measured, since the
+    cohorts are not what the claim is resting on."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    observed = counterfactual(
+        frame,
+        result=assessment.RunResult(
+            outcome=replay.RESULT_COMPLETED,
+            concluded_at="2026-08-11T08:00:00Z",
+            detail="both revisions ran the case set; nothing the release aimed at was measured",
+            elapsed_seconds=1800.0,
+            metrics=(measurement(metric="elapsed", unit="seconds", better=replay.BETTER_NEITHER),),
+            regressions=(),
+            ambiguity=None,
+        ),
+    )
+    publish(second, build(frame, verdict=assessment.VERDICT_REGRESSED, counterfactual=observed))
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "measured no goal quantity on both revisions" in str(error.value)
 
 
 def test_a_counterfactual_of_another_pair_is_refused(
@@ -818,6 +972,12 @@ def test_a_reading_formed_where_the_objects_were_missing_stays_readable(
             after=(),
             after_task_count=0,
             metrics=(),
+            # The facets that machine derived: over an empty after cohort, since
+            # the reports it could not place are reports it could not compare
+            # either. Read here through the same derivation the reader uses,
+            # because the point of the test is the placement rule and the record
+            # has to be the one that machine would have written.
+            comparability=assessment._stated_comparability(frame, frame.before.report_keys, ()),
             excluded=tuple(
                 assessment.Excluded(
                     report_key=key,
@@ -898,6 +1058,56 @@ def test_a_denominator_counted_in_reports_is_refused(
     assert "the denominator is unique tasks, not reports" in str(error.value)
 
 
+def test_a_denominator_no_checkout_could_place_is_still_counted(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The count comes off the frozen manifests, never off what this checkout
+    placed.
+
+    Three reports of one completed task at an effective revision nothing here
+    resolves. A reader that counted only the reports it could place would have no
+    opinion about this cohort at all and would take the record's own `3` — one
+    task's evidence stated as three, and over the minimum a directional verdict is
+    admissible against. `(repo_id, task_id)` is committed content, so the answer
+    is the same on every clone.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id="2026-08-01-task",
+                effective_revision="e1",
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert frame.unverified == ("a1", "a2", "a3")
+    after = ("a1", "a2", "a3")
+    publish(
+        second,
+        build(
+            frame,
+            after=after,
+            after_task_count=3,
+            excluded=(),
+            metrics=(),
+            comparability=assessment._stated_comparability(frame, frame.before.report_keys, after),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "the denominator is unique tasks, not reports" in str(error.value)
+
+
 def test_a_settlement_naming_no_inverse_commit_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
@@ -934,10 +1144,14 @@ def test_a_retained_release_settles_without_an_inverse_commit(
         second,
         build(
             frame,
+            metrics=(),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="no frozen manifest states what kind of work either cohort did",
             decision=assessment.Decision(
                 settlement=assessment.SETTLEMENT_RETAIN,
                 decided_at=SETTLED_AT,
-                reason="the release held up on the first comparable cohort",
+                reason="nothing measured said the release did harm, so it stays on the line",
                 rollback_revision=None,
             ),
         ),
@@ -946,6 +1160,55 @@ def test_a_retained_release_settles_without_an_inverse_commit(
     read = assessment.read(config, second)
     assert read is not None and read.settled is True
     assert read.decision is not None and read.decision.settlement == assessment.SETTLEMENT_RETAIN
+
+
+def test_a_rolled_back_settlement_reads_against_the_rollback_record(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The ordinary flow of a regression finding, end to end.
+
+    The assessment is formed while the release still stands, so its `assessed`
+    block says so and keeps saying so — re-deriving that field would make the
+    rollback contradict the finding that caused it. The settlement is appended
+    afterwards, and what it is held to is the rollback record: the reading the
+    lineage has *now*, not the state the assessment was formed in.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert frame.subject.standing is True and frame.subject.rollback_revision is None
+    built = build(
+        frame,
+        verdict=assessment.VERDICT_REGRESSED,
+        metrics=(measurement(before=1.6, after=2.4),),
+        counterfactual=counterfactual(frame),
+        rationale="the pinned run converged more slowly at the promoted revision",
+    )
+    publish(second, built)
+    assert assessment.read(config, second) is not None
+
+    reversal = rollback.rollback(config, reason="the counterfactual confirmed the regression", now=REVERSED_AT)
+    publish(
+        second,
+        dataclasses.replace(
+            built,
+            decision=assessment.Decision(
+                settlement=assessment.SETTLEMENT_ROLLED_BACK,
+                decided_at=SETTLED_AT,
+                reason="the counterfactual confirmed the regression",
+                rollback_revision=reversal.revision,
+            ),
+        ),
+    )
+
+    read = assessment.read(config, second)
+    assert read is not None and read.settled is True
+    assert read.decision is not None and read.decision.rollback_revision == reversal.revision
+    # Still the release as it stood when it was judged: the reading is what
+    # justified the reversal, so it cannot be rewritten by it.
+    assert read.subject.standing is True and read.subject.rollback_revision is None
 
 
 def test_a_record_with_no_release_before_it_is_refused(

@@ -919,17 +919,33 @@ agreed with the change is the base rate invariants 1 and 2 exist to keep
 knowable.
 
 **Verdicts.** `improved`, `neutral`, `regressed`, or `inconclusive`. The first
-three are directional and admissible only from cohorts that can carry one: every
-comparability facet coherent — one evaluator, rubric, protocol revision and role
-configuration across both sides, and at least one repository present on both —
-both sides at or above the configured minimum unique-task count, and at least one
-goal quantity measured on both sides (invariants 1, 4, 5, 13). `regressed` rests
-on the counterfactual as well.
+three are directional, and a directional claim rests on one of two kinds of
+evidence.
 
-`inconclusive` is a real result. Mixed provenance, too small a sample, and a
-harness that could not run are reasons to know less, never evidence against a
-release — and the reading that costs somebody a promoted change is the one that
-has to be measured rather than inferred.
+The **cohorts** carry one only when nothing else explains their difference: every
+comparability facet coherent — one evaluator, rubric, protocol revision and role
+configuration across both sides, at least one repository present on both, and the
+same shape of work — both sides at or above the configured minimum unique-task
+count, and at least one goal quantity measured on both sides (invariants 1, 4, 5,
+13). The shape of the work is the facet nothing frozen states: a manifest entry
+carries identity, hashes, evaluator and deployment provenance and nothing about
+the kind of task it judged, and the two cohorts are two different task sets by
+construction (one report per completed task). So it is recorded as the unknown it
+is — invariant 4 — rather than approximated by repository coverage, which is
+coverage and not a match. The facet becomes answerable if a later manifest
+version carries durable task-shape provenance.
+
+The **counterfactual** carries one on its own: a completed run measuring a goal
+quantity on both the pre-promotion and the promoted revision is a comparison in
+which the release *is* the only difference, so what the cohorts came to is
+context rather than the claim's support. `regressed` rests on it in every case.
+In practice, then, the cohorts show the base rate and raise the suspicion, and
+the pinned run settles the direction — in either sign.
+
+`inconclusive` is a real result. Mixed provenance, too small a sample, work whose
+shape nothing states, and a harness that could not run are reasons to know less,
+never evidence against a release — and the reading that costs somebody a promoted
+change is the one that has to be measured rather than inferred.
 
 **The counterfactual.** A cohort difference can suspect a regression; what
 settles it is the exact pre-promotion and promoted revisions exercised with one
@@ -988,9 +1004,14 @@ and what came back off it.
 A release assessment is held to the same treatment, against the frame its own
 batch's provenance supports: the release it names, the frozen membership it
 places, the side each report's effective revision puts it on wherever Git can
-answer, and — as a rule of the record rather than of whoever wrote it — a
-directional verdict its stated cohorts can carry. A reading that could not have
-been formed is not one that may be read back.
+answer, and — as rules of the record rather than of whoever wrote it — the
+denominators and the comparability facets its two frozen manifests give, and a
+directional verdict resting on evidence that can carry one. Those denominators
+and facets are committed content, so they are checked on every clone, including
+one that can resolve no effective revision and place no report at all: a reader
+that skipped them there would accept a cohort size and a coherence claim nobody
+could have derived. A reading that could not have been formed is not one that may
+be read back.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run
