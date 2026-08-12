@@ -584,6 +584,11 @@ other.
   revisions over one case set with one evaluator, which is the only comparison in
   which the release is the only difference. `regressed` rests on it in every
   case. Without one, record what the cohorts show and read it `inconclusive`.
+- A verdict settled that way is the direction the run measured: the way every
+  goal that moved points, with unmoved goals neither adding to it nor standing
+  against it, and every goal unmoved reading `neutral`. Goals pointing both ways
+  settle nothing — record the quantity the release is judged on as the goal and
+  the rest as observations (invariant 13), or read it `inconclusive`.
 - Record the reading at
   `{release.assessment_relative_path}`, with the denominators and every exclusion
   visible. Retaining or rolling back the release is a human decision recorded on
@@ -610,5 +615,6 @@ def _release_acceptance(release: ReleaseAssessment | None) -> str:
 - No directional verdict rests on mixed provenance, work whose shape nothing
   states, an under-sized cohort, or an unmeasured quantity — a direction the
   cohorts cannot carry is either settled by a completed counterfactual or read
-  `inconclusive`.
+  `inconclusive`, and a verdict a counterfactual settles is the direction that
+  run measured.
 """

@@ -54,12 +54,15 @@ THIRD = "evolution-batch-0003"
 
 PROMOTED_AT = datetime(2026, 8, 8, 9, 0, 0, tzinfo=timezone.utc)
 REVERSED_AT = datetime(2026, 8, 9, 9, 0, 0, tzinfo=timezone.utc)
+# When the run that finishes an interrupted rollback finds the line.
+FINISHED_AT = datetime(2026, 8, 9, 11, 0, 0, tzinfo=timezone.utc)
 FROZEN_AT = datetime(2026, 8, 10, 9, 0, 0, tzinfo=timezone.utc)
 FORMED_AT = "2026-08-11T09:00:00Z"
 SETTLED_AT = "2026-08-11T10:00:00Z"
 
 WHY = "the cohort produced at the promoted revision converged in fewer rounds"
 EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
+REVERSAL = "the counterfactual confirmed the regression"
 
 
 @pytest.fixture
@@ -157,21 +160,39 @@ def measurement(**overrides) -> assessment.Measurement:
     return assessment.Measurement(**fields)
 
 
-def counterfactual(frame: assessment.Frame, **overrides) -> assessment.Counterfactual:
+# What a run measuring the release doing harm came to: the same quantity, the
+# other way round. Spelled once because a regression is what the settlement gate
+# exists for, and every test that reaches it needs a run that actually found one.
+SLOWER = (measurement(before=1.6, after=2.4),)
+WORSE = "the promoted revision took more rounds over the same cases"
+
+
+def counterfactual(
+    frame: assessment.Frame,
+    *,
+    metrics: tuple[assessment.Measurement, ...] | None = None,
+    detail: str | None = None,
+    **overrides,
+) -> assessment.Counterfactual:
     """The pinned two-revision run, on the pair the release's own outcome states.
 
     Its position is a round beyond the promoted experiment's last: that
     experiment is terminal, so no run or withdrawal will ever hold it, and a
     harness keyed on it cannot answer this comparison with an experiment's run.
+
+    `metrics` is what the run came to, and it is a knob rather than a constant
+    because the verdict a record may carry is read off exactly these numbers: the
+    default measures the release improving, and a test asserting any other
+    direction says so here.
     """
 
     subject = frame.subject
     result = assessment.RunResult(
         outcome=replay.RESULT_COMPLETED,
         concluded_at="2026-08-11T08:00:00Z",
-        detail="the promoted revision converged in fewer rounds over the same cases",
+        detail=detail if detail is not None else "the promoted revision converged in fewer rounds over the same cases",
         elapsed_seconds=1800.0,
-        metrics=(measurement(),),
+        metrics=metrics if metrics is not None else (measurement(),),
         regressions=(),
         ambiguity=None,
     )
@@ -799,6 +820,12 @@ def test_regressed_stands_on_a_completed_counterfactual(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
+    """The pinned pair measured, and measured the promoted revision doing worse.
+
+    Both halves matter: the run reached the end of both revisions, and what it
+    came to is the direction the record claims.
+    """
+
     second = freeze_second(config, promoted)
     frame = assessment.describe(config, second)
     assert frame is not None
@@ -808,7 +835,7 @@ def test_regressed_stands_on_a_completed_counterfactual(
             frame,
             verdict=assessment.VERDICT_REGRESSED,
             metrics=(measurement(before=1.6, after=2.4),),
-            counterfactual=counterfactual(frame),
+            counterfactual=counterfactual(frame, metrics=SLOWER, detail=WORSE),
         ),
     )
 
@@ -844,6 +871,142 @@ def test_a_counterfactual_that_measured_no_goal_carries_no_direction(
     with pytest.raises(evolution.BatchError) as error:
         assessment.read(config, second)
     assert "measured no goal quantity on both revisions" in str(error.value)
+
+
+def test_a_direction_the_counterfactual_measured_the_other_way_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The run is what the claim rests on, so it is also what the claim is held to.
+
+    Both signs, because both are ways of being wrong about the same numbers: a
+    release the pinned pair measured doing worse is not `improved`, and one it
+    measured doing better is not `regressed` — and `regressed` is the reading that
+    costs somebody a promoted change.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_IMPROVED,
+            counterfactual=counterfactual(frame, metrics=SLOWER, detail=WORSE),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "the run it records measured 'regressed'" in str(error.value)
+    assert "remediation-rounds 1.6 → 2.4 with 'lower' better: regressed" in str(error.value)
+
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_REGRESSED,
+            metrics=(measurement(before=1.6, after=2.4),),
+            counterfactual=counterfactual(frame),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "the run it records measured 'improved'" in str(error.value)
+
+
+def test_neutral_is_a_measured_reading_rather_than_an_unmeasured_one(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """`neutral` claims the release changed nothing, which is a measurement like
+    any other: the run has to have found the quantity unmoved, and a run that
+    found it moved says something else."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+
+    publish(
+        second,
+        build(frame, verdict=assessment.VERDICT_NEUTRAL, counterfactual=counterfactual(frame)),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "the run it records measured 'improved'" in str(error.value)
+
+    unmoved = (measurement(before=2.0, after=2.0),)
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_NEUTRAL,
+            metrics=unmoved,
+            rationale="the pinned run converged in the same number of rounds at both revisions",
+            counterfactual=counterfactual(
+                frame,
+                metrics=unmoved,
+                detail="both revisions converged in the same number of rounds over the same cases",
+            ),
+        ),
+    )
+    read = assessment.read(config, second)
+    assert read is not None and read.verdict == assessment.VERDICT_NEUTRAL
+
+
+def test_goals_the_run_moved_both_ways_settle_no_direction(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """More than one goal, and the rule that goes with it.
+
+    A goal that did not move neither adds to a direction nor stands against one,
+    so a run that improved one quantity and left another alone still carries
+    `improved`. Two goals pointing opposite ways carry nothing: which of them the
+    release is judged on is chosen when the run is configured — invariant 13
+    records the rest as observations — and a reader weighing them afterwards would
+    be making that choice for the operator.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+
+    contested = (measurement(), measurement(metric="review-findings", unit="findings", before=1.0, after=3.0))
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_IMPROVED,
+            counterfactual=counterfactual(
+                frame,
+                metrics=contested,
+                detail="fewer rounds at the promoted revision, and more findings raised in them",
+            ),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "its goal quantities point both ways" in str(error.value)
+    assert "review-findings 1.0 → 3.0 with 'lower' better: regressed" in str(error.value)
+    assert assessment.VERDICT_INCONCLUSIVE in str(error.value)
+
+    agreed = (measurement(), measurement(metric="review-findings", unit="findings", before=2.0, after=2.0))
+    publish(
+        second,
+        build(
+            frame,
+            verdict=assessment.VERDICT_IMPROVED,
+            counterfactual=counterfactual(
+                frame,
+                metrics=agreed,
+                detail="fewer rounds at the promoted revision, with the same findings raised in them",
+            ),
+        ),
+    )
+    read = assessment.read(config, second)
+    assert read is not None and read.verdict == assessment.VERDICT_IMPROVED
 
 
 def test_a_counterfactual_of_another_pair_is_refused(
@@ -1183,13 +1346,13 @@ def test_a_rolled_back_settlement_reads_against_the_rollback_record(
         frame,
         verdict=assessment.VERDICT_REGRESSED,
         metrics=(measurement(before=1.6, after=2.4),),
-        counterfactual=counterfactual(frame),
+        counterfactual=counterfactual(frame, metrics=SLOWER, detail=WORSE),
         rationale="the pinned run converged more slowly at the promoted revision",
     )
     publish(second, built)
     assert assessment.read(config, second) is not None
 
-    reversal = rollback.rollback(config, reason="the counterfactual confirmed the regression", now=REVERSED_AT)
+    reversal = rollback.rollback(config, reason=REVERSAL, now=REVERSED_AT)
     publish(
         second,
         dataclasses.replace(
@@ -1197,7 +1360,7 @@ def test_a_rolled_back_settlement_reads_against_the_rollback_record(
             decision=assessment.Decision(
                 settlement=assessment.SETTLEMENT_ROLLED_BACK,
                 decided_at=SETTLED_AT,
-                reason="the counterfactual confirmed the regression",
+                reason=REVERSAL,
                 rollback_revision=reversal.revision,
             ),
         ),
@@ -1209,6 +1372,125 @@ def test_a_rolled_back_settlement_reads_against_the_rollback_record(
     # Still the release as it stood when it was judged: the reading is what
     # justified the reversal, so it cannot be rewritten by it.
     assert read.subject.standing is True and read.subject.rollback_revision is None
+
+
+def interrupt_before_the_line_moves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave a rollback in the durable state between its two writes: the inverse
+    commit made and recorded, the source line not yet moved onto it.
+
+    The state a killed process leaves, and one the next run finishes rather than
+    starting over — so a record beside it is read while it lasts.
+    """
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("stopped before the source line moved")
+
+    monkeypatch.setattr(rollback, "_land", interrupted)
+
+
+def test_a_settlement_beside_a_prepared_rollback_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rollback record names its commit before the line takes it.
+
+    So the commit's identity is not the answer to whether the release came off:
+    in this window the record already states the revision and the promotion is
+    still what the line has. A settlement read on the revision alone would call an
+    interrupted rollback a completed one — and the settlement is what the next
+    base freeze is gated on, so it would gate on a release still standing.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    built = build(
+        frame,
+        verdict=assessment.VERDICT_REGRESSED,
+        metrics=(measurement(before=1.6, after=2.4),),
+        counterfactual=counterfactual(frame, metrics=SLOWER, detail=WORSE),
+        rationale="the pinned run converged more slowly at the promoted revision",
+    )
+    publish(second, built)
+
+    interrupt_before_the_line_moves(monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=REVERSAL, now=REVERSED_AT)
+
+    prepared = json.loads((config.batches_root / FIRST / "rollback.json").read_text(encoding="utf-8"))
+    assert prepared["reverted_at"] is None
+    interrupted = assessment.describe(config, second)
+    assert interrupted is not None
+    assert interrupted.subject.rollback_revision == prepared["revision"]
+    assert interrupted.subject.standing is True
+    # The reading itself is unaffected: what the cohorts held did not change, and
+    # the record says nothing about a reversal yet.
+    assert assessment.read(config, second) is not None
+
+    settled = dataclasses.replace(
+        built,
+        decision=assessment.Decision(
+            settlement=assessment.SETTLEMENT_ROLLED_BACK,
+            decided_at=SETTLED_AT,
+            reason=REVERSAL,
+            rollback_revision=prepared["revision"],
+        ),
+    )
+    publish(second, settled)
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "prepared without the source line recorded as carrying it" in str(error.value)
+
+    # The same record, once the operation finishes the rollback it prepared: the
+    # commit is unchanged and what changed is the line.
+    monkeypatch.undo()
+    reversal = rollback.rollback(config, reason=REVERSAL, now=FINISHED_AT)
+    assert reversal.revision == prepared["revision"]
+
+    read = assessment.read(config, second)
+    assert read is not None and read.settled is True
+    assert read.decision is not None and read.decision.rollback_revision == prepared["revision"]
+
+
+def test_a_reading_of_a_reversal_the_line_never_took_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same rule where the record makes the claim about itself.
+
+    `assessed.standing` stays historical — a rollback the reading caused may not
+    contradict the reading — but a record asserting the release was already off
+    the line when it was judged is asserting something the repository has to
+    have. A prepared inverse commit is not that, and the exception costs nothing:
+    a promotion a completed rollback reversed is never effective again, so a
+    record legitimately formed against a reversed release still reads against one.
+    """
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+
+    interrupt_before_the_line_moves(monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=REVERSAL, now=REVERSED_AT)
+    prepared = json.loads((config.batches_root / FIRST / "rollback.json").read_text(encoding="utf-8"))
+
+    publish(
+        second,
+        build(
+            frame,
+            metrics=(),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            subject=dataclasses.replace(
+                frame.subject, standing=False, rollback_revision=prepared["revision"]
+            ),
+        ),
+    )
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "prepared without the source line recorded as carrying it" in str(error.value)
 
 
 def test_a_record_with_no_release_before_it_is_refused(

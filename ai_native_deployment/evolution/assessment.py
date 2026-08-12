@@ -59,6 +59,7 @@ from .lineage import BatchLineage, Lineage
 from .lineage import describe as describe_lineage
 from .manifests import OUTCOME_PROMOTED, Batch, read_batch_record
 from .replay import (
+    BETTER_LOWER,
     BETTER_NEITHER,
     RESULT_COMPLETED,
     RESULT_FAILED,
@@ -565,6 +566,34 @@ def directional_admissible(
     return coherent and before_task_count >= minimum and after_task_count >= minimum
 
 
+def measured_direction(goals: Sequence[Measurement]) -> str | None:
+    """Which direction a counterfactual's goal quantities came to, or None when
+    they came to no single one.
+
+    The other rule asked by both sides: the run states what the release did, so a
+    session forming a verdict reads it here and every later read of the record
+    asks the same question of the same numbers. `goals` is the run's directional
+    goals — measured on both revisions — and asking it of none of them is a
+    question about a run that settled nothing, which its caller has already
+    refused.
+
+    The rule for more than one goal, stated once. A run supports the direction
+    every goal that moved points; goals that did not move neither add to it nor
+    stand against it, and all of them unchanged is `neutral` — a measured "the
+    release changed nothing", which is a finding rather than an absence of one.
+    Goals pointing both ways support no direction: which quantity a release is
+    judged on is chosen when the run is configured, and invariant 13 records the
+    others as observations, so a reader weighing an improvement against a
+    regression afterwards would be making that choice on the operator's behalf.
+    """
+
+    directions = {_direction(measurement) for measurement in goals}
+    moved = directions - {VERDICT_NEUTRAL}
+    if not moved:
+        return VERDICT_NEUTRAL
+    return next(iter(moved)) if len(moved) == 1 else None
+
+
 def subject(lineage: Lineage, batch: Batch) -> Subject | None:
     """The release `batch`'s cohort would be assessing, or None when there is
     none before it.
@@ -1047,8 +1076,11 @@ def _read_subject(path: Path, stated: Mapping[str, Any], derived: Subject) -> Su
     rollback that follows it, so re-deriving it would make every such rollback
     contradict the assessment that justified it. What is checked is the other
     direction — a reversal this record asserts must be one the repository
-    recorded, since a claim that the line no longer carries a release is not one
-    an assessment may make on its own.
+    recorded *and landed*, since a claim that the line no longer carries a
+    release is not one an assessment may make on its own. That direction needs no
+    exception: a promotion a completed rollback reversed is never effective
+    again, so a record legitimately formed against a reversed release still reads
+    against one.
     """
 
     fields = (
@@ -1092,6 +1124,7 @@ def _read_subject(path: Path, stated: Mapping[str, Any], derived: Subject) -> Su
                 )
                 + "; what came off the source line is the rollback record's to state"
             )
+        _require_reversal_landed(path, reversal, derived, "the assessment says the promotion was reversed by")
 
     return Subject(
         batch_id=stated["batch_id"],
@@ -1245,7 +1278,8 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, derived: Subjec
     the rollback contradict the finding that justified it — and the settlement is
     appended after the rollback operation has run. The record the settlement is
     checked against is therefore the one written last: `rollback.json` beside the
-    promoted batch's outcome.
+    promoted batch's outcome, read for what it says about the source line and not
+    only for the commit it names.
     """
 
     if stated is None:
@@ -1274,11 +1308,40 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, derived: Subjec
                 )
                 + "; the rollback record stays the authority on what came off the line"
             )
+        _require_reversal_landed(path, revision, derived, "the settlement names")
     return Decision(
         settlement=settlement,
         decided_at=stated["decided_at"],
         reason=stated["reason"],
         rollback_revision=revision,
+    )
+
+
+def _require_reversal_landed(path: Path, revision: str, derived: Subject, described: str) -> None:
+    """A commit a record calls a reversal must be one the source line took.
+
+    A rollback is two writes with a window between them: the record naming the
+    inverse commit lands first, and the line is only recorded as carrying it once
+    the ref has moved (`reverted_at`). Between the two the record already states
+    the revision while the promotion is still effective, and that is a durable
+    state — an interrupted rollback stays there until the operation is run again.
+    So the commit's identity is not on its own an answer to "did this promotion
+    come off the line"; the lineage's own reading of that is asked as well.
+
+    Called after the identity check, which is the half that says *which* rollback
+    is meant. This is the half that says it happened, and the two questions are
+    separate in the ordinary flow: the settlement that depends on it is what a
+    later base freeze is gated on, and a release still on the line is not one a
+    record may settle as taken off it.
+    """
+
+    if not derived.standing:
+        return
+    raise BatchError(
+        f"{path}: {described} the inverse commit {revision[:12]}, and the rollback record beside the promoted "
+        "batch's outcome has that commit prepared without the source line recorded as carrying it; the promotion "
+        "is still what the line has until the rollback operation finishes that record, and a reversal is a commit "
+        "that landed rather than one that was made"
     )
 
 
@@ -1519,6 +1582,12 @@ def _require_supported_verdict(
     `regressed` is checked before either: it always rests on the counterfactual,
     completed, because it is the verdict that costs somebody a promoted change
     and the one that therefore has to be measured rather than inferred.
+
+    A verdict resting on the counterfactual is also held to what that run
+    measured. The cohorts are two different task sets and their numbers are read
+    by the judging session, with `confidence` and `rationale` for what the reading
+    weighs; the counterfactual is the release measured directly, so a direction it
+    contradicts is not a judgement about it but a claim about something else.
     """
 
     if verdict not in DIRECTIONAL_VERDICTS:
@@ -1533,11 +1602,27 @@ def _require_supported_verdict(
             f"under one configuration, and until that is done the reading is {VERDICT_INCONCLUSIVE!r}"
         )
     if run is not None:
-        if not any(measurement.directional for measurement in run.metrics):
+        goals = tuple(measurement for measurement in run.metrics if measurement.directional)
+        if not goals:
             raise BatchError(
                 f"{path}: {verdict!r} rests on the counterfactual, and the run it records measured no goal "
                 f"quantity on both revisions — every number it states is an observation ({BETTER_NEITHER!r}) "
                 f"or missing a side, which settles nothing about the release (invariant 13)"
+            )
+        supported = measured_direction(goals)
+        if supported is None:
+            raise BatchError(
+                f"{path}: {verdict!r} rests on the counterfactual, and its goal quantities point both ways "
+                f"({_reading(goals)}); a run whose goals disagree settles no direction, and which of them "
+                f"the release is judged on is chosen when the run is configured — the rest are recorded as "
+                f"observations ({BETTER_NEITHER!r}) rather than weighed against it afterwards. What this "
+                f"evidence allows is {VERDICT_INCONCLUSIVE!r}"
+            )
+        if supported != verdict:
+            raise BatchError(
+                f"{path}: {verdict!r} rests on the counterfactual, and the run it records measured "
+                f"{supported!r} ({_reading(goals)}); a direction is what its own evidence came to, and a "
+                "verdict the only comparison supporting it contradicts is an opinion with a run attached"
             )
         return
 
@@ -1573,6 +1658,36 @@ def _require_supported_verdict(
         + "; ".join(unmet)
         + f"; what this evidence allows is {VERDICT_INCONCLUSIVE!r}, or a direction settled by a "
         "completed counterfactual"
+    )
+
+
+def _direction(measurement: Measurement) -> str:
+    """Which way one measured goal moved, in the verdict's own words.
+
+    Asked of a goal with both sides measured; `better` says which way is the
+    improvement, and equal values are the release changing nothing about that
+    quantity rather than a missing answer.
+    """
+
+    if measurement.after == measurement.before:
+        return VERDICT_NEUTRAL
+    improved = (
+        measurement.after < measurement.before
+        if measurement.better == BETTER_LOWER
+        else measurement.after > measurement.before
+    )
+    return VERDICT_IMPROVED if improved else VERDICT_REGRESSED
+
+
+def _reading(goals: Sequence[Measurement]) -> str:
+    """What the run's goals came to, quantity by quantity — a refusal that names
+    only the disagreement leaves the reader to reopen the record for the
+    numbers."""
+
+    return ", ".join(
+        f"{measurement.metric} {measurement.before} → {measurement.after} with {measurement.better!r} better: "
+        f"{_direction(measurement)}"
+        for measurement in goals
     )
 
 

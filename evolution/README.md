@@ -903,7 +903,10 @@ in. So the record states which of the two it assessed, and it is not re-derived
 afterwards — the ordinary consequence of a regression finding is the rollback
 that follows it, and re-reading that field would make every such rollback
 contradict the assessment that justified it. What the line carries *now* is the
-lineage's own reading.
+lineage's own reading. The other direction is checked: a record asserting the
+release was already off the line is held to a reversal this repository recorded
+and landed, and that exception costs nothing, because a promotion a completed
+rollback reversed is never effective again.
 
 **Which reports contribute.** Membership comes from the two frozen manifests and
 nothing else (invariant 3). Each report is placed by its own
@@ -942,6 +945,17 @@ context rather than the claim's support. `regressed` rests on it in every case.
 In practice, then, the cohorts show the base rate and raise the suspicion, and
 the pinned run settles the direction — in either sign.
 
+A verdict resting on that run is also the direction the run measured. It supports
+the way every goal that moved points; goals it left unmoved neither add to that
+nor stand against it, and all of them unmoved is `neutral` — the release measured
+changing nothing, which is a finding rather than the absence of one. Goals
+pointing both ways support no direction: which quantity a release is judged on is
+chosen when the run is configured, and the rest are recorded as observations
+(invariant 13), so weighing an improvement against a regression afterwards would
+make that choice on the operator's behalf. What the cohorts came to is read by
+the judging session — that is what `confidence` and `rationale` are for — but a
+claim the pinned run contradicts is a claim about something else.
+
 `inconclusive` is a real result. Mixed provenance, too small a sample, work whose
 shape nothing states, and a harness that could not run are reasons to know less,
 never evidence against a release — and the reading that costs somebody a promoted
@@ -966,11 +980,16 @@ makes a round beyond its last unreachable forever.
 
 **The settlement** is a human decision recorded on the assessment: `retain`
 leaves the release as the line later work builds on, and `rolled-back` names the
-inverse commit the rollback operation made. The evidence and the decision live in
-one record because a reader finding only one of them would have to guess at the
-other. The reason is the operator's and not the assessment's — an `inconclusive`
-reading is an ordinary ground for retaining a release, and a rollback is a
-judgement the promotion's own evidence never contained (Rollback).
+inverse commit the rollback operation made *and landed*. A rollback records that
+commit before the line takes it, so between the two writes the record already
+names a revision while the promotion is still effective — a durable state, since
+an interrupted rollback stays there until the operation runs again. Naming the
+commit is therefore only half of what a settlement claims; the other half is the
+lineage's reading that the promotion came off the line. The evidence and the
+decision live in one record because a reader finding only one of them would have
+to guess at the other. The reason is the operator's and not the assessment's — an
+`inconclusive` reading is an ordinary ground for retaining a release, and a
+rollback is a judgement the promotion's own evidence never contained (Rollback).
 
 ### What is derived
 
@@ -1005,13 +1024,14 @@ A release assessment is held to the same treatment, against the frame its own
 batch's provenance supports: the release it names, the frozen membership it
 places, the side each report's effective revision puts it on wherever Git can
 answer, and — as rules of the record rather than of whoever wrote it — the
-denominators and the comparability facets its two frozen manifests give, and a
-directional verdict resting on evidence that can carry one. Those denominators
-and facets are committed content, so they are checked on every clone, including
-one that can resolve no effective revision and place no report at all: a reader
-that skipped them there would accept a cohort size and a coherence claim nobody
-could have derived. A reading that could not have been formed is not one that may
-be read back.
+denominators and the comparability facets its two frozen manifests give, a
+directional verdict resting on evidence that can carry one and pointing the way
+that evidence came to, and a settlement held to a rollback the source line took.
+Those denominators and facets are committed content, so they are checked on every
+clone, including one that can resolve no effective revision and place no report
+at all: a reader that skipped them there would accept a cohort size and a
+coherence claim nobody could have derived. A reading that could not have been
+formed is not one that may be read back.
 
 Replay evidence is the one reading with a question Git may be unable to answer:
 whether the source line has moved since a run measured it needs the ref that run

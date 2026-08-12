@@ -47,7 +47,7 @@
       "$ref": "#/$defs/counterfactual"
     },
     "verdict": {
-      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
+      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. A verdict resting on that run is the direction the run measured: it supports the way every goal that moved points, goals it left unmoved neither add to that nor stand against it, all of them unmoved is `neutral`, and goals pointing both ways support no direction at all — which quantity a release is judged on is chosen when the run is configured, not by weighing an improvement against a regression afterwards. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
       "enum": [
         "improved",
         "neutral",
@@ -136,7 +136,7 @@
           "type": "boolean"
         },
         "rollback_revision": {
-          "description": "The inverse commit that had already taken this promotion back off the line, or null when the promotion was standing. Paired with `standing` and checked against the promoted batch's own rollback record: a reversal this repository never recorded is not one an assessment may assert.",
+          "description": "The inverse commit that had already taken this promotion back off the line, or null when the promotion was standing. Paired with `standing` and checked against the promoted batch's own rollback record, in both of the things that record says: a reversal this repository never recorded is not one an assessment may assert, and neither is one whose commit was prepared without the source line being recorded as carrying it. That check needs no exception for a rollback this reading caused, because a promotion a completed rollback reversed is never effective again.",
           "type": [
             "string",
             "null"
@@ -628,7 +628,7 @@
           "minLength": 1
         },
         "rollback_revision": {
-          "description": "The inverse commit a `rolled-back` settlement produced, and null for `retain`. Restated from the rollback record the operation wrote beside the promoted batch's outcome, which stays the authority on what came off the line.",
+          "description": "The inverse commit a `rolled-back` settlement produced, and null for `retain`. Restated from the rollback record the operation wrote beside the promoted batch's outcome, which stays the authority on what came off the line — and on whether it came off at all: that record names its commit before the source line takes it, so a settlement is accepted only once the lineage reads the promotion as no longer standing. An interrupted rollback names a revision and is not a reversal.",
           "type": [
             "string",
             "null"
