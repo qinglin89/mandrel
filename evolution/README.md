@@ -1285,7 +1285,12 @@ task's second question — so what guards it is which batch is current (invarian
 before it, and nothing about the stage's end. Ordinarily those are the same
 batch; where the owing cohort ended without answering, they are not, and the
 record is written where the obligation is rather than where the current batch is.
-None of them moves a ref or touches
+Once that obligation is answered it is closed to everything that would add to the
+reading, which is then told whose record it is — but not to the settlement's own
+redo, which reaches the answer in order to report it back; a settlement a caller
+could not repeat is one it could not recover, and a carried-forward settlement is
+no more repeatable from the cohort that took it than any other. None of them
+moves a ref or touches
 an experiment; a `rolled-back` settlement moves the source line, and it does that
 by running the rollback, under the guards a rollback has. What they share is the
 rest: the lock, the record before the audit line, and a redo that reports what is

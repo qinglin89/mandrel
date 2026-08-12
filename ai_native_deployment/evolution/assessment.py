@@ -1209,7 +1209,9 @@ def form(
     return Formed(batch_id=frame.batch_id, assessment=recorded, record_path=batch.assessment_path)
 
 
-def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
+def _owing_frame(
+    config: EvolutionConfig, known: Lineage, *, follow_answered: bool = False
+) -> Frame:
     """The frame of the batch that owes a reading, or why there is none to write.
 
     Three ways there is nothing here to record, and they are different answers to
@@ -1224,6 +1226,18 @@ def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
     cohort that happens to be current: a gate nothing can answer would stop the
     lineage for good, since what freezes the next cohort is the settlement and
     what would record the settlement is this.
+
+    `follow_answered` is the settlement's own exception, and it is about
+    reporting rather than about writing. Everything a settlement does to a
+    reading that already carries a decision is report that decision back or
+    refuse to re-take it (`_redone_settlement`), so reaching an answered owner
+    is what makes a carried-forward settlement repeatable — and a settlement
+    nobody can repeat is one a caller cannot recover, since losing the response
+    and being interrupted after the record landed look the same from outside.
+    The operations that *add* to a reading do not take the exception: for them an
+    answered obligation is where the work stops, and stopping here says whose
+    record it is, which the settled check further in could not — the cohort
+    standing at the keyboard has recorded nothing at all.
     """
 
     current = known.current
@@ -1248,7 +1262,7 @@ def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
     # before it — and where the lineage cannot say which cohort owes that
     # reading, `obligation` refuses rather than answering.
     owed = obligation(config, current.batch, lineage=known)
-    if owed is not None and not owed.settled:
+    if owed is not None and (follow_answered or not owed.settled):
         return owed.frame
     owner = frame.batch_id if owed is None else owed.owner_id
     raise BatchError(
@@ -1893,7 +1907,10 @@ def settle(
 
     with single_writer_lock(config):
         known = settled(config, now=moment)
-        frame = _owing_frame(config, known)
+        # The one operation that follows an obligation to an owner that already
+        # answered: what it has to do with a decision on record is report it, and
+        # a redo that could not reach the record could not report it either.
+        frame = _owing_frame(config, known, follow_answered=True)
         reading = _recorded(config, frame, "settle")
         decided = reading.decision
         if decided is not None:
@@ -1929,7 +1946,7 @@ def settle(
         # itself cannot have moved — nothing else has written since the refusals
         # above — so what this re-reads is the release, not the judgement.
         known = settled(config, now=moment)
-        frame = _owing_frame(config, known)
+        frame = _owing_frame(config, known, follow_answered=True)
         reading = _recorded(config, frame, "settle")
         return _record_settlement(config, frame, reading, settlement, text, reversal, moment)
 

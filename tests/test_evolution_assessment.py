@@ -3465,6 +3465,88 @@ def test_a_cohort_that_ended_unread_still_gates_the_next_base(
     assert admitted.created is True
 
 
+def test_a_settlement_taken_where_the_obligation_sits_is_redone_there_too(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A carried-forward settlement is answerable more than once, like every
+    other one.
+
+    The redo is not a convenience: a caller that lost the response and a run
+    interrupted between the record and its return are the same state, and the
+    way out of it here is to ask again. Refusing the second ask because the
+    first one succeeded would make the one settlement an operator cannot repeat
+    the one they most need to, since it is taken from a cohort that is not even
+    the record's own.
+    """
+
+    second = freeze_second(config, promoted)
+    ended_without_settling(config, promoted, reading=True)
+
+    first = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT
+    )
+    written = second.assessment_path.read_bytes()
+
+    again = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
+    )
+    assert first.batch_id == SECOND and again.batch_id == SECOND
+    assert again.recorded is False
+    assert again.decision.decided_at == first.decision.decided_at
+    assert second.assessment_path.read_bytes() == written
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_SETTLED)) == 1
+
+    # The gate still answers once: a different answer is refused where it sits,
+    # and refused before anything is reversed for it.
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.settle(
+            config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=CONCLUDED_AT
+        )
+    assert "answers once" in str(error.value)
+    assert (config.batches_root / FIRST / "rollback.json").exists() is False
+
+
+def test_an_answered_obligation_is_still_closed_to_everything_but_its_own_redo(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """Reaching a settled owner's record is the settlement's exception alone.
+
+    What a redo does with a decision already on record is report it; what these
+    would do is add to the reading that decision was made from. So the cohort
+    that is merely standing where the obligation was answered is told whose
+    reading it is, which is a different thing for an operator to hear than
+    "settled" — their own cohort has recorded nothing at all.
+    """
+
+    second = freeze_second(config, promoted)
+    third = ended_without_settling(config, promoted, reading=True)
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
+    written = second.assessment_path.read_bytes()
+
+    for act in (
+        lambda: form_reading(config),
+        lambda: assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT),
+        lambda: assessment.conclude(config, FakeHarness(), now=MEASURED_AT),
+        lambda: assessment.abandon(config, reason=DIED, now=MEASURED_AT),
+        lambda: assessment.withdraw(config, now=MEASURED_AT),
+        lambda: assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_NEUTRAL,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+            now=MEASURED_AT,
+        ),
+    ):
+        with pytest.raises(evolution.BatchError) as error:
+            act()
+        assert f"the first batch frozen after that promotion is {SECOND}" in str(error.value)
+
+    assert second.assessment_path.read_bytes() == written
+    assert third.assessment_path.exists() is False
+
+
 def test_nothing_else_writes_between_the_settlement_and_the_reversal_it_composes(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
