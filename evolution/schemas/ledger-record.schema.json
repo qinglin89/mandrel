@@ -27,7 +27,8 @@
         "experiment-superseded",
         "experiment-promoted",
         "batch-concluded",
-        "promotion-rolled-back"
+        "promotion-rolled-back",
+        "release-assessed"
       ]
     },
     "schema_version": {

@@ -889,6 +889,18 @@ rationale of the session that judged them. The cohorts are restated all the same
 because evidence that names no denominator is a directional claim whose sample
 nobody can see.
 
+Recording one runs that derivation as a write. The cohorts, denominators,
+exclusions and facets come from the manifests rather than from whoever is
+recording; the verdict is held to the evidence the record carries before anything
+lands; and the audit line that follows names the cohort, the release and the
+verdict, which is a bounded code this controller authored. So a reading that
+could not be read back is never written, and a record written beside it by hand
+is held to the same rules the moment it is read. Running the same formation again
+reports the reading already on record — an interrupted one is finished by
+repeating it — and a request that says something else is refused, because a
+cohort reads a release once and that record is what the counterfactual and the
+settlement are added to.
+
 The release is read from the promoted batch's `outcome.json`. That record carries
 the whole merge unit, which is what makes the pair to compare a reading rather
 than a reconstruction: the pre-promotion revision is the merge input — the
@@ -906,7 +918,11 @@ contradict the assessment that justified it. What the line carries *now* is the
 lineage's own reading. The other direction is checked: a record asserting the
 release was already off the line is held to a reversal this repository recorded
 and landed, and that exception costs nothing, because a promotion a completed
-rollback reversed is never effective again.
+rollback reversed is never effective again. A reversal still in flight is not one
+of those, and a reading formed beside one records the release as standing — which
+is what it was. The inverse commit exists and the line has not taken it, so it
+places the reports produced on a line that did take it and states no reversal at
+all.
 
 **Which reports contribute.** Membership comes from the two frozen manifests and
 nothing else (invariant 3). Each report is placed by its own
@@ -1068,7 +1084,8 @@ Two readings are specifically not that answer:
 
 Each of the operations above — grouped admission, draft rejection, `add-tasks`,
 `seal-round`, `revise`, starting, concluding, ending and withdrawing a replay,
-abandon, supersede, promote, `conclude-no-change`, and rollback — writes
+abandon, supersede, promote, `conclude-no-change`, rollback, and recording a
+release assessment — writes
 several places at once: the experiment ref, a versioned record, `.ai-tasks/` and
 its index, the audit ledger. Not every one of them touches all four — a seal and
 a revision write a record and an audit line, because what they record is a
@@ -1081,12 +1098,25 @@ of them — a commit, the record naming it, a ref on the source line, then two
 more records and two audit lines — and it is the one whose middle cannot be
 undone by this controller. A rollback is the same shape with one record: a
 commit, the record naming it, the ref, then the moment written into that same
-record and one audit line.
+record and one audit line. A release assessment writes one record and one audit
+line, for the reason a seal does: what it records is a judgement about work that
+has already happened.
 They take
 the same single-writer lock as import and freeze, they write in an order where
 the durable record is what makes the operation real, and every step is safe to
 redo, so an interrupted operation is finished by the next run rather than
 repaired by hand.
+
+Recording a release assessment is the one whose preamble is not the whole of the
+shared one, and the difference is which stage it belongs to. Every other
+operation here writes into a batch's change lineage, which is why each refuses
+while the analysis stage is still running; this reading *is* part of that stage —
+the generated analysis task's second question — so what guards it is which batch
+is current (invariant 14, from the whole history) and whether that batch is the
+cohort owing the reading, and nothing about the stage's end. It moves no ref and
+touches no experiment, so the ref holds below do not reach it either. What it
+shares is the rest: the lock, the record before the audit line, and a redo that
+reports the reading already on record.
 
 An ending is also guarded by the state of the ref it ends over. An experiment's
 ref is described only while that experiment is open, so a decision recorded over

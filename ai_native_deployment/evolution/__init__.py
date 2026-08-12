@@ -23,9 +23,10 @@ batch's change lineage, the `replay.start` / `replay.conclude` / `replay.abandon
 `replay.read_replays` / `replay.describe_evidence` and the rest of that module's
 vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
 `rollback.rollback` (the latest promotion taken back off the source line),
-`assessment.describe` / `assessment.read` (the comparison a batch's frozen
-provenance supports, and the reading it recorded of the release before it), and
-the `render.format_*` functions (operator-facing text for the CLI).
+`assessment.describe` / `assessment.read` / `assessment.form` (the comparison a
+batch's frozen provenance supports, the reading it recorded of the release
+before it, and the operation that records one), and the `render.format_*`
+functions (operator-facing text for the CLI).
 """
 
 from __future__ import annotations

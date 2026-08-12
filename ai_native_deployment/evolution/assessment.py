@@ -15,7 +15,10 @@ the way every other lifecycle reading in this package is, and the committed
 record is checked against that derivation. What cannot be re-derived is what the
 record exists for: measurements taken from machine-local evaluation artifacts, a
 counterfactual run a harness made, and the verdict, confidence and rationale of
-the session that judged them.
+the session that judged them. Recording one (`form`) is that same derivation run
+as a write — a caller supplies only the half nobody can re-derive, and the record
+is published through the reader that loads it back, so what a later read enforces
+is what this write passed and a reading that could not be read is never written.
 
 **The failure this exists to prevent** is a directional claim the cohorts cannot
 support. Reports arrive from targets that were redeployed at different times, by
@@ -49,12 +52,17 @@ promoted one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError
+from .guards import reason as require_reason
+from .guards import settled
+from .ledger import append_records, build_record
 from .lineage import BatchLineage, Lineage
 from .lineage import describe as describe_lineage
 from .manifests import OUTCOME_PROMOTED, Batch, read_batch_record
@@ -70,8 +78,12 @@ from .replay import (
     Regression,
 )
 from .revisions import contains, resolve_commit
+from .schema import format_rfc3339, load_schema, validate_or_raise
+from .state import atomic_write_text, single_writer_lock
 
 ASSESSMENT_SCHEMA_VERSION = 1
+
+RECORD_RELEASE_ASSESSED = "release-assessed"
 
 VERDICT_IMPROVED = "improved"
 VERDICT_NEUTRAL = "neutral"
@@ -544,6 +556,19 @@ class Assessment:
         }
 
 
+@dataclass(frozen=True)
+class Formed:
+    """One reading recorded, and where it landed."""
+
+    batch_id: str
+    assessment: Assessment
+    record_path: Path
+    # False when this reports the reading already on record — the same formation
+    # run again after an interruption, recognised by what it says rather than by
+    # a marker beside it.
+    recorded: bool = True
+
+
 def directional_admissible(
     *,
     coherent: bool,
@@ -848,6 +873,230 @@ def parse(
         decision=decision,
         path=path,
     )
+
+
+def form(
+    config: EvolutionConfig,
+    *,
+    verdict: str,
+    confidence: str,
+    rationale: str,
+    metrics: Sequence[Measurement] = (),
+    now: datetime | None = None,
+) -> Formed:
+    """Record the current cohort's reading of the release before it.
+
+    What a caller supplies is only what nobody can re-derive: the quantities the
+    two cohorts came to, read from evaluation artifacts this machine holds, and
+    the verdict, confidence and rationale of the session that judged them.
+    Everything else — which release, which reports on which side, the
+    denominators, the exclusions, the comparability facets — is derived here from
+    the two frozen manifests, the promoted batch's outcome, its rollback record
+    if it has one, and Git. A record states the reading rather than choosing it,
+    which is what makes the check every later read applies the same one this
+    write passed.
+
+    The preamble is deliberately not `guards.current_cycle`. That one settles
+    which batch may be *acted on*, and it refuses while the analysis stage is
+    still running — which is exactly when this is written: the reading is the
+    generated analysis task's own second question, taken before the dispositions
+    close. What this does need from the lineage is the same as everything else:
+    which batch is current (invariant 14, from the whole history), and whether it
+    is the cohort that owes the reading.
+
+    The verdict is checked against the evidence the record carries, by the parser
+    every read uses. In practice a reading formed here is `inconclusive` or
+    nothing: no manifest version states the shape of the work, so the cohorts
+    carry no direction on their own, and the counterfactual that settles one has
+    not run when this is written. That is the artifact working rather than a
+    limitation of it — the cohorts raise the suspicion and the pinned run answers
+    it.
+
+    Run again after an interrupted formation, this reports the reading already on
+    record rather than writing a second one, and does not re-append the audit line
+    that interruption may have cost — the rule a redone conclusion follows, for
+    the same reason: the event happened once. A request that says something
+    different is refused, because a cohort reads a release once and the record is
+    what the counterfactual and the human settlement are afterwards added to.
+    """
+
+    moment = _moment(now)
+    text = require_reason(
+        rationale,
+        "a release assessment records why its verdict is that verdict; the evidence the judging session had in "
+        "front of it is machine-local and the cohorts are two different task sets, so this sentence is what a "
+        "later reader has instead of both",
+    )
+    stated = tuple(metrics)
+
+    with single_writer_lock(config):
+        known = settled(config, now=moment)
+        frame = _owing_frame(config, known)
+        batch = frame.batch
+
+        already = read(config, batch, frame=frame)
+        if already is not None:
+            return _redone(frame, already, stated, verdict, confidence, text)
+
+        built = Assessment(
+            batch_id=frame.batch_id,
+            subject=_as_assessed(frame.subject),
+            before=frame.before.report_keys,
+            before_task_count=frame.before.task_count,
+            after=frame.after.report_keys,
+            after_task_count=frame.after.task_count,
+            excluded=frame.excluded,
+            comparability=frame.comparability,
+            metrics=stated,
+            counterfactual=None,
+            verdict=verdict,
+            confidence=confidence,
+            rationale=text,
+            formed_at=format_rfc3339(moment),
+            decision=None,
+        )
+        recorded = _write_assessment(config, batch, built, frame)
+        append_records(
+            config,
+            [
+                build_record(
+                    RECORD_RELEASE_ASSESSED,
+                    recorded_at=built.formed_at,
+                    batch_id=frame.batch_id,
+                    experiment_id=frame.subject.experiment_id,
+                    revision=frame.subject.revision,
+                    detail=verdict,
+                )
+            ],
+        )
+
+    return Formed(batch_id=frame.batch_id, assessment=recorded, record_path=batch.assessment_path)
+
+
+def _owing_frame(config: EvolutionConfig, known: Lineage) -> Frame:
+    """The frame of the batch that owes a reading, or why there is none to write.
+
+    Three ways there is nothing here to record, and they are different answers to
+    an operator: no cohort is current, the current cohort follows no release, and
+    the reading belongs to an earlier cohort than this one.
+    """
+
+    current = known.current
+    if current is None:
+        raise BatchError(
+            "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
+            "cohort's answer about the promotion before it, and what freezes a cohort is "
+            "`aii-2 evolution start` (invariant 14)"
+        )
+
+    frame = describe(config, current.batch, lineage=known)
+    if frame is None:
+        raise BatchError(
+            f"{current.batch_id} follows no promotion, so there is no release for it to assess; a repository "
+            "that promoted nothing before this cohort and a predecessor that concluded `no-change` both leave "
+            "nothing an upgrade effect could be measured against, and none is invented (invariant 7)"
+        )
+    if not frame.owed:
+        promoted = next(item for item in known.batches if item.batch_id == frame.subject.batch_id)
+        # Never empty: this cohort derived that release from a batch frozen before
+        # it, so it is itself one of the batches after it.
+        owner = known.after(promoted)[0].batch_id
+        raise BatchError(
+            f"{frame.batch_id} is not the cohort that owes a reading of the {frame.subject.batch_id} release; "
+            f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
+            "about it, and its reading was taken and settled before this cohort could freeze (invariant 14)"
+        )
+    return frame
+
+
+def _as_assessed(subject: Subject) -> Subject:
+    """The release as the record states it, which is not quite as the lineage
+    reads it now.
+
+    `assessed.rollback_revision` is for a reversal that had *already* taken the
+    promotion off the line when the reading was formed. The derived subject also
+    carries an inverse commit that is only prepared — it needs one, since a report
+    produced at a line that took that commit belongs to neither cohort — and
+    writing it here would state that the release was reversed while `standing`
+    says it was not, which is the contradiction the reader refuses.
+    """
+
+    return subject if subject.reversed_promotion else replace(subject, rollback_revision=None)
+
+
+def _redone(
+    frame: Frame,
+    already: Assessment,
+    metrics: tuple[Measurement, ...],
+    verdict: str,
+    confidence: str,
+    rationale: str,
+) -> Formed:
+    """The same formation run again, or the refusal that this cohort has read
+    this release already.
+
+    Recognised by what the record says rather than by a marker: an interrupted
+    formation either wrote its record or did not, and the one it wrote is the one
+    a redo is asking for. What is compared is the caller's half alone — the
+    derived half is derived on both sides, and `formed_at` is when the reading
+    landed rather than part of it.
+    """
+
+    if (already.metrics, already.verdict, already.confidence, already.rationale) == (
+        metrics,
+        verdict,
+        confidence,
+        rationale,
+    ):
+        return Formed(
+            batch_id=frame.batch_id,
+            assessment=already,
+            record_path=frame.batch.assessment_path,
+            recorded=False,
+        )
+    raise BatchError(
+        f"{frame.batch_id} already reads the {frame.subject.batch_id} release {already.verdict!r}, and this "
+        f"request is {verdict!r}; a cohort reads a release once, and that record is what the counterfactual "
+        "and the human settlement are added to — two readings of one release would leave a later reader "
+        "choosing between them"
+    )
+
+
+def _write_assessment(
+    config: EvolutionConfig,
+    batch: Batch,
+    built: Assessment,
+    frame: Frame,
+) -> Assessment:
+    """Publish a reading through the two halves of the reader that loads it.
+
+    The schema first and then the rules it cannot state, in the order and by the
+    calls a read makes, so a writer cannot produce a record its own package
+    refuses — a directional verdict its evidence does not support is refused here
+    rather than committed and discovered by the next reader.
+    """
+
+    record = built.to_json()
+    validate_or_raise(
+        record,
+        load_schema(config.schema_path(ASSESSMENT_SCHEMA_FILENAME)),
+        description=f"release assessment record for {frame.batch_id}",
+    )
+    parsed = parse(config, record, batch, frame=frame)
+    atomic_write_text(batch.assessment_path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return parsed
+
+
+def _moment(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+        raise BatchError(
+            "the moment a release assessment was formed must be timezone-aware; a naive datetime records an "
+            "ambiguous instant, and the interval between the promotion, the freeze and this reading is what "
+            "makes it a later judgement"
+        )
+    return now
 
 
 def _owed(lineage: Lineage, batch: Batch, assessed: Subject) -> bool:

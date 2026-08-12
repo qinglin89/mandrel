@@ -1511,6 +1511,305 @@ def test_a_record_with_no_release_before_it_is_refused(
     assert "follows no promotion" in str(error.value)
 
 
+# --- recording a reading ----------------------------------------------------
+
+
+INCONCLUSIVE_WHY = "no frozen manifest states what kind of work either cohort did"
+
+
+def ledger_records(config: evolution.EvolutionConfig, record_type: str) -> list[dict]:
+    return [item for item in evolution.read_records(config) if item["record_type"] == record_type]
+
+
+def test_forming_derives_everything_but_the_judgement(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A caller supplies the numbers and the reading; the cohorts, denominators,
+    exclusions and facets come from the frozen manifests and Git."""
+
+    second = freeze_second(config, promoted)
+
+    formed = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        metrics=(measurement(),),
+    )
+
+    assert formed.recorded is True
+    assert formed.batch_id == SECOND
+    assert formed.record_path == second.assessment_path
+    recorded = formed.assessment
+    assert recorded.before == ("b1", "b2", "b3") and recorded.before_task_count == 3
+    assert recorded.after == ("a1", "a2", "a3") and recorded.after_task_count == 3
+    assert recorded.excluded == ()
+    assert recorded.comparability.incoherent == (assessment.FACET_TASK_SHAPE,)
+    assert recorded.subject.revision == promoted.promotion_revision
+    assert recorded.rationale == INCONCLUSIVE_WHY
+    assert recorded.counterfactual is None and recorded.decision is None
+
+    # On disk exactly as the reader loads it back.
+    read = assessment.read(config, second)
+    assert read is not None and read.to_json() == recorded.to_json()
+    assert json.loads(second.assessment_path.read_text(encoding="utf-8")) == recorded.to_json()
+
+
+def test_forming_audits_the_release_it_read(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The audit line names the cohort that read it, the release it was about,
+    and the verdict — which is a bounded code this package authored."""
+
+    freeze_second(config, promoted)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+    )
+
+    lines = ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)
+    assert len(lines) == 1
+    assert lines[0]["batch_id"] == SECOND
+    assert lines[0]["revision"] == promoted.promotion_revision
+    assert lines[0]["experiment_id"] == promoted.experiment_id
+    assert lines[0]["detail"] == assessment.VERDICT_INCONCLUSIVE
+
+
+def test_forming_states_a_prepared_reversal_as_no_reversal_at_all(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rollback whose inverse commit exists and has not reached the line leaves
+    the promotion standing, and a reading formed then says so.
+
+    The derived subject carries that commit — it has to, since a report produced
+    at a line that took it belongs to neither cohort — but `assessed` is about
+    what the line held, and stating a reversal beside `standing: true` is the
+    contradiction the reader refuses.
+    """
+
+    second = freeze_second(config, promoted)
+    interrupt_before_the_line_moves(monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=REVERSAL, now=REVERSED_AT)
+    prepared = json.loads((config.batches_root / FIRST / "rollback.json").read_text(encoding="utf-8"))
+
+    derived = assessment.describe(config, second)
+    assert derived is not None
+    assert derived.subject.standing is True and derived.subject.rollback_revision == prepared["revision"]
+
+    formed = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+    )
+
+    assert formed.assessment.subject.standing is True
+    assert formed.assessment.subject.rollback_revision is None
+    assert assessment.read(config, second) is not None
+
+
+def test_a_verdict_the_evidence_cannot_carry_writes_nothing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The rule the reader applies is the rule the writer passes. A directional
+    claim with no counterfactual behind it never reaches the disk, so nothing has
+    to be discovered by whoever reads next."""
+
+    second = freeze_second(config, promoted)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_IMPROVED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale="the cohort after the release converged faster",
+            metrics=(measurement(),),
+        )
+
+    assert "resting on the cohorts alone" in str(error.value)
+    assert assessment.FACET_TASK_SHAPE in str(error.value)
+    assert second.assessment_path.exists() is False
+    assert ledger_records(config, assessment.RECORD_RELEASE_ASSESSED) == []
+
+
+def test_a_reading_with_no_reason_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    freeze_second(config, promoted)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="   ",
+        )
+    assert "why its verdict is that verdict" in str(error.value)
+
+
+def test_the_same_formation_run_again_reports_what_it_wrote(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """An interrupted formation is finished by running it again: the record it
+    already wrote is the one being asked for, and no second audit line is
+    appended for an event that happened once."""
+
+    freeze_second(config, promoted)
+    first = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        metrics=(measurement(),),
+    )
+
+    again = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        # The same sentence, wrapped differently — a reason travels in a versioned
+        # record and is compared there.
+        rationale="no frozen manifest\n  states what kind of work either cohort did",
+        metrics=(measurement(),),
+    )
+
+    assert again.recorded is False
+    assert again.assessment.to_json() == first.assessment.to_json()
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 1
+
+
+def test_a_second_reading_of_one_release_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    freeze_second(config, promoted)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_MEDIUM,
+            rationale="the after cohort was produced at a revision that carries the change",
+        )
+    assert "reads a release once" in str(error.value)
+
+
+def test_nothing_is_formed_where_there_is_no_release(
+    config: evolution.EvolutionConfig,
+    release: str,
+) -> None:
+    write_manifest(config.batches_root, FIRST, ["r1"], analysis_task_id="2026-07-31-first")
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+        )
+    assert "follows no promotion" in str(error.value)
+    assert (config.batches_root / FIRST / "release-assessment.json").exists() is False
+
+
+def test_a_later_cohort_may_not_read_a_release_for_the_one_that_owes_it(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The obligation belongs to the first cohort after the promotion. A later
+    one derives the same release — that is how it reads the record — and is told
+    whose reading it is."""
+
+    freeze_second(config, promoted)
+    write_outcome(config.batches_root, SECOND, outcome="no-change")
+    third = freeze_second(config, promoted, batch_id=THIRD)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+        )
+    assert f"the first batch frozen after that promotion is {SECOND}" in str(error.value)
+    assert third.assessment_path.exists() is False
+
+
+def test_no_current_cohort_reads_nothing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """Every batch concluded: there is a release on the line and no cohort whose
+    reading it would be."""
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+        )
+    assert "no batch is current" in str(error.value)
+
+
+def test_a_reading_is_formed_while_the_analysis_is_still_being_written(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    tmp_path: Path,
+) -> None:
+    """The generated analysis task asks for this reading, so it is written before
+    that task closes — which is exactly the state every other guarded operation
+    refuses to act in."""
+
+    fill_pool(config, tmp_path / "feed")
+    result = evolution.freeze(config, now=FROZEN_AT, runner_revision="v2.2.0")
+    assert result.batch_id == SECOND
+    awaiting = evolution.batch_awaiting_analysis(config)
+    assert awaiting is not None and awaiting.batch_id == SECOND
+
+    formed = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+    )
+
+    assert formed.recorded is True
+    assert formed.batch_id == SECOND
+
+
+def test_a_naive_moment_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    freeze_second(config, promoted)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+            now=datetime(2026, 8, 11, 9, 0, 0),
+        )
+    assert "timezone-aware" in str(error.value)
+
+
 # --- what the generated analysis task says ---------------------------------
 
 
