@@ -71,6 +71,19 @@ release assessment reads `effective_revision`, and a null one lands the cohort
 in the designed "missing provenance is inconclusive" path instead of inventing a
 revision no target ever reported.
 
+Nothing here can be made to fill it in. `effective_revision` means the canonical
+commit the evaluated target's deployed payload came from — its
+`.ai-deploy-lock.json` `source_git_commit` — as of the evaluation, and the only
+side that held that worktree then is the one that published the report. This
+client sees a catalog entry; a lock it read today would state what that target
+holds today, which places a pre-release report on the wrong side of a promotion
+the target has since been redeployed onto. So the field is left null until the
+feed carries it, and what that would take is written down in the contract
+(`evolution/README.md`, Release assessment): `source_git_commit` verbatim as
+`effective_revision` and `canonical_payload_sha256` as `deploy_lock_hash`, both
+absent for a target that carried no lock. Whichever names orch-hub gives them,
+`_unstated_provenance` is the one place this translation reads them from.
+
 **Integrity headers are not trusted.** The raw-artifact route serves bytes that
 no longer match their recorded digest with
 `X-Report-Artifact-Integrity: mismatched` rather than hiding them, precisely so
@@ -466,6 +479,10 @@ def _unstated_provenance() -> dict[str, Any]:
     release assessment reading a null `effective_revision` places the cohort in
     the inconclusive path, which is the designed answer for a report whose
     provenance never said, and a fabricated revision would be worse than none.
+
+    This is also where a published one would be read (module docstring): the
+    evaluated target's deploy-lock `source_git_commit` and
+    `canonical_payload_sha256`, under whatever names the feed gives them.
     """
 
     return {

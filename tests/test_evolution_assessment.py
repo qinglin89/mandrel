@@ -3757,6 +3757,28 @@ def test_the_first_cohort_after_a_release_is_asked_to_assess_it(
     assert "session-est: 0/2" in text
 
 
+def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    tmp_path: Path,
+) -> None:
+    """The reading is taken by whoever opens this task, so what the published
+    feed cannot state has to be met there rather than in the contract alone: a
+    report with no effective revision is excluded whole, every orch-hub-sourced
+    report is one, and the counterfactual is then the only directional
+    instrument. Without it a session finds empty cohorts and no reason for them.
+    """
+
+    fill_pool(config, tmp_path / "feed")
+    result = evolution.freeze(config, now=FROZEN_AT, runner_revision="v2.2.0")
+
+    assert result.analysis_task_id is not None
+    text = (config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md").read_text(encoding="utf-8")
+    assert "from the orch-hub feed state none" in text
+    assert "places nothing on either side" in text
+    assert "the pinned counterfactual below is the only directional" in text
+
+
 def test_a_first_cohort_is_asked_for_no_release_reading(
     config: evolution.EvolutionConfig,
     tmp_path: Path,

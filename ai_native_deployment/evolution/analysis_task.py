@@ -568,6 +568,13 @@ other.
   `provenance.effective_revision` — what that target actually held — and never
   the targets the promotion was *planned* for ({targets}), which is a plan and
   not a deployment.
+- A report stating no effective revision is excluded whole, and reports imported
+  from the orch-hub feed state none: that feed publishes no such field, so a
+  cohort drawn from it places nothing on either side and offers no direction in
+  either sign. Read the exclusions before the numbers. Where they take the
+  denominators to zero, the pinned counterfactual below is the only directional
+  instrument available, and an unmeasured reading is `inconclusive` — absent
+  evidence, never evidence against the release.
 - Verdicts are `improved`, `neutral`, `regressed`, or `inconclusive`. The first
   three are directional and rest on one of two kinds of evidence. The cohorts
   carry a direction only when nothing else explains it: one evaluator, rubric,

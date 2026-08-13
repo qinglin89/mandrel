@@ -31,6 +31,16 @@ suspected regression is answered by the counterfactual — the exact
 pre-promotion and promoted revisions, one case set, one evaluator — because that
 is the only comparison in which the release is the only difference.
 
+**The placing field is reported, never derived here.** A report's
+`provenance.effective_revision` is the evaluated target's deploy-lock
+`source_git_commit` as of that evaluation, which only the side holding that
+worktree could state; a lock read from a target now says what it holds now, and
+placement is an ancestry test, so filling the gap from one would move
+pre-release reports onto the `after` side of a promotion the target was
+redeployed onto later. The published feed states none of it today, so cohorts
+drawn from it exclude whole and the counterfactual below is what carries a
+direction (contract: Release assessment).
+
 The shape of the work is the difference nothing frozen states. Two cohorts are
 two different task sets by construction, and no manifest version records what
 kind of task each report judged, so that facet is carried as the unknown it is
