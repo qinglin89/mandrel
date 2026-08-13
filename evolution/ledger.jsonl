@@ -1,1 +1,4 @@
 {"record_type":"workspace-initialized","schema_version":1,"recorded_at":"2026-07-31T06:26:48Z","detail":"No evaluation reports imported."}
+{"record_type":"report-imported","schema_version":1,"recorded_at":"2026-08-13T03:35:59Z","report_key":"rpt-5ddbea19f7492df27441b7c35780300b","task_id":"2026-07-20-backtest-prepare-coverage-check","detail":"new"}
+{"record_type":"report-imported","schema_version":1,"recorded_at":"2026-08-13T03:35:59Z","report_key":"rpt-ac2cf7fa75cc42123e31cd5f08cd3626","task_id":"2026-07-20-chart-audit-fidelity","detail":"new"}
+{"record_type":"report-imported","schema_version":1,"recorded_at":"2026-08-13T03:35:59Z","report_key":"rpt-9049d146863841c965cf42cad7479981","task_id":"2026-07-19-gateway-only-strategy-surface","detail":"new"}
