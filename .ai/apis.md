@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-13
+verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 ---
 
 # APIs and Interfaces
@@ -62,14 +62,18 @@ successful outcome when policy is not met.
 
 ## External Integration
 
-The pending orch-hub global report feed is expected to supply globally ordered,
-archived-task reports with durable complete L1+L2 artifacts. Eligibility does
-not depend on evaluation trigger provenance. The implemented client uses an
-opaque cursor, bearer token from `ORCH_HUB_TOKEN`, and base URL from
-`ORCH_HUB_URL`; it follows no redirects, permits cleartext HTTP only for
-loopback, and bounds every response read to 32 MiB. Until orch-hub publishes the
-feed, `--feed-dir` provides deterministic offline imports against the same
-`ReportFeed` boundary.
+The published orch-hub feed supplies globally ordered archived-task reports.
+Its integer `after` watermark is stringified at the `ReportFeed` boundary;
+`has_more` is the feed-owned exhaustion signal. The client translates catalog
+entries into import-schema-v1 records and fetches byte-exact artifacts by fixed
+wire filename; 410 means published bytes were pruned, while 404/409/500 remain
+errors. It uses `ORCH_HUB_URL` plus bearer `ORCH_HUB_TOKEN`, follows no
+redirects, permits cleartext HTTP only for loopback, and bounds each response at
+32 MiB. `scripts/probe-orch-hub.py` is the manual credentialed contract check;
+`--feed-dir` remains the deterministic offline implementation of the same
+boundary. orch-hub publishes no `provenance.effective_revision`, so translated
+reports fail closed into an inconclusive release assessment until a truthful
+provenance source is selected.
 
 ## API Conventions
 

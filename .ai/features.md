@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-13
+verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 ---
 
 # Features
@@ -17,7 +17,7 @@ verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 | Unified regression/CI gate | implemented | `scripts/check.sh`; deterministic lint/test/build matrix; optional pre-push hook; manual live probe |
 | Repository-local workflow skills | implemented | canonical Claude skill payload; manifest/lock coverage; cross-backend closeout pointers |
 | Evolution normative workspace | initialized | README, config, schemas, ledger, batch/case/experiment dirs |
-| Evolution report feed | pending in orch-hub | globally ordered archived-task reports with complete L1+L2 artifacts |
+| Evolution report feed | published; client reconciled and live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
 | Evolution lifecycle CLI | implemented | `aii-2 evolution list|sync|status|start`; human and JSON phase rendering |

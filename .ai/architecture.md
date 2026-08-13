@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-13
+verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 ---
 
 # Architecture
@@ -100,8 +100,8 @@ promotion, deployment, and rollback remain separate reviewed/human-gated steps.
 - Git for source revisions and target audit.
 - Local filesystem and Python virtualenv tooling.
 - Claude/Codex CLI logins or Cursor API key only for selected runtime backends.
-- orch-hub protected report API for live evolution imports; the global feed is
-  still pending, so deterministic local bundle import is the available path.
+- orch-hub protected catalog and byte-exact artifact API for live evolution
+  imports; deterministic local bundles remain the offline/replay path.
 
 ## Deployment
 

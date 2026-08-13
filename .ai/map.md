@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-13
+verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 ---
 
 # Project Map
@@ -24,7 +24,7 @@ verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision services, evolution policy | replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v6 |
 | Release effectiveness gate | assessment/lineage/experiment/rollback services, evolution policy | release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
-| Report publication | external orch-hub | pending global report feed/export |
+| Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |
 
 ## Change Impact
 
@@ -38,4 +38,4 @@ verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 | Repository check/tool | `scripts/check.sh`, `dev` extra, structural gate tests; CI/hooks call only the gate |
 | Evolution admission/state | evolution contract/config/schema, ledger/batch invariants, `.ai` feature/API snapshot |
 | Release assessment/settlement | assessment schema/reader, replay and rollback boundaries, experiment-base gate, ledger vocabulary, `.ai` feature/API snapshot |
-| orch-hub report contract | import schema/client fixtures and task acceptance |
+| orch-hub report contract | hub client, import schema/client fixtures, manual live probe, task acceptance |
