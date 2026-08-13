@@ -325,37 +325,57 @@ export ORCH_HUB_URL=https://orch-hub.example
 export ORCH_HUB_TOKEN=...
 ```
 
-**That feed is not published yet.** Until it is, `list`, `sync`, and `start`
-without `--feed-dir` fail with one message naming both variables and the
-offline path — they do not hang, and they do not silently import nothing. The
-offline path is a local report bundle:
+Without those variables, `list`, `sync`, and `start` fail with one message
+naming both of them and the offline path — they do not hang, and they do not
+silently import nothing. The offline path is a local report bundle:
 
 ```text
 <feed-dir>/reports/*.json                          one import record per file
 <feed-dir>/artifacts/<report_key>/<artifact-name>  the four L1+L2 bodies
 ```
 
-`--feed-dir` is the supported way to run the controller today, and stays the
-way to replay a fixed cohort afterwards.
+`--feed-dir` stays the way to run a deterministic cohort offline and to replay
+a fixed one afterwards.
 
-The wire contract the client expects of orch-hub, stated so the two sides can
-be built against the same shape (details in
-`ai_native_deployment/evolution/hub.py`):
+The wire contract, as orch-hub publishes it and the client was reconciled
+against on 2026-08-12 (details in `ai_native_deployment/evolution/hub.py`):
 
 ```text
-GET <ORCH_HUB_URL><report_feed_path>?limit=<n>[&cursor=<opaque>]
-    -> {"items": [<import record>...], "next_cursor": <string|null>,
-        "exhausted": <bool>}
-GET <ORCH_HUB_URL><report_feed_path>/<report_key>/artifacts/<name>
-    -> the artifact bytes, or 404 if the feed does not serve it
+GET <ORCH_HUB_URL><report_feed_path>?limit=<n>[&after=<watermark>]
+    -> {"enabled": true, "reports": [<catalog entry>...],
+        "cursor": <int>, "next_cursor": <int>, "has_more": <bool>}
+GET <ORCH_HUB_URL><report_feed_path>/<report_key>/artifacts/<wire name>
+    -> the artifact bytes exactly as published
+       404 unknown report key or artifact name   410 published, bytes pruned
+       409 incoherent stored identity            500 unreadable artifact
 ```
 
-Both requests carry `Authorization: Bearer $ORCH_HUB_TOKEN`. `exhausted` is
-required: it is what tells a later `freeze` that the pool is the whole eligible
-set rather than a prefix, so it is read from the feed and never inferred.
+Both requests carry `Authorization: Bearer $ORCH_HUB_TOKEN`. `has_more` is
+required: its negation is what tells a later `freeze` that the pool is the whole
+eligible set rather than a prefix, so it is read from the feed and never
+inferred from a short page. The cursor is an integer watermark on the wire and
+opaque above the client, which converts at that boundary.
+
+A catalog entry is orch-hub's own shape, not this repository's import record:
+the client translates one into the other so the offline feed stays
+interchangeable. Two fields are derived rather than copied — `completed` from
+the entry's `archived` (orch-hub catalogs only reports whose task was archived
+at publication, and this protocol archives only at completion close-out), and
+each artifact's `media_type` from its published filename. orch-hub publishes
+none of this repository's provenance fields, so translated records carry them
+null, and a release assessment reads that as provenance it never got rather
+than inventing a revision.
+
+Artifact bytes are served byte for byte and verified here against the digests
+the feed itself published. The route reports a failed integrity check in a
+header instead of hiding the body, and the client deliberately ignores that
+header for decisions: the check belongs to the side that did not publish the
+bytes.
 
 Two bounds are the client's own rather than the feed's, and both refuse with a
-message naming what to change:
+message naming what to change. Both were confirmed against the published feed
+rather than assumed — nothing it serves redirects, and its largest artifact is
+three orders of magnitude under the bound:
 
 - **No redirect is followed.** `urllib` would copy the `Authorization` header
   onto whatever host a `Location` named, so a checked URL would say nothing
@@ -363,6 +383,13 @@ message naming what to change:
 - **Every response body is read under a fixed 32 MiB bound**, not the
   `size_bytes` the record declares. A body that reaches the bound is rejected by
   the usual size/hash check rather than truncated into the pool.
+
+`scripts/probe-orch-hub.py` checks all of that against the running service —
+envelope, reported exhaustion, one entry translated into a record the real
+import schema admits, and one report's artifact bytes hashed against the digests
+the feed published. It is read-only and credentialed, so it is not in
+`scripts/check.sh` and no CI runner can reach the feed; run it by hand with both
+variables exported after either side changes.
 
 ### What lands where
 

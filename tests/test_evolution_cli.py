@@ -1,9 +1,12 @@
 """The operator surface: CLI adapters, the orch-hub client, and the derived phase.
 
-Everything runs against a temporary repository. The orch-hub feed does not exist
-yet, so the client is exercised through an injected opener that answers the wire
-contract `hub.py` states, which is the only way to test a client written against
-an API that has not shipped.
+Everything runs against a temporary repository. The client is exercised through
+an injected opener answering the wire contract orch-hub publishes — the catalog
+entry it really serves, not the import record this repository would have
+preferred — so the translation `hub.py` performs is under test rather than
+assumed. The one thing no injected opener can prove is that the live service
+still answers that way; `scripts/probe-orch-hub.sh` is the credentialed check
+for that, and it stays off the required gate.
 
 Two tests are the exception and bind a loopback server: what `urllib` does with
 a redirect — whose headers it copies, and to whom — is a property of the real
@@ -32,6 +35,7 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
+    HUB_ARTIFACT_NAMES,
     admitted_task,
     experiment_decision,
     experiment_round,
@@ -41,6 +45,8 @@ from evolution_fixtures import (
     git_rev,
     git_unrelated_commit,
     git_update_ref,
+    hub_page,
+    make_hub_entry,
     make_record,
     make_repo,
     promotion_of,
@@ -762,6 +768,21 @@ def page_url(**query: str) -> str:
     return f"{BASE_URL}/api/evaluation/reports?{urllib.parse.urlencode(query)}"
 
 
+def artifact_url(key: str, name: str) -> str:
+    """The published artifact's URL — by wire filename, which is what orch-hub's
+    four-value selector accepts."""
+
+    return f"{BASE_URL}/api/evaluation/reports/{key}/artifacts/{HUB_ARTIFACT_NAMES[name]}"
+
+
+def artifact_routes(key: str, bodies: dict[str, bytes] | None = None) -> dict[str, object]:
+    return {artifact_url(key, name): body for name, body in (bodies or ARTIFACT_BODIES).items()}
+
+
+def http_error(url: str, code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url, code, "", {}, None)
+
+
 def test_an_unset_feed_url_or_token_is_reported_as_not_ready(
     config: evolution.EvolutionConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -784,8 +805,7 @@ def test_only_the_missing_variable_is_named(config: evolution.EvolutionConfig) -
 
 def test_the_token_travels_in_a_header_and_never_in_the_url(config: evolution.EvolutionConfig) -> None:
     seen: list = []
-    body = json.dumps({"items": [], "next_cursor": None, "exhausted": True}).encode("utf-8")
-    feed = hub_feed({page_url(limit="10"): body}, seen=seen)
+    feed = hub_feed({page_url(limit="10"): hub_page([])}, seen=seen)
 
     feed.fetch_page(None, 10)
 
@@ -793,64 +813,108 @@ def test_the_token_travels_in_a_header_and_never_in_the_url(config: evolution.Ev
     assert TOKEN not in seen[0].full_url
 
 
-def test_a_page_carries_its_items_cursor_and_exhaustion(config: evolution.EvolutionConfig) -> None:
-    record = make_record(key="r1", sequence=1)
-    body = json.dumps({"items": [record], "next_cursor": "c1", "exhausted": False}).encode("utf-8")
-    feed = hub_feed({page_url(limit="5"): body})
+def test_a_page_carries_its_entries_cursor_and_exhaustion(config: evolution.EvolutionConfig) -> None:
+    """`has_more` is the feed's own statement; `exhausted` is its negation, never
+    a guess from a short page."""
+    entry = make_hub_entry(key="r1", seq=1)
+    feed = hub_feed({page_url(limit="5"): hub_page([entry], next_cursor=1, has_more=True)})
 
     page = feed.fetch_page(None, 5)
 
-    assert page.items == (record,)
-    assert page.cursor == "c1"
+    assert page.cursor == "1"
     assert page.exhausted is False
+    assert page.items[0]["report_key"] == "r1"
 
 
-def test_a_page_without_exhaustion_is_refused(config: evolution.EvolutionConfig) -> None:
+def test_the_watermark_is_sent_as_after_and_stays_opaque_upward(config: evolution.EvolutionConfig) -> None:
+    """orch-hub pages an append-only catalog by an integer watermark, but nothing
+    above `ReportFeed` may learn that a cursor is a number."""
+    seen: list = []
+    feed = hub_feed({page_url(limit="5", after="7"): hub_page([], cursor=7, next_cursor=7)}, seen=seen)
+
+    page = feed.fetch_page("7", 5)
+
+    assert "after=7" in seen[0].full_url and "cursor=" not in seen[0].full_url
+    assert page.cursor == "7"
+
+
+def test_a_page_without_has_more_is_refused(config: evolution.EvolutionConfig) -> None:
     """It authorizes a later freeze to treat the pool as the whole eligible set,
     so it is read from the feed, never inferred."""
-    body = json.dumps({"items": [], "next_cursor": None}).encode("utf-8")
+    body = json.dumps({"enabled": True, "reports": [], "cursor": 0, "next_cursor": 0}).encode("utf-8")
     feed = hub_feed({page_url(limit="5"): body})
 
-    with pytest.raises(evolution.FeedError, match="exhausted"):
+    with pytest.raises(evolution.FeedError, match="has_more"):
         feed.fetch_page(None, 5)
 
 
-def test_a_null_next_cursor_leaves_discovery_where_it_was(config: evolution.EvolutionConfig) -> None:
-    """Reading it as "start over" would re-import the feed from the beginning on
-    every drained run."""
-    body = json.dumps({"items": [], "next_cursor": None, "exhausted": True}).encode("utf-8")
-    feed = hub_feed({page_url(limit="5", cursor="c9"): body})
+def test_an_empty_page_echoes_the_watermark_and_does_not_rewind(config: evolution.EvolutionConfig) -> None:
+    """A drained feed returns the cursor unchanged. Reading a missing one as
+    "start over" would re-import the feed from the beginning on every run, so a
+    page without a watermark is refused rather than interpreted."""
+    echoed = hub_feed({page_url(limit="5", after="9"): hub_page([], cursor=9, next_cursor=9)})
+    assert echoed.fetch_page("9", 5).cursor == "9"
 
-    assert feed.fetch_page("c9", 5).cursor == "c9"
+    missing = json.dumps({"enabled": True, "reports": [], "has_more": False, "next_cursor": None}).encode("utf-8")
+    with pytest.raises(evolution.FeedError, match="next_cursor"):
+        hub_feed({page_url(limit="5"): missing}).fetch_page(None, 5)
 
 
-def test_an_artifact_the_feed_does_not_serve_is_absent_rather_than_fatal(
-    config: evolution.EvolutionConfig,
-) -> None:
-    """A 404 is the feed stating the body is not there: the L1+L2 set is not
-    durable, which the importer records as a rejection with a reason."""
+def test_a_disabled_evaluation_subsystem_is_not_an_empty_feed(config: evolution.EvolutionConfig) -> None:
+    """Treating it as a drained page would let a freeze call an empty pool the
+    whole eligible set."""
+    body = json.dumps({"enabled": False, "reports": [], "cursor": 0, "next_cursor": 0, "has_more": False}).encode(
+        "utf-8"
+    )
+    feed = hub_feed({page_url(limit="5"): body})
+
+    with pytest.raises(evolution.FeedError, match="disabled"):
+        feed.fetch_page(None, 5)
+
+
+def test_a_pruned_artifact_is_absent_rather_than_fatal(config: evolution.EvolutionConfig) -> None:
+    """410 is the feed stating the body was published and is gone: the L1+L2 set
+    is no longer durable, which the importer records as a rejection."""
     record = make_record(key="r1", sequence=1)
-    routes = {
-        f"{BASE_URL}/api/evaluation/reports/r1/artifacts/{name}": body
-        for name, body in list(ARTIFACT_BODIES.items())[:3]
-    }
+    routes = artifact_routes("r1")
+    routes[artifact_url("r1", "report_markdown")] = http_error(artifact_url("r1", "report_markdown"), 410)
     feed = hub_feed(routes)
 
     blobs = feed.fetch_artifacts(record)
 
-    assert set(blobs) == set(list(ARTIFACT_BODIES)[:3])
+    assert set(blobs) == {"evidence", "static_metrics", "semantic_report"}
+
+
+def test_an_unknown_key_or_name_raises_instead_of_reading_as_pruned(config: evolution.EvolutionConfig) -> None:
+    """404 says the request addressed nothing — a defect in what was asked, not
+    a fact about retention. Recording it as a missing body would bury a report
+    that is fine."""
+    record = make_record(key="r1", sequence=1)
+    routes = artifact_routes("r1")
+    routes[artifact_url("r1", "evidence")] = http_error(artifact_url("r1", "evidence"), 404)
+    feed = hub_feed(routes)
+
+    with pytest.raises(evolution.FeedError, match="HTTP 404"):
+        feed.fetch_artifacts(record)
+
+
+def test_an_incoherent_stored_identity_raises(config: evolution.EvolutionConfig) -> None:
+    """409 is the hub saying its own entry cannot address its artifacts; no retry
+    heals it and no rejection reason describes it."""
+    record = make_record(key="r1", sequence=1)
+    routes = artifact_routes("r1")
+    routes[artifact_url("r1", "evidence")] = http_error(artifact_url("r1", "evidence"), 409)
+    feed = hub_feed(routes)
+
+    with pytest.raises(evolution.FeedError, match="HTTP 409"):
+        feed.fetch_artifacts(record)
 
 
 def test_a_transport_failure_fetching_an_artifact_raises(config: evolution.EvolutionConfig) -> None:
     """An unreachable feed says nothing about a report's eligibility, and
     recording it as rejected would bury a good report permanently."""
     record = make_record(key="r1", sequence=1)
-    feed = hub_feed(
-        {
-            f"{BASE_URL}/api/evaluation/reports/r1/artifacts/{name}": urllib.error.URLError("connection reset")
-            for name in ARTIFACT_BODIES
-        }
-    )
+    feed = hub_feed({artifact_url("r1", name): urllib.error.URLError("connection reset") for name in ARTIFACT_BODIES})
 
     with pytest.raises(evolution.FeedError, match="unreachable"):
         feed.fetch_artifacts(record)
@@ -869,9 +933,12 @@ def test_a_report_key_with_a_slash_addresses_one_path_segment(config: evolution.
     seen: list = []
     feed = hub_feed({}, seen=seen)
 
-    feed.fetch_artifacts({"report_key": "a/../b", "artifacts": {"evidence": {"size_bytes": 1}}})
+    # The canned feed answers 404 for a URL it does not know, which is now a
+    # refusal rather than an absent body; the request it built is the subject.
+    with pytest.raises(evolution.FeedError):
+        feed.fetch_artifacts({"report_key": "a/../b", "artifacts": {"evidence": {"size_bytes": 1}}})
 
-    assert seen[0].full_url.endswith("/reports/a%2F..%2Fb/artifacts/evidence")
+    assert seen[0].full_url.endswith("/reports/a%2F..%2Fb/artifacts/evidence.json")
 
 
 def test_a_body_larger_than_declared_is_bounded_and_then_rejected(
@@ -882,7 +949,7 @@ def test_a_body_larger_than_declared_is_bounded_and_then_rejected(
     oversized = b"x" * 5000
     record = make_record(key="r1", sequence=1)
     declared = record["artifacts"]["evidence"]["size_bytes"]
-    feed = hub_feed({f"{BASE_URL}/api/evaluation/reports/r1/artifacts/evidence": oversized})
+    feed = hub_feed({**artifact_routes("r1"), artifact_url("r1", "evidence"): oversized})
 
     blobs = feed.fetch_artifacts(record)
 
@@ -919,11 +986,8 @@ def test_a_body_over_the_clients_limit_is_rejected_not_quietly_shortened(
     truncated body reaching the pool as a short artifact nobody declared."""
     monkeypatch.setattr(hub, "MAX_RESPONSE_BYTES", 2048)
     bodies = dict(ARTIFACT_BODIES, evidence=b"L" * 4096)
-    record = make_record(key="r1", sequence=1, bodies=bodies)
-    routes: dict[str, object] = {
-        page_url(limit="50"): json.dumps({"items": [record], "next_cursor": "c1", "exhausted": True}).encode("utf-8")
-    }
-    routes.update({f"{BASE_URL}/api/evaluation/reports/r1/artifacts/{name}": body for name, body in bodies.items()})
+    routes: dict[str, object] = {page_url(limit="50"): hub_page([make_hub_entry(key="r1", seq=1, bodies=bodies)])}
+    routes.update(artifact_routes("r1", bodies))
 
     result = importer.sync(config, hub_feed(routes))
 
@@ -988,7 +1052,7 @@ def test_a_cross_origin_redirect_never_receives_the_token() -> None:
     """`urllib`'s default handler copies the request headers — `Authorization`
     among them — onto whichever destination answered with a `Location`, so
     checking the configured URL proves nothing about where the token lands."""
-    drained = (200, {"Content-Type": "application/json"}, b'{"items": [], "next_cursor": null, "exhausted": true}')
+    drained = (200, {"Content-Type": "application/json"}, hub_page([]))
     with loopback_server(lambda path: drained) as (elsewhere, elsewhere_received):
         with loopback_server(lambda path: (302, {"Location": f"{elsewhere}/feed"}, b"")) as (base, _):
             feed = hub.OrchHubFeed(base, TOKEN, "/api/evaluation/reports")
@@ -1015,19 +1079,73 @@ def test_a_same_origin_redirect_is_refused_as_well() -> None:
 
 def test_the_hub_client_imports_a_report_end_to_end(config: evolution.EvolutionConfig) -> None:
     """The client and the importer meet only at `ReportFeed`, so this is the one
-    test that proves the pair works together."""
-    record = make_record(key="r1", sequence=1)
-    routes: dict[str, object] = {
-        page_url(limit="50"): json.dumps({"items": [record], "next_cursor": "c1", "exhausted": True}).encode("utf-8")
-    }
-    routes.update(
-        {f"{BASE_URL}/api/evaluation/reports/r1/artifacts/{name}": body for name, body in ARTIFACT_BODIES.items()}
-    )
+    test that proves the pair works together — a published catalog entry in, a
+    pooled report with verified bytes out."""
+    routes: dict[str, object] = {page_url(limit="50"): hub_page([make_hub_entry(key="r1", seq=1)])}
+    routes.update(artifact_routes("r1"))
 
     result = importer.sync(config, hub_feed(routes))
 
     assert result.imported == ("r1",)
     assert result.exhausted is True
+    assert result.cursor_after == "1"
+
+
+def test_a_translated_entry_is_the_record_the_import_schema_describes(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The feed serves its own catalog entry; everything above `ReportFeed` reads
+    an import record, so the translation is what has to be right."""
+    feed = hub_feed({page_url(limit="5"): hub_page([make_hub_entry(key="r1", seq=4)])})
+
+    record = feed.fetch_page(None, 5).items[0]
+
+    assert record["schema_version"] == 1
+    assert record["sequence"] == 4
+    assert record["generated_at"] == "2026-07-30T10:00:00Z"
+    assert record["source"]["repo_id"] == "repo-alpha"
+    assert record["evaluator"]["model"] == "claude-opus-5"
+    assert record["artifacts"]["report_markdown"]["media_type"] == "text/markdown"
+    assert record["artifacts"]["evidence"]["size_bytes"] == len(ARTIFACT_BODIES["evidence"])
+    # Nothing orch-hub says about runs or git survives: the import schema closes
+    # its objects, and a release assessment must see provenance it never got as
+    # absent rather than invented.
+    assert record["provenance"]["effective_revision"] is None
+    assert "repo_path" not in record and "target_source" not in record
+    assert reports.normalize(record, config, reports.load_import_schema(config)).report_key == "r1"
+
+
+def test_archived_is_how_this_feed_says_completed(config: evolution.EvolutionConfig) -> None:
+    """orch-hub catalogs a report only once its task was archived at publication,
+    and this protocol archives only at completion close-out — but it is mapped
+    rather than asserted, so the importer's own gate still decides."""
+    admissible = hub_feed({page_url(limit="5"): hub_page([make_hub_entry(key="r1", seq=1)])})
+    assert admissible.fetch_page(None, 5).items[0]["source"]["completed"] is True
+
+    unarchived = hub_feed({page_url(limit="5"): hub_page([make_hub_entry(key="r2", seq=2, archived=False)])})
+    record = unarchived.fetch_page(None, 5).items[0]
+
+    assert record["source"]["completed"] is False
+    rejection = reports.normalize(record, config, reports.load_import_schema(config))
+    assert rejection.reason == reports.REASON_NOT_ARCHIVED
+
+
+def test_an_entry_the_feed_mangled_is_translated_and_then_rejected(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The translation never raises and never drops: a malformed entry has to
+    reach the importer, which records the rejection the ledger carries."""
+    entry = make_hub_entry(key="r1", seq=1)
+    entry["artifacts"] = [item for item in entry["artifacts"] if item["name"] != "semantic_report.json"]
+    entry["seq"] = "not-a-sequence"
+    feed = hub_feed({page_url(limit="5"): hub_page([entry], next_cursor=1)})
+
+    record = feed.fetch_page(None, 5).items[0]
+
+    assert "semantic_report" not in record["artifacts"]
+    assert reports.normalize(record, config, reports.load_import_schema(config)).reason == (
+        reports.REASON_MISSING_ARTIFACT
+    )
 
 
 # --- CLI ---------------------------------------------------------------------

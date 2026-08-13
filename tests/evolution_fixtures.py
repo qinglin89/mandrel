@@ -38,6 +38,81 @@ ARTIFACT_BODIES = {
 }
 
 
+# The filename orch-hub publishes each artifact under, spelled out rather than
+# imported from the client: a fixture that borrowed the client's own mapping
+# would agree with it even when both are wrong about the feed.
+HUB_ARTIFACT_NAMES = {
+    "evidence": "evidence.json",
+    "static_metrics": "static_metrics.json",
+    "semantic_report": "semantic_report.json",
+    "report_markdown": "report.md",
+}
+
+
+def make_hub_entry(
+    *,
+    key: str,
+    seq: int,
+    repo_slug: str = "repo-alpha",
+    task_id: str = "2026-07-01-task",
+    evaluation_id: str | None = None,
+    bodies: dict[str, bytes] | None = None,
+    generated_ts: str = "2026-07-30T10:00:00Z",
+    archived: bool = True,
+) -> dict:
+    """One orch-hub catalog entry, in the shape the published feed serves.
+
+    Deliberately not `make_record`: the feed serves its own catalog entry, not
+    an import record, and a fixture that pretended otherwise would exercise the
+    client against this repository's preferences instead of orch-hub's contract.
+    The client's translation is what closes the gap, so it has to be given the
+    real thing to translate.
+    """
+
+    bodies = bodies or ARTIFACT_BODIES
+    return {
+        "seq": seq,
+        "report_key": key,
+        "cataloged_ts": "2026-07-30T11:00:00Z",
+        "repo_name": repo_slug.replace("-", " "),
+        "repo_slug": repo_slug,
+        "repo_path": f"/repos/{repo_slug}",
+        "task_id": task_id,
+        "evaluation_id": evaluation_id or f"eval-{key}",
+        "generated_ts": generated_ts,
+        "target_source": "archived",
+        "archived": archived,
+        "evaluator": {"backend": "claude", "model": "claude-opus-5", "schema_version": "1"},
+        "artifacts": [
+            {"name": HUB_ARTIFACT_NAMES[name], "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+            for name, body in bodies.items()
+        ],
+        # orch-hub's own provenance: run and git coverage of the evaluation, and
+        # explicit statements that it holds none of the protocol/orchestrator
+        # facts this repository's import schema asks for.
+        "provenance": {
+            "runs": {"available": True, "run_ids": [f"run-{key}"], "count": 1, "detail": None},
+            "git": {"available": True, "commit_count": 2, "detail": None},
+            "protocol": {"available": False, "detail": "evidence packs carry no .ai-protocol version"},
+            "orchestrator_config": {"available": False, "detail": "no effective-config snapshot"},
+        },
+    }
+
+
+def hub_page(entries: list[dict], *, cursor: int = 0, next_cursor: int | None = None, has_more: bool = False) -> bytes:
+    """One page envelope as orch-hub serves it."""
+
+    return json.dumps(
+        {
+            "enabled": True,
+            "reports": entries,
+            "cursor": cursor,
+            "next_cursor": next_cursor if next_cursor is not None else (entries[-1]["seq"] if entries else cursor),
+            "has_more": has_more,
+        }
+    ).encode("utf-8")
+
+
 def make_repo(tmp_path: Path) -> Path:
     """A repository carrying the real versioned evolution contract files.
 

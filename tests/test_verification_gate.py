@@ -20,6 +20,7 @@ GATE = REPO_ROOT / "scripts" / "check.sh"
 HOOK_INSTALLER = REPO_ROOT / "scripts" / "install-git-hooks.sh"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "smoke.yml"
+ORCH_HUB_PROBE = REPO_ROOT / "scripts" / "probe-orch-hub.py"
 MOCK_LOOP = REPO_ROOT / "canonical" / "orchestrator" / "test_loop_mock.py"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
@@ -177,6 +178,21 @@ def test_the_live_probe_is_manual_and_outside_the_gate() -> None:
     assert "workflow_dispatch:" in smoke
     for automatic in ("pull_request:", "\n  push:", "schedule:"):
         assert automatic not in smoke, f"the live probe runs on {automatic.strip()}"
+
+
+def test_the_orch_hub_probe_is_manual_and_outside_the_gate() -> None:
+    """The feed usually lives on the operator's own machine, so this probe can
+    reach it and no CI runner can. It stays runnable by hand and out of every
+    automatic caller — and, like the hook probe, has to remain findable, or
+    'outside the gate' quietly becomes 'deleted'."""
+    assert ORCH_HUB_PROBE.is_file(), "the live orch-hub probe is gone"
+    assert os.access(ORCH_HUB_PROBE, os.X_OK), "the live orch-hub probe is not executable"
+
+    for automatic in (GATE, CI_WORKFLOW, HOOK_INSTALLER):
+        assert ORCH_HUB_PROBE.name not in code(automatic), f"{automatic.name} runs the credentialed orch-hub probe"
+
+    # Documented where an operator looks for it, since nothing executes it.
+    assert ORCH_HUB_PROBE.name in (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_the_git_hook_defers_to_the_entrypoint() -> None:
