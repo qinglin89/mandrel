@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from ai_native_deployment import cli, deploy, hashing, lockfile, manifest
 
@@ -149,6 +152,36 @@ def deploy_to_tmp(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     return source, target, deployed
 
 
+GIT_IDENTITY = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
+
+
+def git(source: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(source), *GIT_IDENTITY, *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def commit_source(source: Path) -> str:
+    """The source checkout as a repository whose canonical payload is committed,
+    and the commit it is at — the only state in which a deploy may state one."""
+
+    git(source, "init", "-q")
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "canonical payload")
+    return git(source, "rev-parse", "HEAD")
+
+
+def deploy_from(source: Path, tmp_path: Path) -> Path:
+    target = tmp_path / "target"
+    target.mkdir(exist_ok=True)
+    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    return target
+
+
 def drift_kinds(result: deploy.StatusResult) -> set[str]:
     return {drift.kind for drift in result.drifts}
 
@@ -216,6 +249,107 @@ def test_deploy_places_skills_in_target_manifest_and_lock(tmp_path: Path) -> Non
         source / "canonical" / "claude" / "skills" / "demo-skill" / "SKILL.md"
     )
     assert {skill, script} <= {item["target_relative_path"] for item in lock["deployed_files"]}
+
+
+def test_the_lock_states_the_canonical_commit_a_clean_payload_came_from(tmp_path: Path) -> None:
+    """The one state in which the receipt's revision is an account of the payload
+    rather than of the moment: every canonical file the deploy read is exactly
+    what that commit holds."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+
+    target = deploy_from(source, tmp_path)
+
+    assert lockfile.read_lock(target)["source_git_commit"] == head
+
+
+@pytest.mark.parametrize("dirt", ("modified", "deleted", "added"))
+def test_a_payload_carrying_uncommitted_canonical_work_states_no_revision(tmp_path: Path, dirt: str) -> None:
+    """A deploy copies the working tree, so `HEAD` says when it ran and not what
+    it carried. Downstream the revision is read as an account of those bytes — a
+    release assessment places every report a target produced by it, as an
+    ancestry test — so a payload no commit holds has no commit to name, and
+    stating one anyway would place those reports by content the target never ran.
+    """
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    committed = lockfile.read_lock(deploy_from(source, tmp_path))
+    assert committed["source_git_commit"] is not None
+
+    contract = source / "canonical" / "protocols" / "dev.md"
+    if dirt == "modified":
+        write(contract, "dev contract, edited and never committed\n")
+    elif dirt == "deleted":
+        contract.unlink()
+    else:
+        write(source / "canonical" / "protocols" / "review.md", "review contract, never committed\n")
+
+    lock = lockfile.read_lock(deploy_from(source, tmp_path))
+
+    assert lock["canonical_payload_sha256"] != committed["canonical_payload_sha256"], (
+        "the deploy carried a payload the commit does not hold"
+    )
+    assert lock["source_git_commit"] is None
+
+
+def test_a_deployed_file_git_ignores_states_no_revision(tmp_path: Path) -> None:
+    """The case a dirty-tree check alone cannot see. An ignored canonical file is
+    absent from every `status` report and still lands in the payload, so a
+    revision stated on that report alone would describe a target that ran a file
+    no commit holds."""
+
+    source = make_source(tmp_path)
+    write(source / ".gitignore", "canonical/protocols/local-note.md\n")
+    commit_source(source)
+    write(source / "canonical" / "protocols" / "local-note.md", "a note nobody committed\n")
+    assert git(source, "status", "--porcelain", "--", "canonical") == "", "the tree reads clean"
+
+    target = deploy_from(source, tmp_path)
+
+    assert (target / ".ai-protocol" / "protocols" / "local-note.md").is_file()
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
+def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Path) -> None:
+    """The payload's bytes are the canonical tree's. Uncommitted work elsewhere
+    in the checkout says nothing about them, and refusing a revision for it would
+    strip provenance from every target deployed during ordinary development."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    write(source / "notes.md", "a scratch note, uncommitted\n")
+    write(source / "ai_native_deployment" / "deploy.py", "# edited tooling, uncommitted\n")
+
+    target = deploy_from(source, tmp_path)
+
+    assert lockfile.read_lock(target)["source_git_commit"] == head
+
+
+def test_deploy_reports_whether_the_payload_has_a_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unstated revision is a fact the operator can act on — commit the
+    canonical work and redeploy — and one they would otherwise meet much later,
+    as a report their target cannot be assessed by."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_REGISTRY", str(tmp_path / "registry.json"))
+
+    assert cli.main(["deploy", str(target)]) == 0
+    assert f"source revision: {head}" in capsys.readouterr().out
+
+    write(source / "canonical" / "protocols" / "dev.md", "dev contract, edited and never committed\n")
+
+    assert cli.main(["deploy", str(target)]) == 0
+    assert "source revision: none" in capsys.readouterr().out
 
 
 def test_deploy_preview_does_not_write(tmp_path: Path) -> None:

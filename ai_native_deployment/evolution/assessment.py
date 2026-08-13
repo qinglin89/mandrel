@@ -41,6 +41,17 @@ redeployed onto later. The published feed states none of it today, so cohorts
 drawn from it exclude whole and the counterfactual below is what carries a
 direction (contract: Release assessment).
 
+Reported also means unchecked: `_place` asks Git whether a stated revision
+carries the promotion, and Git answers about that commit, not about what the
+target ran. Whether the commit describes the payload at all is settled where the
+receipt is written — the deploy states no revision when the canonical tree it
+copied was not exactly that commit's — and whether the target still matched that
+receipt when it was evaluated is settled by whoever held it. Both conditions sit
+in the contract as what a publisher must establish before stating the field,
+because a revision this side cannot verify is one it cannot refuse either: it
+would place the report, and a misplaced report is a direction invented rather
+than a denominator lost.
+
 The shape of the work is the difference nothing frozen states. Two cohorts are
 two different task sets by construction, and no manifest version records what
 kind of task each report judged, so that facet is carried as the unknown it is

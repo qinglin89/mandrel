@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import deploy, manifest, registry
+from . import deploy, lockfile, manifest, registry
 from .evolution import errors as evolution_errors
 
 
@@ -199,9 +199,11 @@ def main(argv: list[str] | None = None) -> int:
                     print("  orchestrator bootstrap: would create/update .cursor/orchestrator/.venv and install requirements")
                 return 1 if any(change.action == "blocked" for change in preview.changes) else 0
             deployed_manifest = deploy.deploy_canonical(args.target)
+            target_root = Path(args.target).expanduser().resolve()
             files = deployed_manifest.get("files", {})
-            print(f"deployed {len(files)} files to {Path(args.target).expanduser().resolve()}")
-            print(f"manifest: {Path(args.target).expanduser().resolve() / manifest_path_name()}")
+            print(f"deployed {len(files)} files to {target_root}")
+            print(f"manifest: {target_root / manifest_path_name()}")
+            print(_deployed_revision_line(target_root))
             if args.bootstrap_orchestrator:
                 result = deploy.bootstrap_orchestrator(args.target, python_executable=args.orchestrator_python)
                 print(f"orchestrator venv: {result.venv_path}")
@@ -269,6 +271,27 @@ def manifest_path_name() -> str:
     from .paths import MANIFEST_FILENAME
 
     return MANIFEST_FILENAME
+
+
+def _deployed_revision_line(target_root: Path) -> str:
+    """What the lock this deploy just wrote says the payload came from.
+
+    Printed because the absence is a fact the operator can act on and would
+    otherwise never see. A payload the deploy could not tie to a committed
+    canonical revision leaves the lock stating none (`lockfile.py`), and a
+    report produced by that target then carries no effective revision and is
+    excluded from any release-effectiveness reading (`evolution/README.md`,
+    Release assessment). Committing the canonical work and redeploying is what
+    puts the target back on the record.
+    """
+
+    revision = lockfile.read_lock(target_root).get("source_git_commit")
+    if isinstance(revision, str) and revision:
+        return f"source revision: {revision}"
+    return (
+        "source revision: none — this payload is not exactly a committed canonical revision, "
+        "so reports produced by this target cannot be placed in a release assessment"
+    )
 
 
 if __name__ == "__main__":

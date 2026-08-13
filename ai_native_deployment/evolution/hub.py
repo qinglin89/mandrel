@@ -84,6 +84,20 @@ feed carries it, and what that would take is written down in the contract
 absent for a target that carried no lock. Whichever names orch-hub gives them,
 `_unstated_provenance` is the one place this translation reads them from.
 
+**A published revision is not a checked one.** Both fields are copied from a
+receipt this client never sees, and a receipt is only an account of the payload
+under the two conditions the contract states: the deploy could tie the payload it
+wrote to that commit (a lock written from a dirty canonical tree states no
+revision at all, and one written before that rule states a commit nothing
+checked), and the target still matched its receipt when it was evaluated. Neither
+is answerable from a catalog entry, so when the feed does carry the fields this
+translation copies what it is told and copies an absent field as absent — it
+never derives one, never falls back to a neighbouring value, and never treats a
+present `deploy_lock_hash` as evidence for a missing revision. Anything weaker
+turns an unverified lock into a cohort placement, which is worse than the null it
+replaced: an excluded report costs a denominator, a misplaced one invents a
+direction.
+
 **Integrity headers are not trusted.** The raw-artifact route serves bytes that
 no longer match their recorded digest with
 `X-Report-Artifact-Integrity: mismatched` rather than hiding them, precisely so
