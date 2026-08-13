@@ -1029,9 +1029,13 @@ checkable from here:
    comparison is against the commit rather than against a clean-tree report
    because cleanliness is not the same claim either: an index entry can be told
    to stop reporting a file and a config to stop reporting a mode, and the bytes
-   are deployed either way. A lock stating no revision is not a lock to publish
-   a revision from, and a lock written before this rule states a commit nothing
-   checked.
+   are deployed either way. And what it compares is one record per target path,
+   because that is what a target holds: two canonical files carried onto one
+   path deploy in order and only the later one survives there, so a receipt
+   listing both would vouch for bytes no target file carries — the deploy
+   refuses such a payload outright rather than describe files it did not leave
+   behind. A lock stating no revision is not a lock to publish a revision from,
+   and a lock written before this rule states a commit nothing checked.
 2. *The target still matches the receipt.* A deployed payload edited in place is
    bytes the receipt no longer describes, and the revision would then name a
    protocol the evaluated work did not run under. `aii-2 status <target>`

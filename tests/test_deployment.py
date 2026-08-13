@@ -512,6 +512,80 @@ def test_a_canonical_file_no_target_receives_leaves_the_revision_stated(tmp_path
     assert lockfile.read_lock(target)["source_git_commit"] == head
 
 
+def colliding_source(tmp_path: Path) -> Path:
+    """A canonical tree whose buckets carry two files to one target path.
+
+    Reachable from the layout rather than contrived: `repo-root` maps to the
+    target root, so it reaches under every other bucket's prefix — here onto the
+    path `codex/config.toml.template` is rendered to. `canonical/orchestrator/x`
+    and `canonical/cursor/orchestrator/x` collide the same way."""
+
+    source = make_source(tmp_path)
+    write(source / "canonical" / "repo-root" / ".codex" / "config.toml", "a second claim on the codex config\n")
+    return source
+
+
+def test_two_canonical_files_carried_to_one_target_path_stop_the_deploy(tmp_path: Path) -> None:
+    """A target path holds one file, so a payload claiming to carry two into it
+    is not a payload. Measured before this refusal: the deploy wrote both in
+    bucket order, the target kept the later one, and the lock stated `HEAD` over
+    seventeen records for sixteen target files — a canonical commit vouching for
+    bytes no target file carries, which placement reads as the protocol that
+    target ran."""
+
+    source = colliding_source(tmp_path)
+    commit_source(source)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    with pytest.raises(deploy.PayloadError) as refused:
+        deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    message = str(refused.value)
+    assert ".codex/config.toml" in message
+    assert "canonical/repo-root/.codex/config.toml" in message
+    assert "canonical/codex/config.toml.template" in message
+    assert list(target.iterdir()) == [], "refused before writing anything, so there is no receipt to trust"
+
+
+def test_a_colliding_payload_is_refused_by_every_surface_that_reads_the_mapping(tmp_path: Path) -> None:
+    """Status and dry-run answer from the same mapping and would otherwise answer
+    as though the dropped file never existed: both key by target path, so the
+    collision collapses into one entry and a target short a canonical file's
+    bytes reads as in sync. The deployment, both receipts and the reading agree
+    because the mapping never hands any of them a payload it cannot resolve."""
+
+    source = make_source(tmp_path)
+    target = deploy_from(source, tmp_path)
+    assert deploy.check_status(target, root=source).in_sync
+
+    write(source / "canonical" / "repo-root" / ".codex" / "config.toml", "a second claim on the codex config\n")
+
+    with pytest.raises(deploy.PayloadError):
+        deploy.check_status(target, root=source)
+    with pytest.raises(deploy.PayloadError):
+        deploy.preview_deploy(target, root=source)
+
+
+def test_deploy_cli_reports_a_payload_it_cannot_resolve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The refusal is a canonical-authoring fact, so it has to reach the operator
+    who can fix it as a named cause rather than a traceback."""
+
+    source = colliding_source(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_REGISTRY", str(tmp_path / "registry.json"))
+
+    assert cli.main(["deploy", str(target)]) == 2
+
+    assert "two canonical files map to .codex/config.toml" in capsys.readouterr().err
+
+
 def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Path) -> None:
     """The payload's bytes are the canonical tree's. Uncommitted work elsewhere
     in the checkout says nothing about them, and refusing a revision for it would

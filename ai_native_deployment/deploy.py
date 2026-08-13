@@ -82,6 +82,11 @@ DEPLOYED_SKILLS_ROOT = PurePosixPath(".claude/skills")
 SKILL_MANIFEST_FILENAME = "SKILL.md"
 
 
+class PayloadError(RuntimeError):
+    """Raised when the canonical payload cannot be carried into a target as
+    written, so no surface can answer for it."""
+
+
 @dataclass(frozen=True)
 class DeploymentItem:
     canonical_relative_path: str
@@ -379,9 +384,31 @@ def deploys_canonical_path(canonical_relative_path: str) -> bool:
 
 
 def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
+    """The payload this canonical tree carries into a target: one item per file
+    the target receives.
+
+    One item per *target* file, which is what makes it a payload. The buckets
+    overlap by design — `repo-root` maps to the target root, so it reaches under
+    every other bucket's prefix, and `orchestrator` maps inside `cursor`'s — so
+    two canonical files can name one target path, and a target path holds one
+    file. Deployed in bucket order, the later write would silently replace the
+    earlier one while both receipts describe the writes rather than the files
+    left behind: the lock would list two records for a path the target holds one
+    of, and state a canonical commit over bytes no target file carries, which is
+    the placement a release assessment reads as evidence
+    (`evolution/README.md`, Release assessment). Neither the manifest nor
+    `check_status` would see it — both key by target path, so the collision
+    collapses and the dropped file's absence reads as in sync.
+
+    Refused here rather than in any of them, because this is the one mapping all
+    of them read: a canonical tree that cannot say which file a target path gets
+    has no payload to deploy, preview, or check.
+    """
+
     root = (root or source_root()).resolve()
     canonical = canonical_root(root)
     items: list[DeploymentItem] = []
+    claimed: dict[str, str] = {}
 
     for bucket, _target_prefix in PAYLOADS:
         bucket_root = canonical / bucket
@@ -394,6 +421,12 @@ def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
             target_rel = target_relative_path_for(canonical_rel)
             if target_rel is None:
                 continue
+            claimant = claimed.setdefault(target_rel, canonical_rel)
+            if claimant != canonical_rel:
+                raise PayloadError(
+                    f"two canonical files map to {target_rel}: {claimant} and {canonical_rel}; "
+                    "a target path holds one file, so the payload cannot carry both"
+                )
             items.append(
                 DeploymentItem(
                     canonical_relative_path=canonical_rel,

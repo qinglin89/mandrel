@@ -101,9 +101,17 @@ def payload_source_commit(
         return None
 
     payload = {record.canonical_relative_path: record for record in deployed}
-    if len(payload) != len(deployed):
-        # Two records for one canonical file: the comparison below would read as
-        # complete while one of them went unchecked.
+    targets = {record.target_relative_path for record in deployed}
+    if len(payload) != len(deployed) or len(targets) != len(deployed):
+        # Not one record per file, in either direction, and the comparison below
+        # would read as a complete account of the payload either way. Two records
+        # for one canonical file leave one of them unchecked; two for one target
+        # file describe a payload the target cannot be holding, since only the
+        # later write survives there. The mapping refuses the second before a
+        # deploy can write it (`deploy.iter_deployment_items`), which is where
+        # the manifest and `status` are kept honest about it too; this is the
+        # receipt saying what it needs a record set to be before it vouches for
+        # one.
         return None
     # Both directions at once: a payload file the commit does not hold, and a
     # canonical file the commit expected this payload to carry.

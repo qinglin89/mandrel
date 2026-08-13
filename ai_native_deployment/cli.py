@@ -254,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
 
     except (
         FileNotFoundError,
+        deploy.PayloadError,
         manifest.ManifestError,
         registry.RegistryError,
         evolution_errors.EvolutionError,
