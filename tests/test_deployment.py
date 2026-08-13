@@ -312,6 +312,68 @@ def test_a_deployed_file_git_ignores_states_no_revision(tmp_path: Path) -> None:
     assert lockfile.read_lock(target)["source_git_commit"] is None
 
 
+@pytest.mark.parametrize("suppression", ("assume-unchanged", "skip-worktree"))
+def test_a_canonical_file_git_was_told_not_to_report_states_no_revision(tmp_path: Path, suppression: str) -> None:
+    """A clean tree is not proof that the payload is the commit's. Either index
+    flag makes Git stop looking at the working tree for that file, so `status`
+    and `diff` stay silent about bytes the deploy still copies — and a revision
+    resting on their silence would name content this payload does not carry."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    committed = lockfile.read_lock(deploy_from(source, tmp_path))
+    assert committed["source_git_commit"] is not None
+
+    git(source, "update-index", f"--{suppression}", "canonical/protocols/dev.md")
+    write(source / "canonical" / "protocols" / "dev.md", "dev contract, changed behind a silenced index\n")
+    assert git(source, "status", "--porcelain", "--", "canonical") == "", "the tree reads clean"
+    assert git(source, "diff", "--", "canonical") == "", "and so does the diff"
+
+    lock = lockfile.read_lock(deploy_from(source, tmp_path))
+
+    assert lock["canonical_payload_sha256"] != committed["canonical_payload_sha256"], (
+        "the deploy carried a payload the commit does not hold"
+    )
+    assert lock["source_git_commit"] is None
+
+
+def test_a_mode_change_git_was_configured_not_to_see_states_no_revision(tmp_path: Path) -> None:
+    """The other silence. Deployment copies the source file's mode, so an
+    executable bit the commit does not hold is a payload difference like any
+    other, and `core.fileMode=false` keeps every Git report quiet about it."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    assert lockfile.read_lock(deploy_from(source, tmp_path))["source_git_commit"] is not None
+
+    git(source, "config", "core.fileMode", "false")
+    (source / "canonical" / "workflow" / "runbook.md").chmod(0o755)
+    assert git(source, "status", "--porcelain", "--", "canonical") == "", "the tree reads clean"
+
+    target = deploy_from(source, tmp_path)
+
+    deployed_mode = stat.S_IMODE((target / ".ai-protocol" / "workflow" / "runbook.md").stat().st_mode)
+    assert deployed_mode & 0o111, "the deploy carried a mode the commit does not hold"
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
+def test_a_canonical_symlink_states_no_revision(tmp_path: Path) -> None:
+    """The commit holds a link; `iter_deployment_items` reads bytes through it
+    and deploys those. Nothing in the canonical tree is a symlink today, and if
+    one arrives the payload it produces is not the commit's to claim — the
+    content came from wherever the link pointed at deploy time."""
+
+    source = make_source(tmp_path)
+    (source / "canonical" / "protocols" / "review.md").symlink_to("dev.md")
+    commit_source(source)
+    assert git(source, "ls-files", "-s", "--", "canonical/protocols/review.md").startswith("120000")
+
+    target = deploy_from(source, tmp_path)
+
+    assert (target / ".ai-protocol" / "protocols" / "review.md").read_text(encoding="utf-8") == "dev contract\n"
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
 def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Path) -> None:
     """The payload's bytes are the canonical tree's. Uncommitted work elsewhere
     in the checkout says nothing about them, and refusing a revision for it would
