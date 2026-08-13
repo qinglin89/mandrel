@@ -1015,17 +1015,23 @@ checkable from here:
    `HEAD` alone says when it ran, not what it carried: canonical files edited
    and not committed produce bytes no commit holds, and the revision beside them
    would name content the target never ran. This repository's deploy therefore
-   states `source_git_commit` only where it compared the payload against that
-   commit's own tree and they corresponded exactly — every deployed file tracked
-   by the commit with the bytes it holds, every canonical file the commit holds
-   present with that content and that executable bit — and states nothing
-   otherwise (`ai_native_deployment/lockfile.py`; `aii-2 deploy` prints which of
-   the two happened). The comparison is against the commit rather than against a
-   clean-tree report because cleanliness is not the same claim: an index entry
-   can be told to stop reporting a file and a config to stop reporting a mode,
-   and the bytes are deployed either way. A lock stating no revision is not a
-   lock to publish a revision from, and a lock written before this rule states a
-   commit nothing checked.
+   states `source_git_commit` only where the payload it wrote and that commit's
+   own tree corresponded exactly — every deployed file coming from a canonical
+   file the commit tracks, carrying the bytes and the executable bit the commit
+   holds for it, and every canonical file the commit holds that a target
+   receives present in the payload — and states nothing otherwise
+   (`ai_native_deployment/lockfile.py`; `aii-2 deploy` prints which of the two
+   happened). What it compares is the deployment's own record of the bytes it
+   copied and the mode it applied: a source read again once the target has been
+   written answers for the file as it stands then, so an edit undone in between,
+   or a canonical file put back after the deploy had already passed it by, would
+   agree with the commit while the target runs something else. And the
+   comparison is against the commit rather than against a clean-tree report
+   because cleanliness is not the same claim either: an index entry can be told
+   to stop reporting a file and a config to stop reporting a mode, and the bytes
+   are deployed either way. A lock stating no revision is not a lock to publish
+   a revision from, and a lock written before this rule states a commit nothing
+   checked.
 2. *The target still matches the receipt.* A deployed payload edited in place is
    bytes the receipt no longer describes, and the revision would then name a
    protocol the evaluated work did not run under. `aii-2 status <target>`

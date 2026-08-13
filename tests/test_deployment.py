@@ -374,6 +374,144 @@ def test_a_canonical_symlink_states_no_revision(tmp_path: Path) -> None:
     assert lockfile.read_lock(target)["source_git_commit"] is None
 
 
+def when_the_target_file_is_written(monkeypatch: pytest.MonkeyPatch, target_relative_path: str, then) -> None:
+    """Run `then` during the deploy, once the named target file has been written
+    and before the receipt is built.
+
+    The window a receipt that re-reads the source answers from: by then the
+    target already carries its bytes and its mode, so anything the source says
+    afterwards is a second observation of a file the payload no longer depends
+    on. Hooking the manifest's hash of that target file places the mutation
+    there deterministically, where a real race would not be reproducible."""
+
+    real_file_record = hashing.file_record
+
+    def record_then_mutate(path: Path) -> dict[str, int | str]:
+        record = real_file_record(path)
+        if path.as_posix().endswith(target_relative_path):
+            then()
+        return record
+
+    monkeypatch.setattr(hashing, "file_record", record_then_mutate)
+
+
+def when_the_lock_is_built(monkeypatch: pytest.MonkeyPatch, then) -> None:
+    """Run `then` during the deploy, after every file has been deployed and
+    before the receipt is built."""
+
+    real_build_lock = lockfile.build_lock
+
+    def mutate_then_build(**arguments: object) -> dict[str, object]:
+        then()
+        return real_build_lock(**arguments)
+
+    monkeypatch.setattr(lockfile, "build_lock", mutate_then_build)
+
+
+def lock_record_for(target: Path, canonical_relative_path: str) -> dict[str, object]:
+    return next(
+        record
+        for record in lockfile.read_lock(target)["deployed_files"]
+        if record["canonical_relative_path"] == canonical_relative_path
+    )
+
+
+def test_a_source_edit_undone_after_the_deploy_copied_it_states_no_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The receipt is an account of what was deployed, so it has to be built from
+    what was deployed. A source file edited before the deploy and restored after
+    the target was written leaves the target running bytes no commit holds, while
+    every later look at the source agrees with the commit."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    contract = source / "canonical" / "protocols" / "dev.md"
+    committed_bytes = contract.read_bytes()
+    edited_bytes = write(contract, "dev contract, edited and never committed\n").read_bytes()
+    when_the_target_file_is_written(
+        monkeypatch,
+        ".ai-protocol/protocols/dev.md",
+        lambda: contract.write_bytes(committed_bytes),
+    )
+
+    target = deploy_from(source, tmp_path)
+
+    assert (target / ".ai-protocol" / "protocols" / "dev.md").read_bytes() == edited_bytes, (
+        "the deploy carried bytes the commit does not hold"
+    )
+    assert lock_record_for(target, "canonical/protocols/dev.md")["canonical_sha256"] == hashing.sha256_bytes(
+        edited_bytes
+    ), "the receipt describes the bytes that were deployed"
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
+def test_a_mode_undone_after_the_deploy_copied_it_states_no_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window on the other property the deploy copies. The mode reaching
+    the target is the one enumeration captured, so restoring the source's mode
+    afterwards changes nothing about the payload and everything about a check
+    that reads the source again."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    runbook = source / "canonical" / "workflow" / "runbook.md"
+    runbook.chmod(0o755)
+    when_the_target_file_is_written(
+        monkeypatch,
+        ".ai-protocol/workflow/runbook.md",
+        lambda: runbook.chmod(0o644),
+    )
+
+    target = deploy_from(source, tmp_path)
+
+    deployed_mode = stat.S_IMODE((target / ".ai-protocol" / "workflow" / "runbook.md").stat().st_mode)
+    assert deployed_mode & 0o111, "the deploy carried a mode the commit does not hold"
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
+def test_a_canonical_file_restored_after_the_deploy_read_the_tree_states_no_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path direction of the same gap. A committed canonical file missing when
+    the deploy enumerated the tree is a file the target never received; restoring
+    it before the receipt is built makes a source re-read see a complete tree and
+    state a commit for a payload that is short a contract."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    contract = source / "canonical" / "protocols" / "dev.md"
+    committed_bytes = contract.read_bytes()
+    contract.unlink()
+    when_the_lock_is_built(monkeypatch, lambda: contract.write_bytes(committed_bytes))
+
+    target = deploy_from(source, tmp_path)
+
+    assert not (target / ".ai-protocol" / "protocols" / "dev.md").exists(), (
+        "the deploy carried a payload the commit does not hold"
+    )
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+
+def test_a_canonical_file_no_target_receives_leaves_the_revision_stated(tmp_path: Path) -> None:
+    """The comparison is scoped to the files the mapping carries into a target,
+    because those are the payload's bytes. A canonical file no target receives
+    cannot make the payload this commit's or stop it being, and requiring it to
+    match would strip provenance from every target over a file no agent loads."""
+
+    source = make_source(tmp_path)
+    notes = write(source / "canonical" / "README.md", "how the canonical buckets are laid out\n")
+    head = commit_source(source)
+    write(notes, "edited, never committed\n")
+
+    target = deploy_from(source, tmp_path)
+
+    assert deploy.target_relative_path_for("canonical/README.md") is None
+    assert not (target / "README.md").exists(), "the mapping carries it nowhere"
+    assert lockfile.read_lock(target)["source_git_commit"] == head
+
+
 def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Path) -> None:
     """The payload's bytes are the canonical tree's. Uncommitted work elsewhere
     in the checkout says nothing about them, and refusing a revision for it would

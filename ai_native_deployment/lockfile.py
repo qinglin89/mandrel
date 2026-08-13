@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
 
-from .hashing import sha256_bytes, sha256_file
+from .hashing import sha256_bytes
 from .manifest import SCHEMA_VERSION, source_git_commit
 from .paths import CANONICAL_DIRNAME, lock_path
 
@@ -16,7 +17,28 @@ EXECUTABLE_BLOB_MODE = "100755"
 REGULAR_BLOB_MODES = frozenset({"100644", EXECUTABLE_BLOB_MODE})
 
 
-def payload_source_commit(source_root: Path, deployed_digests: Mapping[str, str]) -> str | None:
+@dataclass(frozen=True)
+class DeployedFile:
+    """One file as it was deployed: where its bytes came from, where they went,
+    and the digest, size, and executable bit the target received.
+
+    Built while the deploy writes the file, from the bytes it wrote and the mode
+    it applied, so everything the receipt says is said about the payload and not
+    about whatever the source reads as afterwards."""
+
+    canonical_relative_path: str
+    target_relative_path: str
+    canonical_sha256: str
+    canonical_size_bytes: int
+    executable: bool
+
+
+def payload_source_commit(
+    source_root: Path,
+    deployed: Sequence[DeployedFile],
+    *,
+    deploys: Callable[[str], bool],
+) -> str | None:
     """The canonical commit this payload can be said to have come from, if any.
 
     `HEAD` answers when a deploy ran, not what it deployed: the payload is read
@@ -34,70 +56,82 @@ def payload_source_commit(source_root: Path, deployed_digests: Mapping[str, str]
     So the receipt states a revision only where the payload and that commit's
     canonical tree are compared directly and correspond exactly:
 
-    - every file the payload carried is one the commit tracks, and the bytes
-      that were deployed hash to the content the commit holds for it;
-    - every canonical file the commit tracks is in the working tree with that
-      same content and the same executable bit — deployment copies the mode, and
-      the deployed set is a function of which canonical files exist, so a
-      committed file missing or altered before the deploy read it shrinks or
-      changes the payload where the deployed side alone cannot see it.
+    - every file the payload carried came from a canonical file the commit
+      tracks, hashes to the content the commit holds for it, and reached the
+      target with the executable bit the commit records — deployment copies the
+      mode along with the bytes;
+    - every canonical file the commit holds that the mapping deploys is in the
+      payload, because the deployed set is a function of which canonical files
+      existed when the deploy read the tree: a committed file missing then
+      leaves the target short of a contract, where the deployed side alone sees
+      nothing missing.
 
-    Nothing here asks the index or `status` whether the tree is clean, because
-    cleanliness is not that proof: a tracked file marked `assume-unchanged` or
-    `skip-worktree` can differ in the working tree while both stay silent, and
-    `core.fileMode=false` hides a mode change that deployment still copies. Both
-    states would have passed a clean-tree check and put a commit beside bytes it
-    does not hold. Content and mode are therefore read from the commit's own
-    tree and from the payload, neither of which the index can rewrite.
+    Both sides of that comparison are settled before it runs. `deployed` is the
+    deployment's own record — the bytes it copied and the mode it applied,
+    captured as it wrote each file — and never a second reading of the source:
+    an edit undone after the target was written, a mode restored, or a canonical
+    file put back after the enumeration had already passed it would each make
+    every later look at the working tree agree with the commit while the target
+    runs something else. The commit's tree is the other side, and no index can
+    rewrite it: cleanliness is not this proof either, since a tracked file
+    marked `assume-unchanged` or `skip-worktree` can differ while `status` and
+    `diff` stay silent, and `core.fileMode=false` hides a mode change that
+    deployment still copies.
 
-    Anything else states no revision — including a canonical tree entry that is
-    not a regular file, since `iter_deployment_items` reads bytes through a
-    symlink that the commit does not hold, and including any question Git could
-    not answer. That excludes such a report from a cohort, which costs a
-    denominator, where the alternative manufactures a placement.
+    Anything else states no revision — including a canonical entry the mapping
+    deploys that the commit does not hold as a regular file, since
+    `iter_deployment_items` reads bytes through a symlink and deploys whatever
+    it resolved to, and including any question Git could not answer. That
+    excludes such a report from a cohort, which costs a denominator, where the
+    alternative manufactures a placement.
 
-    The question is scoped to the canonical tree because that is where the
-    payload's bytes come from; unrelated work elsewhere in the checkout says
-    nothing about them. It is scoped to content, not to rendering: the lock
-    hashes canonical sources, and which version of this tool rendered them into
-    a target is a separate fact no receipt states.
+    The question is scoped to the canonical files the mapping carries into a
+    target, because those are the payload's bytes; work elsewhere in the
+    checkout, and canonical files no target receives, say nothing about them. It
+    is scoped to content, not to rendering: the lock hashes canonical sources,
+    and which version of this tool rendered them into a target is a separate
+    fact no receipt states.
     """
 
     commit = source_git_commit(source_root)
     if commit is None:
         return None
-    committed = _committed_canonical_blobs(source_root, commit)
+    committed = _committed_canonical_blobs(source_root, commit, deploys)
     if committed is None:
         return None
-    if not deployed_digests.keys() <= committed.keys():
+
+    payload = {record.canonical_relative_path: record for record in deployed}
+    if len(payload) != len(deployed):
+        # Two records for one canonical file: the comparison below would read as
+        # complete while one of them went unchecked.
+        return None
+    # Both directions at once: a payload file the commit does not hold, and a
+    # canonical file the commit expected this payload to carry.
+    if payload.keys() != committed.keys():
         return None
     contents = _committed_content_digests(source_root, {entry[0] for entry in committed.values()})
     if contents is None:
         return None
 
     for path, (object_id, executable) in committed.items():
-        source_path = source_root / path
-        try:
-            if source_path.is_symlink() or not source_path.is_file():
-                return None
-            if bool(source_path.stat().st_mode & 0o111) != executable:
-                return None
-            deployed = deployed_digests.get(path)
-            # What the payload carried where the payload carried it; the file as
-            # it stands otherwise, since that is what the next deploy would read.
-            digest = deployed if deployed is not None else sha256_file(source_path)
-        except OSError:
-            return None
-        if digest != contents[object_id]:
+        record = payload[path]
+        if record.canonical_sha256 != contents.get(object_id) or record.executable != executable:
             return None
     return commit
 
 
-def _committed_canonical_blobs(source_root: Path, commit: str) -> dict[str, tuple[str, bool]] | None:
-    """Every canonical file `commit` holds, as `path -> (object id, executable)`.
+def _committed_canonical_blobs(
+    source_root: Path,
+    commit: str,
+    deploys: Callable[[str], bool],
+) -> dict[str, tuple[str, bool]] | None:
+    """Every canonical file `commit` holds that the mapping deploys, as
+    `path -> (object id, executable)`.
 
     Read from the commit's own tree — the side of the comparison a working tree
-    cannot influence and an index cannot suppress.
+    cannot influence and an index cannot suppress. Entries the mapping carries
+    nowhere are left out rather than compared: they are not the payload's bytes,
+    so nothing about them can make the payload this commit's or stop it being.
     """
 
     output = _git_output(source_root, ["ls-tree", "-r", "-z", commit, "--", CANONICAL_DIRNAME])
@@ -117,6 +151,8 @@ def _committed_canonical_blobs(source_root: Path, commit: str) -> dict[str, tupl
         if not tab or len(fields) != 3:
             return None
         mode, kind, object_id = fields
+        if not deploys(path):
+            continue
         if kind != "blob" or mode not in REGULAR_BLOB_MODES:
             return None
         blobs[path] = (object_id, mode == EXECUTABLE_BLOB_MODE)
@@ -186,16 +222,18 @@ def _git_output(source_root: Path, arguments: list[str], *, stdin: bytes | None 
 def build_lock(
     *,
     source_root: Path,
-    files: Iterable[dict[str, int | str]],
+    files: Iterable[DeployedFile],
+    deploys: Callable[[str], bool],
 ) -> dict[str, object]:
+    deployed = sorted(files, key=lambda record: record.target_relative_path)
     deployed_files = [
         {
-            "canonical_relative_path": str(record["canonical_relative_path"]),
-            "target_relative_path": str(record["target_relative_path"]),
-            "canonical_sha256": str(record["canonical_sha256"]),
-            "canonical_size_bytes": int(record["canonical_size_bytes"]),
+            "canonical_relative_path": record.canonical_relative_path,
+            "target_relative_path": record.target_relative_path,
+            "canonical_sha256": record.canonical_sha256,
+            "canonical_size_bytes": record.canonical_size_bytes,
         }
-        for record in sorted(files, key=lambda item: str(item["target_relative_path"]))
+        for record in deployed
     ]
     payload = "\n".join(
         f"{item['target_relative_path']}\0{item['canonical_sha256']}" for item in deployed_files
@@ -203,17 +241,10 @@ def build_lock(
     return {
         "schema_version": SCHEMA_VERSION,
         "source_repo": "ai-native-deployment",
-        # Derived here and nowhere else: a caller-supplied revision would be a
-        # second way to fill the field, and the one that skips the check above.
-        # The digests are the payload's own — what these bytes were, not what
-        # the file says when the check gets around to reading it.
-        "source_git_commit": payload_source_commit(
-            source_root,
-            {
-                str(item["canonical_relative_path"]): str(item["canonical_sha256"])
-                for item in deployed_files
-            },
-        ),
+        # Derived here and nowhere else, from the deployment's own record of
+        # what it copied: a caller-supplied revision would be a second way to
+        # fill the field, and the one that skips the check above.
+        "source_git_commit": payload_source_commit(source_root, deployed, deploys=deploys),
         "canonical_payload_sha256": sha256_bytes(payload),
         "deployed_files": deployed_files,
     }

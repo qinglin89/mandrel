@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 from . import hashing, lockfile, manifest, registry
 from .paths import (
+    CANONICAL_DIRNAME,
     GITIGNORE_BEGIN,
     GITIGNORE_END,
     canonical_root,
@@ -31,6 +32,14 @@ PAYLOADS: tuple[tuple[str, str], ...] = (
     ("claude", ".claude"),
     ("orchestrator", ".cursor/orchestrator"),
 )
+BUCKET_TARGET_PREFIXES: dict[str, str] = dict(PAYLOADS)
+
+# The Codex CLI reads `.codex/config.toml`; canonical carries the template it is
+# rendered from, and a `config.toml` sitting beside that template is a local
+# file the deploy never carries.
+CODEX_CONFIG_TEMPLATE = f"{CANONICAL_DIRNAME}/codex/config.toml.template"
+CODEX_CONFIG_LOCAL = f"{CANONICAL_DIRNAME}/codex/config.toml"
+CODEX_CONFIG_TARGET = ".codex/config.toml"
 
 # /ai-coding*.md stays during the layout transition: targets deployed before
 # the .ai-protocol/ cut still carry the legacy files untracked; drop the line
@@ -81,15 +90,20 @@ class DeploymentItem:
     mode: int
     render_template: bool = False
 
-    def bytes_for_target(self, target_root: Path) -> bytes:
+    def render(self, source_bytes: bytes, target_root: Path) -> bytes:
+        """What this target file becomes, from the canonical bytes it is made
+        of. Kept separate from reading those bytes so a deploy can write the
+        target and describe what it wrote from one reading of the source."""
         if self.render_template:
-            text = self.source_path.read_text(encoding="utf-8")
-            data = text.replace("{{REPO_ROOT}}", str(target_root)).encode("utf-8")
+            data = source_bytes.decode("utf-8").replace("{{REPO_ROOT}}", str(target_root)).encode("utf-8")
         else:
-            data = self.source_path.read_bytes()
+            data = source_bytes
         if self.target_relative_path == CLAUDE_MD_TARGET:
             data = _resolve_claude_md_memory_imports(data, target_root)
         return data
+
+    def bytes_for_target(self, target_root: Path) -> bytes:
+        return self.render(self.source_path.read_bytes(), target_root)
 
 
 @dataclass(frozen=True)
@@ -328,42 +342,65 @@ def is_forbidden_relative_path(path: Path | PurePosixPath | str) -> bool:
     return False
 
 
+def target_relative_path_for(canonical_relative_path: str) -> str | None:
+    """Where the payload mapping carries one canonical file, or `None` when it
+    carries it nowhere.
+
+    Derived from the path alone, so it answers for a canonical path a commit
+    holds exactly as it answers for one in the working tree. That is what lets
+    the deploy receipt ask which canonical files a commit expected the payload
+    to carry (`lockfile.payload_source_commit`) without walking a tree twice and
+    getting two different answers."""
+
+    parts = PurePosixPath(canonical_relative_path).parts
+    if len(parts) < 3 or parts[0] != CANONICAL_DIRNAME:
+        return None
+    target_prefix = BUCKET_TARGET_PREFIXES.get(parts[1])
+    if target_prefix is None:
+        return None
+
+    bucket_rel = PurePosixPath(*parts[2:])
+    if canonical_relative_path == CODEX_CONFIG_TEMPLATE:
+        target_rel = PurePosixPath(CODEX_CONFIG_TARGET)
+    elif canonical_relative_path == CODEX_CONFIG_LOCAL:
+        return None
+    elif target_prefix:
+        target_rel = PurePosixPath(target_prefix) / bucket_rel
+    else:
+        target_rel = bucket_rel
+
+    if is_forbidden_relative_path(canonical_relative_path) or is_forbidden_relative_path(target_rel):
+        return None
+    return target_rel.as_posix()
+
+
+def deploys_canonical_path(canonical_relative_path: str) -> bool:
+    return target_relative_path_for(canonical_relative_path) is not None
+
+
 def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
     root = (root or source_root()).resolve()
     canonical = canonical_root(root)
     items: list[DeploymentItem] = []
 
-    for bucket, target_prefix in PAYLOADS:
+    for bucket, _target_prefix in PAYLOADS:
         bucket_root = canonical / bucket
         if not bucket_root.exists():
             continue
         for source_path in sorted(bucket_root.rglob("*")):
             if not source_path.is_file():
                 continue
-            bucket_rel = source_path.relative_to(bucket_root)
-            bucket_rel_posix = bucket_rel.as_posix()
-
-            render_template = False
-            if bucket == "codex" and bucket_rel_posix == "config.toml.template":
-                target_rel = PurePosixPath(".codex/config.toml")
-                render_template = True
-            elif bucket == "codex" and bucket_rel_posix == "config.toml":
-                continue
-            elif target_prefix:
-                target_rel = PurePosixPath(target_prefix) / PurePosixPath(bucket_rel_posix)
-            else:
-                target_rel = PurePosixPath(bucket_rel_posix)
-
             canonical_rel = source_path.relative_to(root).as_posix()
-            if is_forbidden_relative_path(canonical_rel) or is_forbidden_relative_path(target_rel):
+            target_rel = target_relative_path_for(canonical_rel)
+            if target_rel is None:
                 continue
             items.append(
                 DeploymentItem(
                     canonical_relative_path=canonical_rel,
-                    target_relative_path=target_rel.as_posix(),
+                    target_relative_path=target_rel,
                     source_path=source_path,
                     mode=stat.S_IMODE(source_path.stat().st_mode),
-                    render_template=render_template,
+                    render_template=canonical_rel == CODEX_CONFIG_TEMPLATE,
                 )
             )
     return items
@@ -453,11 +490,15 @@ def deploy_canonical(
         raise FileNotFoundError(f"target repo does not exist: {target_root}")
 
     manifest_records: list[dict[str, int | str]] = []
-    lock_records: list[dict[str, int | str]] = []
+    deployed_files: list[lockfile.DeployedFile] = []
     for item in iter_deployment_items(root):
         target_path = target_root / item.target_relative_path
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        rendered_bytes = item.bytes_for_target(target_root)
+        # One reading of the source, and the receipt describes it. Reading it
+        # again after the target is written would describe a file that is no
+        # longer the payload's, and a lock is read as an account of the payload.
+        source_bytes = item.source_path.read_bytes()
+        rendered_bytes = item.render(source_bytes, target_root)
         target_path.write_bytes(rendered_bytes)
         target_path.chmod(item.mode)
         file_info = hashing.file_record(target_path)
@@ -470,20 +511,24 @@ def deploy_canonical(
         if item.target_relative_path == CLAUDE_MD_TARGET:
             manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item, rendered_bytes)
         manifest_records.append(manifest_record)
-        source_stat = item.source_path.stat()
-        lock_records.append(
-            {
-                "canonical_relative_path": item.canonical_relative_path,
-                "target_relative_path": item.target_relative_path,
-                "canonical_sha256": hashing.sha256_file(item.source_path),
-                "canonical_size_bytes": source_stat.st_size,
-            }
+        deployed_files.append(
+            lockfile.DeployedFile(
+                canonical_relative_path=item.canonical_relative_path,
+                target_relative_path=item.target_relative_path,
+                canonical_sha256=hashing.sha256_bytes(source_bytes),
+                canonical_size_bytes=len(source_bytes),
+                executable=bool(item.mode & 0o111),
+            )
         )
 
     append_gitignore_block(target_root)
     deployed_manifest = manifest.build_manifest(source_root=root, target_root=target_root, files=manifest_records)
     manifest.write_manifest(target_root, deployed_manifest)
-    deploy_lock = lockfile.build_lock(source_root=root, files=lock_records)
+    deploy_lock = lockfile.build_lock(
+        source_root=root,
+        files=deployed_files,
+        deploys=deploys_canonical_path,
+    )
     lockfile.write_lock(target_root, deploy_lock)
     registry.add_repo(
         target_root,
