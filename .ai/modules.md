@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-14
+verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 ---
 
 # Modules
@@ -10,8 +10,8 @@ verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 | Module | Location | Responsibility |
 |---|---|---|
 | CLI | `ai_native_deployment/cli.py`, `aii-2` | Parse/dispatch deploy, status, registry, and evolution commands |
-| Deployment | `ai_native_deployment/deploy.py` | Map/filter/render/copy current canonical files; bootstrap; content, entrypoint, and skill-precedence drift checks; removed-file orphan detection/pruning pending |
-| Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local and portable receipts plus hashes |
+| Deployment | `ai_native_deployment/deploy.py` | Map/filter/render/copy current canonical files; bootstrap; content/mode, entrypoint, and skill-precedence drift checks; removed-file orphan detection/pruning pending |
+| Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, and hashes |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |
 | Workflow skills | `canonical/claude/skills/` | Versioned per-target skills; Claude native discovery and repo-local paths for other backends |
 | Protocol contracts | `canonical/protocols/` | Conduct and role-specific behavioral contracts |

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-14
-verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
+verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 ---
 
 # Architecture
@@ -45,16 +45,18 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
    identity; payload validity is portable rather than host-dependent.
 2. Target-specific templates and `CLAUDE.md` eager-memory entrypoints resolve.
 3. Deployment overwrites the deploy-owned files in the current canonical
-   mapping and writes target-local manifest, portable lock, managed gitignore
-   block, and registry entry. The lock states a source revision only when the
-   deployment's own captured input paths, bytes, and executable modes exactly
-   match that commit's deployable canonical tree. It does not prune files
+   mapping and writes a target-local manifest of rendered hashes and applied
+   modes, portable lock, managed gitignore block, and registry entry. The lock
+   states a source revision only when the deployment's own captured input
+   paths, bytes, and executable modes exactly match that commit's deployable
+   canonical tree. It does not prune files
    removed from the mapping; after the new manifest drops them, `status` cannot
    see the target orphans.
 4. Optional bootstrap builds `.cursor/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
-5. `status` compares manifest, target, current canonical source, eager-memory
-   entrypoints, and personal-over-project skill precedence.
+5. `status` compares manifest-recorded content/modes with the target and current
+   canonical source, plus eager-memory entrypoints and personal-over-project
+   skill precedence. A legacy receipt with no modes cannot report in sync.
 
 ## Session Context Flow
 

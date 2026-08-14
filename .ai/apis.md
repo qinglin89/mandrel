@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-14
-verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
+verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 ---
 
 # APIs and Interfaces
@@ -10,7 +10,7 @@ verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
 | Command | Behavior |
 |---|---|
 | `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Preview or deploy canonical payload; optional venv bootstrap |
-| `status <target>` | Compare current manifest entries, target, canonical source, eager entrypoints, and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
+| `status <target>` | Compare manifest-recorded content/modes with the target and current canonical source, plus eager entrypoints and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
 | `status --all` | Check every local registry entry |
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
@@ -39,7 +39,7 @@ successful outcome when policy is not met.
 
 | Interface | Ownership / semantics |
 |---|---|
-| `.ai-deploy-manifest.json` | Ignored target-local rendered receipt used by status |
+| `.ai-deploy-manifest.json` | Ignored target-local receipt of rendered hashes and deployed modes used by status |
 | `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt |
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |

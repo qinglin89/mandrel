@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-14
-verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
+verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 ---
 
 # Design Principles and Decisions
@@ -54,8 +54,9 @@ verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
 
 ### Local manifest versus portable lock
 
-- Chose two receipts: manifest contains rendered hashes/machine paths for
-  status; lock contains canonical hashes/source commit for version control.
+- Chose two receipts: manifest contains rendered hashes, deployed modes, and
+  machine paths for status; lock contains canonical hashes/source commit for
+  version control.
 - The lock's source commit is nullable and stated only when the exact canonical
   paths, bytes, and executable modes captured during deployment match that
   commit's deployable tree; target-file aliases are refused before writes.

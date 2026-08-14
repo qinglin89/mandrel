@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-13
-verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
+last-updated: 2026-08-14
+verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 ---
 
 # Features
@@ -8,7 +8,7 @@ verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 | Feature | Status | Key modules/interfaces |
 |---|---|---|
 | Canonical payload deployment | implemented | deploy, manifest, lock, canonical buckets |
-| Dry-run and drift status | implemented; removed-file orphan detection pending | preview/status; eager-entrypoint and personal-skill-precedence checks |
+| Dry-run and drift status | implemented; removed-file orphan detection pending | preview/status content+mode checks; eager-entrypoint and personal-skill-precedence checks |
 | Managed repo registry | implemented | registry CLI and local JSON |
 | Orchestrator bootstrap | implemented | Python 3.14 venv, requirements, non-overwriting env |
 | Split role launch profiles | implemented | dev/review profiles, legacy profile compatibility, print-config |
