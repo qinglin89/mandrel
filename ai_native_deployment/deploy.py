@@ -20,6 +20,7 @@ from .paths import (
     claude_user_skills_root,
     registry_path,
     source_root,
+    target_path_identity,
 )
 
 PAYLOADS: tuple[tuple[str, str], ...] = (
@@ -390,15 +391,21 @@ def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
     One item per *target* file, which is what makes it a payload. The buckets
     overlap by design — `repo-root` maps to the target root, so it reaches under
     every other bucket's prefix, and `orchestrator` maps inside `cursor`'s — so
-    two canonical files can name one target path, and a target path holds one
-    file. Deployed in bucket order, the later write would silently replace the
-    earlier one while both receipts describe the writes rather than the files
-    left behind: the lock would list two records for a path the target holds one
-    of, and state a canonical commit over bytes no target file carries, which is
-    the placement a release assessment reads as evidence
-    (`evolution/README.md`, Release assessment). Neither the manifest nor
-    `check_status` would see it — both key by target path, so the collision
+    two canonical files can name one target file, and a target file holds the
+    bytes of one of them. Deployed in bucket order, the later write would
+    silently replace the earlier one while both receipts describe the writes
+    rather than the files left behind: the lock would list two records for a
+    file the target holds one of, and state a canonical commit over bytes no
+    target file carries, which is the placement a release assessment reads as
+    evidence (`evolution/README.md`, Release assessment). Neither the manifest
+    nor `check_status` would see it — both key by target path, so the collision
     collapses and the dropped file's absence reads as in sync.
+
+    Two canonical files name one target file whenever their target paths are
+    the same file, which is `target_path_identity` and not string equality: on
+    the supported hosts `.CURSOR/hooks/x` and `.cursor/hooks/x` are one file,
+    and a payload carrying both drops one exactly as an identical pair would,
+    while every string-keyed check above still sees two.
 
     Refused here rather than in any of them, because this is the one mapping all
     of them read: a canonical tree that cannot say which file a target path gets
@@ -408,7 +415,7 @@ def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
     root = (root or source_root()).resolve()
     canonical = canonical_root(root)
     items: list[DeploymentItem] = []
-    claimed: dict[str, str] = {}
+    claimed: dict[str, tuple[str, str]] = {}
 
     for bucket, _target_prefix in PAYLOADS:
         bucket_root = canonical / bucket
@@ -421,10 +428,17 @@ def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
             target_rel = target_relative_path_for(canonical_rel)
             if target_rel is None:
                 continue
-            claimant = claimed.setdefault(target_rel, canonical_rel)
+            claimant, claimed_rel = claimed.setdefault(
+                target_path_identity(target_rel), (canonical_rel, target_rel)
+            )
             if claimant != canonical_rel:
+                where = (
+                    target_rel
+                    if claimed_rel == target_rel
+                    else f"{claimed_rel} and {target_rel}, one file on a case- or normalization-insensitive volume"
+                )
                 raise PayloadError(
-                    f"two canonical files map to {target_rel}: {claimant} and {canonical_rel}; "
+                    f"two canonical files map to {where}: {claimant} and {canonical_rel}; "
                     "a target path holds one file, so the payload cannot carry both"
                 )
             items.append(

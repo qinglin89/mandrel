@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .hashing import sha256_bytes
 from .manifest import SCHEMA_VERSION, source_git_commit
-from .paths import CANONICAL_DIRNAME, lock_path
+from .paths import CANONICAL_DIRNAME, lock_path, target_path_identity
 
 # The only tree entries whose bytes a payload can be said to have come from.
 EXECUTABLE_BLOB_MODE = "100755"
@@ -101,17 +101,19 @@ def payload_source_commit(
         return None
 
     payload = {record.canonical_relative_path: record for record in deployed}
-    targets = {record.target_relative_path for record in deployed}
+    targets = {target_path_identity(record.target_relative_path) for record in deployed}
     if len(payload) != len(deployed) or len(targets) != len(deployed):
         # Not one record per file, in either direction, and the comparison below
         # would read as a complete account of the payload either way. Two records
         # for one canonical file leave one of them unchecked; two for one target
         # file describe a payload the target cannot be holding, since only the
-        # later write survives there. The mapping refuses the second before a
-        # deploy can write it (`deploy.iter_deployment_items`), which is where
-        # the manifest and `status` are kept honest about it too; this is the
-        # receipt saying what it needs a record set to be before it vouches for
-        # one.
+        # later write survives there. Target files are counted by
+        # `target_path_identity` for that reason: two records the target resolves
+        # to one file are the case this rejects, whether or not their paths are
+        # the same string. The mapping refuses such a payload before a deploy can
+        # write it (`deploy.iter_deployment_items`), which is where the manifest
+        # and `status` are kept honest about it too; this is the receipt saying
+        # what it needs a record set to be before it vouches for one.
         return None
     # Both directions at once: a payload file the commit does not hold, and a
     # canonical file the commit expected this payload to carry.

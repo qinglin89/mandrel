@@ -4,6 +4,8 @@ import hashlib
 import json
 import stat
 import subprocess
+import unicodedata
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -584,6 +586,119 @@ def test_deploy_cli_reports_a_payload_it_cannot_resolve(
     assert cli.main(["deploy", str(target)]) == 2
 
     assert "two canonical files map to .codex/config.toml" in capsys.readouterr().err
+
+
+def host_folds_target_paths(tmp_path: Path, one: str, other: str) -> bool:
+    """Whether this host resolves the two names to a single file.
+
+    Probed rather than assumed so the alias assertions below state what was
+    measured here; the refusal itself is host-independent, so the tests hold on
+    a case- and normalization-sensitive host too."""
+
+    probe = tmp_path / "alias-probe"
+    probe.mkdir(exist_ok=True)
+    (probe / one).write_bytes(b"first\n")
+    return (probe / other).exists()
+
+
+def test_case_variant_target_paths_are_one_target_file_and_stop_the_deploy(tmp_path: Path) -> None:
+    """`.CURSOR/hooks/x` and `.cursor/hooks/x` are two strings and one file on a
+    default macOS volume, so a payload carrying both drops one exactly as an
+    identical pair does — while `claimed`, the manifest map and `check_status`
+    all still see two. Measured on this checkout's APFS volume before the
+    identity rule: the deploy accepted both, the two paths opened one inode, the
+    0755 write was replaced by the 0644 one, the lock stated `HEAD` over
+    seventeen records for sixteen target files, and `check_status` read in
+    sync — a canonical commit vouching for a path and mode set the target does
+    not hold."""
+
+    source = make_source(tmp_path)
+    alias = write(source / "canonical" / "repo-root" / ".CURSOR" / "hooks" / "session-start.sh", "#!/bin/sh\n")
+    alias.chmod(0o755)
+    (source / "canonical" / "cursor" / "hooks" / "session-start.sh").chmod(0o644)
+    commit_source(source)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    if host_folds_target_paths(tmp_path, ".cursor-probe", ".CURSOR-probe"):
+        assert (target.parent / "alias-probe" / ".CURSOR-probe").exists(), "one file on this host"
+
+    with pytest.raises(deploy.PayloadError) as refused:
+        deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    message = str(refused.value)
+    assert ".CURSOR/hooks/session-start.sh" in message and ".cursor/hooks/session-start.sh" in message
+    assert "canonical/repo-root/.CURSOR/hooks/session-start.sh" in message
+    assert "canonical/cursor/hooks/session-start.sh" in message
+    assert list(target.iterdir()) == [], "refused before writing anything, so there is no receipt to trust"
+
+
+def test_normalization_variant_target_paths_are_one_target_file(tmp_path: Path) -> None:
+    """The same fold covers the other alias a default macOS volume applies:
+    measured here, a name written decomposed reopens the file written composed.
+    Refused on every host, including one that keeps the two apart — the payload
+    is the canonical tree's and the lock is portable, so the answer cannot
+    depend on the machine the deploy ran on."""
+
+    composed = unicodedata.normalize("NFC", "hooks/café.sh")
+    decomposed = unicodedata.normalize("NFD", composed)
+    assert composed != decomposed, "the two spellings must differ, or this measures nothing"
+
+    source = make_source(tmp_path)
+    write(source / "canonical" / "repo-root" / ".cursor" / decomposed, "#!/bin/sh\n")
+    write(source / "canonical" / "cursor" / composed, "#!/bin/sh\n")
+    commit_source(source)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    with pytest.raises(deploy.PayloadError) as refused:
+        deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+
+    assert "one file on a case- or normalization-insensitive volume" in str(refused.value)
+    assert list(target.iterdir()) == []
+
+
+def deployed_records(source: Path) -> list[lockfile.DeployedFile]:
+    """The record set a deploy of this source builds, as `deploy_canonical`
+    builds it: the bytes read once and written, and the mode applied."""
+
+    records = []
+    for item in deploy.iter_deployment_items(source):
+        data = item.source_path.read_bytes()
+        records.append(
+            lockfile.DeployedFile(
+                canonical_relative_path=item.canonical_relative_path,
+                target_relative_path=item.target_relative_path,
+                canonical_sha256=hashing.sha256_bytes(data),
+                canonical_size_bytes=len(data),
+                executable=bool(item.mode & 0o111),
+            )
+        )
+    return records
+
+
+def test_the_receipt_refuses_a_record_set_whose_targets_are_one_file(tmp_path: Path) -> None:
+    """The receipt's own precondition asks the same question as the mapping, so
+    it has to count target files the same way. Two records the target resolves
+    to one file describe a payload it cannot be holding — only the later write
+    survives there — and counting them as two would let the commit be stated
+    over a record the target never kept. Every other input here is exactly the
+    passing one, so this measures the identity rule alone: as string equality,
+    the aliased set below states the commit."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    records = deployed_records(source)
+    assert lockfile.payload_source_commit(source, records, deploys=deploy.deploys_canonical_path) == head
+
+    aliased = [
+        replace(record, target_relative_path=".CURSOR/hooks/session-start.sh")
+        if record.target_relative_path == ".codex/hooks/session-start.sh"
+        else record
+        for record in records
+    ]
+    assert len({record.target_relative_path for record in aliased}) == len(aliased), "distinct as strings"
+    assert lockfile.payload_source_commit(source, aliased, deploys=deploy.deploys_canonical_path) is None
 
 
 def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Path) -> None:
