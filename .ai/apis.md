@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-13
-verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
+last-updated: 2026-08-14
+verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
 ---
 
 # APIs and Interfaces
@@ -71,9 +71,12 @@ errors. It uses `ORCH_HUB_URL` plus bearer `ORCH_HUB_TOKEN`, follows no
 redirects, permits cleartext HTTP only for loopback, and bounds each response at
 32 MiB. `scripts/probe-orch-hub.py` is the manual credentialed contract check;
 `--feed-dir` remains the deterministic offline implementation of the same
-boundary. orch-hub publishes no `provenance.effective_revision`, so translated
-reports fail closed into an inconclusive release assessment until a truthful
-provenance source is selected.
+boundary. orch-hub currently publishes no `provenance.effective_revision`, so
+translated reports fail closed into an inconclusive release assessment. The
+truthful value is the evaluated target's validated deploy-lock
+`source_git_commit`, captured at evaluation time by the side holding that
+target; it stays absent until orch-hub publishes it, and the pinned
+counterfactual remains the only directional instrument against today's feed.
 
 ## API Conventions
 

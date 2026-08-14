@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-13
-verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
+last-updated: 2026-08-14
+verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
 ---
 
 # Architecture
@@ -39,14 +39,18 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 
 ## Deployment Flow
 
-1. `iter_deployment_items` maps canonical buckets to target paths and filters
-   credentials/runtime files.
+1. `iter_deployment_items` maps canonical buckets to target paths, filters
+   credentials/runtime files, and refuses two canonical inputs whose target
+   paths are the same file under a host-independent Unicode canonical caseless
+   identity; payload validity is portable rather than host-dependent.
 2. Target-specific templates and `CLAUDE.md` eager-memory entrypoints resolve.
 3. Deployment overwrites the deploy-owned files in the current canonical
    mapping and writes target-local manifest, portable lock, managed gitignore
-   block, and registry entry. It does not prune files removed from that
-   mapping; after the new manifest drops them, `status` cannot see the target
-   orphans.
+   block, and registry entry. The lock states a source revision only when the
+   deployment's own captured input paths, bytes, and executable modes exactly
+   match that commit's deployable canonical tree. It does not prune files
+   removed from the mapping; after the new manifest drops them, `status` cannot
+   see the target orphans.
 4. Optional bootstrap builds `.cursor/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
 5. `status` compares manifest, target, current canonical source, eager-memory

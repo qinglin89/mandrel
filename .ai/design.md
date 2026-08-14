@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-14
+verified-against: 3d51653c1ef62e4660b1edb9f74dd6956ab83e24
 ---
 
 # Design Principles and Decisions
@@ -56,6 +56,9 @@ verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
 
 - Chose two receipts: manifest contains rendered hashes/machine paths for
   status; lock contains canonical hashes/source commit for version control.
+- The lock's source commit is nullable and stated only when the exact canonical
+  paths, bytes, and executable modes captured during deployment match that
+  commit's deployable tree; target-file aliases are refused before writes.
 
 ### Repository-local skills versus personal-level compatibility
 
