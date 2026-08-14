@@ -1047,7 +1047,17 @@ checkable from here:
    bytes the receipt no longer describes, and the revision would then name a
    protocol the evaluated work did not run under. `aii-2 status <target>`
    answers that, on the machine holding the target, and the answer is only good
-   as of when it was asked — at evaluation time, not later.
+   as of when it was asked — at evaluation time, not later. What it compares is
+   content *and* mode, because the payload is both and condition 1 vouched for
+   both: a hook chmod'd back to non-executable holds every byte the receipt
+   hashes and does not run, so content alone would call that target a match
+   while it runs less of the protocol than the revision names. The mode compared
+   against is the one the deployment recorded, not the one the canonical tree
+   carries now — a canonical mode that moved since is that source line's drift
+   and not this target's, and the two are reported as the different findings
+   they are. A manifest written before deployments recorded modes states none;
+   `status` reports that receipt as unable to answer rather than passing a mode
+   nothing compared, and a redeploy is what makes such a target readable again.
 
 When either fails, publish the field absent. An excluded report costs a
 denominator; one placed by an unverified revision manufactures the direction

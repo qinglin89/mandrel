@@ -87,14 +87,14 @@ any finding:
 
 | kind | meaning |
 |---|---|
-| `target modified` | someone edited a deployed file in the target |
-| `canonical changed` | this repo moved ahead; target needs a re-deploy |
+| `target modified` | a deployed file's bytes or mode no longer match what the deploy left |
+| `canonical changed` | this repo moved ahead, in content or in mode; target needs a re-deploy |
 | `missing target file` | a deployed file was deleted |
 | `extra deployed file` | tracked in the manifest but gone from `canonical/` |
 | `stale eager import` | the loader points at a memory doc that is no longer the current entrypoint, or routing points somewhere illegal |
 | `ambiguous memory entrypoint` | both `x.md` and `x/index.md` exist for one topic |
 | `shadowed skill` | a deployed skill name also exists personal-level, where it takes precedence |
-| `invalid manifest entry` | malformed manifest record |
+| `invalid manifest entry` | a malformed manifest record, or a receipt that records no deployed mode (written before modes were recorded) |
 
 ---
 

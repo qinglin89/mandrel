@@ -16,6 +16,7 @@ from .paths import (
     CANONICAL_DIRNAME,
     GITIGNORE_BEGIN,
     GITIGNORE_END,
+    MANIFEST_FILENAME,
     canonical_root,
     claude_user_skills_root,
     registry_path,
@@ -67,6 +68,14 @@ GITIGNORE_BLOCK_PATTERN = re.compile(
 
 CLAUDE_MD_TARGET = "CLAUDE.md"
 NORMALIZED_SHA256_FIELD = "normalized_sha256"
+# The permission bits the deploy applied to a target file, recorded per manifest
+# record. A deployed file is bytes and a mode — a hook stripped of its executable
+# bit is the payload's content and not the payload's behavior — so the receipt
+# has to state the mode for `status` to answer for it. Absent from manifests
+# written before this field existed; `_manifest_mode` reads that as a receipt
+# that states no mode rather than as a mode of zero.
+MODE_FIELD = "mode"
+MODE_BITS = 0o7777
 # The eager memory docs that the memory protocol allows to be upgraded to
 # directory form. Ordered, and kept in lockstep with the `add_eager_entrypoint`
 # calls in the cursor/codex session-start hooks (tests/test_hook_eager_set.py).
@@ -324,6 +333,42 @@ def _manifest_status_hash(record: dict[object, object], manifest_hash: str) -> s
     return manifest_hash
 
 
+def _manifest_mode(record: dict[object, object]) -> int | None:
+    """The mode this record vouches for, or None where it vouches for none.
+
+    The expected mode comes from the receipt and never from a fresh reading of
+    the canonical item, even though `check_status` has that item in hand. The
+    receipt is what the deploy left behind, and the two questions `status`
+    answers are both asked against it: a target that no longer carries the
+    deployed mode is `target modified`, and a canonical file whose mode has
+    moved since is `canonical changed`. Substituting the current source for the
+    receipt collapses them into one — the target would be blamed for a mode the
+    canonical tree changed under it.
+
+    `bool` is excluded because it is an `int` in Python and a receipt reading
+    `"mode": true` states nothing about permission bits."""
+    mode = record.get(MODE_FIELD)
+    if isinstance(mode, bool) or not isinstance(mode, int):
+        return None
+    if not 0 <= mode <= MODE_BITS:
+        # Permission bits, which is what a deploy chmods and what a target
+        # stats. A whole `st_mode` carries the file type above them and is not
+        # the value either side of the comparison holds.
+        return None
+    return mode
+
+
+def _divergence_detail(content_changed: bool, mode_changed: bool) -> str:
+    """How a file diverges, in one vocabulary for `status` and for
+    `preview_deploy`: the same target state has to read the same way whether it
+    is described as drift from a receipt or as work a deploy would do."""
+    if content_changed and mode_changed:
+        return "content and mode differ"
+    if mode_changed:
+        return "mode differs"
+    return ""
+
+
 def is_forbidden_relative_path(path: Path | PurePosixPath | str) -> bool:
     parts = PurePosixPath(_posix(path)).parts
     if not parts:
@@ -502,10 +547,7 @@ def preview_deploy(target: str | Path, *, root: Path | None = None) -> DeployPre
             mode_changed = stat.S_IMODE(target_path.stat().st_mode) != item.mode
             if content_changed or mode_changed:
                 action = "update"
-                if content_changed and mode_changed:
-                    detail = "content and mode differ"
-                elif mode_changed:
-                    detail = "mode differs"
+                detail = _divergence_detail(content_changed, mode_changed)
             else:
                 action = "unchanged"
 
@@ -554,6 +596,12 @@ def deploy_canonical(
             "target_relative_path": item.target_relative_path,
             "sha256": file_info["sha256"],
             "size_bytes": file_info["size_bytes"],
+            # The mode the deploy applied, like the lock's `executable` beside
+            # it: both receipts describe this deployment's own act. A mode read
+            # back off the target instead would record whatever the filesystem
+            # made of the chmod, so a volume that drops the executable bit would
+            # produce a receipt vouching for a hook that cannot run.
+            MODE_FIELD: item.mode,
         }
         if item.target_relative_path == CLAUDE_MD_TARGET:
             manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item, rendered_bytes)
@@ -755,12 +803,13 @@ def check_status(
     try:
         deployed_manifest = manifest.read_manifest(target_root)
     except manifest.ManifestError as exc:
-        return StatusResult(target_root=target_root, total_files=0, drifts=(Drift("missing manifest", ".ai-deploy-manifest.json", str(exc)),))
+        return StatusResult(target_root=target_root, total_files=0, drifts=(Drift("missing manifest", MANIFEST_FILENAME, str(exc)),))
 
     manifest_files = deployed_manifest["files"]
     assert isinstance(manifest_files, dict)
     current_items = {item.target_relative_path: item for item in iter_deployment_items(root)}
     drifts: list[Drift] = []
+    modeless_records = 0
 
     for target_rel, raw_record in sorted(manifest_files.items()):
         if not isinstance(raw_record, dict):
@@ -772,6 +821,9 @@ def check_status(
             drifts.append(Drift("invalid manifest entry", target_rel, "missing sha256"))
             continue
         manifest_status_hash = _manifest_status_hash(raw_record, manifest_hash)
+        manifest_mode = _manifest_mode(raw_record)
+        if manifest_mode is None:
+            modeless_records += 1
 
         item = current_items.get(target_rel)
         if item is None:
@@ -788,15 +840,43 @@ def check_status(
             target_bytes = target_path.read_bytes()
             target_hash = hashing.sha256_bytes(target_bytes)
             target_status_hash = _status_sha256(item, target_bytes)
-            if target_hash != manifest_hash and target_status_hash != manifest_status_hash:
-                drifts.append(Drift("target modified", target_rel))
+            content_changed = target_hash != manifest_hash and target_status_hash != manifest_status_hash
+            mode_changed = manifest_mode is not None and stat.S_IMODE(target_path.stat().st_mode) != manifest_mode
+            if content_changed or mode_changed:
+                drifts.append(Drift("target modified", target_rel, _divergence_detail(content_changed, mode_changed)))
 
         canonical_status_hash = _status_sha256(item, canonical_bytes)
-        if canonical_hash != manifest_hash and canonical_status_hash != manifest_status_hash:
-            drifts.append(Drift("canonical changed", target_rel))
+        canonical_content_changed = canonical_hash != manifest_hash and canonical_status_hash != manifest_status_hash
+        canonical_mode_changed = manifest_mode is not None and item.mode != manifest_mode
+        if canonical_content_changed or canonical_mode_changed:
+            drifts.append(
+                Drift(
+                    "canonical changed",
+                    target_rel,
+                    _divergence_detail(canonical_content_changed, canonical_mode_changed),
+                )
+            )
 
     for target_rel in sorted(set(current_items) - {str(key) for key in manifest_files}):
         drifts.append(Drift("canonical changed", target_rel, "new canonical file not deployed"))
+
+    if modeless_records:
+        # A receipt written before modes were recorded, or one hand-edited since.
+        # Reported rather than passed over: `status` is what the release contract
+        # asks whether a target still matches its receipt
+        # (`evolution/README.md`, Release assessment), and a silent skip would
+        # let it vouch for an executable bit nothing compared. Said once for the
+        # whole receipt, because that is where the gap is — the per-file checks
+        # above still answer for content, so the target keeps a usable status
+        # until the next deploy writes the modes in.
+        drifts.append(
+            Drift(
+                "invalid manifest entry",
+                MANIFEST_FILENAME,
+                f"{modeless_records} of {len(manifest_files)} records state no deployed mode; "
+                "redeploy so status can check modes",
+            )
+        )
 
     drifts.extend(eager_import_drifts(target_root))
     drifts.extend(

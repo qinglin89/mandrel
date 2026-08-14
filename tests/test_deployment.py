@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_native_deployment import cli, deploy, hashing, lockfile, manifest
+from ai_native_deployment import cli, deploy, hashing, lockfile, manifest, paths
 
 
 def write(path: Path, content: str = "content\n") -> Path:
@@ -791,6 +791,135 @@ def test_status_target_modified(tmp_path: Path) -> None:
 
     assert "target modified" in drift_kinds(result)
     assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
+
+
+def test_status_sees_a_deployed_file_stripped_of_its_executable_bit(tmp_path: Path) -> None:
+    """A deployed file is bytes and a mode. A hook chmod'd back to 0644 holds
+    every byte the receipt hashes and does not run, so a check that reads only
+    content calls it in sync while the target no longer runs the payload the
+    receipt describes — the state `aii-2 status` is asked about when a release
+    assessment asks whether a target still matches its receipt."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    script = ".claude/skills/demo-skill/scan.sh"
+    (target / script).chmod(0o644)
+
+    result = deploy.check_status(target, root=source)
+
+    drifts = [drift for drift in result.drifts if drift.target_relative_path == script]
+    assert [(drift.kind, drift.detail) for drift in drifts] == [("target modified", "mode differs")]
+
+
+def test_status_and_preview_read_one_target_state_the_same_way(tmp_path: Path) -> None:
+    """The two surfaces answer different questions — what the target no longer
+    matches, and what a deploy would do — and disagreeing about whether a file's
+    mode is part of it made the tool contradict itself about the same target."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    script = ".claude/skills/demo-skill/scan.sh"
+    (target / script).chmod(0o644)
+    write(target / "CLAUDE.md", "local edit\n")
+
+    result = deploy.check_status(target, root=source)
+    preview = deploy.preview_deploy(target, root=source)
+
+    assert not result.in_sync
+    change = next(change for change in preview.changes if change.target_relative_path == script)
+    drift = next(drift for drift in result.drifts if drift.target_relative_path == script)
+    assert (change.action, change.detail) == ("update", "mode differs")
+    assert (drift.kind, drift.detail) == ("target modified", "mode differs")
+    assert {change.target_relative_path for change in preview.changed} == {
+        drift.target_relative_path for drift in result.drifts
+    }
+
+
+def test_status_reports_a_deployed_file_that_lost_both_its_bytes_and_its_mode(tmp_path: Path) -> None:
+    """One file, one drift, and the detail says which parts moved — the same
+    vocabulary the preview uses for the same state."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    script = ".claude/skills/demo-skill/scan.sh"
+    write(target / script, "#!/bin/sh\nlocal edit\n").chmod(0o644)
+
+    result = deploy.check_status(target, root=source)
+
+    drifts = [drift for drift in result.drifts if drift.target_relative_path == script]
+    assert [(drift.kind, drift.detail) for drift in drifts] == [("target modified", "content and mode differ")]
+
+
+def test_status_blames_the_canonical_side_when_only_the_canonical_mode_moved(tmp_path: Path) -> None:
+    """Why the expected mode comes from the receipt and not from the canonical
+    item `check_status` already has in hand: with the source as the expectation,
+    a canonical file made executable after a deploy reads as a target somebody
+    edited, and the operator is sent to look at the wrong side."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    runbook = ".ai-protocol/workflow/runbook.md"
+    (source / "canonical" / "workflow" / "runbook.md").chmod(0o755)
+
+    result = deploy.check_status(target, root=source)
+
+    drifts = [drift for drift in result.drifts if drift.target_relative_path == runbook]
+    assert [(drift.kind, drift.detail) for drift in drifts] == [("canonical changed", "mode differs")]
+
+
+def test_status_reports_a_receipt_that_states_no_mode_and_still_checks_content(tmp_path: Path) -> None:
+    """A manifest written before modes were recorded cannot answer whether a
+    target still carries the mode it was deployed with. Said once, for the
+    receipt rather than for every file it lists, and the content checks it can
+    still answer keep running until the next deploy writes the modes in."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    saved = manifest.read_manifest(target)
+    for record in saved["files"].values():
+        record.pop(deploy.MODE_FIELD)
+    manifest.write_manifest(target, saved)
+    script = ".claude/skills/demo-skill/scan.sh"
+    (target / script).chmod(0o644)
+    write(target / "CLAUDE.md", "local edit\n")
+
+    result = deploy.check_status(target, root=source)
+
+    receipt = [drift for drift in result.drifts if drift.target_relative_path == paths.MANIFEST_FILENAME]
+    assert len(receipt) == 1
+    assert receipt[0].kind == "invalid manifest entry"
+    assert "state no deployed mode" in receipt[0].detail
+    assert not [drift for drift in result.drifts if drift.target_relative_path == script]
+    assert "target modified" in drift_kinds(result)
+    assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
+
+
+@pytest.mark.parametrize("mode", (True, 0o100755, -1, "0755", None))
+def test_status_treats_an_unreadable_recorded_mode_as_no_mode(tmp_path: Path, mode: object) -> None:
+    """A record whose mode is not permission bits states none — `True` because
+    it is an `int` in Python, a whole `st_mode` because it is not the value a
+    deploy applies. Guessing at either would vouch for a mode nothing wrote."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    saved = manifest.read_manifest(target)
+    script = ".claude/skills/demo-skill/scan.sh"
+    saved["files"][script][deploy.MODE_FIELD] = mode
+    manifest.write_manifest(target, saved)
+
+    result = deploy.check_status(target, root=source)
+
+    assert not [drift for drift in result.drifts if drift.target_relative_path == script]
+    assert [drift.detail for drift in result.drifts if drift.target_relative_path == paths.MANIFEST_FILENAME] == [
+        f"1 of {result.total_files} records state no deployed mode; redeploy so status can check modes"
+    ]
+
+
+def test_manifest_records_the_mode_the_deploy_applied(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    saved = manifest.read_manifest(target)
+
+    script = saved["files"][".claude/skills/demo-skill/scan.sh"]
+    manifest_page = saved["files"][".ai-protocol/workflow/runbook.md"]
+    assert script[deploy.MODE_FIELD] == 0o755
+    assert manifest_page[deploy.MODE_FIELD] == stat.S_IMODE(
+        (source / "canonical" / "workflow" / "runbook.md").stat().st_mode
+    )
+    assert not manifest_page[deploy.MODE_FIELD] & 0o111
 
 
 def test_status_allows_claude_md_target_memory_import_index_variants(tmp_path: Path) -> None:
