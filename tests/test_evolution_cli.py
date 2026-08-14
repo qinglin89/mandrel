@@ -36,6 +36,9 @@ import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
     HUB_ARTIFACT_NAMES,
+    HUB_LOCK_HASH,
+    HUB_PROTOCOL_LEGACY,
+    HUB_REVISION,
     admitted_task,
     experiment_decision,
     experiment_round,
@@ -46,6 +49,7 @@ from evolution_fixtures import (
     git_unrelated_commit,
     git_update_ref,
     hub_page,
+    hub_protocol,
     make_hub_entry,
     make_record,
     make_repo,
@@ -1091,6 +1095,31 @@ def test_the_hub_client_imports_a_report_end_to_end(config: evolution.EvolutionC
     assert result.cursor_after == "1"
 
 
+def test_a_published_identity_reaches_the_frozen_cohort_unchanged(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The identity is only worth publishing if it survives to where a release
+    assessment reads it: the pool stages the record whole and the freeze copies
+    its provenance into the immutable manifest, so what places a report in a
+    cohort is the pair its own feed stated."""
+    entries = [
+        make_hub_entry(key=f"r{index}", seq=index, task_id=f"2026-07-0{index}-task", protocol=hub_protocol())
+        for index in (1, 2)
+    ]
+    routes: dict[str, object] = {page_url(limit="50"): hub_page(entries)}
+    for entry in entries:
+        routes.update(artifact_routes(entry["report_key"]))
+
+    assert importer.sync(config, hub_feed(routes)).imported == ("r1", "r2")
+    result = freeze(config)
+
+    assert result.manifest_path is not None
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    provenance = [report["provenance"] for report in manifest["reports"]]
+    assert [item["effective_revision"] for item in provenance] == [HUB_REVISION, HUB_REVISION]
+    assert [item["deploy_lock_hash"] for item in provenance] == [HUB_LOCK_HASH, HUB_LOCK_HASH]
+
+
 def test_a_translated_entry_is_the_record_the_import_schema_describes(
     config: evolution.EvolutionConfig,
 ) -> None:
@@ -1108,11 +1137,112 @@ def test_a_translated_entry_is_the_record_the_import_schema_describes(
     assert record["artifacts"]["report_markdown"]["media_type"] == "text/markdown"
     assert record["artifacts"]["evidence"]["size_bytes"] == len(ARTIFACT_BODIES["evidence"])
     # Nothing orch-hub says about runs or git survives: the import schema closes
-    # its objects, and a release assessment must see provenance it never got as
-    # absent rather than invented.
+    # its objects, and the entry here states no protocol identity, which a release
+    # assessment must see as absent rather than invented.
     assert record["provenance"]["effective_revision"] is None
     assert "repo_path" not in record and "target_source" not in record
     assert reports.normalize(record, config, reports.load_import_schema(config)).report_key == "r1"
+
+
+def test_a_verified_protocol_identity_is_copied_onto_the_record(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The pair orch-hub publishes is the one fact of this repository's provenance
+    block the feed states, and it is what places a report in a release cohort."""
+    entry = make_hub_entry(key="r1", seq=1, protocol=hub_protocol())
+    feed = hub_feed({page_url(limit="5"): hub_page([entry])})
+
+    provenance = feed.fetch_page(None, 5).items[0]["provenance"]
+
+    assert provenance["effective_revision"] == HUB_REVISION
+    assert provenance["deploy_lock_hash"] == HUB_LOCK_HASH
+    # Copied, not reshaped: the record states exactly what the feed did.
+    assert provenance["effective_revision"] == entry["provenance"]["protocol"]["effective_revision"]
+    # The rest of the block orch-hub does not hold, and this side does not invent.
+    assert provenance["runner_protocol_revision"] is None
+    assert provenance["config_revision"] is None
+    assert provenance["dev"] == {"agent": None, "model": None, "effort": None, "profile": None}
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        HUB_PROTOCOL_LEGACY,
+        {"available": False, "detail": "contributing runs verified different protocol revisions"},
+        {"available": False, "effective_revision": HUB_REVISION, "deploy_lock_hash": HUB_LOCK_HASH},
+        {"available": True, "detail": "an earlier hub published a revision on its own"},
+        hub_protocol(lock_hash=None),
+        hub_protocol(revision=None),
+        hub_protocol(revision="   "),
+        hub_protocol(revision=42),
+        hub_protocol(available="true"),
+        hub_protocol(available=1),
+        None,
+        "unavailable",
+    ],
+    ids=[
+        "legacy-detail-only",
+        "unavailable-mixed-run-set",
+        "unavailable-but-carrying-a-pair",
+        "available-carrying-neither-half",
+        "revision-without-payload",
+        "payload-without-revision",
+        "blank-revision",
+        "revision-that-is-not-a-string",
+        "availability-as-a-string",
+        "availability-as-a-number",
+        "section-served-as-null",
+        "section-that-is-not-an-object",
+    ],
+)
+def test_anything_short_of_a_stated_pair_translates_to_two_nulls(
+    config: evolution.EvolutionConfig, section: object
+) -> None:
+    """Half an identity is not a weaker fact, it is a different one: the commit
+    names a source tree and the digest names the bytes taken from it, so neither
+    stands in for the other. `available` is the flag orch-hub sets only for an
+    identity every contributing run verified, and anything that is not exactly
+    that flag over exactly both halves leaves the report unplaceable — which the
+    assessment reports as `effective-revision-absent` rather than misplacing it."""
+    feed = hub_feed({page_url(limit="5"): hub_page([make_hub_entry(key="r1", seq=1, protocol=section)])})
+
+    record = feed.fetch_page(None, 5).items[0]
+
+    assert record["provenance"]["effective_revision"] is None
+    assert record["provenance"]["deploy_lock_hash"] is None
+    # Still an admissible report: unplaceable costs a denominator, not a report.
+    assert reports.normalize(record, config, reports.load_import_schema(config)).report_key == "r1"
+
+
+def test_an_entry_predating_the_protocol_section_states_no_identity(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The section is absent, not null, on everything an older hub published."""
+    entry = make_hub_entry(key="r1", seq=1)
+    del entry["provenance"]["protocol"]
+    feed = hub_feed({page_url(limit="5"): hub_page([entry])})
+
+    record = feed.fetch_page(None, 5).items[0]
+
+    assert record["provenance"]["effective_revision"] is None
+    assert record["provenance"]["deploy_lock_hash"] is None
+
+
+def test_no_neighbouring_field_supplies_a_missing_identity(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """The entry carries other commit-shaped values — the newest commit of the
+    evaluation's git window among them — and none of them is the revision the
+    target's payload came from. Completing an unstated identity from one would
+    place a report by a commit no run was shown to have run under."""
+    entry = make_hub_entry(key="r1", seq=1, protocol=hub_protocol(revision=None))
+    feed = hub_feed({page_url(limit="5"): hub_page([entry])})
+
+    record = feed.fetch_page(None, 5).items[0]
+
+    assert entry["provenance"]["git"]["newest_sha"]
+    assert record["provenance"]["effective_revision"] is None
+    assert record["provenance"]["deploy_lock_hash"] is None
 
 
 def test_archived_is_how_this_feed_says_completed(config: evolution.EvolutionConfig) -> None:

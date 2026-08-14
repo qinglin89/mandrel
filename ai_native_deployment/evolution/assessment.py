@@ -37,20 +37,24 @@ is the only comparison in which the release is the only difference.
 worktree could state; a lock read from a target now says what it holds now, and
 placement is an ancestry test, so filling the gap from one would move
 pre-release reports onto the `after` side of a promotion the target was
-redeployed onto later. The published feed states none of it today, so cohorts
-drawn from it exclude whole and the counterfactual below is what carries a
-direction (contract: Release assessment).
+redeployed onto later. The feed publishes it as half of an atomic pair with the
+lock's payload digest, and the import client copies both or neither, so a report
+here states the identity its runs were verified under or states nothing at all.
+Reports imported before that publication carry no revision and never gain one —
+a frozen manifest copies the record as staged — so a cohort built from them
+excludes whole and the counterfactual below is what carries a direction
+(contract: Release assessment).
 
 Reported also means unchecked: `_place` asks Git whether a stated revision
 carries the promotion, and Git answers about that commit, not about what the
 target ran. Whether the commit describes the payload at all is settled where the
 receipt is written — the deploy states no revision when the canonical tree it
 copied was not exactly that commit's — and whether the target still matched that
-receipt when it was evaluated is settled by whoever held it. Both conditions sit
-in the contract as what a publisher must establish before stating the field,
-because a revision this side cannot verify is one it cannot refuse either: it
-would place the report, and a misplaced report is a direction invented rather
-than a denominator lost.
+receipt while the evaluated work ran is settled by whoever held it, at the
+boundaries of the runs that did the work. Both conditions sit in the contract as
+what a publisher must establish before stating the field, because a revision this
+side cannot verify is one it cannot refuse either: it would place the report, and
+a misplaced report is a direction invented rather than a denominator lost.
 
 The shape of the work is the difference nothing frozen states. Two cohorts are
 two different task sets by construction, and no manifest version records what

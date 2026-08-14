@@ -142,7 +142,7 @@ another — a candidate measured against the wrong one measures nothing.
 | Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
 | Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch. A promotion recorded before the experiment carried a merge unit (`experiment.json` version 1) states the revision alone, and the outcome is the only record of what it went as | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
 | Rollback revision | the source-line commit that takes a promoted change back out; a commit of its own with the line's tip as its parent, never the promotion it reverses and never a rewrite of it | `outcome.json`'s batch: `rollback.json` `revision` |
-| Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed. Stated only where the deploy could tie the payload to that commit and the target still matches its receipt; otherwise the target has none to report | target `.ai-deploy-lock.json` `source_git_commit`, as read from that target at evaluation time; restated on a report as `provenance.effective_revision` |
+| Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed. Stated only where the deploy could tie the payload to that commit and the deployed files were checked against their receipt while the work being evaluated ran; otherwise the report has none to state | target `.ai-deploy-lock.json` `source_git_commit`, captured by the publisher when each contributing run was launched and verified at that run's end; published with its payload digest as the `provenance.protocol` pair and copied onto a report as `provenance.effective_revision` |
 
 The middle two are the pair a promotion is decided from, and neither stands in
 for the other. The candidate is pinned and cannot move; the merge input is not
@@ -993,18 +993,24 @@ knowable.
 
 **Where that revision comes from.** It is the evaluated target's
 `.ai-deploy-lock.json` `source_git_commit` — the canonical commit its deployed
-payload was rendered from — read from that target's worktree at evaluation time
-and carried on the report from then on. Only the side holding the target at that
-moment can state it as a fact, so the feed that publishes the report is the only
-truthful source of it, and this repository derives it from nothing. A target's
-lock read *now* answers what that target holds today, which is a different
-question: placement is an ancestry test, so a target redeployed after the
-promotion would put its pre-release reports on the `after` side and manufacture
-exactly the directional claim this reading exists to refuse. Recovering the lock
-from the target's own history is closer, and still an inference on a repository
-this system does not own, over a path a feed supplied, for the one reading that
-costs somebody a promoted change. A report that arrived without the field stays
-without it (invariant 4 keeps a missing field missing).
+payload was rendered from — captured while the evaluated work was being done and
+carried on the report from then on. Only the side holding that target then can
+state it as a fact, so the feed that publishes the report is the only truthful
+source of it, and this repository derives it from nothing. It is published as
+half of the atomic `provenance.protocol` pair, beside the lock's
+`canonical_payload_sha256` as `deploy_lock_hash`: the commit names a source tree
+and the digest names the bytes taken from it, so a revision published without the
+digest its runs verified names a tree the report cannot show its sessions read.
+This side copies both or neither, and completes neither from the other.
+
+A target's lock read *now* answers what that target holds today, which is a
+different question: placement is an ancestry test, so a target redeployed after
+the promotion would put its pre-release reports on the `after` side and
+manufacture exactly the directional claim this reading exists to refuse.
+Recovering the lock from the target's own history is closer, and still an
+inference on a repository this system does not own, over a path a feed supplied,
+for the one reading that costs somebody a promoted change. A report that arrived
+without the field stays without it (invariant 4 keeps a missing field missing).
 
 **When a lock may be published as one.** A commit written beside a payload is not
 by itself an account of that payload — and placement reads it as one. Two things
@@ -1043,44 +1049,67 @@ checkable from here:
    on different machines. A lock stating no revision is not a lock to publish a
    revision from, and a lock written before this rule states a commit nothing
    checked.
-2. *The target still matches the receipt.* A deployed payload edited in place is
-   bytes the receipt no longer describes, and the revision would then name a
-   protocol the evaluated work did not run under. `aii-2 status <target>`
-   answers that, on the machine holding the target, and the answer is only good
-   as of when it was asked — at evaluation time, not later. What it compares is
-   content *and* mode, because the payload is both and condition 1 vouched for
-   both: a hook chmod'd back to non-executable holds every byte the receipt
-   hashes and does not run, so content alone would call that target a match
-   while it runs less of the protocol than the revision names. The mode compared
-   against is the one the deployment recorded, not the one the canonical tree
-   carries now — a canonical mode that moved since is that source line's drift
-   and not this target's, and the two are reported as the different findings
-   they are. A manifest written before deployments recorded modes states none;
-   `status` reports that receipt as unable to answer rather than passing a mode
-   nothing compared, and a redeploy is what makes such a target readable again.
+2. *The target still matched the receipt while the evaluated work ran.* A
+   deployed payload edited in place is bytes the receipt no longer describes, and
+   the revision would then name a protocol the evaluated work did not run under.
+   The answer is only good as of when it was asked, so it is asked on the machine
+   holding the target, at boundaries the work is bracketed by rather than at
+   publication time. `aii-2 status <target>` answers it for a target as it
+   stands: what it compares is content *and* mode, because the payload is both
+   and condition 1 vouched for both — a hook chmod'd back to non-executable holds
+   every byte the receipt hashes and does not run, so content alone would call
+   that target a match while it runs less of the protocol than the revision
+   names. The mode compared against is the one the deployment recorded, not the
+   one the canonical tree carries now — a canonical mode that moved since is that
+   source line's drift and not this target's, and the two are reported as the
+   different findings they are. A manifest written before deployments recorded
+   modes states none; `status` reports that receipt as unable to answer rather
+   than passing a mode nothing compared, and a redeploy is what makes such a
+   target readable again.
 
 When either fails, publish the field absent. An excluded report costs a
 denominator; one placed by an unverified revision manufactures the direction
 this whole reading exists to refuse.
 
-**What the published feed states today.** orch-hub publishes none of these
-provenance fields — its per-report provenance describes runs and git history, and
-it states that evidence packs carry no `.ai-protocol` version for the evaluated
-task — so every report imported from it carries `effective_revision: null`, is
-excluded as `effective-revision-absent`, and contributes to neither denominator.
-A cohort drawn from that feed alone is therefore empty on both sides: it supports
-no direction in either sign, and the pinned counterfactual below is the only
-directional instrument there is. That is absent
-evidence, not a negative reading and not a defect to be worked around by
-inferring the field locally. For the cohorts to become readable, the publisher
-has to carry the lock it already had in hand, under the two conditions above:
-`source_git_commit` verbatim as `effective_revision`, and the lock's
-`canonical_payload_sha256` as `deploy_lock_hash` — the second because a source
-commit this repository's history no longer reaches is unresolvable here while the
-payload hash still identifies what was deployed. Both are stated as absent for a
-target that carried no lock, for a lock stating no revision, and for a target
-that no longer matches its receipt: an unstated field is honest, and a guessed
-one is not.
+**What a publisher's answer to condition 2 covers.** A receipt comparison is a
+point observation, and the fact being published is about a span — the whole task,
+worked by several runs. orch-hub's answer, which is the one behind the feed this
+repository imports, is therefore built from per-run observations at two
+boundaries and an agreement rule across runs: the target's lock is stamped into
+the run's own directory at launch, after a readiness gate has compared the
+deployed files against their receipt; at a run end the hub observed itself, it
+re-reads the lock and compares the deployed bytes against the deploy manifest
+over the whole file set the lock names; and a report publishes the identity only
+if every run contributing to it verified the same one. A run still live, one
+whose end the hub was not up to see, one whose payload had drifted, and one
+spanning a redeployment each publish nothing, as does a run set that verified two
+revisions — or one revision with two payloads. The two boundaries answer
+different halves: the launch gate compares content and mode, the end comparison
+compares content, and between them nothing is watched. So the published claim
+says exactly that much and no more — the deployed files matched their receipt at
+both ends of each run and named one identity throughout. This repository
+re-derives none of it; a consumer that recomputed the rule would be free to
+publish an identity the publisher would not.
+
+**What the published feed states today.** orch-hub publishes the pair, in each
+catalog entry's `provenance.protocol`: `available`, then `effective_revision` and
+`deploy_lock_hash` when it is true, and a `detail` naming the reason when it is
+false. The import client copies a stated pair verbatim onto the record and copies
+anything else — absent, unavailable, legacy, malformed, or half a pair — as two
+nulls, so a report either states the identity its runs were verified under or
+states none. The rest of this repository's provenance block stays null: orch-hub
+holds no runner protocol revision, orchestrator config revision, or per-role
+agent/model/effort/profile, and says so.
+
+Reports published before the capture existed keep their `available: false` and
+their reason, and no re-import changes that: the pool dedupes by (repo, task) and
+a frozen manifest copies the staged record, so a report already imported carries
+the provenance it was imported with, forever. The first placeable cohort is
+therefore built from reports imported after the publisher began stating the pair,
+and a cohort mixing the two reads as the exclusions it prints — absent evidence,
+not a negative reading and not a defect to be worked around by inferring the
+field locally. Where the exclusions take a denominator to zero, the pinned
+counterfactual below is the only directional instrument there is.
 
 **Verdicts.** `improved`, `neutral`, `regressed`, or `inconclusive`. The first
 three are directional, and a directional claim rests on one of two kinds of

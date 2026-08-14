@@ -49,6 +49,45 @@ HUB_ARTIFACT_NAMES = {
 }
 
 
+# The protocol section a report published before orch-hub captured the identity
+# carries: unavailable, both halves null, and the reason. Written out rather than
+# built, because it is the shape the live feed serves for every report predating
+# the capture — measured on all three published reports, 2026-08-14.
+HUB_PROTOCOL_LEGACY = {
+    "available": False,
+    "effective_revision": None,
+    "deploy_lock_hash": None,
+    "detail": "evidence packs carry no .ai-protocol version for the evaluated task",
+}
+
+# The identity a report publishes when every contributing run verified one:
+# the evaluated target's deploy-lock `source_git_commit` and
+# `canonical_payload_sha256`.
+HUB_REVISION = "1ef2f203" + "0" * 32
+HUB_LOCK_HASH = "cec19abe" + "0" * 56
+
+
+def hub_protocol(
+    *,
+    revision: object = HUB_REVISION,
+    lock_hash: object = HUB_LOCK_HASH,
+    available: object = True,
+) -> dict:
+    """One `provenance.protocol` section, as orch-hub serializes it.
+
+    Four keys, always: the hub renames its aggregate's fields at the catalog
+    boundary and writes null for a half it does not state, so a consumer never has
+    to tell a missing key from a stated null.
+    """
+
+    return {
+        "available": available,
+        "effective_revision": revision,
+        "deploy_lock_hash": lock_hash,
+        "detail": None,
+    }
+
+
 def make_hub_entry(
     *,
     key: str,
@@ -59,6 +98,7 @@ def make_hub_entry(
     bodies: dict[str, bytes] | None = None,
     generated_ts: str = "2026-07-30T10:00:00Z",
     archived: bool = True,
+    protocol: object = HUB_PROTOCOL_LEGACY,
 ) -> dict:
     """One orch-hub catalog entry, in the shape the published feed serves.
 
@@ -67,6 +107,13 @@ def make_hub_entry(
     client against this repository's preferences instead of orch-hub's contract.
     The client's translation is what closes the gap, so it has to be given the
     real thing to translate.
+
+    `protocol` defaults to the legacy section rather than to a stated identity, so
+    every test that is not about provenance exercises the case the live feed still
+    serves most; pass `hub_protocol()` for a report whose runs were verified, or a
+    mangled value for a feed that contradicts itself. An entry predating the
+    section entirely is built by deleting the key from the returned dict, which is
+    what an older hub actually served.
     """
 
     bodies = bodies or ARTIFACT_BODIES
@@ -87,13 +134,20 @@ def make_hub_entry(
             {"name": HUB_ARTIFACT_NAMES[name], "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
             for name, body in bodies.items()
         ],
-        # orch-hub's own provenance: run and git coverage of the evaluation, and
-        # explicit statements that it holds none of the protocol/orchestrator
-        # facts this repository's import schema asks for.
+        # orch-hub's own provenance: run and git coverage of the evaluation, the
+        # protocol identity its runs were verified under (or why there is none),
+        # and an explicit statement that it holds no orchestrator config.
         "provenance": {
             "runs": {"available": True, "run_ids": [f"run-{key}"], "count": 1, "detail": None},
-            "git": {"available": True, "commit_count": 2, "detail": None},
-            "protocol": {"available": False, "detail": "evidence packs carry no .ai-protocol version"},
+            "git": {
+                "available": True,
+                "commit_count": 2,
+                "newest_sha": "5bdc67777285144375766648dacda7e701768ee6",
+                "detail": None,
+            },
+            # Copied, so a caller editing one entry's section cannot reach the
+            # shared default every other entry is built from.
+            "protocol": dict(protocol) if isinstance(protocol, dict) else protocol,
             "orchestrator_config": {"available": False, "detail": "no effective-config snapshot"},
         },
     }

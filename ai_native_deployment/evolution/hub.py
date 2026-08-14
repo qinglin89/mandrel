@@ -3,7 +3,8 @@
 orch-hub owns report publication and the global feed; this repository owns what
 it does with the reports. The feed is published, and this module is written
 against the shape it actually serves (reconciled against the running service on
-2026-08-12) rather than against the shape this repository would have preferred.
+2026-08-12, and its provenance section again on 2026-08-14) rather than against
+the shape this repository would have preferred.
 
 **Wire contract.**
 
@@ -37,11 +38,12 @@ omitting it gets a refusal, not a guess. A short page proves nothing either way.
 
 **Translation.** A catalog entry is not an `evaluation-import.schema.json`
 record: orch-hub names the same facts its own way (`seq`, `generated_ts`, flat
-repo/task fields, artifacts as a list keyed by published filename) and carries no
-`schema_version`, `media_type`, or `provenance` block in this repository's sense.
-`_import_record` maps one to the other so both feeds hand the importer the same
-shape and `DirectoryFeed` stays interchangeable. Two mappings are derivations
-rather than restatements, and both are deliberate:
+repo/task fields, artifacts as a list keyed by published filename), carries no
+`schema_version` or `media_type`, and states its provenance in its own sections
+(`runs`, `git`, `protocol`, `orchestrator_config`) rather than in this
+repository's block. `_import_record` maps one to the other so both feeds hand the
+importer the same shape and `DirectoryFeed` stays interchangeable. Two mappings
+are derivations rather than restatements, and both are deliberate:
 
 - `source.completed` is read from the entry's `archived`. orch-hub catalogs a
   report only once its task was archived at publication, and this protocol
@@ -59,44 +61,51 @@ ledger is supposed to carry — so a field orch-hub did not send arrives absent 
 null and is refused downstream with a reason an operator can act on.
 
 What the entry carries and the import schema has no home for (`repo_path`,
-`cataloged_ts`, `target_source`, and orch-hub's own runs/git provenance) is
-dropped: the schema closes its objects with `additionalProperties: false`, and
-`target_source` in particular is evaluation-trigger provenance, which the
-evolution contract deliberately puts outside artifact eligibility.
+`cataloged_ts`, `target_source`, and orch-hub's own runs/git/orchestrator-config
+provenance) is dropped: the schema closes its objects with
+`additionalProperties: false`, and `target_source` in particular is
+evaluation-trigger provenance, which the evolution contract deliberately puts
+outside artifact eligibility.
 
-**Provenance is stated as absent.** The import schema requires this
-repository's provenance block, and orch-hub publishes none of those fields, so
-every translated record carries them null. That is honest rather than inert: a
-release assessment reads `effective_revision`, and a null one lands the cohort
-in the designed "missing provenance is inconclusive" path instead of inventing a
-revision no target ever reported.
+**The protocol identity is copied, never derived.** orch-hub publishes one fact
+this repository's provenance block has a home for, in `provenance.protocol`:
+`available`, the pair `effective_revision` + `deploy_lock_hash` when it is true,
+and a `detail` naming the reason when it is false. `_protocol_identity` is the
+one place that section is read, and it copies both fields verbatim onto the
+record or copies neither.
 
-Nothing here can be made to fill it in. `effective_revision` means the canonical
-commit the evaluated target's deployed payload came from — its
-`.ai-deploy-lock.json` `source_git_commit` — as of the evaluation, and the only
-side that held that worktree then is the one that published the report. This
-client sees a catalog entry; a lock it read today would state what that target
-holds today, which places a pre-release report on the wrong side of a promotion
-the target has since been redeployed onto. So the field is left null until the
-feed carries it, and what that would take is written down in the contract
-(`evolution/README.md`, Release assessment): `source_git_commit` verbatim as
-`effective_revision` and `canonical_payload_sha256` as `deploy_lock_hash`, both
-absent for a target that carried no lock. Whichever names orch-hub gives them,
-`_unstated_provenance` is the one place this translation reads them from.
+The pair is the evaluated target's deploy lock — `source_git_commit` and
+`canonical_payload_sha256` — and it is a *verified* reading rather than a lock
+somebody happened to read: the hub stamps that lock into the run at launch, after
+a readiness gate has compared the target's deployed files against their receipt;
+it re-compares the whole deployed payload against those receipts at a run end it
+observed itself; and it publishes only the identity every run contributing to the
+report verified alike. A set that is incomplete, that spans a redeployment, or
+that verified two payloads under one revision publishes `available: false` and a
+reason instead. None of that is answerable from a catalog entry, which is exactly
+why this side copies the answer rather than forming one.
 
-**A published revision is not a checked one.** Both fields are copied from a
-receipt this client never sees, and a receipt is only an account of the payload
-under the two conditions the contract states: the deploy compared the payload it
-wrote against that commit's tree and found them equal (a lock written from a
-canonical tree that differed states no revision at all, and one written before
-that rule states a commit nothing checked), and the target still matched its
-receipt when it was evaluated. Neither is answerable from a catalog entry, so
-when the feed does carry the fields this translation copies what it is told and
-copies an absent field as absent — it never derives one, never falls back to a
-neighbouring value, and never treats a present `deploy_lock_hash` as evidence for
-a missing revision. Anything weaker turns an unverified lock into a cohort
-placement, which is worse than the null it replaced: an excluded report costs a
-denominator, a misplaced one invents a direction.
+The rest of the block stays null. orch-hub has no `runner_protocol_revision`,
+`config_revision`, or per-role agent/model/effort/profile to state — its
+`orchestrator_config` section says so outright — and a null there lands a release
+assessment in the designed "missing provenance is inconclusive" path rather than
+inventing a fact no report carries.
+
+**Half an identity places nothing.** A `protocol` section that is absent,
+unavailable, legacy (written before the identity became a pair), malformed, or
+stating one field without the other translates to two nulls, so
+`effective-revision-absent` stays reachable and no partial reading can place a
+report. Neither half stands in for the other — the commit names a source tree and
+the digest names the bytes taken from it — and nothing neighbouring is allowed to
+supply a missing one: not `provenance.git.newest_sha`, not another report's
+identity, not a lock read from a target today, which would state what that target
+holds now and put its pre-release reports on the far side of a promotion it was
+redeployed onto since. A stated field is checked only for being a non-empty
+string and is then copied unchanged; whether a revision resolves to a commit is
+`assessment`'s question, and it reports an unresolvable one as its own exclusion.
+Anything weaker turns an unverified lock into a cohort placement, which is worse
+than the null it replaced: an excluded report costs a denominator, a misplaced
+one invents a direction.
 
 **Integrity headers are not trusted.** The raw-artifact route serves bytes that
 no longer match their recorded digest with
@@ -455,7 +464,7 @@ def _import_record(entry: Mapping[str, Any]) -> Mapping[str, Any]:
             "schema_version": evaluator.get("schema_version"),
         },
         "artifacts": _artifact_manifest(entry.get("artifacts")),
-        "provenance": _unstated_provenance(),
+        "provenance": _provenance(entry.get("provenance")),
     }
 
 
@@ -485,28 +494,69 @@ def _artifact_manifest(published: Any) -> dict[str, Any]:
     return manifest
 
 
-def _unstated_provenance() -> dict[str, Any]:
-    """The provenance block the import schema requires, said as absent.
+def _provenance(published: Any) -> dict[str, Any]:
+    """The provenance block the import schema requires, from what orch-hub states.
 
-    orch-hub publishes none of these facts — its own provenance block describes
-    runs and git history instead — so every field is null rather than guessed. A
-    release assessment reading a null `effective_revision` places the cohort in
-    the inconclusive path, which is the designed answer for a report whose
-    provenance never said, and a fabricated revision would be worse than none.
-
-    This is also where a published one would be read (module docstring): the
-    evaluated target's deploy-lock `source_git_commit` and
-    `canonical_payload_sha256`, under whatever names the feed gives them.
+    One fact of it is published — the protocol identity the report's runs were
+    verified under — and is copied whole or not at all. The rest orch-hub does not
+    hold and this side does not invent: a null lands a release assessment in the
+    inconclusive path designed for a report whose provenance never said, and a
+    fabricated field would be worse than none (module docstring).
     """
 
+    revision, lock_hash = _protocol_identity(published)
     return {
         "runner_protocol_revision": None,
-        "deploy_lock_hash": None,
+        "deploy_lock_hash": lock_hash,
         "config_revision": None,
-        "effective_revision": None,
+        "effective_revision": revision,
         "dev": _unstated_role(),
         "review": _unstated_role(),
     }
+
+
+def _protocol_identity(published: Any) -> tuple[str | None, str | None]:
+    """`(effective_revision, deploy_lock_hash)` as the feed stated them, or nulls.
+
+    The single reader of `provenance.protocol`. `available` is the flag orch-hub
+    sets only for an identity every contributing run verified, so anything else —
+    a section that is missing, not an object, unavailable with its reason, or a
+    legacy one predating the pair — yields nulls without inspecting further.
+
+    Both halves are then required together, and the pair is returned only if both
+    were actually stated: an `available` section missing or mangling one of them
+    contradicts itself, and the honest reading of a self-contradicting statement
+    is that the report states no identity. Filling the other half from anything to
+    hand would place the report on evidence no run was shown to have run under.
+    """
+
+    section = published.get("protocol") if isinstance(published, dict) else None
+    if not isinstance(section, dict) or section.get("available") is not True:
+        return None, None
+    revision = _stated(section.get("effective_revision"))
+    lock_hash = _stated(section.get("deploy_lock_hash"))
+    if revision is None or lock_hash is None:
+        return None, None
+    return revision, lock_hash
+
+
+def _stated(value: Any) -> str | None:
+    """The value if the feed stated one, else None. Copied, never repaired.
+
+    Blank and non-string are both absent. A whitespace-only revision names
+    nothing, and a number or an object is not a value this field can carry at all
+    — the import schema types both halves `string | null`, so copying one through
+    would reject the whole report over a field whose absence the design already
+    tolerates, losing an eligible report to say what a null says.
+
+    A string is otherwise handed on exactly as received, unstripped and
+    unvalidated. The publisher checks the shape it publishes, and a second opinion
+    here would be this side deciding which stated identities count; a string that
+    resolves to no commit is reported by `assessment` as its own exclusion, which
+    is the accurate reading of a report that stated something unusable.
+    """
+
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _unstated_role() -> dict[str, Any]:

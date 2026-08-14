@@ -23,8 +23,18 @@ shape the client translates. Every offline test answers with a fixture written
 from this contract, so the two would agree with each other indefinitely after
 the feed moved. Concretely it checks the page envelope, that exhaustion is a
 value the feed reports, that a catalog entry still translates into a record the
-real import schema admits, and that artifact bytes fetched by wire name hash to
+real import schema admits, that the protocol identity each entry states is the
+one that reaches the record, and that artifact bytes fetched by wire name hash to
 the digests the entry published.
+
+The identity check needs the *raw* page as well as the translated records, so the
+page body is teed as the shipped client reads it and the two are compared side by
+side: what each entry stated is what its record must carry, which catches a
+client that dropped, reshaped, or invented an identity against a feed that is
+perfectly healthy. It also reports how many entries state one at all — the number
+an operator watches to see whether placeable reports have started arriving. A
+feed serving none still passes and says so: absence is a fact about those
+reports, not a defect in this client.
 
 Exit status is 0 when every check passed, 1 when one failed, and 2 when the
 probe could not run at all (no credentials, no reachable feed).
@@ -32,9 +42,11 @@ probe could not run at all (no credentials, no reachable feed).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -48,8 +60,9 @@ PAGE_LIMIT = 5
 
 def main() -> int:
     config = evolution.load_config(REPO_ROOT)
+    bodies: list[bytes] = []
     try:
-        feed = hub.feed_from_config(config, environ=os.environ)
+        feed = hub.feed_from_config(config, environ=os.environ, opener=teeing_opener(bodies))
     except evolution.FeedError as exc:
         print(f"probe cannot run: {exc}")
         return 2
@@ -71,6 +84,7 @@ def main() -> int:
             isinstance(page.exhausted, bool),
             f"exhausted={page.exhausted} (from the feed's has_more, never inferred)",
         ),
+        protocol_identity_check(bodies[0] if bodies else b"", page.items),
     ]
 
     if not page.items:
@@ -111,6 +125,95 @@ def main() -> int:
         )
     )
     return report(checks)
+
+
+def teeing_opener(bodies: list[bytes]) -> hub.Opener:
+    """The client's own opener, keeping a copy of each body it reads.
+
+    Built from the client's default so the probe exercises the transport the tool
+    ships — the redirect refusal included, which is the rule that decides where
+    the bearer token may go. The copy is what lets the identity check compare the
+    page as served with the records it became; without it the probe could only
+    report what the translation produced, which is the half that cannot tell a
+    renamed field from an unstated one.
+    """
+
+    default = hub._default_opener()
+
+    def opener(request: Any, timeout: float | None = None) -> Any:
+        return _Tee(default(request, timeout=timeout), bodies)
+
+    return opener
+
+
+class _Tee:
+    """One response, passed through, with what was read appended to `sink`."""
+
+    def __init__(self, response: Any, sink: list[bytes]) -> None:
+        self._response = response
+        self._sink = sink
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._response.read(size)
+        self._sink.append(data)
+        return data
+
+    def __enter__(self) -> "_Tee":
+        self._response.__enter__()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._response.__exit__(*exc)
+
+
+def protocol_identity_check(body: bytes, records: tuple[Any, ...]) -> tuple[str, bool, str]:
+    """Does the identity each entry states reach the record it became?
+
+    The rule is the contract's, restated here against the live wire rather than
+    against a fixture: an entry whose `provenance.protocol` is available with both
+    halves must translate to exactly those two values, and anything else — absent,
+    unavailable, legacy, half a pair — must translate to two nulls.
+
+    An entry stating no identity is reported, not failed: every report published
+    before orch-hub captured the identity says exactly that, and the count is what
+    tells an operator whether placeable reports have started arriving. That count
+    is also the only signal for a hub that renamed one of the pair's fields, since
+    under the contract's names such an entry states nothing — indistinguishable
+    here from a report whose runs were never verified, and told apart by reading
+    the entry's own `detail`.
+    """
+
+    try:
+        entries = json.loads(body.decode("utf-8"))["reports"]
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return ("protocol-identity", False, "the page body could not be re-read to compare provenance against")
+    if not isinstance(entries, list):
+        return ("protocol-identity", False, f"the page served {type(entries).__name__} where the catalog entries go")
+
+    stated = 0
+    for entry, record in zip(entries, records):
+        published = entry.get("provenance") if isinstance(entry, dict) else None
+        section = published.get("protocol") if isinstance(published, dict) else None
+        expected: tuple[Any, Any] = (None, None)
+        if isinstance(section, dict) and section.get("available") is True:
+            halves = (section.get("effective_revision"), section.get("deploy_lock_hash"))
+            if all(isinstance(half, str) and half.strip() for half in halves):
+                expected = halves
+                stated += 1
+        provenance = record["provenance"]
+        actual = (provenance["effective_revision"], provenance["deploy_lock_hash"])
+        if actual != expected:
+            key = entry.get("report_key") if isinstance(entry, dict) else None
+            return (
+                "protocol-identity",
+                False,
+                f"entry {key!r} states {expected} and the record carries {actual}",
+            )
+    return (
+        "protocol-identity",
+        True,
+        f"{stated} of {len(entries)} entr(ies) state a verified identity; each record carries what its entry did",
+    )
 
 
 def report(checks: list[tuple[str, bool, str]]) -> int:
