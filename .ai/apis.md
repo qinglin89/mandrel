@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-14
-verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
+last-updated: 2026-08-15
+verified-against: 5ff1f7eb68cb461c508545fdca7120fc894a4121
 ---
 
 # APIs and Interfaces
@@ -71,12 +71,13 @@ errors. It uses `ORCH_HUB_URL` plus bearer `ORCH_HUB_TOKEN`, follows no
 redirects, permits cleartext HTTP only for loopback, and bounds each response at
 32 MiB. `scripts/probe-orch-hub.py` is the manual credentialed contract check;
 `--feed-dir` remains the deterministic offline implementation of the same
-boundary. orch-hub currently publishes no `provenance.effective_revision`, so
-translated reports fail closed into an inconclusive release assessment. The
-truthful value is the evaluated target's validated deploy-lock
-`source_git_commit`, captured at evaluation time by the side holding that
-target; it stays absent until orch-hub publishes it, and the pinned
-counterfactual remains the only directional instrument against today's feed.
+boundary. The client copies orch-hub's nested `provenance.protocol`
+`effective_revision` + `deploy_lock_hash` pair verbatim only when `available` is
+true and both halves are stated; absent, unavailable, legacy, malformed, or
+half-identity sections become two nulls. Imported and frozen records retain that
+pair, while release assessment uses only its revision half for Git ancestry
+placement. The complete-pair path is live-proven; reports imported before the
+publisher began stating it remain unplaceable and are never retrofitted.
 
 ## API Conventions
 
