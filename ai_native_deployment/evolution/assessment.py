@@ -104,6 +104,11 @@ the two sides are cohorts produced before and after a release, so they are named
 `before` and `after`. A counterfactual's numbers cross that boundary once, on
 the way in: its baseline is the pre-promotion revision and its candidate the
 promoted one.
+
+Every operation here that needs no harness takes the optional `expect` the rest
+of this package takes (`experiments`: The state a caller read), checked first
+inside its lock — the settlement's included, which is the one hold the composed
+reversal also runs under.
 """
 
 from __future__ import annotations
@@ -117,7 +122,7 @@ from typing import Any, Mapping, Sequence
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError, ValidationError
 from .guards import reason as require_reason
-from .guards import settled
+from .guards import require_expected, settled
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Lineage
 from .lineage import describe as describe_lineage
@@ -159,10 +164,16 @@ VERDICT_INCONCLUSIVE = "inconclusive"
 # difference, and it needs the same comparable cohorts `improved` does.
 # `inconclusive` is the answer when they are not there.
 DIRECTIONAL_VERDICTS = frozenset({VERDICT_IMPROVED, VERDICT_NEUTRAL, VERDICT_REGRESSED})
+# Every reading a record may state: the three directional ones, then the one
+# that is not. Stated here for `SETTLEMENTS`' reason — a surface offering the
+# vocabulary takes it from the module that owns it, rather than spelling a fifth
+# word this build would refuse at the write.
+VERDICTS = (VERDICT_IMPROVED, VERDICT_NEUTRAL, VERDICT_REGRESSED, VERDICT_INCONCLUSIVE)
 
 CONFIDENCE_HIGH = "high"
 CONFIDENCE_MEDIUM = "medium"
 CONFIDENCE_LOW = "low"
+CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW)
 
 SETTLEMENT_RETAIN = "retain"
 SETTLEMENT_ROLLED_BACK = "rolled-back"
@@ -1143,6 +1154,7 @@ def form(
     confidence: str,
     rationale: str,
     metrics: Sequence[Measurement] = (),
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Formed:
     """Record the current cohort's reading of the release before it.
@@ -1191,6 +1203,7 @@ def form(
     stated = tuple(metrics)
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch
@@ -1594,6 +1607,7 @@ def abandon(
     config: EvolutionConfig,
     *,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Concluded:
     """Record why the counterfactual ended when its harness cannot say.
@@ -1629,6 +1643,7 @@ def abandon(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch
@@ -1660,7 +1675,7 @@ def abandon(
     return Concluded(batch_id=frame.batch_id, assessment=recorded, run=concluded, recorded=True)
 
 
-def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Withdrawn:
+def withdraw(config: EvolutionConfig, *, expect: str | None = None, now: datetime | None = None) -> Withdrawn:
     """Take back a request the harness never answered for.
 
     The way out of the window the request exists to cover, and the only one there
@@ -1696,6 +1711,7 @@ def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Withdra
     moment = _moment(now)
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch
@@ -1739,6 +1755,7 @@ def resolve(
     verdict: str,
     confidence: str,
     rationale: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Formed:
     """Record the reading the completed counterfactual settles.
@@ -1772,6 +1789,7 @@ def resolve(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch
@@ -1839,6 +1857,7 @@ def settle(
     *,
     settlement: str,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Settled:
     """Answer the human gate between a release and the next base freeze.
@@ -1900,6 +1919,11 @@ def settle(
     )
 
     with single_writer_lock(config):
+        # First inside the one hold this whole settlement runs under, the
+        # composed reversal included: a token checked again from inside that
+        # rollback would be compared against a state this operation is the writer
+        # of.
+        require_expected(config, expect)
         known = settled(config, now=moment)
         # The one operation that follows an obligation to an owner that already
         # answered: what it has to do with a decision on record is report it, and

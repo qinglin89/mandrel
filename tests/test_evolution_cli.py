@@ -39,12 +39,16 @@ from evolution_fixtures import (
     HUB_LOCK_HASH,
     HUB_PROTOCOL_LEGACY,
     HUB_REVISION,
+    RELEASE_REF,
+    FakeHarness,
     admitted_task,
     complete_task,
+    completed_report,
     experiment_decision,
     experiment_round,
     git_checkout,
     git_commit,
+    git_follow,
     git_repo,
     git_rev,
     git_unrelated_commit,
@@ -52,8 +56,10 @@ from evolution_fixtures import (
     hub_page,
     hub_protocol,
     make_hub_entry,
+    make_manifest_report,
     make_record,
     make_repo,
+    promote_candidate,
     promotion_of,
     rejection,
     snapshot,
@@ -69,6 +75,7 @@ from evolution_fixtures import (
 from ai_native_deployment import cli, evolution
 from ai_native_deployment.evolution import (
     analysis_task,
+    assessment,
     batches,
     hub,
     importer,
@@ -76,6 +83,7 @@ from ai_native_deployment.evolution import (
     phase,
     render,
     reports,
+    replay,
 )
 
 TARGET = 2
@@ -90,6 +98,12 @@ TOKEN = "s3cret-token"
 # these objects (contract: What is derived).
 BASE = "a" * 40
 CANDIDATE = "b" * 40
+
+# The two cohorts a release reading is about: the batch whose experiment was
+# promoted, and the first one frozen after it. Batch ids are allocated, so these
+# are what the allocator would produce rather than names of a test's choosing.
+FIRST = "evolution-batch-0001"
+SECOND = "evolution-batch-0002"
 
 
 # --- fixtures ----------------------------------------------------------------
@@ -1790,7 +1804,7 @@ def test_the_verbs_this_cli_offers_are_the_ones_the_gate_names(
     gate(config, feed_root, "loader-fallback")
     emitted = {item["action"] for item in phase.describe(config, now=NOW).to_json()["allowed_actions"]}
 
-    wired = cli._lineage_verbs(phase)
+    wired = cli._wired_verbs(phase)
 
     assert wired
     assert wired <= emitted
@@ -1801,9 +1815,500 @@ def test_the_verbs_this_cli_offers_are_the_ones_the_gate_names(
         assert parsed.expect == "1-abc"
 
 
+# --- the release, as commands ------------------------------------------------
+#
+# What the change lineage produces and what is done about it afterwards: a
+# candidate carried onto the source line, a run that measured it ended or given
+# up, the next cohort's reading of that release, and the gate the next base
+# freeze waits on. The same two properties are under test as for the lineage
+# verbs — every operation reachable, and a run that found the work already done
+# saying so — with one more that belongs to this half alone: a `rolled-back`
+# settlement performs the reversal itself, so the console offers one verb where
+# an operator might otherwise compose two.
+
+
+@pytest.fixture
+def release(lineage_repo: Path) -> str:
+    """The source line, where it stood before anything was promoted."""
+
+    sha = git_rev(lineage_repo, "HEAD")
+    git_update_ref(lineage_repo, RELEASE_REF, sha)
+    return sha
+
+
+def measured(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
+    """A batch driven to the state a promotion is argued from, by the commands
+    that were wired for it: admitted, completed, sealed, and then measured.
+
+    The run is started through the library because the two verbs that ask a
+    harness are not wired yet — this console has no way to reach one.
+    """
+
+    batch_id = gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(config.repo_root)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+    finish_admitted_tasks(config)
+    run(["evolution", "seal-round", *where], capsys)
+
+    harness = FakeHarness(report=completed_report())
+    replay.start(config, harness, source_ref=RELEASE_REF, expectation="fewer remediation rounds", now=NOW)
+    replay.conclude(config, harness, now=NOW)
+    return batch_id
+
+
+def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The acceptance for this half: the measured candidate goes onto the source
+    line and comes back off it with `aii-2` and nothing else. The rollback leaves
+    the promotion exactly what it was — a new commit takes the change back out,
+    and nothing about the experiment or the batch outcome is edited."""
+
+    config = evolution.load_config(lineage_repo)
+    batch_id = measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+
+    code, out, _ = run(
+        ["evolution", "promote", "--reason", "the replay showed fewer rounds", "--target", "orch-hub", *where], capsys
+    )
+
+    assert code == 0
+    assert f"{batch_id}-exp-01 round 1 is on {RELEASE_REF}, ending {batch_id}" in out
+    assert "planned" in out and "orch-hub" in out
+    assert "this deployed nothing" in out
+    promoted = phase.describe(config, now=NOW).last_promotion
+    assert git_rev(lineage_repo, RELEASE_REF) == promoted.revision
+    assert lineage.describe(config).current is None
+
+    code, out, _ = run(["evolution", "rollback", "--reason", "the next cohort measured worse", *where], capsys)
+
+    assert code == 0
+    assert f"is off {RELEASE_REF}" in out
+    assert f"{batch_id}-exp-01 stays promoted and the batch stays concluded" in out
+    assert lineage.describe(config).last_promoted.promotion_effective is False
+    line = git_rev(lineage_repo, RELEASE_REF)
+    assert line != promoted.revision
+
+    code, out, _ = run(["evolution", "rollback", "--reason", "the next cohort measured worse", *where], capsys)
+
+    assert code == 0
+    assert "this run wrote nothing: the rollback above is the one on record" in out
+    assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_a_promotion_run_again_reports_the_merge_rather_than_making_a_second(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The redo every operation here has, on the one verb whose Git half cannot
+    be taken back by running it twice: what a second run reports is the promotion
+    on record, and the source line does not move again."""
+
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    reason = ["--reason", "the replay showed fewer rounds"]
+    run(["evolution", "promote", *reason, "--target", "orch-hub", *where], capsys)
+    line = git_rev(lineage_repo, RELEASE_REF)
+
+    code, out, _ = run(["evolution", "promote", *reason, "--target", "orch-hub", *where], capsys)
+
+    assert code == 0
+    assert "was already on" in out
+    assert "this run wrote nothing: the promotion above is the one on record" in out
+    assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_a_run_and_a_request_are_ended_from_the_command_line(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two replay verbs that need no harness, which are the two that exist
+    for a harness that cannot answer: a run going is recorded as failed, and a
+    request that never became one is given up. Their redo is the difference —
+    ending a run reports the failure on record, while a withdrawal over nothing
+    outstanding is how it reports having already landed."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+    finish_admitted_tasks(config)
+    run(["evolution", "seal-round", *where], capsys)
+    replay.start(config, FakeHarness(report=None), source_ref=RELEASE_REF, expectation="fewer rounds", now=NOW)
+
+    code, out, _ = run(["evolution", "replay-abandon", "--reason", "the harness host was reclaimed", *where], capsys)
+
+    assert code == 0
+    assert "round 1 attempt 1 ended failed" in out
+    assert "the harness host was reclaimed" in out
+
+    code, out, _ = run(["evolution", "replay-abandon", "--reason", "the harness host was reclaimed", *where], capsys)
+    assert code == 0
+    assert "this run wrote nothing: the same failure was already on record" in out
+
+    with pytest.raises(RuntimeError):
+        replay.start(config, DeadHarness(), source_ref=RELEASE_REF, expectation="fewer rounds", now=NOW)
+
+    code, out, _ = run(["evolution", "replay-withdraw", *where], capsys)
+
+    assert code == 0
+    assert "round 1 attempt 2 given up" in out
+    assert "the position stays allocated" in out
+    assert "stopping it is done there" in out
+
+    code, out, _ = run(["evolution", "replay-withdraw", *where], capsys)
+    assert code == 0
+    assert "nothing outstanding" in out
+
+
+class DeadHarness:
+    """A harness that never answers, which is what leaves a request outstanding:
+    the request is written before the harness is asked anything, so a start that
+    dies here leaves a run that may be going and no record naming it."""
+
+    def start(self, request: object) -> object:
+        raise RuntimeError("the harness host was reclaimed before it answered")
+
+    def poll(self, handle: str) -> object | None:
+        return None
+
+
+def assessing(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
+    """A promotion on the line and the cohort that owes the reading of it.
+
+    The promotion is made by the command under test in the tests above; here it
+    is the state rather than the subject, so the shared cycle makes it — and the
+    second cohort's reports state the promoted revision, which is what places
+    them after the release.
+    """
+
+    line = git_rev(config.repo_root, RELEASE_REF)
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        drafts=("loader-fallback",),
+        at=NOW,
+        reports=[_report(f"b{index}", index, f"2026-07-0{index}-task", line) for index in (1, 2)],
+    )
+    git_follow(config.repo_root, promotion.promotion_revision)
+    write_manifest(
+        config.batches_root,
+        SECOND,
+        [],
+        analysis_task_id=f"2026-08-10-{SECOND}",
+        reports=[
+            _report(f"a{index}", index, f"2026-08-0{index}-task", promotion.promotion_revision) for index in (1, 2)
+        ],
+    )
+    return promotion.promotion_revision
+
+
+def _report(key: str, sequence: int, task_id: str, effective_revision: str) -> dict:
+    """One frozen membership entry, stating the revision its target held.
+
+    Which side of the release a report falls on is read from that revision and
+    nothing else, so a cohort is placed by what this states rather than by when
+    the batch was frozen.
+    """
+
+    return make_manifest_report(
+        key=key, sequence=sequence, task_id=task_id, effective_revision=effective_revision
+    )
+
+
+def test_the_release_reading_and_its_gate_are_one_verb_each(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What the cohort after a promotion owes: a reading of that release, and an
+    answer to the gate the next base freeze waits on. The quantities are the
+    operator's — read off machine-local artifacts nothing here can re-derive —
+    and everything else about the reading is the lineage's own."""
+
+    config = evolution.load_config(lineage_repo)
+    promoted = assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+
+    code, out, _ = run(
+        [
+            "evolution",
+            "assess",
+            "--verdict",
+            assessment.VERDICT_INCONCLUSIVE,
+            "--confidence",
+            assessment.CONFIDENCE_LOW,
+            "--rationale",
+            "no frozen manifest states what kind of work either cohort did",
+            "--metric",
+            "review-rounds:rounds:1.8:1.2:lower",
+            *where,
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert f"reads {promoted[:12]} as {assessment.VERDICT_INCONCLUSIVE}" in out
+    assert "review-rounds" in out
+    assert "the gate is unanswered" in out
+    reading = assessment.read(config, assessment.describe_current(config).batch)
+    assert reading.verdict == assessment.VERDICT_INCONCLUSIVE
+    assert reading.metrics[0].before == 1.8
+
+    code, out, _ = run(
+        ["evolution", "settle", "--settlement", assessment.SETTLEMENT_RETAIN, "--reason", "nothing measured against it", *where],
+        capsys,
+    )
+
+    assert code == 0
+    assert f"settled {assessment.SETTLEMENT_RETAIN}" in out
+    assert "the release stays the line the first experiment of this batch freezes its base on" in out
+    assert git_rev(lineage_repo, RELEASE_REF) == promoted
+
+
+def test_a_rolled_back_settlement_runs_the_reversal_itself(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one place this console offers a single verb where an operator might
+    compose two. `assessment.settle` sequences the reversal itself — the rollback
+    lands before the decision is written, and never after it — so a
+    rollback-then-settle sequence of the CLI's own would be a second ordering of
+    the same two writes."""
+
+    config = evolution.load_config(lineage_repo)
+    promoted = assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    run(
+        [
+            "evolution",
+            "assess",
+            "--verdict",
+            assessment.VERDICT_INCONCLUSIVE,
+            "--confidence",
+            assessment.CONFIDENCE_LOW,
+            "--rationale",
+            "the cohorts place nothing on either side",
+            *where,
+        ],
+        capsys,
+    )
+
+    code, out, _ = run(
+        [
+            "evolution",
+            "settle",
+            "--settlement",
+            assessment.SETTLEMENT_ROLLED_BACK,
+            "--reason",
+            "the release is not worth the risk it carries",
+            *where,
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert f"settled {assessment.SETTLEMENT_ROLLED_BACK}" in out
+    assert "committed by this settlement" in out
+    line = git_rev(lineage_repo, RELEASE_REF)
+    assert line != promoted
+    assert lineage.describe(config).last_promoted.promotion_effective is False
+
+    code, out, _ = run(
+        [
+            "evolution",
+            "settle",
+            "--settlement",
+            assessment.SETTLEMENT_ROLLED_BACK,
+            "--reason",
+            "the release is not worth the risk it carries",
+            *where,
+        ],
+        capsys,
+    )
+    assert code == 0
+    assert "this run wrote nothing: the same answer was already on record" in out
+    assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_the_counterfactual_is_ended_given_up_and_read_from_the_command_line(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The three verbs that act on the pinned run without asking a harness. Each
+    answers a state the harness left: a request it never answered for, a run it
+    stopped reporting, and a completed comparison the reading is revised on.
+
+    The runs themselves are started through the library for `measured`'s reason.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    reading = [
+        "--verdict",
+        assessment.VERDICT_INCONCLUSIVE,
+        "--confidence",
+        assessment.CONFIDENCE_LOW,
+        "--rationale",
+        "the cohorts place nothing on either side",
+    ]
+    run(["evolution", "assess", *reading, *where], capsys)
+
+    with pytest.raises(RuntimeError):
+        assessment.measure(config, DeadHarness(), expectation="the release converges in fewer rounds", now=NOW)
+
+    code, out, _ = run(["evolution", "assess-withdraw", *where], capsys)
+    assert code == 0
+    assert "counterfactual attempt 1 given up" in out
+    assert "the position stays allocated" in out
+
+    code, out, _ = run(["evolution", "assess-withdraw", *where], capsys)
+    assert code == 0
+    assert "nothing outstanding" in out
+
+    assessment.measure(config, FakeHarness(report=None), expectation="the release converges in fewer rounds", now=NOW)
+
+    code, out, _ = run(["evolution", "assess-abandon", "--reason", "the harness lost the handle", *where], capsys)
+    assert code == 0
+    assert "counterfactual attempt 2 ended failed" in out
+    assert "another run answers it, from `assess-measure`" in out
+
+    harness = FakeHarness(report=completed_report())
+    assessment.measure(config, harness, expectation="the release converges in fewer rounds", now=NOW)
+    assessment.conclude(config, harness, now=NOW)
+
+    code, out, _ = run(
+        [
+            "evolution",
+            "assess-resolve",
+            "--verdict",
+            assessment.VERDICT_IMPROVED,
+            "--confidence",
+            assessment.CONFIDENCE_HIGH,
+            "--rationale",
+            "the pinned run measured fewer rounds over one case set",
+            *where,
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert f"reads {git_rev(lineage_repo, RELEASE_REF)[:12]} as {assessment.VERDICT_IMPROVED}" in out
+    assert assessment.read(config, assessment.describe_current(config).batch).verdict == assessment.VERDICT_IMPROVED
+
+
+def test_a_release_verb_refuses_the_reading_another_writer_moved_under(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--expect` reaches this half too, and on the settlement it guards the one
+    operation here that composes another: the check is the first statement inside
+    the single hold the whole settlement — reversal included — runs under."""
+
+    config = evolution.load_config(lineage_repo)
+    assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    stale = token(config)
+
+    run(
+        [
+            "evolution",
+            "assess",
+            "--verdict",
+            assessment.VERDICT_INCONCLUSIVE,
+            "--confidence",
+            assessment.CONFIDENCE_LOW,
+            "--rationale",
+            "the cohorts place nothing on either side",
+            *where,
+        ],
+        capsys,
+    )
+    before = snapshot(lineage_repo)
+
+    code, _, err = run(
+        [
+            "evolution",
+            "settle",
+            "--settlement",
+            assessment.SETTLEMENT_ROLLED_BACK,
+            "--reason",
+            "the release is not worth the risk it carries",
+            "--expect",
+            stale,
+            *where,
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert f"the evolution records moved since {stale} was read" in err
+    assert snapshot(lineage_repo) == before
+    assert git_rev(lineage_repo, RELEASE_REF) == phase.describe(config, now=NOW).last_promotion.revision
+
+
+def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one thing this adapter checks itself: the shape of a `--metric`, which
+    is an argument rather than a policy. An empty side is a cohort that measured
+    nothing — a different fact from zero, and the reason the fields are not
+    simply required — while whether a one-sided quantity may be called better in
+    some direction is the record's own rule, asked where every other reader of it
+    is."""
+
+    config = evolution.load_config(lineage_repo)
+    assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    reading = [
+        "--verdict",
+        assessment.VERDICT_INCONCLUSIVE,
+        "--confidence",
+        assessment.CONFIDENCE_LOW,
+        "--rationale",
+        "the cohorts place nothing on either side",
+    ]
+
+    code, _, err = run(["evolution", "assess", *reading, "--metric", "review-rounds:rounds:1.8:lower", *where], capsys)
+    assert code == 2
+    assert "NAME:UNIT:BEFORE:AFTER:BETTER" in err
+
+    code, _, err = run(
+        ["evolution", "assess", *reading, "--metric", "review-rounds:rounds:some:1.2:lower", *where], capsys
+    )
+    assert code == 2
+    assert "where a measurement holds a number" in err
+    assert assessment.read(config, assessment.describe_current(config).batch) is None
+
+    code, out, _ = run(
+        ["evolution", "assess", *reading, "--metric", "review-rounds:rounds::1.2:neither", *where], capsys
+    )
+    assert code == 0
+    reading_record = assessment.read(config, assessment.describe_current(config).batch)
+    assert reading_record.metrics[0].before is None
+    assert reading_record.metrics[0].after == 1.2
+
+
 def _minimal(verb: str) -> list[str]:
     """The arguments a verb needs to parse — not to run."""
 
     drafts = ["a-draft"] if verb in ("create", "add-tasks", "reject") else []
-    reason = ["--reason", "why"] if verb in ("reject", "revise", "abandon", "supersede", "conclude-no-change") else []
-    return drafts + reason
+    reason = (
+        ["--reason", "why"]
+        if verb
+        in (
+            "reject",
+            "revise",
+            "abandon",
+            "supersede",
+            "conclude-no-change",
+            "promote",
+            "rollback",
+            "replay-abandon",
+            "assess-abandon",
+            "settle",
+        )
+        else []
+    )
+    reading = (
+        ["--verdict", assessment.VERDICT_INCONCLUSIVE, "--confidence", assessment.CONFIDENCE_LOW, "--rationale", "why"]
+        if verb in ("assess", "assess-resolve")
+        else []
+    )
+    settlement = ["--settlement", assessment.SETTLEMENT_RETAIN] if verb == "settle" else []
+    return drafts + reason + reading + settlement

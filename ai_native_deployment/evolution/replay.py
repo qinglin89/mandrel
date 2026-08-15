@@ -42,7 +42,9 @@ what keeps a harness that died from leaving the round unmeasurable behind a run
 nothing will ever conclude; `withdraw` takes back a request the harness never
 answered for. All four take the same single-writer lock as every other evolution
 write, run the same guarded preamble, and publish through this module's own
-parser, so a write cannot produce evidence its own reader refuses.
+parser, so a write cannot produce evidence its own reader refuses. `abandon` and
+`withdraw` take the optional `expect` every operation in this package takes
+(`experiments`: The state a caller read).
 
 **The request is durable before the harness is asked.** A record cannot state a
 run until the harness answers, because the cohort, the evaluator, the
@@ -1184,6 +1186,7 @@ def abandon(
     config: EvolutionConfig,
     *,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> RunConcluded:
     """Record why a run ended when its harness cannot say.
@@ -1219,6 +1222,7 @@ def abandon(
     )
 
     with single_writer_lock(config):
+        guards.require_expected(config, expect)
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "end a replay of")
 
@@ -1271,7 +1275,7 @@ def abandon(
     return RunConcluded(experiment_id=experiment.experiment_id, replay=concluded, recorded=True)
 
 
-def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> RequestWithdrawn:
+def withdraw(config: EvolutionConfig, *, expect: str | None = None, now: datetime | None = None) -> RequestWithdrawn:
     """Take back a request the harness never answered for.
 
     The way out of the window the request exists to cover. A harness that cannot
@@ -1306,6 +1310,7 @@ def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Request
     moment = _moment(now)
 
     with single_writer_lock(config):
+        guards.require_expected(config, expect)
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "withdraw a replay request of")
 

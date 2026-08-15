@@ -1747,6 +1747,7 @@ def promote(
     *,
     reason: str,
     targets: Iterable[str],
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> PromotionResult:
     """Carry the open experiment's replayed candidate onto the source line, and
@@ -1808,6 +1809,7 @@ def promote(
     planned = _planned_targets(config, targets)
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         lineage = settled(config, now=moment)
         current = lineage.current
         if current is None:

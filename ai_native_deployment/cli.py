@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import deploy, lockfile, manifest, registry
 from .evolution import errors as evolution_errors
@@ -138,6 +139,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     _add_expectation_argument(evolution_start)
 
     _add_lineage_commands(evolution_subparsers)
+    _add_release_commands(evolution_subparsers)
     return parser
 
 
@@ -147,9 +149,10 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
     One command per domain operation, named exactly as `status` names it in
     `allowed_actions` — a surface reading that gate has the verb and the object
     id it needs, with nothing to translate. None of them decides anything: which
-    drafts belong together, whether an attempt is worth continuing, and whether a
-    batch changed nothing are human judgements the operator states here and the
-    operation records (invariant 9).
+    drafts belong together, whether an attempt is worth continuing, whether a
+    batch changed nothing, and whether the evidence justifies the source line are
+    human judgements the operator states here and the operation records
+    (invariant 9).
     """
 
     from .evolution import phase
@@ -213,6 +216,138 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_workspace_argument(conclude)
     _add_expectation_argument(conclude)
 
+    promote = subparsers.add_parser(
+        phase.ACTION_PROMOTE, help="carry the replayed candidate onto the source line and end the batch with it"
+    )
+    _add_reason_argument(promote, "this evidence justified putting the candidate on the source line")
+    promote.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a target this promotion is intended for, repeatable; a plan, never a deployment",
+    )
+    _add_workspace_argument(promote)
+    _add_expectation_argument(promote)
+
+
+def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
+    """The verbs about a release: the runs measured against a candidate, the
+    reversal of a promotion, and the cohort's reading of the one before it.
+
+    They act on things the change lineage has already produced — a round's run, a
+    promotion on the line, a frozen cohort's reading — which is why they are
+    grouped apart from the verbs that move that lineage. Judging any of it stays
+    the operator's: these record a verdict, a settlement or a reversal, and none
+    of them derives one.
+    """
+
+    from .evolution import assessment, phase
+
+    replay_abandon = subparsers.add_parser(
+        phase.ACTION_REPLAY_ABANDON, help="record why a replay run ended when its harness cannot say"
+    )
+    _add_reason_argument(replay_abandon, "this run stopped without its harness reporting")
+    _add_workspace_argument(replay_abandon)
+    _add_expectation_argument(replay_abandon)
+
+    replay_withdraw = subparsers.add_parser(
+        phase.ACTION_REPLAY_WITHDRAW, help="give up a replay request the harness never answered for"
+    )
+    _add_workspace_argument(replay_withdraw)
+    _add_expectation_argument(replay_withdraw)
+
+    rollback = subparsers.add_parser(
+        phase.ACTION_ROLLBACK, help="take the latest promotion back off the line it was put on"
+    )
+    _add_reason_argument(rollback, "this promotion is being taken back off the source line")
+    _add_workspace_argument(rollback)
+    _add_expectation_argument(rollback)
+
+    assess = subparsers.add_parser(
+        phase.ACTION_ASSESS, help="record this cohort's reading of the release before it"
+    )
+    _add_reading_arguments(assess, assessment)
+    assess.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        metavar="NAME:UNIT:BEFORE:AFTER:BETTER",
+        help=(
+            "a quantity both cohorts came to, repeatable "
+            f"(e.g. review-rounds:rounds:1.8:1.2:{assessment.BETTER_LOWER}); an empty side is one that cohort does "
+            f"not state, which a quantity called better in some direction may not have — record it "
+            f"{assessment.BETTER_NEITHER!r} instead"
+        ),
+    )
+    _add_workspace_argument(assess)
+    _add_expectation_argument(assess)
+
+    assess_abandon = subparsers.add_parser(
+        phase.ACTION_ASSESS_ABANDON, help="record why the counterfactual run ended when its harness cannot say"
+    )
+    _add_reason_argument(assess_abandon, "this run stopped without its harness reporting")
+    _add_workspace_argument(assess_abandon)
+    _add_expectation_argument(assess_abandon)
+
+    assess_withdraw = subparsers.add_parser(
+        phase.ACTION_ASSESS_WITHDRAW, help="give up a counterfactual request the harness never answered for"
+    )
+    _add_workspace_argument(assess_withdraw)
+    _add_expectation_argument(assess_withdraw)
+
+    assess_resolve = subparsers.add_parser(
+        phase.ACTION_ASSESS_RESOLVE, help="revise the reading on the strength of the completed counterfactual"
+    )
+    _add_reading_arguments(assess_resolve, assessment)
+    _add_workspace_argument(assess_resolve)
+    _add_expectation_argument(assess_resolve)
+
+    settle = subparsers.add_parser(
+        phase.ACTION_SETTLE, help="answer the gate between this release and the next base freeze (invariant 17)"
+    )
+    settle.add_argument(
+        "--settlement",
+        required=True,
+        choices=list(assessment.SETTLEMENTS),
+        help=(
+            f"{assessment.SETTLEMENT_RETAIN}: the release stays the line the next base is frozen on; "
+            f"{assessment.SETTLEMENT_ROLLED_BACK}: it comes back off first, which this verb does itself"
+        ),
+    )
+    _add_reason_argument(settle, "the release was kept or taken back")
+    _add_workspace_argument(settle)
+    _add_expectation_argument(settle)
+
+
+def _add_reading_arguments(parser: argparse.ArgumentParser, assessment) -> None:
+    """What a human states about a release: the verdict, how sure of it, and why.
+
+    The rationale is required for the reason every recorded reason here is: the
+    evidence the judging session had in front of it is machine-local, and this
+    sentence is what a later reader has instead of it. The two vocabularies are
+    the record's own, so a value this build does not know is refused at the
+    command line rather than at the write.
+    """
+
+    parser.add_argument(
+        "--verdict",
+        required=True,
+        choices=list(assessment.VERDICTS),
+        help="what this cohort reads of the release; a directional one has to be supported by the evidence recorded",
+    )
+    parser.add_argument(
+        "--confidence",
+        required=True,
+        choices=list(assessment.CONFIDENCES),
+        help="how strongly the evidence carries that verdict",
+    )
+    parser.add_argument(
+        "--rationale",
+        required=True,
+        help="why the verdict is that verdict (recorded, and required)",
+    )
+
 
 def _add_experiment_argument(parser: argparse.ArgumentParser) -> None:
     """Which attempt the decision is about.
@@ -250,6 +385,10 @@ def _evolution(args: argparse.Namespace) -> int:
 
     if args.evolution_command in _lineage_verbs(phase):
         print(_lineage(config, args))
+        return 0
+
+    if args.evolution_command in _release_verbs(phase):
+        print(_release(config, args))
         return 0
 
     feed = _evolution_feed(config, args.feed_dir)
@@ -296,8 +435,45 @@ def _lineage_verbs(phase) -> frozenset[str]:
             phase.ACTION_ABANDON,
             phase.ACTION_SUPERSEDE,
             phase.ACTION_CONCLUDE_NO_CHANGE,
+            phase.ACTION_PROMOTE,
         }
     )
+
+
+def _release_verbs(phase) -> frozenset[str]:
+    """The verbs about a release: a run measured against a candidate, a
+    promotion taken back off the line, and a cohort's reading of the release
+    before it.
+
+    Named from the same constants for the same reason. Two of the replay verbs
+    are here and two are not — `replay-start` and `replay-conclude` ask a harness,
+    which this console has no way to reach yet.
+    """
+
+    return frozenset(
+        {
+            phase.ACTION_REPLAY_ABANDON,
+            phase.ACTION_REPLAY_WITHDRAW,
+            phase.ACTION_ROLLBACK,
+            phase.ACTION_ASSESS,
+            phase.ACTION_ASSESS_ABANDON,
+            phase.ACTION_ASSESS_WITHDRAW,
+            phase.ACTION_ASSESS_RESOLVE,
+            phase.ACTION_SETTLE,
+        }
+    )
+
+
+def _wired_verbs(phase) -> frozenset[str]:
+    """Every lifecycle verb this CLI dispatches.
+
+    What holds the console together: a command the gate has no verb for is a
+    lifecycle only this surface believes in, so both directions are derived from
+    `phase.ACTION_*` and a surface can pass the action it read from
+    `allowed_actions` straight to the command line.
+    """
+
+    return _lineage_verbs(phase) | _release_verbs(phase)
 
 
 def _lineage(config, args: argparse.Namespace) -> str:
@@ -339,10 +515,121 @@ def _lineage(config, args: argparse.Namespace) -> str:
         return render.format_conclusion(
             experiments.conclude_no_change(config, reason=args.reason, expect=args.expect), config.repo_root
         )
+    if command == phase.ACTION_PROMOTE:
+        return render.format_promotion(
+            experiments.promote(config, reason=args.reason, targets=args.target, expect=args.expect),
+            config.repo_root,
+        )
     # Named above as a lineage verb and not dispatched here, which is a verb
     # added to one list and not the other. Raised rather than fallen through to
-    # the last branch: the last branch ends a batch.
+    # the last branch: the last branch puts a candidate on the source line.
     raise AssertionError(f"{command} is a lineage verb with no dispatch")
+
+
+def _release(config, args: argparse.Namespace) -> str:
+    """Run one release verb and describe what it did.
+
+    Same shape as the lineage half and for the same reasons: the operator's
+    judgement goes to the operation that owns the guards, the lock and the
+    recoverable write order, and what comes back is formatted — including
+    whether this run wrote anything. The settlement is the one that composes
+    another operation, and it does that itself: a `rolled-back` answer runs the
+    reversal under its own lock, so this offers one verb rather than a
+    rollback-then-settle sequence of its own.
+    """
+
+    from .evolution import assessment, phase, render, replay, rollback
+
+    command = args.evolution_command
+    if command == phase.ACTION_REPLAY_ABANDON:
+        return render.format_run_ended(replay.abandon(config, reason=args.reason, expect=args.expect))
+    if command == phase.ACTION_REPLAY_WITHDRAW:
+        return render.format_request_withdrawn(replay.withdraw(config, expect=args.expect))
+    if command == phase.ACTION_ROLLBACK:
+        return render.format_rollback(
+            rollback.rollback(config, reason=args.reason, expect=args.expect), config.repo_root
+        )
+    if command in (phase.ACTION_ASSESS, phase.ACTION_ASSESS_RESOLVE):
+        reading = (
+            assessment.form(
+                config,
+                verdict=args.verdict,
+                confidence=args.confidence,
+                rationale=args.rationale,
+                metrics=_measurements(assessment, args.metric),
+                expect=args.expect,
+            )
+            if command == phase.ACTION_ASSESS
+            else assessment.resolve(
+                config,
+                verdict=args.verdict,
+                confidence=args.confidence,
+                rationale=args.rationale,
+                expect=args.expect,
+            )
+        )
+        return render.format_reading(reading, config.repo_root, resolved=command == phase.ACTION_ASSESS_RESOLVE)
+    if command == phase.ACTION_ASSESS_ABANDON:
+        return render.format_counterfactual_ended(assessment.abandon(config, reason=args.reason, expect=args.expect))
+    if command == phase.ACTION_ASSESS_WITHDRAW:
+        return render.format_counterfactual_withdrawn(assessment.withdraw(config, expect=args.expect))
+    if command == phase.ACTION_SETTLE:
+        return render.format_settlement(
+            assessment.settle(config, settlement=args.settlement, reason=args.reason, expect=args.expect),
+            config.repo_root,
+        )
+    # A release verb named above and not dispatched here, for `_lineage`'s
+    # reason: falling through would answer a release gate that was never asked.
+    raise AssertionError(f"{command} is a release verb with no dispatch")
+
+
+def _measurements(assessment, stated: list[str]) -> list[Any]:
+    """The quantities an operator read off this machine's evaluation artifacts.
+
+    Five fields because that is what the record holds: the metric, its unit, what
+    each cohort came to, and which direction is better. A side left empty is one
+    that cohort does not state — a quantity nothing measured before the release is
+    an ordinary reading, and it is a different fact from zero.
+
+    Only the shape is checked here. Whether `better` is a direction this build
+    knows, and whether the numbers support the verdict argued from them, are the
+    record's own rules and are answered where every other reader of them is
+    (`assessment.parse`).
+    """
+
+    parsed = []
+    for item in stated:
+        fields = item.split(":")
+        if len(fields) != 5:
+            raise evolution_errors.BatchError(
+                f"{item!r} is not a measurement: the shape is NAME:UNIT:BEFORE:AFTER:BETTER, five fields, with an "
+                "empty BEFORE or AFTER where that cohort states none"
+            )
+        metric, unit, before, after, better = (field.strip() for field in fields)
+        parsed.append(
+            assessment.Measurement(
+                metric=metric,
+                unit=unit,
+                before=_quantity(before, item),
+                after=_quantity(after, item),
+                better=better,
+            )
+        )
+    return parsed
+
+
+def _quantity(stated: str, item: str) -> float | None:
+    """One side of a measurement: a number, or nothing at all."""
+
+    if not stated:
+        return None
+    try:
+        return float(stated)
+    except ValueError:
+        raise evolution_errors.BatchError(
+            f"{item!r} states {stated!r} where a measurement holds a number; an empty field is how a cohort that "
+            "measured nothing here is stated"
+        ) from None
 
 
 def _evolution_feed(config, feed_dir: str | None):

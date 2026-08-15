@@ -53,7 +53,7 @@ from .config import ROLLBACK_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError
 from .guards import held
 from .guards import reason as require_reason
-from .guards import require_line_not_checked_out, require_readable_evidence, settled
+from .guards import require_expected, require_line_not_checked_out, require_readable_evidence, settled
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Lineage, require_inverse
 from .manifests import ROLLBACK_SCHEMA_VERSION
@@ -139,6 +139,7 @@ def rollback(
     config: EvolutionConfig,
     *,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> RollbackResult:
     """Reverse the latest promotion on the source line it was put on.
@@ -173,6 +174,10 @@ def rollback(
     """
 
     with single_writer_lock(config):
+        # First inside the lock, and outside `reverse` rather than in it: the
+        # settlement composes that entry point under a hold of its own, having
+        # already checked the token at the top of it (`assessment.settle`).
+        require_expected(config, expect)
         return reverse(config, reason=reason, now=now)
 
 

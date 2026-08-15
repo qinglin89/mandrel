@@ -15,12 +15,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .assessment import SETTLEMENT_RETAIN, Frame, Measurement, Subject
+from .assessment import (
+    SETTLEMENT_RETAIN,
+    Concluded,
+    Formed,
+    Frame,
+    Measurement,
+    Settled,
+    Subject,
+    Withdrawn,
+)
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .experiments import (
     AdmissionResult,
     ConclusionResult,
     DecisionResult,
+    PromotionResult,
     RejectionResult,
     ReviseResult,
     SealResult,
@@ -43,7 +53,8 @@ from .phase import (
     ReleaseReading,
     Rollback,
 )
-from .replay import Evidence, PendingRun, WithdrawnRequest
+from .replay import Evidence, PendingRun, RequestWithdrawn, RunConcluded, WithdrawnRequest
+from .rollback import RollbackResult
 
 FIELD_WIDTH = 13
 HEX_DIGITS = "0123456789abcdef"
@@ -248,6 +259,227 @@ def format_conclusion(result: ConclusionResult, repo_root: Path) -> str:
     if not result.recorded:
         lines.append(_field("", "this run wrote nothing: the same conclusion was already on record"))
     lines.append(_field("", "nothing was fabricated on the way out: no candidate, no merge, no deployment"))
+    return "\n".join(lines)
+
+
+def format_promotion(result: PromotionResult, repo_root: Path) -> str:
+    """A candidate carried onto the source line, and the batch it ended.
+
+    The merge is reported as the unit it is — the tree, and the three commits
+    that identify it — because that is what a promotion put there, rather than a
+    pair of commits somebody may re-merge later into something else. The targets
+    stay labelled as the plan they are, for `_promotion_lines`' reason: nothing
+    here deploys anything.
+    """
+
+    state = "is on" if result.recorded else "was already on"
+    lines = [
+        f"promote: {result.experiment_id} round {result.round_number} {state} {result.merge_input_ref}, "
+        f"ending {result.batch_id}",
+        _field("merge", f"{_short(result.promotion_revision)}, tree {_short(result.tree)}"),
+        _field(
+            "",
+            f"{_short(result.candidate_revision)} onto {result.merge_input_ref} at "
+            f"{_short(result.merge_input_revision)}",
+        ),
+        _field("reason", result.reason),
+        _field("decided", result.decided_at),
+        _field("record", _relative(result.record_path, repo_root)),
+    ]
+    planned = ", ".join(result.planned_targets) if result.planned_targets else "none named"
+    lines.append(_field("planned", f"{planned} — this deployed nothing; `aii-2 deploy` is what reaches a target"))
+    if not result.merged and not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the promotion above is the one on record"))
+    elif not result.merged:
+        # The one interruption this verb has: the merge reached the line and the
+        # records did not, so a second run recognises its own commit and finishes
+        # rather than promoting twice.
+        lines.append(
+            _field("", "the source line already carried this merge — a run that made it and stopped before its records")
+        )
+    return "\n".join(lines)
+
+
+def format_rollback(result: RollbackResult, repo_root: Path) -> str:
+    """A promotion taken back off the line, by the commit that took it.
+
+    Both facts are stated because both are true afterwards: the promotion is
+    still what it was, and the line no longer carries it. Nothing about the
+    experiment or the batch outcome changes here, which is the sentence at the
+    end — an operator reading "rolled back" as "un-promoted" would look for a
+    reopened experiment that does not exist.
+    """
+
+    state = "is off" if result.recorded else "was already off"
+    lines = [
+        f"rollback: {_short(result.promotion_revision)} {state} {result.source_ref} ({result.batch_id})",
+        _field("inverse", f"{_short(result.revision)} from {_short(result.reverted_from)}, tree {_short(result.tree)}"),
+        _field("reason", result.reason),
+        _field("reverted", result.reverted_at),
+        _field("record", _relative(result.record_path, repo_root)),
+    ]
+    if not result.reverted and not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the rollback above is the one on record"))
+    elif not result.reverted:
+        lines.append(
+            _field("", "the line already carried this inverse — a run that committed it and stopped before its record")
+        )
+    lines.append(
+        _field("", f"{result.experiment_id} stays promoted and the batch stays concluded — history is not edited")
+    )
+    return "\n".join(lines)
+
+
+def format_run_ended(result: RunConcluded) -> str:
+    """A replay run recorded as failed because its harness could not say.
+
+    What it reports is a *run* ending, not a round: the candidate is untouched
+    and the answer to a failed run is another attempt against the same pinned
+    integration.
+    """
+
+    replay = result.replay
+    state = "ended" if result.recorded else "had already ended"
+    detail = replay.result.detail if replay.result is not None else ""
+    lines = [
+        f"replay-abandon: {result.experiment_id} round {replay.round_number} attempt {replay.attempt} {state} failed",
+        _field("reason", detail),
+        _field("candidate", _short(replay.integration.candidate_revision)),
+    ]
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same failure was already on record"))
+    lines.append(_field("", "the round is unmeasured again — another attempt answers it, from `replay-start`"))
+    return "\n".join(lines)
+
+
+def format_request_withdrawn(result: RequestWithdrawn) -> str:
+    """A replay request given up before it ever became a run.
+
+    The position it held is named because the harness may still be running
+    something under it: this controller will never hear about that run, and
+    stopping it is done at the harness.
+    """
+
+    pending = result.pending
+    if pending is None or not result.withdrawn:
+        return "\n".join(
+            [
+                f"replay-withdraw: nothing outstanding against {result.experiment_id}",
+                _field("", "this run wrote nothing: no request stands, which is also what its redo reports"),
+            ]
+        )
+    return "\n".join(
+        [
+            f"replay-withdraw: {result.experiment_id} round {pending.round_number} attempt {pending.attempt} "
+            "given up",
+            _field("requested", pending.requested_at),
+            _field("pinned", f"{_short(pending.integration.candidate_revision)}, tree {_short(pending.integration.tree)}"),
+            _field("", "the position stays allocated — the next request takes the one after it"),
+            _field("", "a run may still be going at the harness under that key; stopping it is done there"),
+        ]
+    )
+
+
+def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
+    """This cohort's reading of the release before it, recorded or revised.
+
+    One formatter for both because they record one thing — the verdict this
+    batch holds about that release — and the difference is what it was read
+    from: the two cohorts, or the counterfactual that answered them.
+    """
+
+    reading = result.assessment
+    verb = "assess-resolve" if resolved else "assess"
+    state = "reads" if result.recorded else "already read"
+    lines = [
+        f"{verb}: {result.batch_id} {state} {_short(reading.subject.revision)} as "
+        f"{reading.verdict} ({reading.confidence} confidence)",
+        _field("release", f"{reading.subject.batch_id} ({reading.subject.experiment_id})"),
+        _field("cohorts", f"{reading.before_task_count} task(s) before, {reading.after_task_count} after"),
+        _field("rationale", reading.rationale),
+        _field("record", _relative(result.record_path, repo_root)),
+    ]
+    for index, measurement in enumerate(reading.metrics):
+        lines.append(_field("metrics" if index == 0 else "", _metric(measurement)))
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same reading was already on record"))
+    if not reading.settled:
+        lines.append(_field("", "the gate is unanswered — `settle` is what the next base freeze waits on"))
+    return "\n".join(lines)
+
+
+def format_counterfactual_ended(result: Concluded) -> str:
+    """The pinned counterfactual recorded as failed because its harness could not
+    say. Another `assess-measure` answers it, at the position after this one."""
+
+    run = result.run
+    state = "ended" if result.recorded else "had already ended"
+    detail = run.result.detail if run.result is not None else ""
+    lines = [
+        f"assess-abandon: {result.batch_id} counterfactual attempt {run.position.attempt} {state} failed",
+        _field("reason", detail),
+        _field("pinned", f"{_short(run.integration.base_revision)} against {_short(run.integration.candidate_revision)}"),
+    ]
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same failure was already on record"))
+    lines.append(_field("", "the release is unmeasured again — another run answers it, from `assess-measure`"))
+    return "\n".join(lines)
+
+
+def format_counterfactual_withdrawn(result: Withdrawn) -> str:
+    """A counterfactual request given up before it ever became a run."""
+
+    request = result.request
+    if request is None or not result.withdrawn:
+        return "\n".join(
+            [
+                f"assess-withdraw: nothing outstanding against {result.batch_id}",
+                _field("", "this run wrote nothing: no request stands, which is also what its redo reports"),
+            ]
+        )
+    return "\n".join(
+        [
+            f"assess-withdraw: {result.batch_id} counterfactual attempt {request.position.attempt} given up",
+            _field("requested", request.requested_at),
+            _field(
+                "pinned",
+                f"{_short(request.integration.base_revision)} against "
+                f"{_short(request.integration.candidate_revision)}",
+            ),
+            _field("", "the position stays allocated — the next request takes the one after it"),
+            _field("", "a run may still be going at the harness under that key; stopping it is done there"),
+        ]
+    )
+
+
+def format_settlement(result: Settled, repo_root: Path) -> str:
+    """The release gate answered, and what answering it did to the source line.
+
+    A `rolled-back` settlement performs the reversal itself, so the commit it
+    made is reported here rather than left for the operator to run separately —
+    and a settlement that adopted a reversal already on the line says so, since
+    nothing was committed by this run.
+    """
+
+    decision = result.decision
+    state = "settled" if result.recorded else "was already settled"
+    lines = [
+        f"settle: {result.batch_id} {state} {decision.settlement} for "
+        f"{_short(result.assessment.subject.revision)}",
+        _field("reason", decision.reason),
+        _field("decided", decision.decided_at),
+        _field("record", _relative(result.record_path, repo_root)),
+    ]
+    if decision.settlement == SETTLEMENT_RETAIN:
+        lines.append(_field("", "the release stays the line the first experiment of this batch freezes its base on"))
+    elif result.reversal is not None:
+        lines.append(_field("inverse", f"{_short(result.reversal.revision)} — committed by this settlement"))
+    elif decision.rollback_revision is not None:
+        lines.append(
+            _field("inverse", f"{_short(decision.rollback_revision)} — already on the line when the gate answered")
+        )
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same answer was already on record"))
     return "\n".join(lines)
 
 
