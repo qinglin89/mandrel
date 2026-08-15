@@ -431,6 +431,326 @@ def redone_conclusion(lineage: Lineage, *, reason: str | None = None) -> BatchLi
     return concluded[-1] if concluded else None
 
 
+# --- what a fresh run refuses -------------------------------------------------
+#
+# The other half of the same arrangement: each condition an operation here checks
+# before it writes, stated once as the refusal it would give, and asked both by
+# that operation and by the console's gate (`phase.allowed_actions`). Two
+# statements of one rule is how a gate comes to refuse a verb the operation
+# allows, or offer one it does not.
+#
+# Every one of these answers about state alone — the records as they now stand.
+# What belongs to the moment of the write stays with the operation: a working
+# tree sitting on the ref, an admitted task copy's identity, whatever Git answers
+# under the lock, and any argument the verb is given.
+
+
+def prepared_promotion_refusal(experiment: Experiment) -> str | None:
+    """Why an experiment with a promotion in flight is not moved out from under it.
+
+    The one place this controller can create the split it exists to prevent. A
+    prepared promotion may already be on the source line with only its records
+    missing; ending the attempt retires the record that says so, and opening the
+    next round leaves the prepared merge naming a round that is no longer the
+    last — which is a promotion nothing can afterwards record. Either way the
+    canonical line is left carrying a merge no reading explains.
+
+    Deliberately not the boundary accepted for a replay run in flight. That one
+    leaves a record nobody can conclude, which is honest and costs an unanswered
+    question; this one leaves another repository's release line describing
+    something that never happened.
+    """
+
+    prepared = experiment.promotion
+    if prepared is None:
+        return None
+    return (
+        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto "
+        f"{prepared.merge_input_ref}; moving on now would retire the only record that the line may already be "
+        "carrying it — promote finishes that promotion, or discards it once the line proves it never arrived, "
+        "and this is available afterwards"
+    )
+
+
+def second_attempt_refusal(current: BatchLineage, experiment: Experiment) -> str:
+    """Why a grouped admission is not a second attempt over an open one.
+
+    Names what is open rather than what was asked for, since the open attempt is
+    what has to be dealt with either way (invariant 14).
+    """
+
+    last = experiment.last_round
+    state = "open" if experiment.open_round is not None else "candidate-ready"
+    return (
+        f"{current.batch_id} already has an open experiment ({experiment.experiment_id}, round {last.number} "
+        f"{state}, drafts {sorted(task.draft_id for task in last.tasks)}); invariant 14 allows one at a time — "
+        "admit further drafts into its open round, or end it with a decision, which keeps it as evidence and "
+        "frees the batch for an alternative"
+    )
+
+
+def admission_refusal(current: BatchLineage) -> str | None:
+    """Why there is no attempt to admit further drafts into.
+
+    Its own sentence rather than the shared one, because what it points at is the
+    verb that would create the attempt rather than the decision that ended the
+    last.
+    """
+
+    return None if current.open_experiment is not None else _no_attempt_to_admit_into(current)
+
+
+def _no_attempt_to_admit_into(current: BatchLineage) -> str:
+    return (
+        f"{current.batch_id} has no open experiment to admit into; a grouped admission creates one from the "
+        "drafts it selects, and every experiment of this batch starts from the base its first one froze"
+    )
+
+
+def open_round_refusal(experiment: Experiment) -> str | None:
+    """Why a candidate-ready round takes no further work (invariant 16)."""
+
+    return None if experiment.open_round is not None else _candidate_ready(experiment)
+
+
+def _candidate_ready(experiment: Experiment) -> str:
+    last = experiment.last_round
+    return (
+        f"round {last.number} of {experiment.experiment_id} is candidate-ready at "
+        f"{(last.candidate_revision or '')[:12]}; its evidence names that pinned revision, so further work "
+        "opens the next round rather than changing what was already measured (invariant 16)"
+    )
+
+
+def sealable_refusal(experiment: Experiment) -> str | None:
+    """Why a round is not one to pin a candidate from.
+
+    Two states, and neither is the one this verb's redo recognises: a round whose
+    candidate is already pinned is reported back rather than refused
+    (`redone_seal`), and what is left is a round that has not opened at all or
+    one that has admitted nothing.
+    """
+
+    round_ = experiment.open_round
+    if round_ is None:
+        last = experiment.last_round
+        return (
+            f"round {last.number} of {experiment.experiment_id} is already sealed at "
+            f"{(last.candidate_revision or '')[:12]}"
+        )
+    if round_.tasks:
+        return None
+    return (
+        f"round {round_.number} of {experiment.experiment_id} has admitted nothing; a round is the task "
+        "set admitted into it and the candidate that set produced, so sealing an empty one would pin a "
+        "revision pass no proposal accounts for — admit the drafts this round needs, or end the attempt "
+        "with a decision"
+    )
+
+
+def revisable_refusal(experiment: Experiment) -> str | None:
+    """Why the next round is not opened over a round that is still open.
+
+    A round nothing has been admitted into is this verb's own redo and is not
+    refused here (`redone_revision`); the operation tells the two apart by the
+    reason it is given, which is an argument rather than a state.
+    """
+
+    last = experiment.last_round
+    if last.seal is not None or redone_revision(experiment) is not None:
+        return None
+    return _round_still_open(experiment)
+
+
+def _round_still_open(experiment: Experiment) -> str:
+    last = experiment.last_round
+    return (
+        f"round {last.number} of {experiment.experiment_id} is still open; a revision appends to a round whose "
+        "candidate is already pinned, so seal this one first — the previous round's evidence is what a revision "
+        "makes stale, and a round nothing measured leaves the next one revising nothing (invariant 16)"
+    )
+
+
+def gate_refusal(current: BatchLineage, action: str) -> str | None:
+    """Why a batch does not end while a proposal is still waiting at its gate.
+
+    The gate belongs to the batch, so an outcome recorded over a draft nobody
+    decided leaves that proposal at a gate that no longer exists: this batch's
+    own analysis said a change was warranted, and the answer is now unreachable.
+    Both ways of giving one are terminal and either is an answer — admit it into
+    an attempt, or decline it.
+    """
+
+    if not current.gate.waiting:
+        return None
+    return (
+        f"{current.batch_id} still has draft(s) {list(current.gate.waiting)} waiting at its admission gate; "
+        f"{action} ends the batch and the gate with it, leaving a proposal its own analysis made with nobody "
+        "left to decide it — admit them or decline them, both of which are terminal"
+    )
+
+
+def conclusion_refusal(current: BatchLineage) -> str | None:
+    """Why a batch cannot conclude `no-change`.
+
+    Three different ways it can be, and each of them contradicts the conclusion
+    rather than merely preceding it:
+
+    - an open experiment is an attempt at a change, and an outcome is recorded
+      after the last attempt ends, never over one that is running;
+    - a promoted attempt says the source line moved, which is the same
+      contradiction the reader refuses from the other side — that batch
+      concluded by promoting, and the record has to say so;
+    - a draft still waiting is a proposal the analysis made and nobody decided,
+      so "the evidence justified no change" is a claim this batch's own gate
+      does not support.
+    """
+
+    if current.open_experiment is not None:
+        return (
+            f"{current.batch_id} still has an open experiment ({current.open_experiment.experiment_id}); a "
+            "batch's outcome is recorded after its last attempt ends, so abandon or supersede that one first — "
+            "an abandoned attempt stays in the record as the evidence it is"
+        )
+    promoted = [
+        experiment.experiment_id
+        for experiment in current.experiments
+        if experiment.decision is not None and experiment.decision.outcome == DECISION_PROMOTED
+    ]
+    if promoted:
+        return (
+            f"{current.batch_id} cannot conclude {OUTCOME_NO_CHANGE!r}: {promoted} record a promotion; a batch "
+            "whose candidate reached the source line concluded by promoting it, and the outcome names which "
+            "attempt it was and the revision that carries it"
+        )
+    return gate_refusal(current, "concluding that the evidence justified no change")
+
+
+def in_flight_refusal(experiment: Experiment, history: History) -> str | None:
+    """Why nothing is promoted while something is still being measured against it.
+
+    A promotion is terminal for the experiment, and that is what makes this more
+    than tidiness: afterwards there is no open experiment, so nothing can
+    conclude a run, end one, or withdraw a request against it — the harness goes
+    on with work no operation here can ever answer for. Every other terminal
+    decision has the same boundary and keeps it, because abandoning or
+    superseding is what an operator reaches for when something has gone wrong.
+    This one is reached when everything went right, and the run that is going or
+    the request that is outstanding is one command from being settled.
+
+    Promotable evidence says nothing about either: a second run started beside a
+    result that is still exact leaves it promotable by design, and the reader
+    deliberately reports no outstanding request in that reading. So the question
+    is asked of the record here rather than read off the evidence.
+    """
+
+    pending = history.pending
+    if pending is not None:
+        return (
+            f"{experiment.experiment_id} has the replay request for round {pending.round_number} attempt "
+            f"{pending.attempt} outstanding, so a run may be going that this record does not name yet; a "
+            "promotion ends the experiment and with it every operation that could answer for that run — start "
+            "the replay again to record what the harness began, or withdraw the request"
+        )
+    going = history.replays[-1] if history.replays else None
+    if going is None or not going.running:
+        return None
+    return (
+        f"round {going.round_number} attempt {going.attempt} of {experiment.experiment_id} is still running "
+        f"under {going.harness.id} handle {going.harness.handle!r}; a promotion ends the experiment, and "
+        "nothing could afterwards conclude that run or record why it stopped — conclude it, or end it, first"
+    )
+
+
+def promotable_refusal(experiment: Experiment, evidence: Evidence | None) -> str | None:
+    """Why the round's evidence does not describe the tree a promotion would carry.
+
+    The whole gate, and it is the reader's answer rather than a second opinion
+    formed here: `promotable` is one completed run of this round whose merge
+    input this checkout confirms has not moved. What it refuses it refuses in the
+    words the reader already has for it, so an operator meets one explanation of
+    stale evidence whether they asked `status` or asked for a promotion.
+
+    Evidence is derived for an open experiment's current round, so the operation
+    never asks this without one; None is a reading's own absence — no experiment
+    is open — and answers it as the thing a promotion is missing.
+    """
+
+    if evidence is None:
+        return (
+            f"nothing has replayed a round of {experiment.experiment_id}; what reaches the source line is a "
+            "tree a replay measured and still describes (invariant 10)"
+        )
+    if evidence.promotable:
+        return None
+    notes = list(evidence.drift) + list(evidence.unverified)
+    return (
+        f"round {evidence.round_number} of {experiment.experiment_id} is {evidence.state} and cannot be "
+        f"promoted: {notes or ['nothing has measured it']}; what reaches the source line is a tree a replay "
+        "measured and still describes (invariant 10), so replay this round as it now stands and promote that"
+    )
+
+
+def unfinished_promotion_refusal(experiment: Experiment) -> str | None:
+    """Why a promotion interrupted before its batch outcome cannot be finished.
+
+    One state and one only: a record from a build that kept no prepared merge
+    (`experiment.json` v1). The outcome that ends the batch states the merge unit
+    and the targets it was planned for, and neither was ever written down.
+    """
+
+    return None if experiment.promotion is not None else _no_merge_unit(experiment)
+
+
+def _no_merge_unit(experiment: Experiment) -> str:
+    decision = experiment.decision
+    promoted = (decision.promotion_revision or "") if decision is not None else ""
+    return (
+        f"{experiment.experiment_id} was promoted as {promoted[:12]} by a build that "
+        "recorded no merge unit on the experiment, and the outcome that would end this batch states the "
+        "merge unit and the targets that promotion was planned for; the plan was never recorded, so this "
+        "batch cannot be concluded from what is on record rather than from what a later run supposes"
+    )
+
+
+def base_release_refusal(current: BatchLineage, owed: assessment.Obligation | None) -> str | None:
+    """Why a first base is not frozen before the release behind it is judged.
+
+    Invariant 17. The reading it waits on is the *owning* cohort's, which is the
+    first batch frozen after that promotion and not necessarily this one; the
+    caller resolves that obligation (`assessment.obligation`) and hands it here.
+
+    Only where a base is actually being frozen. A later experiment of the same
+    batch takes the frozen commit rather than resolving one, so asking again
+    there would gate work on a decision that can no longer change what it starts
+    from — and a batch with no promotion anywhere before it is not waiting on
+    anything.
+    """
+
+    if current.base_revision is not None or owed is None:
+        return None
+    subject = owed.frame.subject
+    owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the cohort frozen after it, "
+    reading = owed.reading
+    if reading is None:
+        return (
+            f"{owner or current.batch_id + ' '}has recorded no reading of the {subject.batch_id} release "
+            f"({subject.revision[:12]}), so {current.batch_id} has nothing to freeze a base against; that "
+            "cohort's reports are the first evidence of what the release did, and the commit every experiment "
+            "of this batch starts from is either the line carrying it or the line with it taken back out "
+            "(invariant 17)"
+        )
+    if reading.settled:
+        return None
+    return (
+        f"{owner or current.batch_id + ' '}reads the {subject.batch_id} release {reading.verdict!r} and nobody "
+        f"has settled it, so {current.batch_id}'s base cannot be frozen yet; the settlement is what says whether "
+        f"the release stays on the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} "
+        f"keeps it, {assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is "
+        "frozen afterwards (invariant 17)"
+    )
+
+
 def create(
     config: EvolutionConfig,
     draft_ids: Iterable[str],
@@ -545,10 +865,7 @@ def add_tasks(
 
         experiment = current.open_experiment
         if experiment is None:
-            raise BatchError(
-                f"{batch.batch_id} has no open experiment to admit into; a grouped admission creates one from the "
-                "drafts it selects, and every experiment of this batch starts from the base its first one froze"
-            )
+            raise BatchError(_no_attempt_to_admit_into(current))
         round_ = _open_round(experiment)
         require_consistent_ref(current)
         admitted = {task.draft_id: task for task in round_.tasks}
@@ -748,13 +1065,12 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
                 sealed_at=pinned.seal.sealed_at,
                 sealed=False,
             )
-        if not round_.tasks:
-            raise BatchError(
-                f"round {round_.number} of {experiment.experiment_id} has admitted nothing; a round is the task "
-                "set admitted into it and the candidate that set produced, so sealing an empty one would pin a "
-                "revision pass no proposal accounts for — admit the drafts this round needs, or end the attempt "
-                "with a decision"
-            )
+        # Every remaining state of the round, in the words the gate reads off the
+        # same predicate; the already-sealed one it also answers for was returned
+        # just above as this operation's own redo.
+        refusal = sealable_refusal(experiment)
+        if refusal is not None:
+            raise BatchError(refusal)
 
         stamp = format_rfc3339(moment)
         candidate = _pinnable_tip(experiment, current.ref)
@@ -892,11 +1208,7 @@ def _redo_revise(experiment: Experiment, last: Round, reason: str) -> ReviseResu
             f"is opened once, so redo the same revision to finish an interrupted one — {reason!r} would be a "
             "second reason for a round that already exists, and what goes into that round is an admission"
         )
-    raise BatchError(
-        f"round {last.number} of {experiment.experiment_id} is still open; a revision appends to a round whose "
-        "candidate is already pinned, so seal this one first — the previous round's evidence is what a revision "
-        "makes stale, and a round nothing measured leaves the next one revising nothing (invariant 16)"
-    )
+    raise BatchError(_round_still_open(experiment))
 
 
 # --- terminal decisions ------------------------------------------------------
@@ -1056,30 +1368,12 @@ def _end_attempt(
 
 
 def _require_no_prepared_promotion(experiment: Experiment) -> None:
-    """An experiment with a promotion in flight is not moved out from under it.
+    """An experiment with a promotion in flight is not moved out from under it
+    (`prepared_promotion_refusal`)."""
 
-    The one place this controller can create the split it exists to prevent. A
-    prepared promotion may already be on the source line with only its records
-    missing; ending the attempt retires the record that says so, and opening the
-    next round leaves the prepared merge naming a round that is no longer the
-    last — which is a promotion nothing can afterwards record. Either way the
-    canonical line is left carrying a merge no reading explains.
-
-    Deliberately not the boundary accepted for a replay run in flight. That one
-    leaves a record nobody can conclude, which is honest and costs an unanswered
-    question; this one leaves another repository's release line describing
-    something that never happened.
-    """
-
-    prepared = experiment.promotion
-    if prepared is None:
-        return
-    raise BatchError(
-        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto "
-        f"{prepared.merge_input_ref}; moving on now would retire the only record that the line may already be "
-        "carrying it — promote finishes that promotion, or discards it once the line proves it never arrived, "
-        "and this is available afterwards"
-    )
+    refusal = prepared_promotion_refusal(experiment)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _named_attempt(current: BatchLineage, experiment_id: str | None) -> Experiment | None:
@@ -1615,58 +1909,21 @@ def _promotable_integration(
 
 
 def _require_nothing_in_flight(experiment: Experiment, history: History) -> None:
-    """Nothing is being measured against this experiment when it is promoted.
+    """Nothing is being measured against this experiment when it is promoted
+    (`in_flight_refusal`)."""
 
-    A promotion is terminal for the experiment, and that is what makes this more
-    than tidiness: afterwards there is no open experiment, so nothing can
-    conclude a run, end one, or withdraw a request against it — the harness goes
-    on with work no operation here can ever answer for. Every other terminal
-    decision has the same boundary and keeps it, because abandoning or
-    superseding is what an operator reaches for when something has gone wrong.
-    This one is reached when everything went right, and the run that is going or
-    the request that is outstanding is one command from being settled.
-
-    Promotable evidence says nothing about either: a second run started beside a
-    result that is still exact leaves it promotable by design, and the reader
-    deliberately reports no outstanding request in that reading. So the question
-    is asked of the record here rather than read off the evidence.
-    """
-
-    pending = history.pending
-    if pending is not None:
-        raise BatchError(
-            f"{experiment.experiment_id} has the replay request for round {pending.round_number} attempt "
-            f"{pending.attempt} outstanding, so a run may be going that this record does not name yet; a "
-            "promotion ends the experiment and with it every operation that could answer for that run — start "
-            "the replay again to record what the harness began, or withdraw the request"
-        )
-    going = history.replays[-1] if history.replays else None
-    if going is not None and going.running:
-        raise BatchError(
-            f"round {going.round_number} attempt {going.attempt} of {experiment.experiment_id} is still running "
-            f"under {going.harness.id} handle {going.harness.handle!r}; a promotion ends the experiment, and "
-            "nothing could afterwards conclude that run or record why it stopped — conclude it, or end it, first"
-        )
+    refusal = in_flight_refusal(experiment, history)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _require_promotable(experiment: Experiment, evidence: Evidence) -> None:
-    """The round's evidence describes the tree this promotion would carry.
+    """The round's evidence describes the tree this promotion would carry
+    (`promotable_refusal`)."""
 
-    The whole gate, and it is the reader's answer rather than a second opinion
-    formed here: `promotable` is one completed run of this round whose merge
-    input this checkout confirms has not moved. What it refuses it refuses in the
-    words the reader already has for it, so an operator meets one explanation of
-    stale evidence whether they asked `status` or asked for a promotion.
-    """
-
-    if evidence.promotable:
-        return
-    notes = list(evidence.drift) + list(evidence.unverified)
-    raise BatchError(
-        f"round {evidence.round_number} of {experiment.experiment_id} is {evidence.state} and cannot be "
-        f"promoted: {notes or ['nothing has measured it']}; what reaches the source line is a tree a replay "
-        "measured and still describes (invariant 10), so replay this round as it now stands and promote that"
-    )
+    refusal = promotable_refusal(experiment, evidence)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, integration: Integration) -> None:
@@ -2002,12 +2259,7 @@ def _finish_promotion(
         # original — the one thing the outcome is trusted to state about intent
         # — so the state is reported instead of guessed at (design: fail closed
         # on missing provenance a decision needs).
-        raise BatchError(
-            f"{last.experiment_id} was promoted as {(decision.promotion_revision or '')[:12]} by a build that "
-            "recorded no merge unit on the experiment, and the outcome that would end this batch states the "
-            "merge unit and the targets that promotion was planned for; the plan was never recorded, so this "
-            "batch cannot be concluded from what is on record rather than from what a later run supposes"
-        )
+        raise BatchError(_no_merge_unit(last))
     if decision.reason != reason:
         raise BatchError(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
@@ -2201,59 +2453,20 @@ def _write_outcome(config: EvolutionConfig, current: BatchLineage, record: Mappi
 
 
 def _require_gate_settled(current: BatchLineage, action: str) -> None:
-    """No proposal is still waiting when a batch ends.
+    """No proposal is still waiting when a batch ends (`gate_refusal`)."""
 
-    The gate belongs to the batch, so an outcome recorded over a draft nobody
-    decided leaves that proposal at a gate that no longer exists: this batch's
-    own analysis said a change was warranted, and the answer is now unreachable.
-    Both ways of giving one are terminal and either is an answer — admit it into
-    an attempt, or decline it.
-    """
-
-    if not current.gate.waiting:
-        return
-    raise BatchError(
-        f"{current.batch_id} still has draft(s) {list(current.gate.waiting)} waiting at its admission gate; "
-        f"{action} ends the batch and the gate with it, leaving a proposal its own analysis made with nobody "
-        "left to decide it — admit them or decline them, both of which are terminal"
-    )
+    refusal = gate_refusal(current, action)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _require_nothing_outstanding(current: BatchLineage) -> None:
-    """A batch concludes `no-change` only when nothing about it is still open.
+    """A batch concludes `no-change` only when nothing about it is still open
+    (`conclusion_refusal`)."""
 
-    Three different ways it can be, and each of them contradicts the conclusion
-    rather than merely preceding it:
-
-    - an open experiment is an attempt at a change, and an outcome is recorded
-      after the last attempt ends, never over one that is running;
-    - a promoted attempt says the source line moved, which is the same
-      contradiction the reader refuses from the other side — that batch
-      concluded by promoting, and the record has to say so;
-    - a draft still waiting is a proposal the analysis made and nobody decided,
-      so "the evidence justified no change" is a claim this batch's own gate
-      does not support. Admit it or decline it; both are terminal, and either
-      one is an answer.
-    """
-
-    if current.open_experiment is not None:
-        raise BatchError(
-            f"{current.batch_id} still has an open experiment ({current.open_experiment.experiment_id}); a "
-            "batch's outcome is recorded after its last attempt ends, so abandon or supersede that one first — "
-            "an abandoned attempt stays in the record as the evidence it is"
-        )
-    promoted = [
-        experiment.experiment_id
-        for experiment in current.experiments
-        if experiment.decision is not None and experiment.decision.outcome == DECISION_PROMOTED
-    ]
-    if promoted:
-        raise BatchError(
-            f"{current.batch_id} cannot conclude {OUTCOME_NO_CHANGE!r}: {promoted} record a promotion; a batch "
-            "whose candidate reached the source line concluded by promoting it, and the outcome names which "
-            "attempt it was and the revision that carries it"
-        )
-    _require_gate_settled(current, "concluding that the evidence justified no change")
+    refusal = conclusion_refusal(current)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
@@ -2878,28 +3091,10 @@ def _require_release_settled(
     if current.base_revision is not None:
         return None
     owed = assessment.obligation(config, current.batch, lineage=known)
-    if owed is None:
-        return None
-    subject = owed.frame.subject
-    owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the cohort frozen after it, "
-    reading = owed.reading
-    if reading is None:
-        raise BatchError(
-            f"{owner or current.batch_id + ' '}has recorded no reading of the {subject.batch_id} release "
-            f"({subject.revision[:12]}), so {current.batch_id} has nothing to freeze a base against; that "
-            "cohort's reports are the first evidence of what the release did, and the commit every experiment "
-            "of this batch starts from is either the line carrying it or the line with it taken back out "
-            "(invariant 17)"
-        )
-    if reading.settled:
-        return owed
-    raise BatchError(
-        f"{owner or current.batch_id + ' '}reads the {subject.batch_id} release {reading.verdict!r} and nobody "
-        f"has settled it, so {current.batch_id}'s base cannot be frozen yet; the settlement is what says whether "
-        f"the release stays on the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} "
-        f"keeps it, {assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is "
-        "frozen afterwards (invariant 17)"
-    )
+    refusal = base_release_refusal(current, owed)
+    if refusal is not None:
+        raise BatchError(refusal)
+    return owed
 
 
 def _require_settled_line(
@@ -3195,14 +3390,7 @@ def _redo_create(
     if round_ is not None and set(admitted) == requested:
         return _finish(config, current, experiment, round_, tuple(admitted[key] for key in sorted(admitted)))
 
-    last = experiment.last_round
-    state = "open" if experiment.open_round is not None else "candidate-ready"
-    raise BatchError(
-        f"{current.batch_id} already has an open experiment ({experiment.experiment_id}, round {last.number} "
-        f"{state}, drafts {sorted(task.draft_id for task in last.tasks)}); invariant 14 allows one at a time — "
-        "admit further drafts into its open round, or end it with a decision, which keeps it as evidence and "
-        "frees the batch for an alternative"
-    )
+    raise BatchError(second_attempt_refusal(current, experiment))
 
 
 def _finish(
@@ -3413,12 +3601,7 @@ def _admitted(draft: _Draft, *, admitted_at: str) -> AdmittedTask:
 def _open_round(experiment: Experiment) -> Round:
     round_ = experiment.open_round
     if round_ is None:
-        last = experiment.last_round
-        raise BatchError(
-            f"round {last.number} of {experiment.experiment_id} is candidate-ready at "
-            f"{(last.candidate_revision or '')[:12]}; its evidence names that pinned revision, so further work "
-            "opens the next round rather than changing what was already measured (invariant 16)"
-        )
+        raise BatchError(_candidate_ready(experiment))
     return round_
 
 

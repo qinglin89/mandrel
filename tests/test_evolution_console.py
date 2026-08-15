@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from evolution_fixtures import (
@@ -657,12 +658,20 @@ def test_every_verb_is_named_and_the_refused_ones_carry_a_reason(
         "supersede",
         "create",
         "add-tasks",
+        # Never a refusal: with no request outstanding the operation reports that
+        # and writes nothing, which is also how one interrupted before its answer
+        # is finished.
+        "replay-withdraw",
     }
     assert all(item["reason"] for item in named.values() if not item["allowed"])
     assert all(item["reason"] is None for item in named.values() if item["allowed"])
     # Which of the allowed verbs are the fresh operation and which are its redo,
     # so a surface does not offer the repair as though it were work outstanding.
-    assert {name for name, item in named.items() if item["recovers"]} == {"create", "add-tasks"}
+    assert {name for name, item in named.items() if item["recovers"]} == {
+        "create",
+        "add-tasks",
+        "replay-withdraw",
+    }
     assert named["abandon"]["recovers"] is None
     # The id a decision is given, which is the point of the object: a console
     # holding it already has the value `abandon --experiment-id` takes.
@@ -724,7 +733,7 @@ def test_a_supersession_owing_its_successor_accepts_only_its_own_redo(
     named = verbs(config)
     assert {name for name, item in named.items() if item["allowed"]} == {"supersede"}
     assert named["supersede"]["object"] == {"type": "experiment", "id": f"{FIRST}-exp-01"}
-    assert "which was never created" in named["abandon"]["reason"]
+    assert "which does not exist" in named["abandon"]["reason"]
 
 
 def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
@@ -759,7 +768,9 @@ def test_a_first_base_freeze_names_the_settlement_it_waits_on(
 
     named = verbs(config)
     assert not named["create"]["allowed"]
-    assert "nothing has read" in named["create"]["reason"]
+    assert "recorded no reading" in named["create"]["reason"]
+    # Which line the base is expected on, said here rather than met at the freeze.
+    assert "the line with it taken back out" in named["create"]["reason"]
     assert "invariant 17" in named["create"]["reason"]
     # Declining a draft is not what the settlement gates — only the base is.
     assert named["reject"]["allowed"] is True
@@ -965,6 +976,163 @@ def test_a_settled_release_offers_the_answer_that_settled_it(
         now=NOW,
     )
     assert formed_again.recorded is False
+
+
+# --- one statement of every refusal ------------------------------------------
+#
+# The gate reads the owning modules' own predicates rather than restating what
+# they check (`guards.stage_refusal` and the preamble beside it,
+# `experiments.sealable_refusal` and its neighbours, `replay.conclude_refusal`,
+# `assessment.settleable_refusal`, …). These ask the gate and then run the very
+# operation it was answering for, and hold the two answers to being the same
+# sentence — a rule written down twice is a gate that comes to refuse what the
+# operation allows, or offer what it refuses.
+
+
+def refusal(config: evolution.EvolutionConfig, verb: str) -> str:
+    offered = verbs(config)[verb]
+    assert offered["allowed"] is False, f"{verb} is refused here"
+    return offered["reason"]
+
+
+def raised(operation: Callable[[], object]) -> str:
+    with pytest.raises(evolution.BatchError) as error:
+        operation()
+    return str(error.value)
+
+
+def test_the_change_verbs_refuse_in_the_words_their_operations_refuse_with(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """One walk through a batch, asking the gate at each state and then running
+    the operation it refused. Every sentence is the operation's own."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    write_draft(config.batches_root, FIRST, "loader-fallback")
+
+    # The analysis stage, which the preamble every guarded operation runs stops
+    # every one of them at.
+    assert refusal(config, "create") == raised(
+        lambda: experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+    )
+    assert refusal(config, "seal-round") == raised(lambda: experiments.seal_round(config, now=FROZEN_AT))
+
+    # The stage has ended and nothing is admitted: the attempt these act on is
+    # not there, in each verb's own words.
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    assert refusal(config, "seal-round") == raised(lambda: experiments.seal_round(config, now=FROZEN_AT))
+    assert refusal(config, "add-tasks") == raised(
+        lambda: experiments.add_tasks(config, ["loader-fallback"], now=FROZEN_AT)
+    )
+    assert refusal(config, "replay-start") == raised(
+        lambda: replay.start(
+            config, FakeHarness(), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT
+        )
+    )
+
+    # A round with work in it: what it is not is a round to revise, to measure,
+    # or to end a batch over.
+    admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+    revision = "the loader fallback needs a second pass"
+    assert refusal(config, "revise") == raised(lambda: experiments.revise(config, reason=revision, now=FROZEN_AT))
+    assert refusal(config, "replay-start") == raised(
+        lambda: replay.start(
+            config, FakeHarness(), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT
+        )
+    )
+    assert refusal(config, "conclude-no-change") == raised(
+        lambda: experiments.conclude_no_change(config, reason="the evidence justified nothing", now=FROZEN_AT)
+    )
+
+    # Sealed: the round no longer takes work, and nothing has measured it.
+    for item in admission.admitted:
+        complete_task(config, item.task_id)
+    git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, "candidate work"))
+    experiments.seal_round(config, now=FROZEN_AT)
+    assert refusal(config, "add-tasks") == raised(
+        lambda: experiments.add_tasks(config, ["loader-fallback"], now=FROZEN_AT)
+    )
+    assert refusal(config, "replay-conclude") == raised(lambda: replay.conclude(config, FakeHarness(), now=FROZEN_AT))
+    assert refusal(config, "replay-abandon") == raised(
+        lambda: replay.abandon(config, reason="the harness lost the handle", now=FROZEN_AT)
+    )
+    assert refusal(config, "promote") == raised(
+        lambda: experiments.promote(config, reason="the evidence held", targets=(), now=FROZEN_AT)
+    )
+
+
+def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The same property on the seven verbs whose guard is not the shared
+    preamble: what the reading is at, said once by the module that owns it."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+
+    # A cohort that owes a reading and has recorded none: six of the seven have
+    # nothing to act on.
+    assert refusal(config, "settle") == raised(
+        lambda: assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason="nothing found", now=NOW)
+    )
+    assert refusal(config, "assess-resolve") == raised(
+        lambda: assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_IMPROVED,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="the counterfactual moved the goal metric",
+            now=NOW,
+        )
+    )
+    assert refusal(config, "assess-conclude") == raised(lambda: assessment.conclude(config, FakeHarness(), now=NOW))
+
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        now=NOW,
+    )
+    # A reading with no run under it: the two that answer for one, and the
+    # resolution that a completed one settles.
+    assert refusal(config, "assess-abandon") == raised(
+        lambda: assessment.abandon(config, reason="the harness never reported", now=NOW)
+    )
+    assert refusal(config, "assess-resolve") == raised(
+        lambda: assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_IMPROVED,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="the counterfactual moved the goal metric",
+            now=NOW,
+        )
+    )
+
+    # A run going is a measurement in flight, which the gate is not answered over.
+    assessment.measure(config, FakeHarness(report=None), expectation=EXPECTATION, now=NOW)
+    assert refusal(config, "assess-measure") == raised(
+        lambda: assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=NOW)
+    )
+    assert refusal(config, "settle") == raised(
+        lambda: assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason="nothing found", now=NOW)
+    )
+
+
+def test_a_withdrawal_over_nothing_outstanding_is_offered_rather_than_refused(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The verb the shared predicates found: both withdrawals report that nothing
+    was outstanding rather than refusing, because a single write with nothing
+    after it either landed or did not — so a gate refusing them would withhold the
+    verb that finishes an interrupted one."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+
+    offered = verbs(config)["replay-withdraw"]
+    assert offered["allowed"] is True
+    assert "no replay request is outstanding" in offered["recovers"]
+    assert replay.withdraw(config, now=FROZEN_AT).withdrawn is False
 
 
 def test_the_state_revision_follows_the_artifacts_and_not_the_clock(

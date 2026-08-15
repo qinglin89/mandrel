@@ -102,6 +102,20 @@ class RollbackResult:
     recorded: bool = True
 
 
+def nothing_promoted_refusal() -> str:
+    """Why a repository that promoted nothing has no line to take a change off.
+
+    Read from here by the console's gate as well, for the reason the redo above
+    is: one statement of what this operation refuses, rather than the operation's
+    and a second one the surface keeps in step by hand.
+    """
+
+    return (
+        "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
+        "reverses the promotion this repository most recently recorded (contract: Rollback)"
+    )
+
+
 def redone_reversal(promoted: BatchLineage) -> Mapping[str, Any] | None:
     """The rollback a request redone would report having finished.
 
@@ -193,10 +207,7 @@ def reverse(
     lineage = settled(config, now=moment)
     promoted = lineage.last_promoted
     if promoted is None:
-        raise BatchError(
-            "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
-            "reverses the promotion this repository most recently recorded (contract: Rollback)"
-        )
+        raise BatchError(nothing_promoted_refusal())
     outcome = promoted.outcome or {}
     recorded = promoted.rollback
     # The lineage's own reading of whether that promotion is still what the line

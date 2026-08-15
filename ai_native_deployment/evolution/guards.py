@@ -25,6 +25,16 @@ an operator meets one refusal rather than one per module.
 Nothing here writes. `settled` publishes this machine's analysis closures, which
 is a record catching up with a task lifecycle rather than a change to the
 lineage, and is exactly what the freeze does before it reads.
+
+Each question is stated once as a *refusal*: a function returning the reason in
+one line, or None where the state allows the write. The raising guards below are
+wrappers over those, and the console's gate reads the same functions to derive
+what may be done next (`phase.allowed_actions`). One statement rather than two is
+what keeps the two answers from drifting — a gate refusing what an operation
+allows withholds the verb that repairs an interruption, and one allowing what an
+operation refuses offers a write that cannot happen. It is also why these texts
+name no verb: they are read by every operation that runs this preamble, and a
+refusal phrased for an admission is the wrong sentence over a seal.
 """
 
 from __future__ import annotations
@@ -70,15 +80,21 @@ def current_cycle(
 
     current = (known if known is not None else settled(config, now=now)).current
     if current is None:
-        raise BatchError(
-            "no batch is current, so there is no admission gate to act on; freeze a cohort with "
-            "`aii-2 evolution start` and let its analysis produce the drafts (invariant 14)"
-        )
+        raise BatchError(no_current_batch())
     require_stage_ended(config, current)
     if not finishing:
         require_no_pending_successor(current)
     require_readable_evidence(config, current)
     return current
+
+
+def no_current_batch() -> str:
+    """Why there is nothing for any of these operations to act on."""
+
+    return (
+        "no batch is current, and every change lineage belongs to one; freeze a cohort with "
+        "`aii-2 evolution start` and let its analysis produce the drafts (invariant 14)"
+    )
 
 
 def require_readable_evidence(config: EvolutionConfig, current: BatchLineage) -> None:
@@ -132,12 +148,27 @@ def settled(config: EvolutionConfig, *, now: datetime) -> Lineage:
 def require_stage_ended(config: EvolutionConfig, current: BatchLineage) -> None:
     """The batch's analysis stage is over before anything acts on its lineage."""
 
-    if awaiting_analysis(config, current.batch):
-        raise BatchError(
-            f"{current.batch_id} is still in its analysis stage; drafts reach the gate when that task completes "
-            f"and {current.batch.closure_path.name} records it — a proposal admitted before then implements "
-            "dispositions nobody has reviewed (invariant 6)"
-        )
+    refusal = stage_refusal(current, stage_open=awaiting_analysis(config, current.batch))
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def stage_refusal(current: BatchLineage, *, stage_open: bool) -> str | None:
+    """Why nothing acts on a batch whose analysis is still being written.
+
+    The observation is the caller's — `batches.awaiting_analysis` on both sides,
+    made once per reading, because it is answered from a machine-local task
+    lifecycle and a status that asked it again could describe a stage its own
+    phase label disagrees with. What is here is the rule and its words.
+    """
+
+    if not stage_open:
+        return None
+    return (
+        f"{current.batch_id} is still in its analysis stage; drafts reach the gate when that task completes "
+        f"and {current.batch.closure_path.name} records it — anything decided before then rests on "
+        "dispositions nobody has reviewed (invariant 6)"
+    )
 
 
 def require_no_pending_successor(current: BatchLineage) -> None:
@@ -151,10 +182,18 @@ def require_no_pending_successor(current: BatchLineage) -> None:
     not exist yet.
     """
 
+    refusal = successor_refusal(current)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def successor_refusal(current: BatchLineage) -> str | None:
+    """Why a batch owing the attempt a supersession named has nothing to work in."""
+
     successor = current.pending_successor
     if successor is None:
-        return
-    raise BatchError(
+        return None
+    return (
         f"{current.experiments[-1].experiment_id} was superseded by {successor}, which does not exist; the "
         "decision landed and the attempt it creates did not, so this batch has nothing to work in — redo that "
         "supersession, for the same reason, to finish it"
@@ -179,7 +218,25 @@ def no_open_experiment(current: BatchLineage, action: str) -> BatchError:
     again" — a terminal decision is never reopened.
     """
 
-    return BatchError(
+    return BatchError(_no_open_experiment(current, action))
+
+
+def open_experiment_refusal(current: BatchLineage, action: str) -> str | None:
+    """Why the attempt an operation would act on is not there.
+
+    Takes the verb's own words because this one is about what the operator asked
+    for rather than about the lineage: "there is nothing to seal" and "there is
+    nothing to promote" are different sentences, and the gate names each verb the
+    way the operation it stands for does.
+    """
+
+    if current.open_experiment is not None:
+        return None
+    return _no_open_experiment(current, action)
+
+
+def _no_open_experiment(current: BatchLineage, action: str) -> str:
+    return (
         f"{current.batch_id} has no open experiment, so there is nothing to {action}; a terminal decision is "
         "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
         "it needs"
@@ -258,17 +315,25 @@ def require_consistent_ref(current: BatchLineage) -> None:
     work, and one that says nothing about the lineage.
     """
 
+    refusal = ref_refusal(current)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def ref_refusal(current: BatchLineage) -> str | None:
+    """Why a ref standing off the history its record pins takes no further work."""
+
     ref = current.ref
     if ref is None or ref.consistent is not False:
-        return
+        return None
     if ref.chain_break is not None:
         earlier, later = ref.chain_break
-        raise BatchError(
+        return (
             f"{ref.ref}: {later[:12]} does not descend from {earlier[:12]}, which this experiment's record pins "
             "before it; rounds only add (invariant 15), so a candidate off that history leaves the revisions the "
-            "record names unreachable — resolve the ref before admitting anything else into it"
+            "record names unreachable — resolve the ref before anything else is recorded onto it"
         )
-    raise BatchError(
+    return (
         f"{ref.ref} stands at {(ref.tip or 'nothing')[:12]}, not on the history of the {ref.pinned[:12]} its "
         f"record pins ({ref.state}); the ref only fast-forwards, and work admitted onto it now would be measured "
         "as part of a candidate nobody can identify"

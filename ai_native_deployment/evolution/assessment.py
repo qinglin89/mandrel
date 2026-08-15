@@ -1267,19 +1267,11 @@ def _owing_frame(
 
     current = known.current
     if current is None:
-        raise BatchError(
-            "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
-            "cohort's answer about the promotion before it, and what freezes a cohort is "
-            "`aii-2 evolution start` (invariant 14)"
-        )
+        raise BatchError(no_cohort_refusal())
 
     frame = describe(config, current.batch, lineage=known)
     if frame is None:
-        raise BatchError(
-            f"{current.batch_id} follows no promotion, so there is no release for it to assess; a repository "
-            "that promoted nothing before this cohort and a predecessor that concluded `no-change` both leave "
-            "nothing an upgrade effect could be measured against, and none is invented (invariant 7)"
-        )
+        raise BatchError(no_release_refusal(current.batch_id))
     if frame.owed:
         return frame
 
@@ -1289,12 +1281,7 @@ def _owing_frame(
     owed = obligation(config, current.batch, lineage=known)
     if owed is not None and (follow_answered or not owed.settled):
         return owed.frame
-    owner = frame.batch_id if owed is None else owed.owner_id
-    raise BatchError(
-        f"{frame.batch_id} is not the cohort that owes a reading of the {frame.subject.batch_id} release; "
-        f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
-        "about it, and it has read that release and had it settled (invariant 14)"
-    )
+    raise BatchError(_not_the_owner(frame.batch_id, frame.subject, owed))
 
 
 def _as_assessed(subject: Subject) -> Subject:
@@ -1652,11 +1639,7 @@ def abandon(
             result = going.result
             if result is not None and result.outcome == RESULT_FAILED and result.detail == text:
                 return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
-            raise BatchError(
-                f"{_describe(going.position)} of {frame.batch_id}'s counterfactual already ended "
-                f"{result.outcome!r}: {result.detail!r}; a run ends once, and what is on record is what it "
-                "measured — start another attempt rather than restating how this one finished"
-            )
+            raise BatchError(_already_ended(frame, going))
 
         stamp = format_rfc3339(moment)
         concluded = replace(
@@ -1795,23 +1778,9 @@ def resolve(
         reading = _recorded(config, frame, "resolve")
         _require_unsettled(frame, reading, "a reading recorded now")
 
-        run = reading.counterfactual
-        if run is None or not run.completed:
-            if run is None:
-                found = (
-                    "none has been started, and the pinned run is the comparison in which the release is the "
-                    "only difference"
-                )
-            elif run.running:
-                found = f"{_describe(run.position)} is still going"
-            else:
-                ended = run.result.detail if run.result is not None else ""
-                found = f"{_describe(run.position)} ended {RESULT_FAILED!r}: {ended}"
-            raise BatchError(
-                f"{frame.batch_id} has no completed counterfactual of the {frame.subject.batch_id} release, so "
-                f"there is nothing for a reading to be settled by — {found}; what the cohorts allow on their own "
-                f"is {VERDICT_INCONCLUSIVE!r}"
-            )
+        refusal = resolve_refusal(frame, reading)
+        if refusal is not None:
+            raise BatchError(refusal)
 
         if (reading.verdict, reading.confidence, reading.rationale) == (verdict, confidence, text):
             return Formed(
@@ -2063,13 +2032,220 @@ def _redone_settlement(
 
 
 def _require_settleable(frame: Frame, reading: Assessment) -> None:
-    """The gate answers over evidence that is over (`settleable`)."""
+    """The gate answers over evidence that is over (`settleable_refusal`)."""
+
+    refusal = settleable_refusal(frame, reading)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+# --- what a fresh run refuses -------------------------------------------------
+#
+# Each condition the release verbs check before they write, stated once as the
+# refusal it would give, and read both by the operation and by the console's gate
+# (`phase.allowed_actions`). Two statements of one rule is how a gate comes to
+# refuse a verb the operation allows, or offer one it does not.
+#
+# State alone: the frame the lineage derives and the reading on record. Every
+# argument a verb is given — which way a settlement goes, what a resolution
+# claims — stays with the operation, under the lock.
+
+
+def no_cohort_refusal() -> str:
+    """Why nothing here reads a release when no cohort is frozen."""
+
+    return (
+        "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
+        "cohort's answer about the promotion before it, and what freezes a cohort is "
+        "`aii-2 evolution start` (invariant 14)"
+    )
+
+
+def no_release_refusal(batch_id: str) -> str:
+    """Why a cohort that follows no promotion has nothing to assess (invariant 7)."""
+
+    return (
+        f"{batch_id} follows no promotion, so there is no release for it to assess; a repository "
+        "that promoted nothing before this cohort and a predecessor that concluded `no-change` both leave "
+        "nothing an upgrade effect could be measured against, and none is invented (invariant 7)"
+    )
+
+
+def owner_refusal(batch_id: str, subject: Subject, owed: Obligation | None) -> str | None:
+    """Why the cohort standing at the keyboard is not the one that records this.
+
+    An obligation an earlier cohort left *outstanding* is not this: the record
+    still belongs in that cohort's directory and these operations follow it there
+    (`_owing_frame`), because a gate nothing can answer would stop the lineage
+    for good. What is refused is a reading already answered — with the one
+    exception the settlement takes, since reporting a decision back is what makes
+    a carried-forward settlement recoverable.
+    """
+
+    if owed is not None and not owed.settled:
+        return None
+    return _not_the_owner(batch_id, subject, owed)
+
+
+def _not_the_owner(batch_id: str, subject: Subject, owed: Obligation | None) -> str:
+    owner = batch_id if owed is None else owed.owner_id
+    return (
+        f"{batch_id} is not the cohort that owes a reading of the {subject.batch_id} release; "
+        f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
+        "about it, and it has read that release and had it settled (invariant 14)"
+    )
+
+
+def reading_refusal(frame: Frame, reading: Assessment | None, action: str) -> str | None:
+    """Why there is no reading for the counterfactual or the gate to act on.
+
+    Everything those do is done to that record: it is where the run is written,
+    and what the run's numbers afterwards settle. A cohort that has not read the
+    release yet has nothing to add either to — and the order is the point rather
+    than bookkeeping, since what a pinned run answers is a suspicion the cohorts
+    raised, and what the gate answers is the reading that came of it.
+    """
+
+    return None if reading is not None else _nothing_read(frame, action)
+
+
+def _nothing_read(frame: Frame, action: str) -> str:
+    return (
+        f"{frame.batch_id} has recorded no reading of the {frame.subject.batch_id} release, so there is "
+        f"nothing to {action}; the cohorts are read first — what they come to is the suspicion a pinned run "
+        "is started to settle, and the reading it leaves is what the gate answers"
+    )
+
+
+def unsettled_refusal(frame: Frame, reading: Assessment, described: str) -> str | None:
+    """Why nothing is added to a reading the human gate has already answered."""
+
+    decision = reading.decision
+    if decision is None:
+        return None
+    return (
+        f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decision.settlement!r} "
+        f"at {decision.decided_at}, so {described} would change the record that decision was made from; a "
+        "settlement stands on the evidence it stood on, and a release read again after its gate has answered is "
+        "the next cohort's reading of the line as it now is"
+    )
+
+
+def run_refusal(frame: Frame, reading: Assessment, action: str) -> str | None:
+    """Why there is no run for these two verbs to answer for.
+
+    A request outstanding is the state where the newest thing on record is not a
+    run at all: the harness was asked and its answer never reached this record.
+    Reporting "no run" there would hide that something may be measuring right
+    now — so what is reported instead is the two ways forward: start the run
+    again, which records what the harness began, or give the request up.
+    """
+
+    if reading.requested is not None:
+        return (
+            f"{frame.batch_id} has {_describe(reading.requested.position)} of its counterfactual outstanding, "
+            f"and no run recorded for it; the harness was asked for that run and its answer never reached this "
+            f"record, so there is nothing here to be {action} — start the run again to record what it began, or "
+            "withdraw the request"
+        )
+    return None if reading.counterfactual is not None else _nothing_started(frame, action)
+
+
+def end_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """Why there is no run for an abandonment to record the end of.
+
+    One state more than a conclusion's, and it is the asymmetry between the two
+    redos: this operation writes one particular result, so a run that ended some
+    other way is not its work and is refused rather than overwritten. The
+    operation asks these in the same order and not as one call, since which of
+    the two an ended run is turns on the reason it is given.
+    """
+
+    refusal = run_refusal(frame, reading, "ended")
+    if refusal is not None:
+        return refusal
+    run = reading.counterfactual
+    if run is None or run.running:
+        return None
+    return _already_ended(frame, run)
+
+
+def _already_ended(frame: Frame, run: Counterfactual) -> str:
+    result = run.result
+    return (
+        f"{_describe(run.position)} of {frame.batch_id}'s counterfactual already ended "
+        f"{(result.outcome if result is not None else '')!r}: {(result.detail if result is not None else '')!r}; "
+        "a run ends once, and what is on record is what it measured — start another attempt rather than "
+        "restating how this one finished"
+    )
+
+
+def _nothing_started(frame: Frame, action: str) -> str:
+    return (
+        f"{frame.batch_id} has started no counterfactual of the {frame.subject.batch_id} release, so there "
+        f"is no run to be {action}; what these record is the end of a run this controller started, and a "
+        "harness invocation nothing here named is not one it can speak for"
+    )
+
+
+def measure_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """Why a further run is not started under the one already on record.
+
+    Not asked of a request already outstanding: a measurement run again with one
+    on record is that request resumed rather than a second run (`measure`). A
+    failed run is what a further attempt is for, and is not one either.
+    """
+
+    previous = reading.counterfactual
+    if reading.requested is not None or previous is None or previous.failed:
+        return None
+    subject = frame.subject
+    return (
+        f"{frame.batch_id} has {_describe(previous.position)} of its counterfactual "
+        + ("still running" if previous.running else "completed")
+        + f" against the {subject.batch_id} release; "
+        + (
+            "a release is measured against one pinned pair at a time, so a second run started under it "
+            "would leave two answers with nothing to choose between them — conclude that run first"
+            if previous.running
+            else "the release is measured once, and a second completed run would leave a reader choosing "
+            "which of two answers the reading rests on"
+        )
+    )
+
+
+def resolve_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """Why the reading is not one a completed run settles the direction of."""
+
+    run = reading.counterfactual
+    if run is not None and run.completed:
+        return None
+    if run is None:
+        found = (
+            "none has been started, and the pinned run is the comparison in which the release is the "
+            "only difference"
+        )
+    elif run.running:
+        found = f"{_describe(run.position)} is still going"
+    else:
+        ended = run.result.detail if run.result is not None else ""
+        found = f"{_describe(run.position)} ended {RESULT_FAILED!r}: {ended}"
+    return (
+        f"{frame.batch_id} has no completed counterfactual of the {frame.subject.batch_id} release, so "
+        f"there is nothing for a reading to be settled by — {found}; what the cohorts allow on their own "
+        f"is {VERDICT_INCONCLUSIVE!r}"
+    )
+
+
+def settleable_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """Why the gate does not answer over a measurement still in flight
+    (`settleable`)."""
 
     if settleable(reading.counterfactual, reading.requested):
-        return
+        return None
     requested = reading.requested
     if requested is not None:
-        raise BatchError(
+        return (
             f"{frame.batch_id} has {_describe(requested.position)} of its counterfactual outstanding, so its "
             f"reading of the {frame.subject.batch_id} release is not one to settle yet; nothing is added to a "
             "reading once its gate answers, so a run this record never heard back about would have nowhere to "
@@ -2077,12 +2253,23 @@ def _require_settleable(frame: Frame, reading: Assessment) -> None:
         )
     run = reading.counterfactual
     position = "" if run is None else f" ({_describe(run.position)})"
-    raise BatchError(
+    return (
         f"{frame.batch_id}'s counterfactual of the {frame.subject.batch_id} release{position} is still going, so "
         "its reading is not one to settle yet; nothing is added to a reading once its gate answers, and that run "
         "is the one comparison in which the release is the only difference — conclude it, or end it with a "
         "reason if its harness cannot report"
     )
+
+
+def redone_withdrawal(reading: Assessment) -> bool:
+    """Whether a withdrawal run here would report that nothing was outstanding.
+
+    The one release verb that never refuses on the record: a single write with
+    nothing after it either landed or did not, and the request's absence is the
+    answer in both directions (`withdraw`).
+    """
+
+    return reading.requested is None
 
 
 def _require_standing(frame: Frame) -> None:
@@ -2140,52 +2327,26 @@ def _recorded(config: EvolutionConfig, frame: Frame, action: str) -> Assessment:
 
     reading = read(config, frame.batch, frame=frame)
     if reading is None:
-        raise BatchError(
-            f"{frame.batch_id} has recorded no reading of the {frame.subject.batch_id} release, so there is "
-            f"nothing to {action}; the cohorts are read first — what they come to is the suspicion a pinned run "
-            "is started to settle, and the reading it leaves is what the gate answers"
-        )
+        raise BatchError(_nothing_read(frame, action))
     return reading
 
 
 def _require_unsettled(frame: Frame, reading: Assessment, described: str) -> None:
-    """Nothing is added to a reading the human gate has already answered."""
+    """Nothing is added to a reading the human gate has already answered
+    (`unsettled_refusal`)."""
 
-    decision = reading.decision
-    if decision is None:
-        return
-    raise BatchError(
-        f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decision.settlement!r} "
-        f"at {decision.decided_at}, so {described} would change the record that decision was made from; a "
-        "settlement stands on the evidence it stood on, and a release read again after its gate has answered is "
-        "the next cohort's reading of the line as it now is"
-    )
+    refusal = unsettled_refusal(frame, reading, described)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _require_run(frame: Frame, reading: Assessment, action: str) -> Counterfactual:
-    """The run these operations act on, or why there is none to act on.
+    """The run these operations act on, or why there is none (`run_refusal`)."""
 
-    A request outstanding is the state where the newest thing on record is not a
-    run at all: the harness was asked and its answer never reached this record.
-    Reporting "no run" there would hide that something may be measuring right
-    now — so what is reported instead is the two ways forward: start the run
-    again, which records what the harness began, or give the request up.
-    """
-
-    if reading.requested is not None:
-        raise BatchError(
-            f"{frame.batch_id} has {_describe(reading.requested.position)} of its counterfactual outstanding, "
-            f"and no run recorded for it; the harness was asked for that run and its answer never reached this "
-            f"record, so there is nothing here to be {action} — start the run again to record what it began, or "
-            "withdraw the request"
-        )
+    refusal = run_refusal(frame, reading, action)
     run = reading.counterfactual
-    if run is None:
-        raise BatchError(
-            f"{frame.batch_id} has started no counterfactual of the {frame.subject.batch_id} release, so there "
-            f"is no run to be {action}; what these record is the end of a run this controller started, and a "
-            "harness invocation nothing here named is not one it can speak for"
-        )
+    if refusal is not None or run is None:
+        raise BatchError(refusal or _nothing_started(frame, action))
     return run
 
 
@@ -2214,19 +2375,9 @@ def _request(
 
     subject = frame.subject
     previous = reading.counterfactual
-    if previous is not None and not previous.failed:
-        raise BatchError(
-            f"{frame.batch_id} has {_describe(previous.position)} of its counterfactual "
-            + ("still running" if previous.running else "completed")
-            + f" against the {subject.batch_id} release; "
-            + (
-                "a release is measured against one pinned pair at a time, so a second run started under it "
-                "would leave two answers with nothing to choose between them — conclude that run first"
-                if previous.running
-                else "the release is measured once, and a second completed run would leave a reader choosing "
-                "which of two answers the reading rests on"
-            )
-        )
+    refusal = measure_refusal(frame, reading)
+    if refusal is not None:
+        raise BatchError(refusal)
 
     pinned = Pinned(
         base_revision=subject.merge_input_revision,

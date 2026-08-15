@@ -82,15 +82,25 @@ reachable only as a refusal (a prepared promotion, a supersession owing its
 successor, a release nobody settled, a recorded rollback this checkout cannot
 confirm) are what it exists for.
 
-It is a reading, and the operation stays the authority. Four conditions are
-deliberately not asked here, each because the answer belongs to the moment of the
-write rather than to a status: whether some working tree is sitting on the source
-line, whether a later attempt stands on the promotion a rollback would reverse,
-whether an admitted task's file is the copy that admission published, and
-whatever the harness or Git answers while the single-writer lock is held. Nor is
-any argument a verb is given — which drafts an admission selects, which way a
-settlement goes — since this says whether the verb may run at all. A verb this
-gate allows may still refuse on one of those; a verb it refuses is refused.
+It is a reading, and the operation stays the authority — which is why nothing
+here decides what a verb refuses on. Each condition is the owning module's own
+read-only predicate, asked from here with the same records the operation is
+handed (`guards.stage_refusal` and the preamble beside it,
+`experiments.sealable_refusal` and its neighbours, `replay.conclude_refusal`,
+`assessment.settleable_refusal`, `rollback.nothing_promoted_refusal`), so an
+operator meets one sentence whether they asked `status` or ran the command. A
+rule written down twice is one that drifts, and the direction it drifts in is a
+menu refusing what the operation allows.
+
+Four conditions are deliberately not asked here, each because the answer belongs
+to the moment of the write rather than to a status: whether some working tree is
+sitting on the source line, whether a later attempt stands on the promotion a
+rollback would reverse, whether an admitted task's file is the copy that
+admission published, and whatever the harness or Git answers while the
+single-writer lock is held. Nor is any argument a verb is given — which drafts an
+admission selects, which way a settlement goes — since this says whether the verb
+may run at all. A verb this gate allows may still refuse on one of those; a verb
+it refuses is refused.
 
 **Two forms of every verb.** Every operation here is redoable by being run again
 with the same arguments: it finishes what its interrupted run left, reports what
@@ -132,7 +142,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import experiments, replay as replay_ops, rollback as rollback_ops
+from . import assessment as assessment_ops
+from . import experiments, guards, replay as replay_ops, rollback as rollback_ops
 from .analysis_task import task_finished
 from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
@@ -1051,8 +1062,16 @@ class _Held:
     answer the operation's: a verb refused by the batch it would act on is
     refused for that reason rather than for whatever the experiment underneath it
     happens to be doing.
+
+    Every one of these is the owning module's own answer rather than a second
+    statement of it (`guards.stage_refusal` and the two beside it,
+    `experiments.prepared_promotion_refusal`), for the reason the whole of this
+    gate consumes those predicates: a rule written down twice is a gate that
+    comes to refuse what the operation allows.
     """
 
+    # The batch the operations would act on, which is what those predicates take.
+    current: BatchLineage | None
     # No batch is current, or the current one is still in its analysis stage.
     stage: str | None
     # A supersession recorded its decision and not the successor it named.
@@ -1075,13 +1094,28 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
     Emitted in lifecycle order — the pool, the gate, the work, its measurement,
     the decisions, the reversal, the release — so a reader scanning for what to
     do next reads them in the order they happen.
+
+    The records rather than this projection of them are what the guards are
+    asked about, which is why the lineage travels this far: the operations take
+    `BatchLineage`, `Experiment`, `History`, `Evidence` and `Frame`, and handing
+    them the same objects is what makes this the operation's answer.
     """
 
+    current = lineage.current
+    view = status.current_batch
+    experiment = status.experiment
     held = _Held(
-        stage=_stage_refusal(status),
-        successor=_successor_refusal(status),
-        ref=_ref_refusal(status),
-        prepared=_prepared_refusal(status),
+        current=current,
+        # The stage observation is the one this reading already made
+        # (`_read`), not a second one: `.ai-tasks/` is machine-local and answered
+        # off a file, so asking again could describe a stage the phase label
+        # above disagrees with.
+        stage=guards.no_current_batch()
+        if current is None or view is None
+        else guards.stage_refusal(current, stage_open=not view.analysis_complete),
+        successor=None if current is None else guards.successor_refusal(current),
+        ref=None if current is None else guards.ref_refusal(current),
+        prepared=None if experiment is None else experiments.prepared_promotion_refusal(experiment),
     )
     return (
         _start_action(status),
@@ -1098,66 +1132,6 @@ def _on(object_type: str, object_id: str | None) -> tuple[str | None, str | None
     """The object a verb acts on, or nothing where it does not exist here."""
 
     return (object_type, object_id) if object_id is not None else (None, None)
-
-
-def _stage_refusal(status: LifecycleStatus) -> str | None:
-    current = status.current_batch
-    if current is None:
-        return (
-            "no batch is current; a cohort is frozen by `start`, and every change lineage belongs to one "
-            "(invariant 14)"
-        )
-    if not current.analysis_complete:
-        return (
-            f"{current.batch_id} is still in its analysis stage; its dispositions reach the admission gate when "
-            "that task completes and the closure record says so (invariant 6)"
-        )
-    return None
-
-
-def _successor_refusal(status: LifecycleStatus) -> str | None:
-    pending = status.pending_successor
-    if pending is None:
-        return None
-    return (
-        f"{pending.experiment_id} was superseded by {pending.successor_id}, which was never created; the batch has "
-        "nothing to work in until that supersession is redone for the reason on record"
-    )
-
-
-def _ref_refusal(status: LifecycleStatus) -> str | None:
-    """A ref standing off the history its record pins stops every write into it.
-
-    "Cannot tell" is not one: a clone that never fetched `refs/evolution/*` has no
-    answer, which says nothing about the lineage (`guards.require_consistent_ref`).
-    """
-
-    ref = status.ref
-    if ref is None or ref.consistent is not False:
-        return None
-    if ref.chain_break is not None:
-        earlier, later = ref.chain_break
-        return (
-            f"{ref.ref}: {later[:12]} does not descend from {earlier[:12]}, which the record pins before it; work "
-            "admitted onto that history leaves the revisions the record names unreachable"
-        )
-    return (
-        f"{ref.ref} stands at {(ref.tip or 'nothing')[:12]}, not on the history of the {ref.pinned[:12]} its record "
-        f"pins ({ref.state}); the ref only fast-forwards, and work admitted now would be measured as part of a "
-        "candidate nobody can identify"
-    )
-
-
-def _prepared_refusal(status: LifecycleStatus) -> str | None:
-    prepared = status.prepared_promotion
-    experiment = status.experiment
-    if prepared is None or experiment is None:
-        return None
-    return (
-        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto "
-        f"{prepared.merge_input_ref}; the line may already be carrying it, so `promote` finishes that promotion or "
-        "discards it, and this is available afterwards"
-    )
 
 
 def _start_action(status: LifecycleStatus) -> Action:
@@ -1239,48 +1213,33 @@ def _create_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -
 
 
 def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    if held.lineage:
+    if held.lineage or held.current is None:
         return held.lineage
     experiment = status.experiment
     if experiment is not None:
-        return held.ref or (
-            f"{experiment.experiment_id} is open, and a batch runs one attempt at a time (invariant 14); "
-            "`add-tasks` admits further drafts into its open round, and redoing the same selection is what finishes "
-            "an interrupted admission"
-        )
+        return held.ref or experiments.second_attempt_refusal(held.current, experiment)
     if not _waiting(status):
+        # The gate's own, and one of the few: what the operation refuses is each
+        # draft it was named, which is an argument rather than a state.
         return (
             "no draft is waiting at the admission gate; what an experiment admits is a proposal this batch's own "
             "analysis made and nobody has decided yet"
         )
-    return _base_refusal(status)
+    return _base_refusal(status, held)
 
 
-def _base_refusal(status: LifecycleStatus) -> str | None:
+def _base_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     """Invariant 17, asked only where a base is about to be frozen.
 
-    A batch whose first experiment already froze one takes that commit rather
-    than resolving one, so the release before it is not asked about again: the
-    decision can no longer change what this batch starts from.
+    The obligation is derived once for the whole reading (`_release`) and handed
+    to the operation's own predicate, which is also what says which line the base
+    is then expected on — a refusal an operator can act on rather than discover.
     """
 
-    if status.revisions.base is not None:
+    if held.current is None:
         return None
     release = status.release
-    if release is None or release.settled:
-        return None
-    owner = "this batch" if release.owned_here else release.owner_id
-    subject = release.frame.subject
-    reading = release.reading
-    if reading is None:
-        return (
-            f"nothing has read the {subject.batch_id} release ({subject.revision[:12]}) that {owner} owes, and the "
-            "base every alternative here starts from is the line that reading is settled onto (invariant 17)"
-        )
-    return (
-        f"{owner} reads the {subject.batch_id} release {reading.verdict!r} and nobody has settled it; the "
-        "settlement is what says whether the base carries the release or the reversal of it (invariant 17)"
-    )
+    return experiments.base_release_refusal(held.current, None if release is None else release.obligation)
 
 
 def _reject_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -1379,35 +1338,34 @@ def _revise_action(
     return Action(ACTION_REVISE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_revise_refusal(status, held))
 
 
-def _attempt_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+def _attempt_refusal(status: LifecycleStatus, held: _Held, action: str) -> str | None:
     """The open experiment these verbs act on, or why there is none.
 
     None is the answer only where there is one, which is what lets every caller
-    below read `status.experiment` after it.
+    below read `status.experiment` after it. The verb's own word is the one the
+    operation puts in that sentence (`guards.require_open_experiment`), so a
+    refusal here reads as the one running it would give.
     """
 
-    if held.lineage:
+    if held.lineage or held.current is None:
         return held.lineage
-    if status.experiment is None:
-        batch_id = status.current_batch.batch_id if status.current_batch else ""
-        return (
-            f"{batch_id} has no open experiment; a terminal decision is never reopened, and what continues a batch "
-            "is the next attempt — a grouped admission of the drafts it needs"
-        )
-    return held.ref
+    return guards.open_experiment_refusal(held.current, action) or held.ref
 
 
 def _add_tasks_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    hold = _attempt_refusal(status, held)
+    if held.lineage or held.current is None:
+        return held.lineage
+    # Its own sentence rather than the shared one, as in the operation: what it
+    # points at is the verb that would create the attempt.
+    hold = experiments.admission_refusal(held.current)
     experiment = status.experiment
     if hold is not None or experiment is None:
         return hold
-    if experiment.open_round is None:
-        return (
-            f"round {experiment.last_round.number} of {experiment.experiment_id} is candidate-ready; its candidate "
-            "is pinned and its evidence names it, so `revise` opens the round further work is admitted into "
-            "(invariant 16)"
-        )
+    # The round before the ref, which is the order the operation asks in: a
+    # candidate-ready round takes no work whatever the ref is doing.
+    refusal = experiments.open_round_refusal(experiment) or held.ref
+    if refusal is not None:
+        return refusal
     if not _waiting(status):
         return (
             "no draft is waiting at the admission gate; a round admits proposals this batch's analysis made, and "
@@ -1417,19 +1375,16 @@ def _add_tasks_refusal(status: LifecycleStatus, held: _Held) -> str | None:
 
 
 def _seal_refusal(config: EvolutionConfig, status: LifecycleStatus, held: _Held) -> str | None:
-    hold = _attempt_refusal(status, held)
+    hold = _attempt_refusal(status, held, "seal")
     experiment = status.experiment
     if hold is not None or experiment is None:
         return hold
+    refusal = experiments.sealable_refusal(experiment)
     round_ = experiment.open_round
-    if round_ is None:
-        pinned = (experiment.last_round.candidate_revision or "")[:12]
-        return f"round {experiment.last_round.number} of {experiment.experiment_id} is already sealed at {pinned}"
-    if not round_.tasks:
-        return (
-            f"round {round_.number} of {experiment.experiment_id} has admitted nothing; a seal pins the revision a "
-            "task set produced, and an empty round accounts for none of it"
-        )
+    if refusal is not None or round_ is None:
+        # Non-None covers the sealed round: the predicate answers for it, which
+        # is also why there is an open round to ask the last question about.
+        return refusal
     outstanding = _unobserved(config, round_)
     if outstanding:
         return (
@@ -1454,19 +1409,11 @@ def _unobserved(config: EvolutionConfig, round_: Round) -> tuple[str, ...]:
 
 
 def _revise_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    hold = _attempt_refusal(status, held)
+    hold = _attempt_refusal(status, held, "revise")
     experiment = status.experiment
     if hold is not None or experiment is None:
         return hold
-    if held.prepared:
-        return held.prepared
-    open_round = experiment.open_round
-    if open_round is not None:
-        return (
-            f"round {open_round.number} of {experiment.experiment_id} is still open; a revision appends to a round "
-            "whose candidate is already pinned, so seal this one first (invariant 16)"
-        )
-    return None
+    return held.prepared or experiments.revisable_refusal(experiment)
 
 
 def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
@@ -1481,7 +1428,7 @@ def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
             status,
             held,
             ACTION_REPLAY_CONCLUDE,
-            "concluded",
+            "conclude a replay of",
             object_id,
             replay_ops.redone_conclusion(history) if history is not None else None,
             "reports the result on record rather than polling for a second one",
@@ -1490,12 +1437,12 @@ def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
             status,
             held,
             ACTION_REPLAY_ABANDON,
-            "ended",
+            "end a replay of",
             object_id,
             replay_ops.redone_end(history) if history is not None else None,
             "run again for the reason on record, this reports that failure and writes nothing",
         ),
-        Action(ACTION_REPLAY_WITHDRAW, *_on(OBJECT_EXPERIMENT, object_id), refusal=_withdraw_refusal(status, held)),
+        _withdraw_action(status, held, object_id, history),
     )
 
 
@@ -1503,7 +1450,7 @@ def _run_action(
     status: LifecycleStatus,
     held: _Held,
     action: str,
-    ended: str,
+    word: str,
     object_id: str | None,
     recovered: Replay | None,
     note: str,
@@ -1525,79 +1472,58 @@ def _run_action(
                 f"round {recovered.round_number} attempt {recovered.attempt} already ended {outcome!r}; {note}"
             ),
         )
-    return Action(action, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, ended))
+    return Action(action, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, action, word))
+
+
+def _withdraw_action(
+    status: LifecycleStatus, held: _Held, object_id: str | None, history: History | None
+) -> Action:
+    """Giving up a request, or reporting that there was none.
+
+    The one verb of the replay module that never refuses on the record: with
+    nothing outstanding it reports that and writes nothing
+    (`replay.redone_withdrawal`), so refusing it here would withhold the verb
+    that finishes an interrupted withdrawal.
+    """
+
+    hold = _attempt_refusal(status, held, "withdraw a replay request of")
+    if hold is None and history is not None and replay_ops.redone_withdrawal(history):
+        return Action(
+            ACTION_REPLAY_WITHDRAW,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                "no replay request is outstanding; run here this reports that and writes nothing, which is also "
+                "how a withdrawal interrupted before its answer is finished"
+            ),
+        )
+    return Action(ACTION_REPLAY_WITHDRAW, *_on(OBJECT_EXPERIMENT, object_id), refusal=hold)
 
 
 def _replay_start_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     """A start, or the resume of a request the harness never answered for."""
 
-    hold = _attempt_refusal(status, held)
+    hold = _attempt_refusal(status, held, "replay")
     experiment = status.experiment
-    if hold is not None or experiment is None:
+    if hold is not None or experiment is None or status.replays is None:
         return hold
-    open_round = experiment.open_round
-    if open_round is not None:
-        return (
-            f"round {open_round.number} of {experiment.experiment_id} is still open; a round is measured once its "
-            "candidate is pinned, because an open round's tip moves (invariant 16)"
-        )
-    going = _running_replay(status)
-    if going is not None:
-        return (
-            f"round {going.round_number} attempt {going.attempt} is still running under {going.harness.id}; a round "
-            "is measured against one integration at a time — conclude that run first"
-        )
-    return None
+    return replay_ops.start_refusal(experiment, status.replays)
 
 
-def _run_refusal(status: LifecycleStatus, held: _Held, action: str) -> str | None:
-    """Concluding a run and ending one ask the same three questions."""
+def _run_refusal(status: LifecycleStatus, held: _Held, action: str, word: str) -> str | None:
+    """Concluding a run and ending one, each asked as its own operation asks.
 
-    hold = _attempt_refusal(status, held)
+    Not one question: an abandonment writes one particular result, so a run that
+    ended some other way is refused there and reported back by a conclusion.
+    """
+
+    hold = _attempt_refusal(status, held, word)
     experiment = status.experiment
-    if hold is not None or experiment is None:
+    if hold is not None or experiment is None or status.replays is None:
         return hold
-    request = status.replay_request
-    if request is not None:
-        return (
-            f"round {request.round_number} attempt {request.attempt} is outstanding and no run is recorded for it, "
-            f"so there is nothing here to be {action}; start the replay again to record what the harness began, or "
-            "withdraw the request"
-        )
-    runs = status.replays.replays if status.replays else ()
-    if not runs:
-        return (
-            f"{experiment.experiment_id} has no recorded run to be {action}; a harness invocation nothing here "
-            "named is not one this controller can speak for"
-        )
-    newest = runs[-1]
-    if not newest.running:
-        outcome = newest.result.outcome if newest.result is not None else ""
-        return (
-            f"round {newest.round_number} attempt {newest.attempt} already ended {outcome!r}; a run ends once, and "
-            "what measures the round again is another attempt"
-        )
-    return None
-
-
-def _withdraw_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    hold = _attempt_refusal(status, held)
-    if hold:
-        return hold
-    if status.replay_request is None:
-        return (
-            "no replay request is outstanding; a withdrawal takes back a request the harness never answered for, "
-            "and a run that happened is ended with a reason instead"
-        )
-    return None
-
-
-def _running_replay(status: LifecycleStatus) -> Replay | None:
-    """The newest recorded run of the open round, while it is still going."""
-
-    runs = status.replays.replays if status.replays else ()
-    newest = runs[-1] if runs else None
-    return newest if newest is not None and newest.running else None
+    if action == ACTION_REPLAY_CONCLUDE:
+        return replay_ops.conclude_refusal(experiment, status.replays)
+    return replay_ops.end_refusal(experiment, status.replays)
 
 
 def _decision_actions(status: LifecycleStatus, held: _Held, lineage: Lineage) -> tuple[Action, ...]:
@@ -1716,64 +1642,27 @@ def _unfinished_promotion(status: LifecycleStatus) -> Experiment | None:
 def _promote_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     unfinished = _unfinished_promotion(status)
     if unfinished is not None:
-        if held.lineage:
-            return held.lineage
-        if unfinished.promotion is None:
-            return (
-                f"{unfinished.experiment_id} was promoted by a build that recorded no merge unit on the experiment, "
-                "and the outcome that ends this batch states the merge unit and the targets it was planned for; "
-                "the plan was never written down, so this batch cannot be concluded from what is on record"
-            )
-        return None
-    hold = _attempt_refusal(status, held)
-    if hold:
+        return held.lineage or experiments.unfinished_promotion_refusal(unfinished)
+    hold = _attempt_refusal(status, held, "promote")
+    experiment = status.experiment
+    if hold is not None or experiment is None or held.current is None:
         return hold
-    waiting = _waiting(status)
-    if waiting:
-        return (
-            f"{status.current_batch.batch_id if status.current_batch else ''} still has draft(s) {list(waiting)} "
-            "at its admission gate, and a promotion ends the batch and the gate with it — admit them or decline them"
-        )
+    refusal = experiments.gate_refusal(held.current, "promoting")
+    if refusal is not None:
+        return refusal
     if held.prepared:
         # The one state a prepared promotion does not refuse: this verb is what
         # finishes it, or discards it once the line proves it never arrived.
         return None
-    request = status.replay_request
-    if request is not None:
-        return (
-            f"round {request.round_number} attempt {request.attempt} is outstanding, so a run may be going that no "
-            "record names; a promotion ends the experiment and with it every operation that could answer for that "
-            "run — start the replay again, or withdraw the request"
-        )
-    going = _running_replay(status)
-    if going is not None:
-        return (
-            f"round {going.round_number} attempt {going.attempt} is still running under {going.harness.id}; a "
-            "promotion ends the experiment, and nothing could afterwards record how that run finished"
-        )
-    evidence = status.evidence
-    if evidence is not None and evidence.promotable:
-        return None
-    return _unpromotable(evidence)
-
-
-def _unpromotable(evidence: Evidence | None) -> str:
-    """Why the round's evidence does not describe the tree a promotion carries.
-
-    In the reader's own words, and both shortfalls: `drift` is what this checkout
-    established and `unverified` is what it could not answer, and a promotion is
-    refused on either (contract: what is derived).
-    """
-
-    if evidence is None:
-        return "no round has been replayed, and a promotion carries the tree a completed run measured"
-    notes = [*evidence.drift, *(f"unverified here: {note}" for note in evidence.unverified)]
-    tail = f" — {'; '.join(notes)}" if notes else ""
-    return f"the round's replay evidence is {evidence.state}{tail}"
+    if status.replays is not None:
+        refusal = experiments.in_flight_refusal(experiment, status.replays)
+        if refusal is not None:
+            return refusal
+    return experiments.promotable_refusal(experiment, status.evidence)
 
 
 def _abandon_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    hold = _attempt_refusal(status, held)
+    hold = _attempt_refusal(status, held, "end")
     if hold:
         return hold
     return held.prepared
@@ -1789,28 +1678,13 @@ def _supersede_refusal(status: LifecycleStatus, held: _Held) -> str | None:
 
 
 def _conclude_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    if held.lineage:
+    """Every way a batch is not one to conclude, in the operation's own words —
+    the promoted attempt among them, which is how the promotion interrupted
+    before its outcome reads here."""
+
+    if held.lineage or held.current is None:
         return held.lineage
-    unfinished = _unfinished_promotion(status)
-    if unfinished is not None:
-        return (
-            f"{unfinished.experiment_id} records a promotion, so this batch concluded by promoting it; the outcome "
-            "names which attempt it was and the revision that carries it — `promote` writes it"
-        )
-    experiment = status.experiment
-    if experiment is not None:
-        return (
-            f"{experiment.experiment_id} is still open; a batch's outcome is recorded after its last attempt ends, "
-            "so abandon or supersede that one first — an abandoned attempt stays in the record as the evidence it is"
-        )
-    waiting = _waiting(status)
-    if waiting:
-        return (
-            f"{status.current_batch.batch_id if status.current_batch else ''} still has draft(s) {list(waiting)} "
-            "at its admission gate; 'the evidence justified no change' is a claim this batch's own analysis does "
-            "not support — admit them or decline them, both of which are terminal"
-        )
-    return None
+    return experiments.conclusion_refusal(held.current)
 
 
 def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
@@ -1823,13 +1697,7 @@ def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
 
     promotion = status.last_promotion
     if promotion is None:
-        return Action(
-            ACTION_ROLLBACK,
-            refusal=(
-                "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
-                "reverses the promotion this repository most recently recorded"
-            ),
-        )
+        return Action(ACTION_ROLLBACK, refusal=rollback_ops.nothing_promoted_refusal())
     promoted = lineage.last_promoted
     record = promotion.rollback
     reversed_already = (
@@ -1860,15 +1728,24 @@ def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
     return Action(ACTION_ROLLBACK, OBJECT_PROMOTION, promotion.revision, refusal)
 
 
-_RELEASE_ACTIONS = (
-    ACTION_ASSESS,
-    ACTION_ASSESS_MEASURE,
-    ACTION_ASSESS_CONCLUDE,
-    ACTION_ASSESS_ABANDON,
-    ACTION_ASSESS_WITHDRAW,
-    ACTION_ASSESS_RESOLVE,
-    ACTION_SETTLE,
-)
+# The word each release verb puts in the operation's own sentence for a cohort
+# that has recorded no reading yet (`assessment._recorded`), and for a reading
+# whose gate has already answered (`assessment._require_unsettled`). Two
+# vocabularies rather than one because the two sentences are about different
+# things: what the verb would do, and what its writing now would change.
+_RELEASE_WORDS = {
+    ACTION_ASSESS_MEASURE: ("measure against the pre-promotion revision", "a run started now"),
+    ACTION_ASSESS_CONCLUDE: ("conclude a run of", "numbers recorded now"),
+    ACTION_ASSESS_ABANDON: ("end a run of", "a run ended now"),
+    ACTION_ASSESS_WITHDRAW: ("withdraw a run request of", "a request given up now"),
+    ACTION_ASSESS_RESOLVE: ("resolve", "a reading recorded now"),
+    ACTION_SETTLE: ("settle", "an answer given now"),
+}
+
+# The formation first, then the six that act on what it recorded — derived from
+# the words above so a verb added there is one this emits and answers for,
+# rather than one a branch below raises a `KeyError` over.
+_RELEASE_ACTIONS = (ACTION_ASSESS, *_RELEASE_WORDS)
 
 
 def _release_actions(status: LifecycleStatus) -> tuple[Action, ...]:
@@ -1933,6 +1810,11 @@ def _reading_recoveries(release: ReleaseReading) -> dict[str, str]:
             "decision on record — and finishes a reversal interrupted before it — rather than taking it again"
         )
         return found
+    if assessment_ops.redone_withdrawal(reading):
+        found[ACTION_ASSESS_WITHDRAW] = (
+            "no run request is outstanding; run here this reports that and writes nothing, which is also how a "
+            "withdrawal interrupted before its answer is finished"
+        )
     run = release.counterfactual
     if run is not None and not run.running:
         outcome = replay_ops.RESULT_COMPLETED if run.completed else replay_ops.RESULT_FAILED
@@ -1949,15 +1831,12 @@ def _reading_recoveries(release: ReleaseReading) -> dict[str, str]:
 
 
 def _no_release(status: LifecycleStatus) -> str:
+    """Neither absence is this surface's own reading of them
+    (`assessment._owing_frame`)."""
+
     if status.current_batch is None:
-        return (
-            "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
-            "cohort's answer about the promotion before it (invariant 14)"
-        )
-    return (
-        f"{status.current_batch.batch_id} follows no promotion; a repository that promoted nothing before this "
-        "cohort and a predecessor that concluded `no-change` both leave nothing to measure against (invariant 7)"
-    )
+        return assessment_ops.no_cohort_refusal()
+    return assessment_ops.no_release_refusal(status.current_batch.batch_id)
 
 
 def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
@@ -1967,41 +1846,41 @@ def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
     order they are asked in is the readers' own: whose record it is, whether
     there is a reading at all, whether its gate has answered, and only then what
     the run underneath it is doing.
+
+    Every one of them is the owning module's answer about the same `Frame` and
+    `Assessment` the operation would be handed, rather than a second reading of
+    the states they describe.
     """
 
-    subject = release.frame.subject
+    frame = release.frame
+    subject = frame.subject
     reading = release.reading
     decision = None if reading is None else reading.decision
-    state = release.counterfactual_state
 
-    if not release.owned_here and decision is not None:
-        foreign = (
-            f"the reading of the {subject.batch_id} release belongs to {release.owner_id}, which settled it "
-            f"{decision.settlement!r} at {decision.decided_at}; a later cohort reads the line as it now is rather "
-            "than that release"
-        )
-        return {action: foreign for action in _RELEASE_ACTIONS}
+    if not release.owned_here:
+        foreign = assessment_ops.owner_refusal(release.batch_id, subject, release.obligation)
+        if foreign is not None:
+            return {action: foreign for action in _RELEASE_ACTIONS}
 
     if reading is None:
-        unread = (
-            f"{release.owner_id} has recorded no reading of the {subject.batch_id} release "
-            f"({subject.revision[:12]}); the cohorts are read first, and what they come to is the suspicion a "
-            "pinned run is started to settle"
-        )
-        return {action: (None if action == ACTION_ASSESS else unread) for action in _RELEASE_ACTIONS}
+        unread: dict[str, str | None] = {
+            action: assessment_ops.reading_refusal(frame, None, words[0])
+            for action, words in _RELEASE_WORDS.items()
+        }
+        # The one verb a cohort with nothing recorded is for.
+        unread[ACTION_ASSESS] = None
+        return unread
 
     read = (
         f"{release.owner_id} has already read the {subject.batch_id} release {reading.verdict!r}; a cohort reads a "
         "release once, and `assess-resolve` is what revises that reading on a completed run"
     )
     if decision is not None:
-        settled = (
-            f"the reading of the {subject.batch_id} release was settled {decision.settlement!r} at "
-            f"{decision.decided_at}; nothing is added to a reading once its gate answers, and a release read again "
-            "afterwards is the next cohort's reading of the line as it now is"
-        )
         return {
-            **{action: settled for action in _RELEASE_ACTIONS},
+            **{
+                action: assessment_ops.unsettled_refusal(frame, reading, words[1])
+                for action, words in _RELEASE_WORDS.items()
+            },
             ACTION_ASSESS: read,
             ACTION_SETTLE: (
                 f"the gate answered {decision.settlement!r} at {decision.decided_at}; it answers once, and the "
@@ -2011,63 +1890,16 @@ def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
 
     return {
         ACTION_ASSESS: read,
-        ACTION_ASSESS_MEASURE: _measure_refusal(state),
-        ACTION_ASSESS_CONCLUDE: _running_refusal(release, "concluded"),
-        ACTION_ASSESS_ABANDON: _running_refusal(release, "ended"),
-        ACTION_ASSESS_WITHDRAW: None
-        if state == COUNTERFACTUAL_REQUESTED
-        else (
-            "no run request is outstanding; a withdrawal takes back a request the harness never answered for, and "
-            "a run that happened is ended with a reason instead"
-        ),
-        ACTION_ASSESS_RESOLVE: None
-        if state == COUNTERFACTUAL_COMPLETED
-        else (
-            f"the pinned counterfactual is {state}, and what a reading is resolved by is a completed run; the "
-            f"cohorts left this one at {reading.verdict!r} on their own"
-        ),
-        ACTION_SETTLE: (
-            "a measurement is still in flight; nothing may be added to a reading once its gate answers, so "
-            "conclude the run, end it, or withdraw the request first"
-        )
-        if release.in_flight
-        else None,
+        ACTION_ASSESS_MEASURE: assessment_ops.measure_refusal(frame, reading),
+        ACTION_ASSESS_CONCLUDE: assessment_ops.run_refusal(frame, reading, "concluded"),
+        ACTION_ASSESS_ABANDON: assessment_ops.end_refusal(frame, reading),
+        # Never a refusal: with nothing outstanding the withdrawal reports that
+        # and writes nothing (`assessment.redone_withdrawal`), which is also how
+        # one interrupted before its answer is finished.
+        ACTION_ASSESS_WITHDRAW: None,
+        ACTION_ASSESS_RESOLVE: assessment_ops.resolve_refusal(frame, reading),
+        ACTION_SETTLE: assessment_ops.settleable_refusal(frame, reading),
     }
-
-
-def _measure_refusal(state: str) -> str | None:
-    """A failed run is answered by another attempt, and a completed one is not."""
-
-    if state == COUNTERFACTUAL_RUNNING:
-        return (
-            "the pinned counterfactual is still running; a release is measured against one pinned pair at a time, "
-            "so a second run started under it would leave two answers with nothing to choose between them"
-        )
-    if state == COUNTERFACTUAL_COMPLETED:
-        return (
-            "the pinned counterfactual has already completed; the release is measured once, and a second completed "
-            "run would leave a reader choosing which of two answers the reading rests on"
-        )
-    return None
-
-
-def _running_refusal(release: ReleaseReading, action: str) -> str | None:
-    """Both verbs that answer for a run act on one that is going."""
-
-    state = release.counterfactual_state
-    if state == COUNTERFACTUAL_RUNNING:
-        return None
-    if state == COUNTERFACTUAL_REQUESTED:
-        return (
-            f"a run request is outstanding and no run is recorded for it, so there is nothing to be {action}; ask "
-            "again to record what the harness began, or withdraw the request"
-        )
-    if state == COUNTERFACTUAL_NONE:
-        return (
-            f"no counterfactual of this release has been started, so there is no run to be {action}; a harness "
-            "invocation nothing here named is not one this controller can speak for"
-        )
-    return f"the pinned counterfactual already ended {state!r}; a run ends once, and another attempt measures again"
 
 
 def _waiting(status: LifecycleStatus) -> tuple[str, ...]:

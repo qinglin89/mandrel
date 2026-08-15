@@ -758,6 +758,130 @@ def redone_end(history: History) -> Replay | None:
     return ended if result is not None and result.outcome == RESULT_FAILED else None
 
 
+def redone_withdrawal(history: History) -> bool:
+    """Whether a withdrawal run here would report that nothing was outstanding.
+
+    The one verb of this module that never refuses on the record: a single write
+    with nothing after it either landed or did not, and the request's absence is
+    the answer in both directions. So a state with no request outstanding accepts
+    the withdrawal and reports it, rather than refusing the verb that would
+    finish an interrupted one.
+    """
+
+    return history.pending is None
+
+
+# --- what a fresh run refuses -------------------------------------------------
+#
+# Each condition these operations check before they write, stated once as the
+# refusal it would give, and read both by the operation and by the console's gate
+# (`phase.allowed_actions`) — one statement rather than two, so a gate cannot
+# come to refuse what an operation allows or offer what it refuses.
+#
+# State alone. What the harness answers, and every argument a verb is given, stay
+# with the operation under the lock.
+
+
+def start_refusal(experiment: Experiment, history: History) -> str | None:
+    """Why this round cannot be measured as it now stands.
+
+    Both states are about making a request. A start run again with one already
+    outstanding is that request resumed rather than a fresh run, and neither of
+    these can stand over it: a request is only ever made from a sealed round, and
+    the record refuses to hold one made under a run that is still going
+    (`_require_requestable`).
+    """
+
+    round_ = experiment.last_round
+    if round_.seal is None:
+        return (
+            f"round {round_.number} of {experiment.experiment_id} is still open; a round is measured only "
+            "once its candidate is pinned, because an open round's tip moves and evidence taken against it "
+            "describes a tree the record cannot afterwards identify (invariant 16) — seal the round, and "
+            "this run names what the seal pinned"
+        )
+    replays = history.replays
+    if not replays or not replays[-1].running:
+        return None
+    going = replays[-1]
+    return (
+        f"{_describe_replay(going)} of {experiment.experiment_id} is still running under "
+        f"{going.harness.id} handle {going.harness.handle!r}; a round is measured against one "
+        "integration at a time, so a second run started under it would leave two answers about one tree "
+        "with nothing to choose between them — conclude that run first"
+    )
+
+
+def request_refusal(experiment: Experiment, history: History, action: str) -> str | None:
+    """Why a run is concluded or ended, never a request for one.
+
+    Both operations act on the newest recorded run, and a request standing over
+    it is the state where that is the wrong run to act on: the harness was asked
+    for a further one and its answer never reached this record. Reporting the
+    previous run as the thing to conclude would hide that; so would refusing
+    with "no run to conclude" while one may be going. The way forward is the
+    same either way — resume the start, which records the run the harness began,
+    or withdraw the request.
+    """
+
+    pending = history.pending
+    if pending is None:
+        return None
+    return (
+        f"{experiment.experiment_id} has {_describe_pending(pending)} outstanding, and no run recorded for it; "
+        f"the harness was asked for that run and its answer never reached this record, so there is nothing here "
+        f"to be {action} — start the replay again to record the run it began, or withdraw the request"
+    )
+
+
+def conclude_refusal(experiment: Experiment, history: History) -> str | None:
+    """Why there is no run for a conclusion to write the result of.
+
+    A run that has already ended is not one of them: whatever it ended as, a
+    conclusion redone reports that result (`redone_conclusion`).
+    """
+
+    return request_refusal(experiment, history, "concluded") or _no_recorded_run(experiment, history, "concluded")
+
+
+def end_refusal(experiment: Experiment, history: History) -> str | None:
+    """Why there is no run for an abandonment to record the end of.
+
+    One state more than a conclusion's, and it is the asymmetry between the two
+    redos: this operation writes one particular result, so a run that ended some
+    other way is not its work and is refused rather than overwritten.
+
+    The operation asks these in the same order and not as one call: its own redo
+    stands between the second and the third, and which of the two an already
+    ended run is turns on the reason it is given rather than on the record.
+    """
+
+    refusal = request_refusal(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
+    if refusal is not None:
+        return refusal
+    newest = history.replays[-1]
+    return None if newest.running else _already_ended(experiment, newest)
+
+
+def _no_recorded_run(experiment: Experiment, history: History, action: str) -> str | None:
+    if history.replays:
+        return None
+    return (
+        f"{experiment.experiment_id} has no recorded run to be {action}; what these write is the end of a run "
+        "this controller started, and a harness invocation nothing here named is not one it can speak for"
+    )
+
+
+def _already_ended(experiment: Experiment, replay: Replay) -> str:
+    result = replay.result
+    return (
+        f"{_describe_replay(replay)} of {experiment.experiment_id} already ended "
+        f"{(result.outcome if result is not None else '')!r}: {(result.detail if result is not None else '')!r}; "
+        "a run ends once, and what is on record is what it measured — start another attempt rather than "
+        "restating how this one finished"
+    )
+
+
 def start(
     config: EvolutionConfig,
     harness: ReplayHarness,
@@ -900,24 +1024,15 @@ def _request(
 
     guards.require_consistent_ref(current)
 
+    # Both states a fresh start refuses — an unsealed round, and a run still
+    # going — in the words the console's gate reads off the same predicate. Past
+    # it the round has a seal, which is what the position below is pinned from.
+    refusal = start_refusal(experiment, history)
+    if refusal is not None:
+        raise BatchError(refusal)
+
     replays = history.replays
     round_ = experiment.last_round
-    if round_.seal is None:
-        raise BatchError(
-            f"round {round_.number} of {experiment.experiment_id} is still open; a round is measured only "
-            "once its candidate is pinned, because an open round's tip moves and evidence taken against it "
-            "describes a tree the record cannot afterwards identify (invariant 16) — seal the round, and "
-            "this run names what the seal pinned"
-        )
-    if replays and replays[-1].running:
-        going = replays[-1]
-        raise BatchError(
-            f"{_describe_replay(going)} of {experiment.experiment_id} is still running under "
-            f"{going.harness.id} handle {going.harness.handle!r}; a round is measured against one "
-            "integration at a time, so a second run started under it would leave two answers about one tree "
-            "with nothing to choose between them — conclude that run first"
-        )
-
     attempt = _allocated(replays, history.withdrawn, round_.number) + 1
     return PendingRun(
         round_number=round_.number,
@@ -1002,14 +1117,10 @@ def conclude(
         experiment = guards.require_open_experiment(current, "conclude a replay of")
 
         history = read_replays(config, experiment)
-        _require_no_request_outstanding(experiment, history, "concluded")
+        refusal = conclude_refusal(experiment, history)
+        if refusal is not None:
+            raise BatchError(refusal)
         replays = history.replays
-        if not replays:
-            raise BatchError(
-                f"{experiment.experiment_id} has no recorded run to conclude; a conclusion writes the result of "
-                "a run this controller started, and a harness invocation nothing here recorded is not one it can "
-                "speak for"
-            )
 
         going = replays[-1]
         if redone_conclusion(history) is not None:
@@ -1094,24 +1205,21 @@ def abandon(
         experiment = guards.require_open_experiment(current, "end a replay of")
 
         history = read_replays(config, experiment)
-        _require_no_request_outstanding(experiment, history, "ended")
+        # The two states that are not this verb's work at all, before the run
+        # itself is looked at: its own redo stands between them and the third,
+        # and which of the two an ended run is turns on the reason — an argument,
+        # so it is answered here rather than by the shared predicate.
+        refusal = request_refusal(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
+        if refusal is not None:
+            raise BatchError(refusal)
         replays = history.replays
-        if not replays:
-            raise BatchError(
-                f"{experiment.experiment_id} has no recorded run to end; what this records is why a run this "
-                "controller started stopped, and there is none"
-            )
 
         going = replays[-1]
         if not going.running:
             result = going.result
             if redone_end(history) is not None and result is not None and result.detail == text:
                 return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
-            raise BatchError(
-                f"{_describe_replay(going)} of {experiment.experiment_id} already ended "
-                f"{result.outcome!r}: {result.detail!r}; a run ends once, and what is on record is what it "
-                "measured — start another attempt rather than restating how this one finished"
-            )
+            raise BatchError(_already_ended(experiment, going))
 
         stamp = format_rfc3339(moment)
         concluded = replace(
@@ -1208,28 +1316,6 @@ def withdraw(config: EvolutionConfig, *, now: datetime | None = None) -> Request
         experiment_id=experiment.experiment_id,
         pending=history.pending,
         withdrawn=True,
-    )
-
-
-def _require_no_request_outstanding(experiment: Experiment, history: History, action: str) -> None:
-    """A run is concluded or ended, never a request for one.
-
-    Both operations act on the newest recorded run, and a request standing over
-    it is the state where that is the wrong run to act on: the harness was asked
-    for a further one and its answer never reached this record. Reporting the
-    previous run as the thing to conclude would hide that; so would refusing
-    with "no run to conclude" while one may be going. The way forward is the
-    same either way — resume the start, which records the run the harness began,
-    or withdraw the request.
-    """
-
-    pending = history.pending
-    if pending is None:
-        return
-    raise BatchError(
-        f"{experiment.experiment_id} has {_describe_pending(pending)} outstanding, and no run recorded for it; "
-        f"the harness was asked for that run and its answer never reached this record, so there is nothing here "
-        f"to be {action} — start the replay again to record the run it began, or withdraw the request"
     )
 
 
