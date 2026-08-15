@@ -140,6 +140,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
     _add_lineage_commands(evolution_subparsers)
     _add_release_commands(evolution_subparsers)
+    _add_harness_commands(evolution_subparsers)
     return parser
 
 
@@ -323,6 +324,185 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_expectation_argument(settle)
 
 
+def _add_harness_commands(subparsers: argparse._SubParsersAction) -> None:
+    """The four verbs that cross the harness boundary.
+
+    Apart from the others because of what they need rather than what they act
+    on: every other verb in this console needs nothing outside this checkout,
+    while these ask something to run a case suite and report on it. Nothing in
+    this repository is that thing, so the harness they ask is the operator
+    (`evolution/harness.py`) — they run the evaluation however they run it and
+    state what it is running and what it answered.
+
+    That makes each start two commands rather than one, and the domain was
+    already built that way: the controller pins the integration and writes its
+    request before anything is asked, so a start with nothing stated records the
+    request and prints what to exercise, and the same verb run again — naming the
+    run the harness began — records it. A request the harness never answered for
+    is given up with `replay-withdraw` / `assess-withdraw`, which keeps the
+    position rather than freeing it.
+    """
+
+    from .evolution import phase
+
+    replay_start = subparsers.add_parser(
+        phase.ACTION_REPLAY_START, help="measure the sealed round's candidate, integrated onto the source line"
+    )
+    replay_start.add_argument(
+        "--source-ref",
+        required=True,
+        help="the source line this candidate is integrated onto — the ref a promotion would merge it into",
+    )
+    _add_expectation_of_a_run(replay_start)
+    _add_plan_arguments(replay_start)
+    _add_workspace_argument(replay_start)
+    _add_expectation_argument(replay_start)
+
+    replay_conclude = subparsers.add_parser(
+        phase.ACTION_REPLAY_CONCLUDE, help="record what the harness reported for the run that is going"
+    )
+    _add_report_arguments(replay_conclude)
+    _add_workspace_argument(replay_conclude)
+    _add_expectation_argument(replay_conclude)
+
+    assess_measure = subparsers.add_parser(
+        phase.ACTION_ASSESS_MEASURE, help="run the release against the line immediately before it (invariant 17)"
+    )
+    _add_expectation_of_a_run(assess_measure)
+    _add_plan_arguments(assess_measure)
+    _add_workspace_argument(assess_measure)
+    _add_expectation_argument(assess_measure)
+
+    assess_conclude = subparsers.add_parser(
+        phase.ACTION_ASSESS_CONCLUDE, help="record what the harness reported for the counterfactual"
+    )
+    _add_report_arguments(assess_conclude)
+    _add_workspace_argument(assess_conclude)
+    _add_expectation_argument(assess_conclude)
+
+
+def _add_expectation_of_a_run(parser: argparse.ArgumentParser) -> None:
+    """What the run is expected to show, before it shows anything.
+
+    Recorded at the request and never handed to the harness: a prediction given
+    to the thing being measured is an instruction, and one written beside the
+    numbers is a reading of them. A resume restates it, and a different one is
+    refused rather than acted on — the run it would be a prediction about may
+    already be going.
+    """
+
+    parser.add_argument(
+        "--expectation",
+        required=True,
+        help="what this run is expected to show, recorded before any numbers exist (never sent to the harness)",
+    )
+
+
+def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
+    """What the operator's harness says it is running.
+
+    The controller owns the integration and nothing else: the cohort, the
+    evaluator and the harness configuration are the harness's own answer, and
+    this is where an operator states them. All of it or none of it — a partial
+    statement is refused, because a record naming a case set with no evaluator
+    describes a run nobody could repeat.
+
+    Stating nothing is the ordinary first half of a start: the request is
+    recorded, what to exercise is printed, and this verb is run again once there
+    is a run to name.
+    """
+
+    parser.add_argument(
+        "--case-set",
+        nargs=3,
+        metavar=("ID", "SHA256", "COUNT"),
+        help="the cohort the harness resolved, its content hash, and how many cases it holds",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        nargs=2,
+        metavar=("CASE_ID", "REASON"),
+        help="a case held out of that cohort and why, repeatable",
+    )
+    parser.add_argument(
+        "--evaluator",
+        nargs=2,
+        metavar=("BACKEND", "MODEL"),
+        help="who judged the run, in the vocabulary an imported report uses (invariant 5)",
+    )
+    parser.add_argument("--rubric", help="the rubric revision that judging used, where the evaluator states one")
+    parser.add_argument(
+        "--harness",
+        nargs=3,
+        metavar=("ID", "REVISION", "CONFIG_SHA256"),
+        help="which harness ran it, at which revision, and the hash of the configuration it ran under",
+    )
+    parser.add_argument(
+        "--handle",
+        help=(
+            "the harness's own name for this run, opaque here and stored unread; it is what a later "
+            "`*-conclude` polls, so a run recorded without one could never be concluded"
+        ),
+    )
+
+
+def _add_report_arguments(parser: argparse.ArgumentParser) -> None:
+    """What the harness answered for the run that is going.
+
+    Required rather than optional, because that is what this verb is: an
+    operator with nothing to report runs nothing, and `status` is where the run
+    is read. Run again after an interrupted conclusion it reports the result
+    already on record and polls for nothing, which is the redo every operation
+    here has — the same arguments, and what comes back says whether this run
+    wrote anything.
+    """
+
+    from .evolution import replay
+
+    parser.add_argument(
+        "--outcome",
+        required=True,
+        choices=list(replay.RESULTS),
+        help=(
+            f"{replay.RESULT_COMPLETED}: the cohort was measured, and the numbers are stated with --metric; "
+            f"{replay.RESULT_FAILED}: it was not, and the reason is all the record takes"
+        ),
+    )
+    parser.add_argument("--detail", required=True, help="what the harness said about the run (recorded, and required)")
+    parser.add_argument("--elapsed", type=float, metavar="SECONDS", help="how long the run took, where it says")
+    parser.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        nargs=5,
+        metavar=("NAME", "UNIT", "BASELINE", "CANDIDATE", "BETTER"),
+        help=(
+            "a quantity the run measured on both sides, repeatable "
+            f"(e.g. --metric remediation-rounds rounds 2.4 1.6 {replay.BETTER_LOWER}); an empty baseline is a "
+            f"side nothing measured, which a quantity called better in some direction may not have — record it "
+            f"{replay.BETTER_NEITHER!r} instead"
+        ),
+    )
+    parser.add_argument(
+        "--regression",
+        action="append",
+        default=[],
+        nargs=2,
+        metavar=("CASE_ID", "SUMMARY"),
+        help="a case that got worse under the candidate, repeatable",
+    )
+    parser.add_argument("--ambiguity", help="what the run could not decide, where it says so")
+    parser.add_argument(
+        "--handle",
+        help=(
+            "the run these numbers are for, as `status` names it; a precondition wherever it is given, so a "
+            "report meant for one run cannot land on another"
+        ),
+    )
+
+
 def _add_reading_arguments(parser: argparse.ArgumentParser, assessment) -> None:
     """What a human states about a release: the verdict, how sure of it, and why.
 
@@ -394,6 +574,10 @@ def _evolution(args: argparse.Namespace) -> int:
         print(_release(config, args))
         return 0
 
+    if args.evolution_command in _harness_verbs(phase):
+        print(_harness(config, args))
+        return 0
+
     feed = _evolution_feed(config, args.feed_dir)
     if args.evolution_command == "list":
         result = importer.list_candidates(config, feed, page_size=args.page_size, max_pages=args.max_pages)
@@ -448,9 +632,9 @@ def _release_verbs(phase) -> frozenset[str]:
     promotion taken back off the line, and a cohort's reading of the release
     before it.
 
-    Named from the same constants for the same reason. Two of the replay verbs
-    are here and two are not — `replay-start` and `replay-conclude` ask a harness,
-    which this console has no way to reach yet.
+    Named from the same constants for the same reason. The four verbs that ask a
+    harness are grouped apart in `_harness_verbs` — not by what they act on, but
+    by needing something outside this checkout to answer them.
     """
 
     return frozenset(
@@ -467,6 +651,24 @@ def _release_verbs(phase) -> frozenset[str]:
     )
 
 
+def _harness_verbs(phase) -> frozenset[str]:
+    """The verbs that ask a harness to run something, or answer for what it ran.
+
+    The one boundary this console does not own. Everything else here is decided
+    from records in this checkout; these four are the operator's statement of
+    what an evaluation is doing and what it reported.
+    """
+
+    return frozenset(
+        {
+            phase.ACTION_REPLAY_START,
+            phase.ACTION_REPLAY_CONCLUDE,
+            phase.ACTION_ASSESS_MEASURE,
+            phase.ACTION_ASSESS_CONCLUDE,
+        }
+    )
+
+
 def _wired_verbs(phase) -> frozenset[str]:
     """Every lifecycle verb this CLI dispatches.
 
@@ -476,7 +678,7 @@ def _wired_verbs(phase) -> frozenset[str]:
     `allowed_actions` straight to the command line.
     """
 
-    return _lineage_verbs(phase) | _release_verbs(phase)
+    return _lineage_verbs(phase) | _release_verbs(phase) | _harness_verbs(phase)
 
 
 def _lineage(config, args: argparse.Namespace) -> str:
@@ -584,6 +786,157 @@ def _release(config, args: argparse.Namespace) -> str:
     # A release verb named above and not dispatched here, for `_lineage`'s
     # reason: falling through would answer a release gate that was never asked.
     raise AssertionError(f"{command} is a release verb with no dispatch")
+
+
+def _harness(config, args: argparse.Namespace) -> str:
+    """Run one harness verb and describe what it did.
+
+    The operator's statement goes to the same operations a wired-up harness
+    would drive, in the same order and under the same lock; what is different is
+    only where the answers come from. A start with nothing stated is the shape
+    that boundary already had: the operation records its request, the stated
+    harness declines to describe a run, and what comes back is the request
+    itself — which is what an operator hands the evaluation they are about to
+    run. Exit 0, because the command did what it was asked: it pinned a run and
+    put it on record.
+    """
+
+    from .evolution import assessment, harness, phase, render, replay
+
+    command = args.evolution_command
+    if command in (phase.ACTION_REPLAY_START, phase.ACTION_ASSESS_MEASURE):
+        stated = harness.StatedHarness(plan=_plan(replay, args))
+        try:
+            if command == phase.ACTION_REPLAY_START:
+                return render.format_run_started(
+                    replay.start(
+                        config,
+                        stated,
+                        source_ref=args.source_ref,
+                        expectation=args.expectation,
+                        expect=args.expect,
+                    )
+                )
+            return render.format_counterfactual_started(
+                assessment.measure(config, stated, expectation=args.expectation, expect=args.expect)
+            )
+        except harness.Unanswered as unanswered:
+            # Each boundary's request in its own vocabulary: a replay is a tree
+            # to build and exercise, a counterfactual is two revisions the
+            # promotion already produced.
+            if command == phase.ACTION_REPLAY_START:
+                return render.format_request_made(unanswered.request)
+            return render.format_counterfactual_requested(unanswered.request)
+
+    answering = harness.StatedHarness(report=_report(replay, args), handle=args.handle)
+    if command == phase.ACTION_REPLAY_CONCLUDE:
+        return render.format_run_concluded(replay.conclude(config, answering, expect=args.expect))
+    if command == phase.ACTION_ASSESS_CONCLUDE:
+        return render.format_counterfactual_concluded(assessment.conclude(config, answering, expect=args.expect))
+    # A harness verb named above and not dispatched here, for `_lineage`'s
+    # reason: a verb added to one list and not the other is raised rather than
+    # answered as one of the verbs that happens to be near it.
+    raise AssertionError(f"{command} is a harness verb with no dispatch")
+
+
+def _plan(replay, args: argparse.Namespace) -> Any:
+    """What the operator says their harness is running, or nothing at all.
+
+    Nothing is the first half of a start: the controller records its request and
+    the run is described afterwards. A statement is all four parts or none —
+    stating some of them describes a run that could not be repeated from the
+    record, and the record is the only durable form a request has.
+    """
+
+    stated = {
+        "--case-set": args.case_set,
+        "--evaluator": args.evaluator,
+        "--harness": args.harness,
+        "--handle": args.handle,
+    }
+    given = [name for name, value in stated.items() if value]
+    if not given and not args.exclude:
+        return None
+    missing = [name for name, value in stated.items() if not value]
+    if missing:
+        raise evolution_errors.BatchError(
+            f"a harness states all of what it is running or none of it; this states {', '.join(given)} and not "
+            f"{', '.join(missing)}. State nothing to record the request and be told what to exercise, or state "
+            "the whole of what the harness answered with"
+        )
+    case_set_id, case_set_sha256, count = args.case_set
+    backend, model = args.evaluator
+    harness_id, revision, config_sha256 = args.harness
+    return replay.ReplayPlan(
+        cases=replay.CaseSet(
+            case_set_id=case_set_id,
+            case_set_sha256=case_set_sha256,
+            count=_count(count),
+            excluded=tuple(replay.Exclusion(case_id=case_id, reason=reason) for case_id, reason in args.exclude),
+        ),
+        evaluator=replay.Evaluator(backend=backend, model=model, rubric_revision=args.rubric),
+        harness=replay.Harness(
+            id=harness_id, revision=revision, config_sha256=config_sha256, handle=args.handle
+        ),
+    )
+
+
+def _report(replay, args: argparse.Namespace) -> Any:
+    """What the harness answered, as the record's own report.
+
+    Only the numbers are checked here, for `_measurements`' reason: which
+    outcomes and directions exist is the record's vocabulary and is offered by
+    the parser, and every cross-field rule — a completed run that measured
+    nothing, a failure still stating numbers, a direction with no baseline —
+    belongs to the reader that both the library and this share.
+    """
+
+    return replay.ReplayReport(
+        outcome=args.outcome,
+        detail=args.detail,
+        elapsed_seconds=args.elapsed,
+        metrics=tuple(
+            replay.Measurement(
+                metric=metric,
+                unit=unit,
+                baseline=_quantity(baseline, f"--metric {metric} {unit} {baseline} {candidate} {better}"),
+                candidate=_measured(candidate, f"--metric {metric} {unit} {baseline} {candidate} {better}"),
+                better=better,
+            )
+            for metric, unit, baseline, candidate, better in args.metric
+        ),
+        regressions=tuple(replay.Regression(case_id=case_id, summary=summary) for case_id, summary in args.regression),
+        ambiguity=args.ambiguity,
+    )
+
+
+def _count(stated: str) -> int:
+    """How many cases the cohort holds, which is a count and not a measurement."""
+
+    try:
+        return int(stated)
+    except ValueError:
+        raise evolution_errors.BatchError(
+            f"--case-set states {stated!r} where the number of cases goes; a cohort's size is what a later "
+            "reader compares one run's coverage with another's"
+        ) from None
+
+
+def _measured(stated: str, where: str) -> float:
+    """The candidate side of a run's measurement, which always exists.
+
+    A run states what the candidate came to; the baseline is what may be absent,
+    because a quantity nothing measured before is an ordinary reading and a
+    different fact from zero.
+    """
+
+    value = _quantity(stated, where)
+    if value is None:
+        raise evolution_errors.BatchError(
+            f"{where!r} states no candidate value; a run reports what it measured on the candidate, and a "
+            "quantity it did not measure is not one it states"
+        )
+    return value
 
 
 def _measurements(assessment, stated: list[list[str]]) -> list[Any]:

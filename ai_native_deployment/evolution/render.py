@@ -20,6 +20,7 @@ from .assessment import (
     Concluded,
     Formed,
     Frame,
+    Measured,
     Measurement,
     Settled,
     Subject,
@@ -53,7 +54,20 @@ from .phase import (
     ReleaseReading,
     Rollback,
 )
-from .replay import Evidence, PendingRun, RequestWithdrawn, RunConcluded, WithdrawnRequest
+from .replay import (
+    RESULT_FAILED,
+    CaseSet,
+    Evaluator,
+    Evidence,
+    PendingRun,
+    ReplayPlan,
+    ReplayRequest,
+    RequestWithdrawn,
+    RunConcluded,
+    RunStarted,
+    WithdrawnRequest,
+)
+from .replay import Measurement as RunMeasurement
 from .rollback import RollbackResult
 
 FIELD_WIDTH = 13
@@ -330,6 +344,174 @@ def format_rollback(result: RollbackResult, repo_root: Path) -> str:
     return "\n".join(lines)
 
 
+def format_request_made(request: ReplayRequest) -> str:
+    """A replay pinned and asked for, by a harness that has not answered yet.
+
+    The console's half of the operator-stated boundary. The controller writes
+    its request before anything is asked, and this is that request: the tree to
+    exercise, the position it will occupy, and — for a rerun — the selections the
+    earlier attempt resolved. It reaches an operator no other way, because the
+    integration is computed as the request is written and no reading recomputes
+    it.
+
+    Nothing is running at this point, which is the sentence at the top: the
+    record says a run was asked for, and until one is described the round has
+    been measured by nothing.
+    """
+
+    integration = request.integration
+    lines = [
+        f"replay-start: {request.experiment_id} round {request.round_number} attempt {request.attempt} requested — "
+        "nothing is running yet",
+        _field("candidate", _short(integration.candidate_revision)),
+        _field("base", _short(integration.base_revision)),
+        _field(
+            "merge input",
+            f"{_short(integration.merge_input_revision)} ({integration.merge_input_ref or '<no ref>'})",
+        ),
+        _field("tree", _short(integration.tree)),
+        *_reproduce_lines(request.reproduce),
+        _field("next", "exercise that tree, then `replay-start` again stating what the harness is running"),
+        *_holding_lines("replay-withdraw"),
+    ]
+    return "\n".join(lines)
+
+
+def format_counterfactual_requested(request: ReplayRequest) -> str:
+    """A counterfactual pinned and asked for, by a harness that has not answered.
+
+    The same window as a replay's request and a different thing to run: no tree
+    is computed here, because the promotion *is* the integration — what a harness
+    is asked for is the release and the line immediately before it, exercised
+    wherever it likes.
+
+    The position is stated in full because it is the harness key: a run occupies
+    one no experiment holds, and finding it at the harness afterwards is done by
+    that key and the handle the run answers to.
+    """
+
+    integration = request.integration
+    return "\n".join(
+        [
+            f"assess-measure: counterfactual attempt {request.attempt} requested — nothing is running yet",
+            _field("release", _short(integration.candidate_revision)),
+            _field("against", f"{_short(integration.base_revision)} — the line immediately before it"),
+            _field("line", integration.merge_input_ref or "<no ref>"),
+            _field("key", f"{request.experiment_id} round {request.round_number} attempt {request.attempt}"),
+            _field("next", "exercise both revisions, then `assess-measure` again stating what the harness is running"),
+            *_holding_lines("assess-withdraw"),
+        ]
+    )
+
+
+def _reproduce_lines(reproduce: ReplayPlan | None) -> list[str]:
+    """The selections a rerun is asked for, where there are any.
+
+    A further attempt at a round whose previous one completed asks for that run's
+    cohort, evaluator and configuration by name. Stated here because it is what
+    the operator has to reproduce, and not enforced anywhere: the record states
+    what a harness answered with rather than what it was asked for, so a
+    substitution stands visible beside the attempt it was meant to reproduce.
+    """
+
+    if reproduce is None:
+        return []
+    return [
+        _field("reproduce", f"cases {_cases(reproduce.cases)}"),
+        _field("", f"evaluator {_evaluator(reproduce.evaluator)}"),
+        _field(
+            "",
+            f"harness {reproduce.harness.id} {reproduce.harness.revision} "
+            f"({_short(reproduce.harness.config_sha256)})",
+        ),
+        _field("", "this attempt reruns a completed one; a harness that substituted something states what it ran"),
+    ]
+
+
+def _holding_lines(withdraw: str) -> list[str]:
+    return [
+        _field(
+            "",
+            f"the request holds this position until then — `{withdraw}` gives it up, and the position stays "
+            "allocated because a run may already be going under it",
+        )
+    ]
+
+
+def format_run_started(result: RunStarted) -> str:
+    """A replay run recorded against the round's pinned candidate.
+
+    What this states is a run existing, not evidence: the numbers arrive at
+    `replay-conclude`, and until then the round is measured by something still
+    going.
+    """
+
+    plan = result.plan
+    state = "resumed" if result.resumed else "started"
+    lines = [
+        f"replay-start: {result.experiment_id} round {result.round_number} attempt {result.attempt} {state}",
+        _field("handle", f"{plan.harness.id} {plan.harness.handle!r}"),
+        _field("cases", _cases(plan.cases)),
+        _field("evaluator", _evaluator(plan.evaluator)),
+        _field(
+            "candidate",
+            f"{_short(result.integration.candidate_revision)} onto "
+            f"{result.integration.merge_input_ref or '<no ref>'} at {_short(result.integration.merge_input_revision)}",
+        ),
+        _field("tree", _short(result.integration.tree)),
+    ]
+    if result.resumed:
+        lines.append(
+            _field(
+                "",
+                "this answered the request already on record, so the run named above is recorded as the one it "
+                "was for — a harness answers one position with the run it already began",
+            )
+        )
+    lines.append(_field("", "nothing is measured yet: `replay-conclude` records what the harness reports"))
+    return "\n".join(lines)
+
+
+def format_run_concluded(result: RunConcluded) -> str:
+    """What the run the harness was asked about turned out to be.
+
+    Three states, and `recorded` is what tells them apart: concluded here, still
+    going (nothing written), or a result already on record — an interrupted
+    conclusion reporting what it wrote rather than polling for a second answer.
+    """
+
+    replay = result.replay
+    where = f"{result.experiment_id} round {replay.round_number} attempt {replay.attempt}"
+    if replay.running:
+        return "\n".join(
+            [
+                f"replay-conclude: {where} is still going",
+                _field("handle", f"{replay.harness.id} {replay.harness.handle!r}"),
+                _field("", "this run wrote nothing: a run is measured when it reports, and age concludes nothing"),
+            ]
+        )
+    ended = replay.result
+    state = "concluded" if result.recorded else "had already concluded"
+    lines = [f"replay-conclude: {where} {state} {ended.outcome if ended else ''}".rstrip()]
+    if ended is not None:
+        lines.append(_field("detail", ended.detail))
+        if ended.elapsed_seconds is not None:
+            lines.append(_field("elapsed", f"{ended.elapsed_seconds:g}s"))
+        for index, measurement in enumerate(ended.metrics):
+            lines.append(_field("metrics" if index == 0 else "", _run_metric(measurement)))
+        for index, regression in enumerate(ended.regressions):
+            lines.append(_field("regressions" if index == 0 else "", f"{regression.case_id}: {regression.summary}"))
+        if ended.ambiguity is not None:
+            lines.append(_field("ambiguity", ended.ambiguity))
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the result above is the one on record"))
+    if ended is not None and ended.outcome == RESULT_FAILED:
+        lines.append(_field("", "the round is unmeasured again — another attempt answers it, from `replay-start`"))
+    else:
+        lines.append(_field("", "`status` says whether this measures the tree a promotion would carry"))
+    return "\n".join(lines)
+
+
 def format_run_ended(result: RunConcluded) -> str:
     """A replay run recorded as failed because its harness could not say.
 
@@ -405,6 +587,85 @@ def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
         lines.append(_field("", "this run wrote nothing: the same reading was already on record"))
     if not reading.settled:
         lines.append(_field("", "the gate is unanswered — `settle` is what the next base freeze waits on"))
+    return "\n".join(lines)
+
+
+def format_counterfactual_started(result: Measured) -> str:
+    """The pinned two-revision run that settles what the release did, recorded.
+
+    The pair is the release's own merge unit — the line immediately before it,
+    and the promotion — so what is named here is not an integration this
+    controller computed but the one the promotion already is.
+    """
+
+    run = result.run
+    plan = result.plan
+    state = "resumed" if result.resumed else "started"
+    return "\n".join(
+        [
+            f"assess-measure: {result.batch_id} counterfactual attempt {run.position.attempt} {state}",
+            _field("handle", f"{plan.harness.id} {plan.harness.handle!r}"),
+            _field("cases", _cases(plan.cases)),
+            _field("evaluator", _evaluator(plan.evaluator)),
+            _field(
+                "pinned",
+                f"{_short(run.integration.base_revision)} against {_short(run.integration.candidate_revision)} "
+                f"on {run.integration.source_ref}",
+            ),
+            *(
+                [
+                    _field(
+                        "",
+                        "this answered the request already on record, so the run named above is recorded as the "
+                        "one it was for — a harness answers one position with the run it already began",
+                    )
+                ]
+                if result.resumed
+                else []
+            ),
+            _field("", "nothing is measured yet: `assess-conclude` records what the harness reports"),
+        ]
+    )
+
+
+def format_counterfactual_concluded(result: Concluded) -> str:
+    """What the counterfactual turned out to be, in the record's own vocabulary.
+
+    A run states a baseline and a candidate; here the two sides are the line
+    before the release and the release itself, so the numbers are reported as
+    `before` and `after` — the same names the cohort reading uses, which is what
+    lets the two be read together.
+    """
+
+    run = result.run
+    where = f"{result.batch_id} counterfactual attempt {run.position.attempt}"
+    if run.running:
+        return "\n".join(
+            [
+                f"assess-conclude: {where} is still going",
+                _field("handle", f"{run.harness.id} {run.harness.handle!r}"),
+                _field("", "this run wrote nothing: a run is measured when it reports, and age concludes nothing"),
+            ]
+        )
+    ended = run.result
+    state = "concluded" if result.recorded else "had already concluded"
+    lines = [f"assess-conclude: {where} {state} {ended.outcome if ended else ''}".rstrip()]
+    if ended is not None:
+        lines.append(_field("detail", ended.detail))
+        if ended.elapsed_seconds is not None:
+            lines.append(_field("elapsed", f"{ended.elapsed_seconds:g}s"))
+        for index, measurement in enumerate(ended.metrics):
+            lines.append(_field("metrics" if index == 0 else "", _metric(measurement)))
+        for index, regression in enumerate(ended.regressions):
+            lines.append(_field("regressions" if index == 0 else "", f"{regression.case_id}: {regression.summary}"))
+        if ended.ambiguity is not None:
+            lines.append(_field("ambiguity", ended.ambiguity))
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the result above is the one on record"))
+    if ended is not None and ended.outcome == RESULT_FAILED:
+        lines.append(_field("", "the release is unmeasured again — another run answers it, from `assess-measure`"))
+    else:
+        lines.append(_field("", "the numbers decide nothing on their own: `assess-resolve` records what they settle"))
     return "\n".join(lines)
 
 
@@ -1010,6 +1271,26 @@ def _metric(measurement: Measurement) -> str:
     return f"{measurement.metric} {before}→{after} {measurement.unit} ({measurement.better} is better)"
 
 
+def _run_metric(measurement: RunMeasurement) -> str:
+    """One quantity a run measured, in that boundary's own vocabulary: a baseline
+    and a candidate rather than a before and an after."""
+
+    baseline = "?" if measurement.baseline is None else f"{measurement.baseline:g}"
+    return (
+        f"{measurement.metric} {baseline}→{measurement.candidate:g} {measurement.unit} "
+        f"({measurement.better} is better)"
+    )
+
+
+def _cases(cases: CaseSet) -> str:
+    excluded = f", {len(cases.excluded)} excluded" if cases.excluded else ""
+    return f"{cases.case_set_id} ({_short(cases.case_set_sha256)}, {cases.count} case(s){excluded})"
+
+
+def _evaluator(evaluator: Evaluator) -> str:
+    return f"{evaluator.backend}/{evaluator.model} rubric {evaluator.rubric_revision or '<none>'}"
+
+
 def _analysis_note(complete: bool, findings_recorded: bool) -> str:
     if complete:
         return "analysis complete — its dispositions are at the admission gate"
@@ -1053,6 +1334,11 @@ def _replay_lines(evidence: Evidence | None) -> list[str]:
     run = evidence.replay
     where = "" if run is None else f" (round {run.round_number} attempt {run.attempt})"
     lines = [_field("replay", f"{evidence.state}{where}")]
+    if run is not None and run.running:
+        # The one thing that reaches the work itself: concluding a run means
+        # asking that harness about that name, and an operator answering for one
+        # states it back.
+        lines.append(_field("", f"at {run.harness.id}, handle {run.harness.handle!r}"))
     if evidence.promotable and run is not None and run.result is not None:
         lines.append(_field("", run.result.detail))
     for note in evidence.drift:

@@ -1837,23 +1837,81 @@ def release(lineage_repo: Path) -> str:
     return sha
 
 
-def measured(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
-    """A batch driven to the state a promotion is argued from, by the commands
-    that were wired for it: admitted, completed, sealed, and then measured.
+# What an operator states their harness resolved and answered. The values are
+# the shared fixture harness's own, so a record written from the command line and
+# one written by a library caller are the same record.
+CASE_SET = ("loader-regressions", "c" * 64, "12")
+EVALUATOR = ("claude", "claude-opus-5")
+HARNESS = ("local-replay", "0.1.0", "d" * 64)
 
-    The run is started through the library because the two verbs that ask a
-    harness are not wired yet — this console has no way to reach one.
+
+def running(handle: str) -> list[str]:
+    """What the harness is running, as the operator states it."""
+
+    return [
+        "--case-set",
+        *CASE_SET,
+        "--exclude",
+        "case-9",
+        "needs a credentialed backend",
+        "--evaluator",
+        *EVALUATOR,
+        "--rubric",
+        "r7",
+        "--harness",
+        *HARNESS,
+        "--handle",
+        handle,
+    ]
+
+
+def reported(outcome: str = replay.RESULT_COMPLETED) -> list[str]:
+    """What the harness answered, as the operator states it.
+
+    A failure states its reason and nothing else: partial numbers read as a
+    result nobody produced, which the record refuses.
     """
+
+    measured_numbers = [
+        "--elapsed",
+        "1820.5",
+        "--metric",
+        "remediation-rounds",
+        "rounds",
+        "2.4",
+        "1.6",
+        replay.BETTER_LOWER,
+    ]
+    return [
+        "--outcome",
+        outcome,
+        "--detail",
+        "convergence improved; no regression outside the excluded case",
+        *(measured_numbers if outcome == replay.RESULT_COMPLETED else []),
+    ]
+
+
+def sealed(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
+    """A batch with a candidate-ready round: the state a replay is started from,
+    reached by the commands wired for it."""
 
     batch_id = gate(config, feed_root, "loader-fallback")
     where = ["--repo", str(config.repo_root)]
     run(["evolution", "create", "loader-fallback", *where], capsys)
     finish_admitted_tasks(config)
     run(["evolution", "seal-round", *where], capsys)
+    return batch_id
 
-    harness = FakeHarness(report=completed_report())
-    replay.start(config, harness, source_ref=RELEASE_REF, expectation="fewer remediation rounds", now=NOW)
-    replay.conclude(config, harness, now=NOW)
+
+def measured(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
+    """A batch driven to the state a promotion is argued from, by the commands
+    that were wired for it: admitted, completed, sealed, and then measured."""
+
+    batch_id = sealed(config, feed_root, capsys)
+    where = ["--repo", str(config.repo_root)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    run(["evolution", "replay-start", *asked, *running("run-0101"), *where], capsys)
+    run(["evolution", "replay-conclude", *reported(), *where], capsys)
     return batch_id
 
 
@@ -2390,6 +2448,263 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
     assert "latency:p95" in out
 
 
+# --- the harness boundary, as commands ---------------------------------------
+#
+# The four verbs that ask something outside this checkout to run a case suite,
+# which is the one thing this console cannot do itself. Nothing here implements
+# `replay.ReplayHarness`, so the harness is the operator: they run the evaluation
+# however they run it, and state what it is running and what it answered
+# (`evolution/harness.py`).
+#
+# Three properties are under test. A run can be started and concluded from the
+# command line at all, which is this slice's acceptance. What it records is what
+# was stated — the cohort, the evaluator, the configuration, the numbers — since
+# a console that quietly substituted any of it would put a measurement nobody
+# made under this one's provenance. And a start is two commands over one request:
+# what the controller pinned is printed while nothing is running, and the run
+# named afterwards takes that pin rather than a second one.
+
+
+def test_a_replay_is_started_and_concluded_from_the_command_line(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The acceptance for this slice, on the replay half: a sealed round measured
+    with `aii-2` and nothing else.
+
+    Two commands rather than one, and the domain was already built that way. The
+    integration a harness has to exercise is computed as the request is written,
+    so the first command records that request and prints the tree, and the same
+    verb run again — naming the run the harness began for it — records the run.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    sealed(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    experiment = lineage.describe(config).current.open_experiment
+
+    code, out, _ = run(["evolution", "replay-start", *asked, *where], capsys)
+
+    assert code == 0
+    assert "attempt 1 requested — nothing is running yet" in out
+    pending = replay.read_replays(config, experiment).pending
+    assert pending is not None
+    assert not replay.read_replays(config, experiment).replays
+    assert pending.integration.tree[:12] in out
+    assert pending.integration.merge_input_revision[:12] in out
+
+    code, out, _ = run(["evolution", "replay-start", *asked, *running("run-0101"), *where], capsys)
+
+    assert code == 0
+    assert "attempt 1 resumed" in out and "run-0101" in out
+    started = replay.read_replays(config, experiment).replays[-1]
+    assert started.running
+    # The run took the request's own pin: a resume answers what was asked for
+    # rather than pinning the source line a second time.
+    assert started.integration == pending.integration
+    assert started.expectation == "fewer remediation rounds"
+
+    # And what it recorded of the harness is what the library path records. The
+    # shared fixture harness answers with exactly these selections, so asking it
+    # the same request states the other side of this console's own claim: the
+    # answers arrive from a different place and the record is the same record.
+    library = FakeHarness(report=completed_report())
+    answered = library.start(started.request)
+    assert (started.cases, started.evaluator, started.harness) == (
+        answered.cases,
+        answered.evaluator,
+        answered.harness,
+    )
+
+    code, out, _ = run(["evolution", "replay-conclude", *reported(), "--handle", "run-0101", *where], capsys)
+
+    assert code == 0
+    assert "attempt 1 concluded completed" in out
+    assert "remediation-rounds 2.4→1.6 rounds" in out
+    concluded = replay.read_replays(config, experiment).replays[-1].result
+    reported_by_the_library = library.poll("run-0101")
+    assert concluded == replay.Result(
+        outcome=reported_by_the_library.outcome,
+        # The one field neither side takes from the harness: when a run was
+        # observed to have ended is recorded by whoever observed it.
+        concluded_at=concluded.concluded_at,
+        detail=reported_by_the_library.detail,
+        elapsed_seconds=reported_by_the_library.elapsed_seconds,
+        metrics=reported_by_the_library.metrics,
+        regressions=reported_by_the_library.regressions,
+        ambiguity=reported_by_the_library.ambiguity,
+    )
+    assert replay.describe_evidence(config, experiment).promotable
+
+    code, out, _ = run(["evolution", "replay-conclude", *reported(), *where], capsys)
+
+    assert code == 0
+    assert "had already concluded completed" in out
+    assert "this run wrote nothing: the result above is the one on record" in out
+
+
+def test_nothing_is_pinned_until_what_is_running_is_stated_in_full(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A harness states all of what it is running or none of it. None is the
+    ordinary first half of a start; some of it describes a run no later reader
+    could repeat, and is refused before a position is allocated — a request
+    written for a typo would hold a position forever, since positions are never
+    reissued."""
+
+    config = evolution.load_config(lineage_repo)
+    sealed(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    before = snapshot(lineage_repo)
+
+    code, _, err = run(["evolution", "replay-start", *asked, "--handle", "run-0101", *where], capsys)
+
+    assert code == 2
+    assert "states all of what it is running or none of it" in err
+    assert "--case-set" in err and "--evaluator" in err and "--harness" in err
+    assert snapshot(lineage_repo) == before
+    experiment = lineage.describe(config).current.open_experiment
+    assert replay.read_replays(config, experiment).pending is None
+
+
+def test_numbers_are_recorded_against_the_run_they_were_read_from(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one thing a stated harness can check about a handle. It cannot know
+    whether the operator started the run they name — nothing on record has a
+    handle until something is running — but it can refuse to answer for a run it
+    was not asked about, which is what keeps one run's numbers off another run's
+    record."""
+
+    config = evolution.load_config(lineage_repo)
+    sealed(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    run(["evolution", "replay-start", *asked, *running("run-0101"), *where], capsys)
+    experiment = lineage.describe(config).current.open_experiment
+
+    code, _, err = run(["evolution", "replay-conclude", *reported(), "--handle", "run-0207", *where], capsys)
+
+    assert code == 2
+    assert "the run on record is 'run-0101' and this states numbers for 'run-0207'" in err
+    assert replay.read_replays(config, experiment).replays[-1].running
+
+    code, out, _ = run(["evolution", "replay-conclude", *reported(), "--handle", "run-0101", *where], capsys)
+
+    assert code == 0
+    assert "concluded completed" in out
+    assert replay.read_replays(config, experiment).replays[-1].completed
+
+
+def test_a_harness_verb_refuses_the_reading_another_writer_moved_under(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--expect` on the verbs that ask a harness, where it matters most: the
+    check is first inside the lock and therefore before the request is written,
+    so a caller whose reading has moved never leaves a position allocated for a
+    run it did not decide on."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback", "wider-rubric")
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+    finish_admitted_tasks(config)
+    run(["evolution", "seal-round", *where], capsys)
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    stale = token(config)
+
+    # Another writer, between the reading and the verb.
+    run(["evolution", "reject", "wider-rubric", "--reason", "answered by the loader work", *where], capsys)
+    before = snapshot(lineage_repo)
+
+    code, _, err = run(["evolution", "replay-start", *asked, *running("run-0101"), "--expect", stale, *where], capsys)
+
+    assert code == 2
+    assert f"the evolution records moved since {stale} was read" in err
+    assert snapshot(lineage_repo) == before
+    experiment = lineage.describe(config).current.open_experiment
+    assert replay.read_replays(config, experiment).pending is None
+
+    code, out, _ = run(
+        ["evolution", "replay-start", *asked, *running("run-0101"), "--expect", token(config), *where], capsys
+    )
+
+    assert code == 0
+    assert "attempt 1 started" in out
+
+
+def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The acceptance for this slice's other half, and the order the record
+    keeps: the reading exists before a run is started, the run is pinned before
+    the harness is asked, and only a completed run settles a direction.
+
+    The numbers cross one boundary on the way in — a run states a baseline and a
+    candidate, and this record states a before and an after — so what is asserted
+    here is that the two sides arrive where the cohort reading can be read
+    against them.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    promoted = assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    read = [
+        "--verdict",
+        assessment.VERDICT_INCONCLUSIVE,
+        "--confidence",
+        assessment.CONFIDENCE_LOW,
+        "--rationale",
+        "the cohorts place nothing on either side",
+    ]
+    run(["evolution", "assess", *read, *where], capsys)
+
+    code, out, _ = run(["evolution", "assess-measure", "--expectation", "no change either way", *where], capsys)
+
+    assert code == 0
+    assert "counterfactual attempt 1 requested — nothing is running yet" in out
+    assert promoted[:12] in out
+    reading = assessment.read(config, assessment.describe_current(config).batch)
+    assert reading.requested is not None and reading.counterfactual is None
+
+    code, out, _ = run(
+        ["evolution", "assess-measure", "--expectation", "no change either way", *running("cf-0201"), *where], capsys
+    )
+
+    assert code == 0
+    assert "counterfactual attempt 1 resumed" in out and "cf-0201" in out
+    started = assessment.read(config, assessment.describe_current(config).batch)
+    assert started.requested is None and started.counterfactual.running
+    assert started.counterfactual.harness.handle == "cf-0201"
+    assert started.counterfactual.integration.candidate_revision == promoted
+
+    code, out, _ = run(["evolution", "assess-conclude", *reported(), "--handle", "cf-0201", *where], capsys)
+
+    assert code == 0
+    assert "counterfactual attempt 1 concluded completed" in out
+    run_result = assessment.read(config, assessment.describe_current(config).batch).counterfactual.result
+    assert run_result.metrics[0].before == 2.4 and run_result.metrics[0].after == 1.6
+
+    code, out, _ = run(
+        [
+            "evolution",
+            "assess-resolve",
+            "--verdict",
+            assessment.VERDICT_IMPROVED,
+            "--confidence",
+            assessment.CONFIDENCE_HIGH,
+            "--rationale",
+            "the counterfactual measured fewer remediation rounds on the release",
+            *where,
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert f"reads {promoted[:12]} as {assessment.VERDICT_IMPROVED}" in out
+
+
 def _minimal(verb: str) -> list[str]:
     """The arguments a verb needs to parse — not to run."""
 
@@ -2417,4 +2732,13 @@ def _minimal(verb: str) -> list[str]:
         else []
     )
     settlement = ["--settlement", assessment.SETTLEMENT_RETAIN] if verb == "settle" else []
-    return drafts + reason + reading + settlement
+    # What the harness verbs need before they can run at all: where a run is
+    # integrated and what it is expected to show, or what one answered.
+    line = ["--source-ref", RELEASE_REF] if verb == "replay-start" else []
+    expectation = ["--expectation", "what this run should show"] if verb in ("replay-start", "assess-measure") else []
+    report = (
+        ["--outcome", replay.RESULT_COMPLETED, "--detail", "what the harness said"]
+        if verb in ("replay-conclude", "assess-conclude")
+        else []
+    )
+    return drafts + reason + reading + settlement + line + expectation + report

@@ -34,7 +34,9 @@ what it says, and the operation that records one) together with
 settles what the release did, the two ways out of one nothing can finish, and
 the reading its numbers settle) and `assessment.settle` (the human gate between
 that reading and the next base freeze, which composes the rollback rather than
-repeating it), and the `render.format_*`
+repeating it), `harness.StatedHarness` (the one implementation of
+`ReplayHarness` here — a harness an operator speaks for, which is what makes the
+four verbs that ask one reachable from a command line), and the `render.format_*`
 functions (operator-facing text for the CLI).
 """
 

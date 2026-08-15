@@ -2003,6 +2003,12 @@ def _replay_json(evidence: Evidence | None, history: History | None) -> dict[str
             "merge_input_revision": run.integration.merge_input_revision,
             "merge_input_ref": run.integration.merge_input_ref,
             "tree": run.integration.tree,
+            # Who ran it and their own name for it. Opaque here and the only
+            # thing that connects this record to the work: a run is concluded by
+            # asking that harness about that handle, so a surface offering the
+            # conclusion has to be able to say which run it is answering for.
+            "harness": run.harness.id,
+            "handle": run.harness.handle,
             "outcome": None if run.result is None else run.result.outcome,
             "concluded_at": None if run.result is None else run.result.concluded_at,
         },

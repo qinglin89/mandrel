@@ -335,6 +335,25 @@ def test_an_outstanding_request_is_a_field_even_where_the_evidence_is_promotable
     assert "start the replay again to record it, or withdraw the request" in text
 
 
+def test_a_run_that_is_going_names_the_harness_and_the_handle_it_answers_to(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The one thing in this reading that reaches the work itself. A run is
+    concluded by asking that harness about that name, so a surface offering the
+    conclusion — and an operator answering for a run at a harness they drive
+    themselves — has to be able to say which run it is. Everything else here can
+    be derived again; a handle is opaque and exists only on this record."""
+
+    sealed_round(config)
+    replay.start(config, FakeHarness(report=None), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT)
+
+    block = payload(config)["replay"]
+    assert block["state"] == replay.EVIDENCE_RUNNING
+    assert block["run"]["harness"] == "local-replay"
+    assert block["run"]["handle"] == "run-0101"
+    assert "at local-replay, handle 'run-0101'" in rendered(config)
+
+
 def test_a_withdrawn_position_is_reported_rather_than_lost(
     config: evolution.EvolutionConfig, release: str
 ) -> None:

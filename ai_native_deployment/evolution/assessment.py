@@ -1439,6 +1439,7 @@ def measure(
     harness: ReplayHarness,
     *,
     expectation: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Measured:
     """Start the pinned two-revision run that settles what the release did.
@@ -1478,6 +1479,11 @@ def measure(
     long as the request stands. `withdraw` is the way out of that, and the next
     attempt is numbered past what it gave up — which is why a position is
     allocated from the runs and the withdrawals together.
+
+    `expect` is checked first inside the lock, which for this operation is also
+    before the request is written and therefore before the harness may be running
+    anything: a caller whose reading has moved gets a refusal rather than a run
+    it did not decide on.
     """
 
     moment = _moment(now)
@@ -1489,6 +1495,7 @@ def measure(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch
@@ -1547,6 +1554,7 @@ def conclude(
     config: EvolutionConfig,
     harness: ReplayHarness,
     *,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> Concluded:
     """Ask the counterfactual for its numbers, and record them if it has any.
@@ -1575,6 +1583,7 @@ def conclude(
     moment = _moment(now)
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         frame = _owing_frame(config, known)
         batch = frame.batch

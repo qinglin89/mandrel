@@ -110,6 +110,12 @@ BETTER_LOWER = "lower"
 BETTER_HIGHER = "higher"
 BETTER_NEITHER = "neither"
 
+# The two vocabularies as sets, for a surface that offers them rather than
+# spelling them again: a word this build does not know is then refused where it
+# is typed, instead of at the write.
+RESULTS = (RESULT_COMPLETED, RESULT_FAILED)
+BETTERS = (BETTER_LOWER, BETTER_HIGHER, BETTER_NEITHER)
+
 # What the experiment's current round has for evidence. The first three are read
 # off a record; the last two are derived, and are the two a promotion gate cares
 # about most — nothing has measured this round, or what measured it has since
@@ -908,6 +914,7 @@ def start(
     *,
     source_ref: str,
     expectation: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> RunStarted:
     """Measure the open experiment's pinned candidate, integrated onto `source_ref`.
@@ -946,12 +953,18 @@ def start(
     records a run that already exists, and a ref that moved since is exactly
     what a second attempt is for; refusing it would leave the run nothing names
     — the reason `conclude` does not make that check either.
+
+    `expect` is checked first inside the lock, which for this operation is also
+    before the request is written and therefore before the harness may be running
+    anything: a caller whose reading has moved gets a refusal rather than a run
+    it did not decide on.
     """
 
     moment = _moment(now)
     predicted = _expectation(expectation)
 
     with single_writer_lock(config):
+        guards.require_expected(config, expect)
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "replay")
 
@@ -1108,6 +1121,7 @@ def conclude(
     config: EvolutionConfig,
     harness: ReplayHarness,
     *,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> RunConcluded:
     """Ask the run that is going for its numbers, and record them if it has any.
@@ -1133,6 +1147,7 @@ def conclude(
     moment = _moment(now)
 
     with single_writer_lock(config):
+        guards.require_expected(config, expect)
         current = guards.current_cycle(config, now=moment)
         experiment = guards.require_open_experiment(current, "conclude a replay of")
 
