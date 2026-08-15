@@ -164,6 +164,12 @@ def _action_lines(status: LifecycleStatus) -> list[str]:
     is emitted there; what is bounded here is how much of it an operator who can
     already see the state has to scroll past.
 
+    A verb available because this state already holds its record is marked
+    `(redo)` rather than listed as though there were something new to do. That
+    distinction is the whole of what makes the list readable: `seal-round` beside
+    a round already sealed reads as work outstanding, when what it offers is to
+    report the pin — and the sentence saying so is in the JSON with the refusals.
+
     The revision comes last and is deliberately the last line of the whole
     reading: it is what an operator passes to the verb they just chose, and it
     describes everything above it.
@@ -188,9 +194,11 @@ def _action_lines(status: LifecycleStatus) -> list[str]:
 
 
 def _action(action: Action) -> str:
-    """One verb and the object it would act on, which is the id it is given."""
+    """One verb, the object it would act on — the id it is given — and whether
+    what it offers is a fresh run or the redo of one already on record."""
 
-    return action.action if action.object_id is None else f"{action.action} — {_short(action.object_id)}"
+    named = action.action if action.object_id is None else f"{action.action} — {_short(action.object_id)}"
+    return f"{named} (redo)" if action.recovery is not None else named
 
 
 def _short(object_id: str) -> str:

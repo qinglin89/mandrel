@@ -640,20 +640,30 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
 def test_every_verb_is_named_and_the_refused_ones_carry_a_reason(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
-    """A batch working its first round: the only things to do are end the attempt,
-    because the round's task is not finished, nothing has measured anything, and
-    the gate is empty. Every other verb is still named, with the reason it is not
-    one of them — a menu that listed only the legal verbs would leave "why not" to
-    be discovered by running them."""
+    """A batch working its first round: what can be advanced is ending the attempt,
+    because the round's task is not finished and nothing has measured anything —
+    beside the two verbs whose work this state already holds, which run again to
+    finish the copies that admission owes. Every other verb is still named, with
+    the reason it is not one of them: a menu that listed only the legal verbs
+    would leave "why not" to be discovered by running them."""
 
     freeze_cohort(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
 
     named = verbs(config)
-    assert {name for name, item in named.items() if item["allowed"]} == {"abandon", "supersede"}
+    assert {name for name, item in named.items() if item["allowed"]} == {
+        "abandon",
+        "supersede",
+        "create",
+        "add-tasks",
+    }
     assert all(item["reason"] for item in named.values() if not item["allowed"])
     assert all(item["reason"] is None for item in named.values() if item["allowed"])
+    # Which of the allowed verbs are the fresh operation and which are its redo,
+    # so a surface does not offer the repair as though it were work outstanding.
+    assert {name for name, item in named.items() if item["recovers"]} == {"create", "add-tasks"}
+    assert named["abandon"]["recovers"] is None
     # The id a decision is given, which is the point of the object: a console
     # holding it already has the value `abandon --experiment-id` takes.
     assert named["abandon"]["object"] == {"type": "experiment", "id": admission.experiment_id}
@@ -662,7 +672,8 @@ def test_every_verb_is_named_and_the_refused_ones_carry_a_reason(
     assert "follows no promotion" in named["assess"]["reason"]
 
     text = rendered(config)
-    assert f"actions      abandon — {admission.experiment_id}" in text
+    assert f"abandon — {admission.experiment_id}" in text
+    assert f"create — {admission.experiment_id} (redo)" in text
     assert "other verb(s) refuse here" in text
 
     # The one the seal is waiting for is the task, and it is read where the task
@@ -810,6 +821,152 @@ def promoted_rollback_path(config: evolution.EvolutionConfig) -> Path:
     return config.batches_root / FIRST / "rollback.json"
 
 
+# --- the two forms of every verb ---------------------------------------------
+#
+# Every operation here is redoable by being run again with the same arguments,
+# and that redo is how a durable interruption is repaired. A gate projecting only
+# the fresh form would refuse exactly the verb that repairs it, so each of these
+# asks the gate and then runs the operation it was answering for.
+
+
+def test_a_recorded_admission_offers_the_redo_that_writes_the_copies_it_owes(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The one recovery that still writes. The record is what makes an admission
+    real and the task copies come after it, so a run interrupted between the two
+    leaves a copy owed — and the operation that writes it is the same admission
+    run again, which the gate has to offer rather than refuse as a second
+    experiment."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+    admitted = admission.admitted[0]
+    # What an interruption after the record leaves behind.
+    admitted.task_path.unlink()
+
+    offered = verbs(config)["create"]
+    assert offered["allowed"] is True
+    assert offered["object"] == {"type": "experiment", "id": admission.experiment_id}
+    assert "still owes" in offered["recovers"]
+
+    redone = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+    assert redone.created is False
+    assert admitted.task_path.exists(), "the redo wrote the copy the admission owed"
+
+
+def test_a_sealed_round_and_an_empty_revision_offer_the_runs_that_recorded_them(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """Two retries that write nothing: a seal reports the pin on record, and a
+    revision reports the round it opened. Both are what an operator reaches for
+    after losing the response to a run that had already landed."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+    for item in admission.admitted:
+        complete_task(config, item.task_id)
+    git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, "candidate work"))
+    sealed = experiments.seal_round(config, now=FROZEN_AT)
+
+    offered = verbs(config)["seal-round"]
+    assert offered["allowed"] is True
+    assert "already sealed" in offered["recovers"]
+    again = experiments.seal_round(config, now=FROZEN_AT)
+    assert again.sealed is False and again.candidate_revision == sealed.candidate_revision
+
+    experiments.revise(config, reason="the loader fallback needs a second pass", now=FROZEN_AT)
+    offered = verbs(config)["revise"]
+    assert offered["allowed"] is True
+    assert "admitted nothing" in offered["recovers"]
+    redone = experiments.revise(config, reason="the loader fallback needs a second pass", now=FROZEN_AT)
+    assert redone.opened is False and redone.round_number == 2
+
+
+def test_a_concluded_batch_offers_the_conclusion_that_ended_it(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The redo whose own state has no current batch at all: the outcome record is
+    what ends one, and it lands before the audit line — so the run that finishes an
+    interrupted conclusion is asking about a batch this reading calls history."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST)
+    reason = "the reports recur on evaluation noise rather than on protocol"
+    experiments.conclude_no_change(config, reason=reason, now=FROZEN_AT)
+
+    offered = verbs(config)["conclude-no-change"]
+    assert offered["allowed"] is True
+    assert offered["object"] == {"type": "batch", "id": FIRST}
+    assert "already concluded" in offered["recovers"]
+
+    redone = experiments.conclude_no_change(config, reason=reason, now=FROZEN_AT)
+    assert redone.recorded is False and redone.batch_id == FIRST
+
+
+def test_a_finished_rollback_offers_the_request_that_recorded_it(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """A reversal is recorded before its audit line like everything else here, so
+    the same request run again reports it. The gate used to call that terminal —
+    which is true of the reversal and not of the verb."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    reason = "the counterfactual confirmed the regression"
+    reversal = rollback.reverse(config, reason=reason, now=NOW)
+
+    offered = verbs(config)["rollback"]
+    assert offered["allowed"] is True
+    assert offered["object"] == {"type": "promotion", "id": promoted.promotion_revision}
+    assert "run again for the reason on record" in offered["recovers"]
+
+    redone = rollback.reverse(config, reason=reason, now=NOW)
+    assert redone.recorded is False and redone.revision == reversal.revision
+
+
+def test_a_settled_release_offers_the_answer_that_settled_it(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The settlement's redo is the one that finishes a two-write operation: a
+    `rolled-back` answer lands its inverse commit before its decision record, so an
+    operator who lost the response between them has this verb and nothing else."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        now=NOW,
+    )
+    reason = "nothing measured against the release"
+    assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=reason, now=NOW)
+
+    named = verbs(config)
+    assert named["settle"]["allowed"] is True
+    assert "answer redone reports the decision" in named["settle"]["recovers"]
+    # The reading itself is still its own formation's redo; the four verbs that
+    # would add to it are closed by the answer.
+    assert named["assess"]["allowed"] is True
+    assert not named["assess-measure"]["allowed"]
+    assert not named["assess-resolve"]["allowed"]
+
+    redone = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_RETAIN, reason=reason, now=NOW
+    )
+    assert redone.recorded is False
+
+    formed_again = assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        now=NOW,
+    )
+    assert formed_again.recorded is False
+
+
 def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
@@ -827,6 +984,60 @@ def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
 
     experiments.reject(config, ["hook-side-loader"], reason="one report is not recurrence", now=NOW)
     assert status(config).state_revision != first
+
+
+def test_the_state_revision_covers_the_commit_a_first_base_would_freeze(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The one revision an operation resolves that no record names yet. A batch
+    with no experiment has no base, no candidate and no promotion to stand on, and
+    the grouped admission that opens its first attempt freezes `HEAD` — so a
+    checkout that moved between the reading and the write would freeze a base
+    nobody read, on a token that never noticed."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    assert status(config).revisions.base is None
+
+    before = status(config).state_revision
+    git_commit(config.repo_root, "work an operator committed after reading the status")
+    assert status(config).state_revision != before
+
+
+def test_a_reading_is_never_published_with_a_token_from_after_it(
+    config: evolution.EvolutionConfig, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pair a stale-state guard exists to refuse, and the one shape that would
+    slip past it: a reading of the repository before a write, carrying the token of
+    the repository after it. The mutation given that token compares it against a
+    freshly derived one, finds it current, and acts on a reading of a lifecycle
+    that has since moved — so the reading is taken again instead."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback", "hook-side-loader"))
+
+    read = phase._read
+    taken: list[phase.LifecycleStatus] = []
+
+    def racing(cfg: evolution.EvolutionConfig, moment: datetime) -> tuple:
+        reading, lineage = read(cfg, moment)
+        if not taken:
+            # A writer finishing while the lifecycle was being read: the record
+            # lands after this reading saw the draft waiting, and before the
+            # token is taken.
+            experiments.reject(cfg, ["hook-side-loader"], reason="one report is not recurrence", now=NOW)
+        taken.append(reading)
+        return reading, lineage
+
+    monkeypatch.setattr(phase, "_read", racing)
+    reading = status(config)
+
+    assert len(taken) == 2, "the reading the write landed under is taken again rather than published"
+    assert taken[0].gate is not None and len(taken[0].gate.waiting) == 2
+    assert reading.gate is not None and reading.gate.waiting == ("loader-fallback",)
+    # And the token published is of the state that was read: the same one a
+    # mutation derives for itself a moment later.
+    assert reading.state_revision == status(config).state_revision
 
 
 def test_the_state_revision_follows_the_refs_the_lifecycle_stands_on(

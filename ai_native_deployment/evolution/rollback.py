@@ -102,6 +102,25 @@ class RollbackResult:
     recorded: bool = True
 
 
+def redone_reversal(promoted: BatchLineage) -> Mapping[str, Any] | None:
+    """The rollback a request redone would report having finished.
+
+    A reversal the line already took: the record is written before the audit
+    line, so a run interrupted between the two is finished by being run again and
+    what it reports is that record. Asked of the lineage's own reading of whether
+    the promotion is still effective rather than of the record's fields, because
+    a reversal still in flight leaves the promotion standing and is a rollback to
+    *make* rather than one to report.
+
+    Stated here so the operation and the console's gate ask one question: a gate
+    refusing a verb whose redo is how an interrupted run is finished would leave
+    the interruption with nothing on the surface to resolve it.
+    """
+
+    recorded = promoted.rollback
+    return recorded if recorded is not None and not promoted.promotion_effective else None
+
+
 def rollback(
     config: EvolutionConfig,
     *,
@@ -184,7 +203,7 @@ def reverse(
     # carries, rather than a second interpretation of the same record: a
     # promotion nothing reversed and one whose reversal is still in flight are
     # both effective, and only the first of those is a rollback to make.
-    if not promoted.promotion_effective and recorded is not None:
+    if redone_reversal(promoted) is not None and recorded is not None:
         return _redone(promoted, recorded, text)
     # The batch this acts on is the one whose records are about to be added to,
     # so its replay evidence is held to the same rule every guarded operation

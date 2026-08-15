@@ -92,30 +92,57 @@ any argument a verb is given — which drafts an admission selects, which way a
 settlement goes — since this says whether the verb may run at all. A verb this
 gate allows may still refuse on one of those; a verb it refuses is refused.
 
+**Two forms of every verb.** Every operation here is redoable by being run again
+with the same arguments: it finishes what its interrupted run left, reports what
+is on record, and writes nothing twice. So a state carrying an interrupted or
+completed operation *accepts* that verb — an already-sealed round, a recorded
+rejection, a batch that concluded, a promotion already reversed — and a gate
+reading only the fresh form would refuse the one thing that repairs a durable
+interruption. Each verb is therefore projected in both forms, and where this
+state holds a redo rather than the conditions for a fresh run, the action says
+what running it would finish or report and names the object that redo acts on,
+which for a decision or a conclusion is one this batch already ended. Which state
+a redo recognises is the owning module's to say (`experiments.redone_*`,
+`replay.redone_*`, `rollback.redone_reversal`), asked from here and from the
+operation itself; whether the arguments match what is on record stays with the
+operation, under the lock.
+
 `state_revision` is the token that makes acting on this reading safe. It is a
 digest of the durable state the lifecycle is derived from — the versioned records,
-the pool, the policy, and the tips of the refs in play — so a mutation given the
-revision an operator saw can refuse rather than act on a lifecycle another writer
-has changed underneath it. It deliberately does not cover `.ai-tasks/`: a task
-finishing is this machine's own work rather than a competing writer's, and every
-operation re-reads it under the lock anyway.
+the pool, the policy, and the tips of the refs those records name — so a mutation
+given the revision an operator saw can refuse rather than act on a lifecycle
+another writer has changed underneath it. It deliberately does not cover
+`.ai-tasks/`: a task finishing is this machine's own work rather than a competing
+writer's, and every operation re-reads it under the lock anyway.
+
+It is taken twice, before and after the reading, and a difference between the two
+is a writer that finished while this was being read: the reading would then
+describe the repository before that write and the token would describe it after,
+which is exactly the pair a later mutation is meant to refuse and would instead
+accept. So the reading is taken again rather than published with a token that
+does not describe it.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import experiments, replay as replay_ops, rollback as rollback_ops
 from .analysis_task import task_finished
 from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
 from .batches import REASON_CURRENT_BATCH, AdmissionDecision, awaiting_analysis, evaluate_admission
 from .config import EvolutionConfig
+from .errors import BatchError
 from .lineage import (
+    DECISION_ABANDONED,
     DECISION_PROMOTED,
+    DECISION_SUPERSEDED,
     BatchLineage,
     Experiment,
     Gate,
@@ -199,6 +226,12 @@ OBJECT_RELEASE = "release"
 # apart — so a mutation refusing a stale expectation can say which happened.
 STATE_REVISION_VERSION = 1
 _REVISION_DIGITS = 16
+# How many times a reading is taken again when a writer finishes underneath it.
+# Every writer here holds the single-writer lock for one short operation, so a
+# second attempt already answers the ordinary race; a third losing as well is a
+# repository being written to continuously, which is a state to report rather
+# than to keep retrying through.
+_SNAPSHOT_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -483,6 +516,13 @@ class Action:
     object_id: str | None = None
     # Why this state does not accept the verb, in one line. None means it does.
     refusal: str | None = None
+    # What running the verb here would finish or report, where what this state
+    # holds is the record of that operation rather than the conditions for a
+    # fresh one. Every operation in this package is redoable by being run again
+    # with the same arguments, and a state carrying an interrupted one accepts
+    # only that redo — so an allowed verb without this line is the ordinary form,
+    # and one with it is the repair. None means the ordinary form.
+    recovery: str | None = None
 
     @property
     def allowed(self) -> bool:
@@ -496,6 +536,7 @@ class Action:
             if self.object_type is None
             else {"type": self.object_type, "id": self.object_id},
             "reason": self.refusal,
+            "recovers": self.recovery,
         }
 
 
@@ -688,9 +729,52 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     file standing in for an analysis task all raise here exactly as they would
     during a freeze. A status that smoothed those over would report a lifecycle
     the next operation refuses to act on.
+
+    The reading is bracketed by the token's own inputs rather than followed by
+    them. Nothing here takes the single-writer lock — a status that waited on an
+    operation would be a very different promise, and taking that lock is itself a
+    write — so what stops this publishing a reading of one moment with a token
+    from another is reading the inputs, then the lifecycle, then the inputs
+    again. Equal, and no writer finished in between; different, and the reading
+    is taken again.
     """
 
     moment = now or datetime.now(timezone.utc)
+    inputs = _inputs(config)
+    for _ in range(_SNAPSHOT_ATTEMPTS):
+        reading, lineage = _read(config, moment)
+        after = _inputs(config)
+        if after == inputs:
+            # The gate last, over the assembled reading: what may be done next is
+            # a question about all of it at once, and deriving it from anything
+            # narrower is how a surface comes to offer a verb some other field
+            # already refuses.
+            return replace(
+                reading,
+                actions=_actions(config, reading, lineage),
+                state_revision=_state_revision(after),
+            )
+        inputs = after
+    raise BatchError(
+        f"the evolution records changed under this reading {_SNAPSHOT_ATTEMPTS} times over, so nothing here "
+        "describes one moment of the repository; the token a mutation is given has to be of the state that was "
+        "read, and a reading straddling a write is what it exists to refuse — run `status` again once the writer "
+        "holding the single-writer lock has finished"
+    )
+
+
+def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage]:
+    """The lifecycle as the artifacts now have it, without the gate or the token.
+
+    Both of those are derived from this and from nothing else, which is why they
+    are applied by the caller: the gate reads the assembled state, and the token
+    is the bracket that says this state was one moment.
+
+    The lineage travels with the reading because the gate asks the operations
+    themselves what a redo would find here, and their predicates take the records
+    rather than this projection of them.
+    """
+
     state = load_state(config)
     known = load_batches(config)
     # One derivation, shared with every guarded operation: a status that applied
@@ -726,14 +810,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
         batches=tuple(_record(item) for item in lineage.batches),
         release=_release(config, lineage, current),
     )
-    # The gate last, over the assembled reading: what may be done next is a
-    # question about all of it at once, and deriving it from anything narrower is
-    # how a surface comes to offer a verb some other field already refuses.
-    return replace(
-        reading,
-        actions=_actions(config, reading),
-        state_revision=_state_revision(config, reading),
-    )
+    return reading, lineage
 
 
 def _round_tail(round_: Round) -> str:
@@ -992,7 +1069,7 @@ class _Held:
         return self.stage or self.successor
 
 
-def _actions(config: EvolutionConfig, status: LifecycleStatus) -> tuple[Action, ...]:
+def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage) -> tuple[Action, ...]:
     """Every verb, and what this state does with it.
 
     Emitted in lifecycle order — the pool, the gate, the work, its measurement,
@@ -1011,8 +1088,8 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus) -> tuple[Action, 
         *_gate_actions(status, held),
         *_work_actions(config, status, held),
         *_replay_actions(status, held),
-        *_decision_actions(status, held),
-        _rollback_action(status),
+        *_decision_actions(status, held, lineage),
+        _rollback_action(status, lineage),
         *_release_actions(status),
     )
 
@@ -1110,9 +1187,55 @@ def _gate_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
 
     batch_id = status.current_batch.batch_id if status.current_batch else None
     return (
-        Action(ACTION_CREATE, *_on(OBJECT_BATCH, batch_id), refusal=_create_refusal(status, held)),
-        Action(ACTION_REJECT, *_on(OBJECT_BATCH, batch_id), refusal=_reject_refusal(status, held)),
+        _create_action(status, held, batch_id),
+        _reject_action(status, held, batch_id),
     )
+
+
+def _reject_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -> Action:
+    """Declining a draft, or the decision one already recorded reports back.
+
+    Which drafts are already declined is the lineage's own reading of the gate:
+    the record of a rejection is what makes it real, and the same selection redone
+    for the reason on record reports it rather than deciding twice.
+    """
+
+    declined = status.gate.declined if status.gate is not None else ()
+    if not held.lineage and declined and not _waiting(status):
+        return Action(
+            ACTION_REJECT,
+            *_on(OBJECT_BATCH, batch_id),
+            recovery=(
+                f"draft(s) {list(declined)} are already declined at this gate; that selection redone for the "
+                "reason on record reports the decision and writes nothing"
+            ),
+        )
+    return Action(ACTION_REJECT, *_on(OBJECT_BATCH, batch_id), refusal=_reject_refusal(status, held))
+
+
+def _create_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -> Action:
+    """A grouped admission, or the copies one already recorded still owes.
+
+    The redo acts on the open experiment rather than on the batch: what it
+    finishes is that attempt's task copies, and the selection it is given is the
+    one already on its round.
+    """
+
+    experiment = status.experiment
+    if not held.lineage and not held.ref and experiment is not None:
+        round_ = experiments.redone_admission(experiment)
+        if round_ is not None:
+            return Action(
+                ACTION_CREATE,
+                OBJECT_EXPERIMENT,
+                experiment.experiment_id,
+                recovery=(
+                    f"{experiment.experiment_id} is the attempt round {round_.number} was admitted into; the same "
+                    f"selection ({list(task.draft_id for task in round_.tasks)}) redone writes whatever task copies "
+                    "that admission still owes and records nothing twice"
+                ),
+            )
+    return Action(ACTION_CREATE, *_on(OBJECT_BATCH, batch_id), refusal=_create_refusal(status, held))
 
 
 def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -1120,7 +1243,7 @@ def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
         return held.lineage
     experiment = status.experiment
     if experiment is not None:
-        return (
+        return held.ref or (
             f"{experiment.experiment_id} is open, and a batch runs one attempt at a time (invariant 14); "
             "`add-tasks` admits further drafts into its open round, and redoing the same selection is what finishes "
             "an interrupted admission"
@@ -1176,11 +1299,84 @@ def _work_actions(config: EvolutionConfig, status: LifecycleStatus, held: _Held)
 
     experiment = status.experiment
     object_id = experiment.experiment_id if experiment else None
+    # Every one of the three refuses on the same two holds before it looks at the
+    # round, so a redo is only on offer once those are clear — the order the
+    # operations themselves check them in.
+    open_here = None if held.lineage or held.ref else experiment
     return (
-        Action(ACTION_ADD_TASKS, *_on(OBJECT_EXPERIMENT, object_id), refusal=_add_tasks_refusal(status, held)),
-        Action(ACTION_SEAL_ROUND, *_on(OBJECT_EXPERIMENT, object_id), refusal=_seal_refusal(config, status, held)),
-        Action(ACTION_REVISE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_revise_refusal(status, held)),
+        _add_tasks_action(status, held, open_here, object_id),
+        _seal_action(config, status, held, open_here, object_id),
+        _revise_action(status, held, open_here, object_id),
     )
+
+
+def _add_tasks_action(
+    status: LifecycleStatus, held: _Held, open_here: Experiment | None, object_id: str | None
+) -> Action:
+    """Admitting further drafts, or the copies an admission already recorded owes."""
+
+    round_ = experiments.redone_addition(open_here) if open_here is not None else None
+    if round_ is not None and not _waiting(status) and open_here is not None:
+        return Action(
+            ACTION_ADD_TASKS,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                f"round {round_.number} of {open_here.experiment_id} has admitted "
+                f"{list(task.draft_id for task in round_.tasks)}; that selection redone writes whatever task "
+                "copies the admission still owes and records nothing twice"
+            ),
+        )
+    return Action(ACTION_ADD_TASKS, *_on(OBJECT_EXPERIMENT, object_id), refusal=_add_tasks_refusal(status, held))
+
+
+def _seal_action(
+    config: EvolutionConfig,
+    status: LifecycleStatus,
+    held: _Held,
+    open_here: Experiment | None,
+    object_id: str | None,
+) -> Action:
+    """Pinning the round's candidate, or reporting the pin already on record."""
+
+    pinned = experiments.redone_seal(open_here) if open_here is not None else None
+    if pinned is not None and pinned.seal is not None and open_here is not None:
+        return Action(
+            ACTION_SEAL_ROUND,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                f"round {pinned.number} of {open_here.experiment_id} is already sealed at "
+                f"{pinned.seal.candidate_revision[:12]}; run again this reports that pin and writes nothing"
+            ),
+        )
+    return Action(
+        ACTION_SEAL_ROUND, *_on(OBJECT_EXPERIMENT, object_id), refusal=_seal_refusal(config, status, held)
+    )
+
+
+def _revise_action(
+    status: LifecycleStatus, held: _Held, open_here: Experiment | None, object_id: str | None
+) -> Action:
+    """Opening the next round, or reporting the empty one a revision already opened.
+
+    A prepared promotion holds this off as it holds off the fresh form: the
+    operation checks it before it recognises its own work, because an experiment
+    with a merge in flight is not moved on from at all.
+    """
+
+    opened = experiments.redone_revision(open_here) if open_here is not None and not held.prepared else None
+    if opened is not None and open_here is not None:
+        return Action(
+            ACTION_REVISE,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                f"round {opened.number} of {open_here.experiment_id} was opened for {opened.reason!r} and has "
+                "admitted nothing; that revision redone for the same reason reports the round and writes nothing"
+            ),
+        )
+    return Action(ACTION_REVISE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_revise_refusal(status, held))
 
 
 def _attempt_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -1278,12 +1474,58 @@ def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
 
     experiment = status.experiment
     object_id = experiment.experiment_id if experiment else None
+    history = status.replays if not held.lineage and experiment is not None else None
     return (
         Action(ACTION_REPLAY_START, *_on(OBJECT_EXPERIMENT, object_id), refusal=_replay_start_refusal(status, held)),
-        Action(ACTION_REPLAY_CONCLUDE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, "concluded")),
-        Action(ACTION_REPLAY_ABANDON, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, "ended")),
+        _run_action(
+            status,
+            held,
+            ACTION_REPLAY_CONCLUDE,
+            "concluded",
+            object_id,
+            replay_ops.redone_conclusion(history) if history is not None else None,
+            "reports the result on record rather than polling for a second one",
+        ),
+        _run_action(
+            status,
+            held,
+            ACTION_REPLAY_ABANDON,
+            "ended",
+            object_id,
+            replay_ops.redone_end(history) if history is not None else None,
+            "run again for the reason on record, this reports that failure and writes nothing",
+        ),
         Action(ACTION_REPLAY_WITHDRAW, *_on(OBJECT_EXPERIMENT, object_id), refusal=_withdraw_refusal(status, held)),
     )
+
+
+def _run_action(
+    status: LifecycleStatus,
+    held: _Held,
+    action: str,
+    ended: str,
+    object_id: str | None,
+    recovered: Replay | None,
+    note: str,
+) -> Action:
+    """One of the two verbs that answer for a run, in both its forms.
+
+    A run whose result is on record is what an interrupted answer left, and both
+    verbs report it rather than writing twice — which is why a round already
+    measured accepts them instead of refusing the way a fresh answer would.
+    """
+
+    if recovered is not None:
+        outcome = recovered.result.outcome if recovered.result is not None else ""
+        return Action(
+            action,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                f"round {recovered.round_number} attempt {recovered.attempt} already ended {outcome!r}; {note}"
+            ),
+        )
+    return Action(action, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, ended))
 
 
 def _replay_start_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -1358,7 +1600,7 @@ def _running_replay(status: LifecycleStatus) -> Replay | None:
     return newest if newest is not None and newest.running else None
 
 
-def _decision_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+def _decision_actions(status: LifecycleStatus, held: _Held, lineage: Lineage) -> tuple[Action, ...]:
     """The three ways an attempt ends, and the way a batch ends without one."""
 
     experiment = status.experiment
@@ -1366,23 +1608,91 @@ def _decision_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...
     pending = status.pending_successor
     unfinished = _unfinished_promotion(status)
     batch_id = status.current_batch.batch_id if status.current_batch else None
+    current = lineage.current
     return (
         Action(
             ACTION_PROMOTE,
             *_on(OBJECT_EXPERIMENT, unfinished.experiment_id if unfinished is not None else object_id),
             refusal=_promote_refusal(status, held),
         ),
-        Action(ACTION_ABANDON, *_on(OBJECT_EXPERIMENT, object_id), refusal=_abandon_refusal(status, held)),
+        # The hold each of them runs differs by one question: a supersession is
+        # the operation that may act on a batch owing a successor, and it is the
+        # only one (`guards.current_cycle(finishing=...)`).
+        _ending_action(status, held, held.lineage, ACTION_ABANDON, DECISION_ABANDONED, current, object_id),
         # A supersession that recorded its decision and not the successor it
         # named is redone against the attempt that ended, which is the id the
         # decision sits on — the value this object exists to hand over.
-        Action(
+        _ending_action(
+            status,
+            held,
+            held.stage,
             ACTION_SUPERSEDE,
-            *_on(OBJECT_EXPERIMENT, pending.experiment_id if pending is not None else object_id),
-            refusal=_supersede_refusal(status, held),
+            DECISION_SUPERSEDED,
+            current,
+            pending.experiment_id if pending is not None else object_id,
         ),
-        Action(ACTION_CONCLUDE_NO_CHANGE, *_on(OBJECT_BATCH, batch_id), refusal=_conclude_refusal(status, held)),
+        _conclude_action(status, held, lineage, batch_id),
     )
+
+
+def _ending_action(
+    status: LifecycleStatus,
+    held: _Held,
+    hold: str | None,
+    action: str,
+    outcome: str,
+    current: BatchLineage | None,
+    object_id: str | None,
+) -> Action:
+    """A terminal decision, or the one this batch already recorded, reported back.
+
+    The object is the attempt the redo acts on — history rather than anything
+    open, since a decision redone is about the attempt that ended. That is also
+    the id the operation takes as `experiment_id`, which is what distinguishes an
+    interrupted supersession redone from an untouched successor superseded in
+    its turn.
+    """
+
+    ended = experiments.redone_decision(current, outcome) if current is not None and not hold else None
+    if ended is not None and ended.decision is not None:
+        return Action(
+            action,
+            OBJECT_EXPERIMENT,
+            ended.experiment_id,
+            recovery=(
+                f"{ended.experiment_id} already ended {outcome!r} at {ended.decision.decided_at}; that decision "
+                "redone for the reason on record finishes whatever its run left and writes no second one"
+            ),
+        )
+    refusal = _abandon_refusal(status, held) if action == ACTION_ABANDON else _supersede_refusal(status, held)
+    return Action(action, *_on(OBJECT_EXPERIMENT, object_id), refusal=refusal)
+
+
+def _conclude_action(
+    status: LifecycleStatus, held: _Held, lineage: Lineage, batch_id: str | None
+) -> Action:
+    """Ending a batch having changed nothing, or reporting the record that did.
+
+    Read from the whole lineage because the redo's own state has no current
+    batch: the outcome record is what ends one, and a run interrupted between it
+    and its audit line left nothing for a `current` reading to find.
+    """
+
+    if status.current_batch is None:
+        concluded = experiments.redone_conclusion(lineage)
+        if concluded is not None:
+            outcome = concluded.outcome or {}
+            return Action(
+                ACTION_CONCLUDE_NO_CHANGE,
+                OBJECT_BATCH,
+                concluded.batch_id,
+                recovery=(
+                    f"{concluded.batch_id} already concluded {outcome.get('outcome')!r} at "
+                    f"{outcome.get('decided_at')}; that conclusion redone for the reason on record reports it and "
+                    "writes nothing"
+                ),
+            )
+    return Action(ACTION_CONCLUDE_NO_CHANGE, *_on(OBJECT_BATCH, batch_id), refusal=_conclude_refusal(status, held))
 
 
 def _unfinished_promotion(status: LifecycleStatus) -> Experiment | None:
@@ -1503,7 +1813,7 @@ def _conclude_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     return None
 
 
-def _rollback_action(status: LifecycleStatus) -> Action:
+def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
     """Taking the newest promotion back off the line it was put on.
 
     Not gated on the analysis stage or on anything about the current batch: what
@@ -1520,14 +1830,28 @@ def _rollback_action(status: LifecycleStatus) -> Action:
                 "reverses the promotion this repository most recently recorded"
             ),
         )
+    promoted = lineage.last_promoted
     record = promotion.rollback
-    refusal = None
-    if record is not None and record.reverted_at is not None:
-        refusal = (
-            f"{promotion.revision[:12]} was already taken off {promotion.merge_input_ref} by {record.revision[:12]} "
-            f"at {record.reverted_at}; only the newest promotion is reversed, and it is reversed once"
+    reversed_already = (
+        rollback_ops.redone_reversal(promoted) if promoted is not None else None
+    )
+    if reversed_already is not None and record is not None:
+        # The promotion is off the line and the record says so: this verb is how
+        # a run interrupted between the two writes is finished, and run again for
+        # the reason on record it reports the reversal rather than making a
+        # second one.
+        return Action(
+            ACTION_ROLLBACK,
+            OBJECT_PROMOTION,
+            promotion.revision,
+            recovery=(
+                f"{promotion.revision[:12]} was already taken off {promotion.merge_input_ref} by "
+                f"{record.revision[:12]} at {record.reverted_at}; run again for the reason on record this reports "
+                "that rollback and writes nothing"
+            ),
         )
-    elif record is not None and record.unconfirmed is not None:
+    refusal = None
+    if record is not None and record.unconfirmed is not None:
         refusal = (
             f"the inverse commit {record.revision[:12]} on record cannot be confirmed here — {record.unconfirmed}; "
             f"that record is what moves {promotion.merge_input_ref} and what says the promotion came off it, so it "
@@ -1563,7 +1887,65 @@ def _release_actions(status: LifecycleStatus) -> tuple[Action, ...]:
         absent = _no_release(status)
         return tuple(Action(action, refusal=absent) for action in _RELEASE_ACTIONS)
     refusals = _reading_refusals(release)
-    return tuple(Action(action, OBJECT_RELEASE, release.owner_id, refusals[action]) for action in _RELEASE_ACTIONS)
+    recoveries = _reading_recoveries(release)
+    return tuple(
+        Action(
+            action,
+            OBJECT_RELEASE,
+            release.owner_id,
+            refusal=None if action in recoveries else refusals[action],
+            recovery=recoveries.get(action),
+        )
+        for action in _RELEASE_ACTIONS
+    )
+
+
+def _reading_recoveries(release: ReleaseReading) -> dict[str, str]:
+    """The release verbs this reading is the recorded work of.
+
+    Every one of them is redoable the way the rest of the lifecycle is, and two
+    of the states here are ones an operator can only reach by redoing: a
+    settlement whose rollback landed and whose decision record did not, and a
+    formation interrupted after its record. The other verbs close when the gate
+    answers, so nothing is offered past a decision but the settlement itself and
+    the reading it was made from.
+    """
+
+    reading = release.reading
+    if reading is None:
+        return {}
+    subject = release.frame.subject
+    decision = reading.decision
+    found: dict[str, str] = {}
+    # A reading this cohort holds is one its own formation can report back, and
+    # so is an earlier cohort's while nobody has answered for it — the formation
+    # follows an outstanding obligation to where the record is. What it does not
+    # follow is an obligation already answered; only the settlement does
+    # (`assessment._owing_frame`).
+    if release.owned_here or decision is None:
+        found[ACTION_ASSESS] = (
+            f"{release.owner_id} already reads the {subject.batch_id} release {reading.verdict!r}; that reading "
+            "formed again from the same cohorts and the same rationale reports the record and writes nothing"
+        )
+    if decision is not None:
+        found[ACTION_SETTLE] = (
+            f"the gate answered {decision.settlement!r} at {decision.decided_at}; that answer redone reports the "
+            "decision on record — and finishes a reversal interrupted before it — rather than taking it again"
+        )
+        return found
+    run = release.counterfactual
+    if run is not None and not run.running:
+        outcome = replay_ops.RESULT_COMPLETED if run.completed else replay_ops.RESULT_FAILED
+        found[ACTION_ASSESS_CONCLUDE] = (
+            f"the pinned counterfactual already ended {outcome!r}; run again this reports the result on record "
+            "rather than polling for a second one"
+        )
+        if not run.completed:
+            found[ACTION_ASSESS_ABANDON] = (
+                f"the pinned counterfactual already ended {outcome!r}; run again for the reason on record this "
+                "reports that failure and writes nothing"
+            )
+    return found
 
 
 def _no_release(status: LifecycleStatus) -> str:
@@ -1695,7 +2077,22 @@ def _waiting(status: LifecycleStatus) -> tuple[str, ...]:
 # --- the revision this reading is of -----------------------------------------
 
 
-def _state_revision(config: EvolutionConfig, status: LifecycleStatus) -> str:
+@dataclass(frozen=True)
+class _Inputs:
+    """Everything `state_revision` is a digest of, read in one pass.
+
+    A value rather than a digest so it can be compared with the same reading
+    taken a moment later: the token says *what* the state is, and two of these
+    say whether it was one state throughout.
+    """
+
+    # Every durable record, by repository-relative path and content hash.
+    records: tuple[tuple[str, str], ...]
+    # Where each ref in play stands, or None where this checkout does not hold it.
+    tips: tuple[tuple[str, str | None], ...]
+
+
+def _state_revision(inputs: _Inputs) -> str:
     """A digest of the durable state the lifecycle was derived from.
 
     What it is for: a mutation handed the revision an operator saw can refuse
@@ -1719,13 +2116,41 @@ def _state_revision(config: EvolutionConfig, status: LifecycleStatus) -> str:
 
     digest = hashlib.sha256()
     digest.update(f"{STATE_REVISION_VERSION}\n".encode())
-    for path in _authoritative_paths(config):
-        data = path.read_bytes()
-        digest.update(f"{path.relative_to(config.repo_root).as_posix()}:{len(data)}\n".encode())
-        digest.update(data)
-    for ref in sorted(_refs_in_play(status)):
-        digest.update(f"{ref}={ref_tip(config.repo_root, ref) or ''}\n".encode())
+    for path, content in inputs.records:
+        digest.update(f"{path}={content}\n".encode())
+    for ref, tip in inputs.tips:
+        digest.update(f"{ref}={tip or ''}\n".encode())
     return f"{STATE_REVISION_VERSION}-{digest.hexdigest()[:_REVISION_DIGITS]}"
+
+
+def _inputs(config: EvolutionConfig) -> _Inputs:
+    """Read everything the token is over, independently of the reading.
+
+    Independent on purpose, and that is the whole shape of this: it is taken
+    before and after the reading it accompanies, so a ref set derived from that
+    reading could not bracket it. The refs therefore come from the records —
+    every ref a durable record names is a line this lifecycle stands on — rather
+    than from what the reading made of them, which also covers the ones no
+    reading mentions.
+    """
+
+    records: list[tuple[str, str]] = []
+    refs = {_HEAD}
+    for path in _authoritative_paths(config):
+        try:
+            data = path.read_bytes()
+        except OSError:
+            # A file that went away under the walk. Left out rather than raised:
+            # it reads as a difference between the two brackets, which is what
+            # the retry is for, and a record genuinely gone is a state the
+            # reading itself reports.
+            continue
+        records.append((path.relative_to(config.repo_root).as_posix(), hashlib.sha256(data).hexdigest()))
+        refs |= _refs_named(data)
+    return _Inputs(
+        records=tuple(records),
+        tips=tuple((ref, ref_tip(config.repo_root, ref)) for ref in sorted(refs)),
+    )
 
 
 def _authoritative_paths(config: EvolutionConfig) -> list[Path]:
@@ -1741,33 +2166,53 @@ def _authoritative_paths(config: EvolutionConfig) -> list[Path]:
     return sorted(path for path in known if path.is_file())
 
 
-def _refs_in_play(status: LifecycleStatus) -> set[str]:
-    """The refs whose movement changes what the lifecycle allows.
+# The commit an operation resolves when nothing on record names one. Exactly one
+# does — the grouped admission that freezes a batch's first base takes `HEAD`
+# where the operator names no revision (`experiments._base_revision`) — and it is
+# in play whenever that admission is, which is before any record of this batch
+# exists to name it. A checkout moved between the reading and the write is
+# therefore a different base than the one the reading was taken against, and the
+# cost of covering it is a token that stops being current when the operator
+# switches branch: the safe direction, since the alternative is freezing a base
+# nobody read.
+_HEAD = "HEAD"
 
-    The experiment's own ref, and every source line something here integrated
-    onto: a merge input that moves is what makes replay evidence stale, which is
-    the difference between a promotion and a refusal.
+# What a durable record calls a ref. Everything else in these records is a
+# revision — `reverted_from` and the pinned candidates included — and a revision
+# is covered by the bytes that state it.
+_REF_FIELDS = frozenset({"ref", "base_release_ref", "merge_input_ref", "source_ref"})
+
+
+def _refs_named(data: bytes) -> set[str]:
+    """Every ref this record names, wherever it names it.
+
+    Walked rather than read field by field for the reason the paths above are:
+    a record that grows another integration, another line, or another nesting is
+    covered by stating it in one of these fields rather than by somebody
+    remembering this function. A file that is not a record parses as nothing and
+    names none — drafts are bytes at the admission gate, and their bytes are
+    already covered.
     """
 
-    refs: set[str] = set()
-    if status.ref is not None:
-        refs.add(status.ref.ref)
-    base = status.revisions.base
-    if base is not None and base.ref is not None:
-        refs.add(base.ref)
-    prepared = status.prepared_promotion
-    if prepared is not None:
-        refs.add(prepared.merge_input_ref)
-    request = status.replay_request
-    if request is not None:
-        refs.add(request.integration.merge_input_ref)
-    if status.evidence is not None and status.evidence.replay is not None:
-        refs.add(status.evidence.replay.integration.merge_input_ref)
-    if status.last_promotion is not None:
-        refs.add(status.last_promotion.merge_input_ref)
-    if status.release is not None:
-        refs.add(status.release.assessed.merge_input_ref)
-    return refs
+    try:
+        record = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        return set()
+    found: set[str] = set()
+    _collect_refs(record, found)
+    return found
+
+
+def _collect_refs(node: Any, found: set[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _REF_FIELDS and isinstance(value, str) and value.startswith("refs/"):
+                found.add(value)
+            else:
+                _collect_refs(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_refs(item, found)
 
 
 def _replay_json(evidence: Evidence | None, history: History | None) -> dict[str, Any] | None:

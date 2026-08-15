@@ -723,6 +723,41 @@ class RunConcluded:
         return self.replay.result.outcome if self.replay.result is not None else None
 
 
+# --- what a redo would find ---------------------------------------------------
+#
+# The two verbs that answer for a run are redoable by being run again, and each
+# recognises its own work in the record rather than in a marker. Stated here so
+# the operation and the console's gate ask one question: a gate refusing the verb
+# that finishes an interrupted conclusion would leave the interruption with
+# nothing on the surface to resolve it.
+
+
+def redone_conclusion(history: History) -> Replay | None:
+    """The run a conclusion redone would report the result of.
+
+    The newest one, once it has ended, whatever it ended as: a conclusion writes
+    a result and the result is on record, so what a second run of it has to do is
+    report that rather than poll for another.
+    """
+
+    newest = history.replays[-1] if history.replays else None
+    return newest if newest is not None and not newest.running else None
+
+
+def redone_end(history: History) -> Replay | None:
+    """The run an abandonment redone would report having ended.
+
+    Narrower than a conclusion's, because this writes one particular result: a
+    run that ended some other way is not this operation's work, and is reported
+    back rather than overwritten. Whether the reason matches the one on record is
+    the operation's own check against the record it holds.
+    """
+
+    ended = redone_conclusion(history)
+    result = ended.result if ended is not None else None
+    return ended if result is not None and result.outcome == RESULT_FAILED else None
+
+
 def start(
     config: EvolutionConfig,
     harness: ReplayHarness,
@@ -977,7 +1012,7 @@ def conclude(
             )
 
         going = replays[-1]
-        if not going.running:
+        if redone_conclusion(history) is not None:
             return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
 
         report = harness.poll(going.harness.handle)
@@ -1070,7 +1105,7 @@ def abandon(
         going = replays[-1]
         if not going.running:
             result = going.result
-            if result is not None and result.outcome == RESULT_FAILED and result.detail == text:
+            if redone_end(history) is not None and result is not None and result.detail == text:
                 return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
             raise BatchError(
                 f"{_describe_replay(going)} of {experiment.experiment_id} already ended "

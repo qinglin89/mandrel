@@ -333,6 +333,104 @@ class ReviseResult:
     opened: bool = True
 
 
+# --- what a redo would find ---------------------------------------------------
+#
+# Every operation here is redoable by being run again with the same arguments: it
+# finishes whatever its interrupted run left, reports what is on record, and
+# writes nothing a second time. Which state each one recognises as its own work is
+# a fact two readers need — the operation, to branch on it, and the console's
+# gate, which would otherwise refuse the one verb that repairs an interruption —
+# so each is stated once here and asked from both sides.
+#
+# They answer about the state alone. Whether the arguments match what is on record
+# is the operation's to check, under the lock, against the record it is holding.
+
+
+def redone_admission(experiment: Experiment) -> Round | None:
+    """The round a grouped admission redone would finish the task copies of.
+
+    An attempt that has got no further than the round its own creation opened:
+    the record is what made that admission real, so what may still be owed is the
+    copies. A second round, or a sealed one, is an attempt with a history — and a
+    fresh admission over it is the second experiment invariant 14 refuses.
+    """
+
+    round_ = experiment.open_round
+    return round_ if round_ is not None and len(experiment.rounds) == 1 else None
+
+
+def redone_addition(experiment: Experiment) -> Round | None:
+    """The round a further admission redone would finish the task copies of.
+
+    Any open round that has admitted something. Which drafts the redo is about is
+    the selection it is given, and `add_tasks` compares that against the round's
+    own tasks; what this says is that there is a recorded admission here for a
+    redo to be of.
+    """
+
+    round_ = experiment.open_round
+    return round_ if round_ is not None and round_.tasks else None
+
+
+def redone_seal(experiment: Experiment) -> Round | None:
+    """The round a seal redone would report the pin of."""
+
+    last = experiment.last_round
+    return last if last.seal is not None else None
+
+
+def redone_revision(experiment: Experiment) -> Round | None:
+    """The round a revision redone would report having opened.
+
+    Exactly the shape `_redo_revise` recognises: a round this revision opened and
+    nothing has been admitted into yet, standing over one whose candidate is
+    pinned. A round with work in it is not a revision waiting to be finished.
+    """
+
+    last = experiment.last_round
+    if last.seal is not None or last.tasks or len(experiment.rounds) < 2:
+        return None
+    return last if experiment.rounds[-2].candidate_revision is not None else None
+
+
+def redone_decision(current: BatchLineage, outcome: str) -> Experiment | None:
+    """The attempt a terminal decision redone would report having ended.
+
+    The newest one, always: ordinals run 1..N and only the newest may be open, so
+    with none open the last is what any decision here can be finishing.
+    """
+
+    if current.open_experiment is not None:
+        return None
+    last = current.experiments[-1] if current.experiments else None
+    decision = last.decision if last is not None else None
+    return last if decision is not None and decision.outcome == outcome else None
+
+
+def redone_conclusion(lineage: Lineage, *, reason: str | None = None) -> BatchLineage | None:
+    """The batch a no-change conclusion redone would report having ended.
+
+    Read from the whole lineage rather than from a current batch, because there
+    is none: the outcome record is what ends a batch and it lands before the
+    audit line, so a run interrupted between the two left nothing current and its
+    own retry has only the concluded batch to recognise itself in.
+
+    `reason` narrows it to the conclusion a caller is redoing, which is what the
+    operation asks with. The gate asks without one — which sentence a verb would
+    be given is an argument, and what it needs to know is whether this state
+    holds a conclusion for a redo to be of.
+    """
+
+    concluded = [
+        item
+        for item in lineage.batches
+        if item.outcome is not None
+        and item.outcome["outcome"] == OUTCOME_NO_CHANGE
+        and (reason is None or item.outcome["reason"] == reason)
+    ]
+    return concluded[-1] if concluded else None
+
+
 def create(
     config: EvolutionConfig,
     draft_ids: Iterable[str],
@@ -640,13 +738,14 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
         require_consistent_ref(current)
 
         round_ = experiment.last_round
-        if round_.seal is not None:
+        pinned = redone_seal(experiment)
+        if pinned is not None and pinned.seal is not None:
             return SealResult(
                 batch_id=current.batch_id,
                 experiment_id=experiment.experiment_id,
-                round_number=round_.number,
-                candidate_revision=round_.seal.candidate_revision,
-                sealed_at=round_.seal.sealed_at,
+                round_number=pinned.number,
+                candidate_revision=pinned.seal.candidate_revision,
+                sealed_at=pinned.seal.sealed_at,
                 sealed=False,
             )
         if not round_.tasks:
@@ -776,9 +875,9 @@ def _redo_revise(experiment: Experiment, last: Round, reason: str) -> ReviseResu
     by what is on record rather than by opening another.
     """
 
-    previous = experiment.rounds[-2] if len(experiment.rounds) > 1 else None
-    pinned = previous.candidate_revision if previous is not None else None
-    if pinned is not None and not last.tasks:
+    opened = redone_revision(experiment)
+    pinned = experiment.rounds[-2].candidate_revision if opened is not None else None
+    if opened is not None:
         if last.reason == reason:
             return ReviseResult(
                 batch_id=experiment.batch_id,
@@ -1253,7 +1352,7 @@ def _redo_decision(current: BatchLineage, outcome: str, reason: str) -> Decision
     decision = last.decision if last is not None else None
     if last is None or decision is None:
         raise no_open_experiment(current, "end")
-    if decision.outcome != outcome or decision.reason != reason:
+    if redone_decision(current, outcome) is None or decision.reason != reason:
         raise BatchError(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
             "recorded once and never edited, so redo the same one to finish an interrupted decision — what "
@@ -2167,21 +2266,14 @@ def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
     already done.
     """
 
-    concluded = [
-        item
-        for item in lineage.batches
-        if item.outcome is not None
-        and item.outcome["outcome"] == OUTCOME_NO_CHANGE
-        and item.outcome["reason"] == reason
-    ]
-    if not concluded:
+    latest = redone_conclusion(lineage, reason=reason)
+    outcome = latest.outcome or {} if latest is not None else {}
+    if latest is None:
         raise BatchError(
             "no batch is current, so there is nothing to conclude; a batch is current from the freeze of its "
             "manifest until its outcome is recorded (invariant 14), and freezing the next cohort is "
             "`aii-2 evolution start`"
         )
-    latest = concluded[-1]
-    outcome = latest.outcome or {}
     return ConclusionResult(
         batch_id=latest.batch_id,
         outcome=OUTCOME_NO_CHANGE,
@@ -3098,13 +3190,13 @@ def _redo_create(
     open attempt is what has to be dealt with either way.
     """
 
-    round_ = experiment.open_round
+    round_ = redone_admission(experiment)
     admitted = {} if round_ is None else {task.draft_id: task for task in round_.tasks}
-    if round_ is not None and len(experiment.rounds) == 1 and set(admitted) == requested:
+    if round_ is not None and set(admitted) == requested:
         return _finish(config, current, experiment, round_, tuple(admitted[key] for key in sorted(admitted)))
 
     last = experiment.last_round
-    state = "open" if round_ is not None else "candidate-ready"
+    state = "open" if experiment.open_round is not None else "candidate-ready"
     raise BatchError(
         f"{current.batch_id} already has an open experiment ({experiment.experiment_id}, round {last.number} "
         f"{state}, drafts {sorted(task.draft_id for task in last.tasks)}); invariant 14 allows one at a time — "
