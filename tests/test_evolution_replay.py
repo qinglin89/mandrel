@@ -1960,7 +1960,7 @@ def test_status_reports_what_the_current_round_has_been_measured_by(
     going = phase.describe(config, now=ENDED)
     assert going.evidence is not None and going.evidence.state == replay.EVIDENCE_RUNNING
     payload = going.to_json()
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 6
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 7
     assert payload["replay"]["state"] == replay.EVIDENCE_RUNNING
     assert payload["replay"]["promotable"] is False
     assert payload["replay"]["run"]["attempt"] == 1

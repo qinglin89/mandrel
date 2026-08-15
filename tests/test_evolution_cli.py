@@ -686,7 +686,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 6
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 7
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -697,7 +697,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
         "waited_days": payload["pool"]["waited_days"],
         "max_wait_days": 30,
     }
-    assert payload["batches"] == {"total": 0, "current": None}
+    assert payload["batches"] == {"total": 0, "current": None, "history": []}
     assert payload["gate"] is None
     assert payload["experiments"] == {"open": None, "history": [], "pending_successor": None}
     assert payload["revisions"] == {"base": None, "candidate_tip": None, "round_candidate": None}
@@ -705,6 +705,8 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
     # different absence from a round nothing has replayed.
     assert payload["replay"] is None
     assert payload["last_promotion"] is None
+    # Nothing has been promoted, so there is no release for any cohort to read.
+    assert payload["release"] is None
     assert json.loads(json.dumps(payload)) == payload
 
 

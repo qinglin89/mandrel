@@ -14,18 +14,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .assessment import SETTLEMENT_RETAIN, Frame, Measurement, Subject
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
-from .lineage import REF_ABSENT, Gate
+from .lineage import REF_ABSENT, Gate, PreparedPromotion
 from .phase import (
+    COUNTERFACTUAL_COMPLETED,
+    COUNTERFACTUAL_FAILED,
+    COUNTERFACTUAL_NONE,
+    COUNTERFACTUAL_REQUESTED,
+    COUNTERFACTUAL_RUNNING,
     ROUND_CANDIDATE_READY,
     ROUND_OPEN,
+    BatchRecord,
     LifecycleRevisions,
     LifecycleStatus,
     Promotion,
+    ReleaseReading,
     Rollback,
 )
-from .replay import Evidence
+from .replay import Evidence, PendingRun, WithdrawnRequest
 
 FIELD_WIDTH = 13
 
@@ -131,12 +139,109 @@ def format_status(status: LifecycleStatus) -> str:
                 )
             )
 
+    lines.extend(_concluded_lines(status.batches))
     lines.extend(_gate_lines(status.gate))
     lines.extend(_experiment_lines(status))
+    lines.extend(_prepared_lines(status.prepared_promotion))
     lines.extend(_replay_lines(status.evidence))
+    lines.extend(_request_lines(status.replay_request, status.replay_withdrawn))
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
+    lines.extend(_release_lines(status.release))
     lines.extend(_promotion_lines(status.last_promotion))
     return "\n".join(lines)
+
+
+def _concluded_lines(batches: tuple[BatchRecord, ...]) -> list[str]:
+    """The batches that ended, and how.
+
+    Every one of them, uncapped: what a cohort follows is a position in this
+    series, and a list that quietly stopped at the newest few would read as the
+    whole history to anyone counting back from it. The current batch is not here
+    — it is reported above, where what it is waiting for is.
+    """
+
+    ended = [item for item in batches if not item.current]
+    lines: list[str] = []
+    for index, item in enumerate(ended):
+        lines.append(_field("concluded" if index == 0 else "", _concluded(item)))
+    return lines
+
+
+def _concluded(item: BatchRecord) -> str:
+    promotion = item.promotion
+    if promotion is None:
+        return f"{item.batch_id} {item.outcome} — {item.reason}"
+    rollback = promotion.rollback
+    if rollback is None:
+        tail = ""
+    elif rollback.reverted_at is None:
+        tail = " (rollback prepared, not on the line)"
+    else:
+        tail = " (rolled back)"
+    return f"{item.batch_id} promoted {promotion.revision[:12]} from {promotion.experiment_id}{tail}"
+
+
+def _prepared_lines(prepared: PreparedPromotion | None) -> list[str]:
+    """A promotion prepared and not finished, which is the narrowest state here.
+
+    Reported rather than met as a refusal: while it stands the merge may already
+    be on the source line with only its records missing, so every other verb on
+    this experiment refuses and the operator has one thing to do. Which of the
+    two ways it ends — finished, or discarded once the line proves it never
+    arrived — is the promotion's own reading of Git and not something to guess
+    at here.
+    """
+
+    if prepared is None:
+        return []
+    return [
+        _field(
+            "prepared",
+            f"promotion of {prepared.revision[:12]} — {prepared.candidate_revision[:12]} onto "
+            f"{prepared.merge_input_ref} at {prepared.merge_input_revision[:12]}, tree {prepared.tree[:12]}",
+        ),
+        _field(
+            "",
+            f"prepared {prepared.prepared_at} for {prepared.reason!r} — promote finishes it, or discards it "
+            "once the line proves it never arrived; nothing else runs on this experiment until then",
+        ),
+    ]
+
+
+def _request_lines(request: PendingRun | None, withdrawn: tuple[WithdrawnRequest, ...]) -> list[str]:
+    """Replay work the harness was asked for and never answered about.
+
+    The outstanding request is also a `drift` note above, and is stated here as
+    the position it holds because that is what the two answers to it need. It is
+    left out of `drift` exactly when the evidence is promotable, so this line is
+    the only place a promotable round reports one — "no note" never means
+    "nothing outstanding".
+
+    Withdrawals are listed for the one thing that can still be done about them:
+    each is a position given up while the harness may have been running it, and
+    nothing here will ever hear how that ended.
+    """
+
+    lines: list[str] = []
+    if request is not None:
+        lines.append(
+            _field(
+                "request",
+                f"round {request.round_number} attempt {request.attempt} outstanding since "
+                f"{request.requested_at} — a run may be going; start the replay again to record it, "
+                "or withdraw the request",
+            )
+        )
+    if withdrawn:
+        positions = ", ".join(f"round {taken.round_number} attempt {taken.attempt}" for taken in withdrawn)
+        lines.append(
+            _field(
+                "withdrawn",
+                f"{positions} — given up without becoming runs; each may still be running at the harness, "
+                "and no position is ever reissued",
+            )
+        )
+    return lines
 
 
 def _promotion_lines(promotion: Promotion | None) -> list[str]:
@@ -190,6 +295,242 @@ def _rollback_lines(rollback: Rollback | None) -> list[str]:
             )
         ]
     return [_field("", f"rolled back by {rollback.revision[:12]} at {rollback.reverted_at} — {rollback.reason}")]
+
+
+def _release_lines(release: ReleaseReading | None) -> list[str]:
+    """The reading of the release before this batch — the gate the next first
+    experiment base waits on (invariant 17).
+
+    Absent for most batches, and that is ordinary: only a promotion produces
+    something to assess. What is never ordinary is the shape of the absence, so
+    every part of this says which absence it is — a cohort that has recorded
+    nothing, cohorts with nothing in them, a check this checkout could not make,
+    and a reading nobody has settled are four different next steps.
+    """
+
+    if release is None:
+        return []
+    frame = release.frame
+    subject = frame.subject
+    lines = [
+        _field(
+            "release",
+            f"{subject.revision[:12]} from {subject.batch_id} ({subject.experiment_id}) — {_standing(subject)}",
+        )
+    ]
+    owner = "this batch" if release.owned_here else f"{release.owner_id}, which has already concluded"
+    lines.append(_field("", f"the reading of it is owed by {owner}"))
+    lines.extend(_cohort_lines(release))
+    lines.extend(_counterfactual_lines(release))
+    lines.extend(_reading_lines(release))
+    return lines
+
+
+def _standing(subject: Subject) -> str:
+    """Whether the source line still carries the release.
+
+    Three states, because an inverse commit that the line has not been recorded
+    as carrying is neither of the other two: the promotion stands, and something
+    is half-done about it.
+    """
+
+    if not subject.standing:
+        return f"reversed by {(subject.rollback_revision or '')[:12]}"
+    if subject.rollback_revision is not None:
+        return f"still on the source line; an inverse commit {subject.rollback_revision[:12]} is prepared against it"
+    return "still on the source line"
+
+
+def _cohort_lines(release: ReleaseReading) -> list[str]:
+    """The denominators, the exclusions, and what the two together can carry.
+
+    Precedence matters here and it is why the facets are not simply listed: an
+    empty cohort fails every facet, so a surface reaching for the facet list over
+    one would name a provenance mismatch when what happened is that no report
+    could be placed at all. The exclusions are the answer in that case, and the
+    numbers are absent evidence — never a reading against the release.
+    """
+
+    frame = release.frame
+    before, after = frame.before.task_count, frame.after.task_count
+    lines = [
+        _field(
+            "",
+            f"cohorts: {before} unique task(s) before the release, {after} after; "
+            f"a direction needs {frame.minimum_task_count} each",
+        )
+    ]
+    if frame.excluded:
+        counted: dict[str, int] = {}
+        for item in frame.excluded:
+            counted[item.reason] = counted.get(item.reason, 0) + 1
+        placed = ", ".join(f"{reason} ({count})" for reason, count in sorted(counted.items()))
+        lines.append(_field("", f"{len(frame.excluded)} of {len(frame.catalog)} report(s) excluded: {placed}"))
+    if not before or not after:
+        lines.append(
+            _field(
+                "",
+                "an empty cohort carries no evidence either way — absent evidence, not a defect and not a "
+                "reading against the release",
+            )
+        )
+    else:
+        lines.extend(_facet_lines(frame))
+    if frame.unverified:
+        lines.append(
+            _field(
+                "",
+                f"{len(frame.unverified)} report(s) this checkout could not place: it cannot resolve what the "
+                "target held — an unanswered check, never agreement",
+            )
+        )
+    return lines
+
+
+def _facet_lines(frame: Frame) -> list[str]:
+    """Why the cohorts do or do not carry a direction on their own.
+
+    The two ways a facet fails are separated because only one of them is about
+    the cohorts: a facet no manifest states is a gap in what the feed publishes,
+    and rendering it beside a real mismatch would read as broken provenance in
+    both directions. `task-shape` is the standing example — unknown on every
+    manifest version, which is exactly why a direction rests on the
+    counterfactual instead.
+    """
+
+    incoherent = [facet for facet in frame.comparability.facets if not facet.coherent]
+    if not incoherent:
+        return [_field("", "the cohorts are comparable in every stated facet")]
+    unstated = [facet.facet for facet in incoherent if not (set(facet.before) | set(facet.after)) - {None}]
+    differing = [facet.facet for facet in incoherent if facet.facet not in unstated]
+    lines: list[str] = []
+    if differing:
+        lines.append(
+            _field("", f"the cohorts differ in {', '.join(differing)} — the release is not the only difference")
+        )
+    if unstated:
+        lines.append(
+            _field(
+                "",
+                f"no manifest states {', '.join(unstated)}, so the cohorts alone carry no direction — "
+                "one rests on the pinned counterfactual",
+            )
+        )
+    return lines
+
+
+def _counterfactual_lines(release: ReleaseReading) -> list[str]:
+    """The pinned before/after run, in whichever of its four states it stands.
+
+    A request outstanding is reported ahead of the run it retries, because the
+    run is history and the request is a comparison that may be going at a
+    harness this repository will never hear from again. The failed run stays
+    named beside it: it is why another was asked for.
+
+    The positions given up are reported under every one of the states, the
+    absence included: a request withdrawn leaves no run, no request, and a
+    comparison that may still be going — so the state that says least about it is
+    the one it would go missing from.
+    """
+
+    state = release.counterfactual_state
+    run = release.counterfactual
+    reading = release.reading
+    requested = None if reading is None else reading.requested
+
+    lines: list[str] = []
+    if state == COUNTERFACTUAL_NONE:
+        if reading is not None:
+            lines.append(_field("", "counterfactual: none — nothing has measured this release directly"))
+    elif state == COUNTERFACTUAL_REQUESTED and requested is not None:
+        where = f"round {requested.position.round_number} attempt {requested.position.attempt}"
+        lines.append(
+            _field(
+                "",
+                f"counterfactual: requested at {requested.requested_at} ({where}) — a run may be going; "
+                "ask again to record it, or withdraw the request",
+            )
+        )
+        if run is not None and run.failed:
+            lines.append(_field("", f"the run it retries failed: {run.result.detail if run.result else ''}"))
+    elif run is not None:
+        where = f"round {run.position.round_number} attempt {run.position.attempt}"
+        if state == COUNTERFACTUAL_RUNNING:
+            lines.append(_field("", f"counterfactual: running since {run.started_at} at {run.harness.id} ({where})"))
+        elif state == COUNTERFACTUAL_FAILED:
+            detail = run.result.detail if run.result else ""
+            lines.append(_field("", f"counterfactual: failed ({where}) — {detail}; ask for another to measure again"))
+        elif state == COUNTERFACTUAL_COMPLETED:
+            lines.append(
+                _field(
+                    "",
+                    f"counterfactual: completed ({where}) — {run.integration.base_revision[:12]} against "
+                    f"{run.integration.candidate_revision[:12]}, expected {run.expectation!r}",
+                )
+            )
+
+    if reading is not None and reading.withdrawn:
+        positions = ", ".join(
+            f"round {taken.position.round_number} attempt {taken.position.attempt}" for taken in reading.withdrawn
+        )
+        lines.append(
+            _field("", f"positions given up: {positions} — each may still be running where nothing here will hear")
+        )
+    return lines
+
+
+def _reading_lines(release: ReleaseReading) -> list[str]:
+    """What was recorded, and what the human gate still owes.
+
+    The settlement is stated as the commit it selects rather than as a word,
+    because the thing an operator is about to do with it is freeze a base: the
+    first experiment of the next cohort has to stand on the line the answer
+    chose, and discovering that from a refusal is the miss this line exists to
+    prevent.
+    """
+
+    reading = release.reading
+    if reading is None:
+        return [
+            _field(
+                "",
+                "no reading recorded — the analysis of this release forms one, and the next first experiment "
+                "base waits on it being settled (invariant 17)",
+            )
+        ]
+    lines = [
+        _field("", f"reading: {reading.verdict} ({reading.confidence}) formed {reading.formed_at} — {reading.rationale}")
+    ]
+    goals = [item for item in reading.metrics if item.goal]
+    if goals:
+        lines.append(_field("", f"goal metrics: {', '.join(_metric(item) for item in goals)}"))
+
+    decision = reading.decision
+    if decision is None:
+        if release.in_flight:
+            lines.append(
+                _field(
+                    "",
+                    "not settled, and a measurement is still in flight — nothing may be added once the gate "
+                    "answers, so conclude the run, end it, or withdraw the request first",
+                )
+            )
+        else:
+            lines.append(_field("", "not settled — retain the release or roll it back; the next base freeze waits"))
+        return lines
+
+    selected = (
+        release.frame.subject.revision if decision.settlement == SETTLEMENT_RETAIN else (decision.rollback_revision or "")
+    )
+    lines.append(_field("", f"settled {decision.settlement} at {decision.decided_at} — {decision.reason}"))
+    lines.append(_field("", f"the next first experiment base must contain {selected[:12]}"))
+    return lines
+
+
+def _metric(measurement: Measurement) -> str:
+    before = "?" if measurement.before is None else f"{measurement.before:g}"
+    after = "?" if measurement.after is None else f"{measurement.after:g}"
+    return f"{measurement.metric} {before}→{after} {measurement.unit} ({measurement.better} is better)"
 
 
 def _analysis_note(complete: bool, findings_recorded: bool) -> str:
