@@ -16,6 +16,21 @@ from .paths import CANONICAL_DIRNAME, lock_path, target_path_identity
 EXECUTABLE_BLOB_MODE = "100755"
 REGULAR_BLOB_MODES = frozenset({"100644", EXECUTABLE_BLOB_MODE})
 
+# The receipt shapes this build reads back. Every receipt this contract has ever
+# written states its schema, and this build reads exactly the one it writes: a
+# later version is refused rather than read as the current shape, since a field
+# this build knows by name may mean something else in the document that wrote it.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION})
+
+# Git's two object-id widths, as `git rev-parse` writes them — SHA-1 and
+# SHA-256, lowercase both.
+_OBJECT_ID_WIDTHS = frozenset({40, 64})
+_HEX_DIGITS = "0123456789abcdef"
+
+
+class LockError(RuntimeError):
+    """Raised when a document is not a deploy receipt this build reads."""
+
 
 @dataclass(frozen=True)
 class DeployedFile:
@@ -268,3 +283,52 @@ def write_lock(target_root: Path, lock: dict[str, object]) -> Path:
 
 def read_lock(target_root: Path) -> dict[str, object]:
     return json.loads(lock_path(target_root).read_text(encoding="utf-8"))
+
+
+def stated_source_commit(lock: object) -> str | None:
+    """The canonical commit a receipt ties its payload to, or None where it ties
+    it to none.
+
+    `read_lock` returns whatever the file parsed to; this is what may be believed
+    about it, and it is asked here rather than by each reader because a receipt
+    is a document in a repository this tool does not own — anyone may have
+    edited, truncated, or written it with another build, and the two things that
+    make the field usable are not properties of the string alone.
+
+    The schema is asked because a version this build does not write is a document
+    whose fields it only appears to understand.
+
+    The commit is asked for its exact shape because every reader placing a target
+    by it resolves it in a repository of its own: `git rev-parse` answers for a
+    branch, a tag, or `HEAD` as readily as for a commit id, so a receipt stating
+    a symbolic name would be placed against the reading checkout's own current
+    position and would move whenever that did — reporting a target as carrying a
+    revision nobody ever deployed to it. An abbreviation is refused for the other
+    half of the same reason: it names one commit today and may name two
+    tomorrow. What a deploy writes here is `git rev-parse HEAD`'s own answer
+    (`manifest.source_git_commit`), which is a full object id and nothing else.
+
+    None is an ordinary answer rather than a complaint: a deploy states a source
+    commit only where the payload it wrote matched that commit's canonical tree
+    exactly (`payload_source_commit`), and a receipt stating none is saying that
+    what it holds cannot be placed by anyone.
+    """
+
+    if not isinstance(lock, dict):
+        raise LockError("not a deploy receipt")
+    version = lock.get("schema_version")
+    # The type is asked before the value, and both halves of that matter: JSON
+    # `true` decodes to a `bool`, which is an `int` equal to 1, and a JSON array
+    # or object reaching a set membership test raises on being unhashable rather
+    # than answering — which would leave this refusal as an exception no reader
+    # is catching.
+    if not isinstance(version, int) or isinstance(version, bool) or version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise LockError(
+            f"deploy receipt schema_version {version!r}; this build reads {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
+    commit = lock.get("source_git_commit")
+    if commit is None:
+        return None
+    if not isinstance(commit, str) or len(commit) not in _OBJECT_ID_WIDTHS or commit.strip(_HEX_DIGITS):
+        raise LockError(f"source_git_commit {commit!r} is not a commit id")
+    return commit

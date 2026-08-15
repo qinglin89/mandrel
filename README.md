@@ -445,7 +445,12 @@ harness those verbs speak to is the operator.
 `promote --target <name>` records a **plan**, and deploys nothing. `status` reads
 the other half beside it: for each planned name it resolves this machine's
 registry entry, reads that target's own `.ai-deploy-lock.json`, and asks Git
-where the revision that receipt states sits relative to the promotion.
+where the revision that receipt states sits relative to the promotion. A receipt
+is held to the shape this deploy contract writes before any of that: a schema
+this build reads, and a full commit id rather than a name. `HEAD`, a branch, or
+an abbreviation would be resolved against *this* checkout instead of against what
+that target holds, so it reads as `unreadable` rather than as a placement that
+moves whenever this repository does.
 
 ```text
   promoted     6f1c0a5b2e33 from evolution-batch-0001-exp-01 round 1 (evolution-batch-0001)
@@ -464,7 +469,7 @@ where the revision that receipt states sits relative to the promotion.
 | `unplaceable` | this checkout cannot place that revision — it does not hold the commit, or Git could not answer |
 | `unstated` | the receipt ties its payload to no source commit, so nothing places what it holds |
 | `no-receipt` | the repository is registered and nothing has been deployed to it |
-| `unreadable` | the receipt, or the registry naming it, could not be read |
+| `unreadable` | the receipt, or the registry naming it, could not be read — including a receipt whose schema this build does not read, or that states something other than a commit id |
 | `unregistered` | no repository of that name is registered on this machine |
 | `ambiguous` | two registered repositories share that name, so neither can answer for the plan |
 

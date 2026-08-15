@@ -28,7 +28,22 @@ reason that separates them: an evolution record this controller wrote and cannot
 read back is damage to the lifecycle, while a file in somebody else's repository
 is a question this reading could not answer. Refusing the whole console because a
 target's receipt is corrupt would take the gate, the pool and the experiment away
-from an operator over a repository none of them are about.
+from an operator over a repository none of them are about. That holds for every
+way either file fails to answer — a document that is not one, bytes this process
+could not read at all, bytes that are not text — and the local inventory is
+answered for in the same breath as the receipts it names, since a registry that
+will not read leaves this machine unable to say which repository any planned name
+is.
+
+**What it believes a receipt about.** Only what the deploy contract wrote:
+`lockfile.stated_source_commit` holds the file to a schema this build reads and
+to a full object id, and anything else is that target's `unreadable` state rather
+than a revision. The reason is the question this module asks — where a revision
+sits relative to the promotion, asked of *this* repository's Git. A receipt
+naming `HEAD`, a branch, or an abbreviation would be resolved against this
+checkout rather than against what that target holds, so its answer would move
+under a `git checkout` here and report a promotion as deployed where nothing was
+ever deployed.
 
 **Where a rollback comes in.** An inverse commit descends from the promotion, so
 a line that took the reversal contains the promotion too, and asking about the
@@ -45,8 +60,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from ..lockfile import read_lock
-from ..paths import lock_path
+from ..lockfile import LockError, read_lock, stated_source_commit
+from ..paths import lock_path, registry_path
 from ..registry import RegistryError, load_registry
 from .config import EvolutionConfig
 from .revisions import contains, resolve_commit
@@ -75,11 +90,12 @@ HOLDING_AMBIGUOUS = "ambiguous"
 class TargetHolding:
     """One planned target, and what this machine can say it holds.
 
-    `revision` is the receipt's own `source_git_commit`, as the receipt states
-    it — not the commit it resolved to. The two are the same wherever a receipt
-    names a full commit id, and where they are not, what an operator is looking
-    at is the string in that target's file rather than this repository's reading
-    of it.
+    `revision` is the receipt's own `source_git_commit` — and it is that string
+    and the commit it was placed as at once, since a receipt states one only as a
+    full object id (`lockfile.stated_source_commit`). A receipt naming anything
+    else is not placed at all, so there is no case here where an operator is
+    shown this repository's reading of a name rather than what that target's file
+    says.
     """
 
     target: str
@@ -120,12 +136,21 @@ def describe(
 
     try:
         entries = load_registry(source_root=config.repo_root)
-    except RegistryError as error:
+    except (RegistryError, OSError, ValueError) as error:
         # The inventory itself, rather than any one target's receipt. Reported
         # against every name because that is what it costs: this machine cannot
         # say which repository any of them is.
+        #
+        # Three families and one state. `RegistryError` is the registry module's
+        # own complaint about a document that is not a registry; an `OSError` is
+        # a file this process could not read at all — a permission, a directory
+        # where the file belongs — and a `ValueError` is bytes that are not UTF-8
+        # text. Only the first arrives named, and reading the other two as
+        # anything but this target state would fail the whole console over a
+        # machine-local inventory no part of the lifecycle is kept in.
+        detail = _inventory_complaint(config, error)
         return tuple(
-            TargetHolding(target=name, path=None, revision=None, state=HOLDING_UNREADABLE, detail=str(error))
+            TargetHolding(target=name, path=None, revision=None, state=HOLDING_UNREADABLE, detail=detail)
             for name in targets
         )
 
@@ -135,6 +160,20 @@ def describe(
 
     placed: dict[str, tuple[str, str | None]] = {}
     return tuple(_holding(config, name, known.get(name, []), promotion, rollback, placed) for name in targets)
+
+
+def _inventory_complaint(config: EvolutionConfig, error: Exception) -> str:
+    """Why the registry could not be read, always naming the file.
+
+    `RegistryError` names it already. An `OSError` or a decode error is Python's
+    own and may name nothing an operator can act on — a byte offset says which
+    position, never which file — so the path this reading asked for is stated
+    with it.
+    """
+
+    if isinstance(error, RegistryError):
+        return str(error)
+    return f"{registry_path(config.repo_root)}: {error}"
 
 
 def _holding(
@@ -178,23 +217,16 @@ def _holding(
             detail=f"no deploy receipt at {receipt}",
         )
     try:
-        lock = read_lock(Path(path))
-    except (OSError, ValueError) as error:
-        # `ValueError` is both halves of unreadable here: JSON that does not
-        # parse, and bytes that are not UTF-8 text to begin with.
+        stated = stated_source_commit(read_lock(Path(path)))
+    except (OSError, ValueError, LockError) as error:
+        # One state for every way a receipt does not answer: bytes this process
+        # could not read, JSON that does not parse — `ValueError`, which is also
+        # bytes that are not UTF-8 text to begin with — and a document that
+        # parses into something other than a receipt this build reads, which is
+        # the deploy contract's own judgement rather than this module's.
         return TargetHolding(
             target=name, path=path, revision=None, state=HOLDING_UNREADABLE, detail=f"{receipt}: {error}"
         )
-    if not isinstance(lock, dict):
-        return TargetHolding(
-            target=name,
-            path=path,
-            revision=None,
-            state=HOLDING_UNREADABLE,
-            detail=f"{receipt} is not a deploy receipt",
-        )
-
-    stated = lock.get("source_git_commit")
     if stated is None:
         # The receipt's own null, and an ordinary one: a deploy states a source
         # commit only where the payload it copied matched that commit's tree
@@ -206,15 +238,6 @@ def _holding(
             state=HOLDING_UNSTATED,
             detail="the receipt ties its payload to no source commit, so nothing places what it holds",
         )
-    if not isinstance(stated, str) or not stated.strip():
-        return TargetHolding(
-            target=name,
-            path=path,
-            revision=None,
-            state=HOLDING_UNREADABLE,
-            detail=f"{receipt} states a source revision that is not a commit id",
-        )
-
     if stated not in placed:
         placed[stated] = _place(config, stated, promotion, rollback)
     state, detail = placed[stated]

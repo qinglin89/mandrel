@@ -1582,6 +1582,94 @@ def test_a_file_this_machine_cannot_read_is_that_target_and_not_the_console(
     assert payload(config)["phase"] == "batch-frozen"
 
 
+def test_an_inventory_this_process_cannot_read_at_all_is_still_every_targets_state(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    managed: Callable[..., Path],
+) -> None:
+    """The registry's own complaint about a document that is not a registry is
+    one of three ways it fails to answer, and the other two do not arrive named:
+    a file this process cannot read at all, and bytes that are not text. Letting
+    either escape would fail the whole console over a machine-local inventory
+    that holds no lifecycle state — which is the opposite of what this reading
+    promises, and invisible until the file is one of those two things."""
+
+    managed("orch-hub", revision=promoted.promotion_revision)
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    registry = config.repo_root / ".registry" / "repos.local.json"
+
+    # Bytes that are not UTF-8 text: a `UnicodeDecodeError`, which is a
+    # `ValueError` and not the registry module's own error.
+    registry.write_bytes(b"\xff\xfe not text")
+    holdings = deployed(config)["targets"]
+    assert [item["state"] for item in holdings] == ["unreadable"]
+    # The path is stated by this reading, since a decode error names a byte
+    # offset and no file at all.
+    assert str(registry) in holdings[0]["detail"]
+    assert payload(config)["phase"] == "batch-frozen"
+
+    # A file this process cannot read: the path is a directory, which is an
+    # `OSError` on the way to the bytes.
+    registry.unlink()
+    registry.mkdir()
+    assert [item["state"] for item in deployed(config)["targets"]] == ["unreadable"]
+    assert payload(config)["phase"] == "batch-frozen"
+    assert "orch-hub — unreadable: " in rendered(config)
+
+
+def test_a_receipt_is_placed_only_where_it_states_a_commit_this_build_wrote(
+    config: evolution.EvolutionConfig,
+    release: str,
+    managed: Callable[..., Path],
+) -> None:
+    """The receipt is a file in a repository this tool does not own, and the
+    revision in it is resolved *here* — so a document that is not the one this
+    deploy contract writes is that target's `unreadable` state rather than a
+    reading.
+
+    The symbolic case is the one that would be silent: `HEAD` resolves in this
+    checkout, so it would report a target as carrying a promotion nothing was
+    ever deployed to, and would change answer whenever this checkout moved. An
+    abbreviation is refused for the other half of the same reason — it names one
+    commit today and may name two tomorrow — and an unsupported schema because a
+    field this build knows by name may mean something else in the document that
+    wrote it."""
+
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        at=PROMOTED_AT,
+        targets=("symbolic", "abbreviated", "later-schema"),
+    )
+    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    receipts = {
+        "symbolic": {"schema_version": 1, "source_git_commit": "HEAD"},
+        "abbreviated": {"schema_version": 1, "source_git_commit": promotion.promotion_revision[:12]},
+        "later-schema": {"schema_version": 999, "source_git_commit": promotion.promotion_revision},
+    }
+    for target, receipt in receipts.items():
+        root = managed(target, receipt=False)
+        (root / ".ai-deploy-lock.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    targets = {item["target"]: item for item in deployed(config)["targets"]}
+    assert [item["state"] for item in targets.values()] == ["unreadable"] * 3
+    # Nothing of a refused receipt is reported as a reading: no revision, and a
+    # detail naming the file and what the deploy contract said about it.
+    assert [item["revision"] for item in targets.values()] == [None] * 3
+    assert all(".ai-deploy-lock.json:" in item["detail"] for item in targets.values())
+    assert "is not a commit id" in targets["symbolic"]["detail"]
+    assert "'HEAD'" in targets["symbolic"]["detail"]
+    assert "is not a commit id" in targets["abbreviated"]["detail"]
+    assert "schema_version 999" in targets["later-schema"]["detail"]
+    assert "unreadable: " in rendered(config)
+
+    # The proof that the symbolic one is not a formatting preference: this
+    # checkout's `HEAD` does carry that promotion, so a receipt read as stating
+    # it would have read as `carries` here and as something else in the next
+    # clone.
+    assert git_rev(config.repo_root, "HEAD") == promotion.promotion_revision
+
+
 def test_a_repository_that_promoted_nothing_reads_no_targets(
     config: evolution.EvolutionConfig, managed: Callable[..., Path]
 ) -> None:

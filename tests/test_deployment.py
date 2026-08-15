@@ -253,6 +253,50 @@ def test_deploy_places_skills_in_target_manifest_and_lock(tmp_path: Path) -> Non
     assert {skill, script} <= {item["target_relative_path"] for item in lock["deployed_files"]}
 
 
+def test_a_receipt_states_a_source_commit_only_as_the_object_id_a_deploy_wrote(tmp_path: Path) -> None:
+    """What a reader may believe a receipt about, asked here because the receipt
+    is this contract's document and read in repositories it does not own.
+
+    The shape is load-bearing rather than tidy: a reader places a target by
+    resolving this field in a repository of its own (`evolution/deployment.py`),
+    and `git rev-parse` answers for `HEAD`, a branch or an abbreviation as
+    readily as for a commit id — so a receipt naming one of those would be placed
+    against the reading checkout's own position and would move whenever that did.
+    An unsupported schema is refused for the neighbouring reason: a field this
+    build knows by name may mean something else in the document that wrote it.
+    """
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    target = deploy_from(source, tmp_path)
+
+    # What a deploy writes reads back as itself, and a payload tied to no commit
+    # reads back as the ordinary absence it is rather than as a complaint.
+    assert lockfile.stated_source_commit(lockfile.read_lock(target)) == head
+    assert lockfile.stated_source_commit({"schema_version": 1, "source_git_commit": None}) is None
+
+    for refused in (
+        [],
+        "a receipt",
+        {"source_git_commit": head},
+        {"schema_version": 2, "source_git_commit": head},
+        {"schema_version": True, "source_git_commit": head},
+        # Refused as a version rather than raised on as an unhashable one: a
+        # `TypeError` out of here is a refusal no reader is catching.
+        {"schema_version": [1], "source_git_commit": head},
+        {"schema_version": "1", "source_git_commit": head},
+        {"schema_version": 1, "source_git_commit": "HEAD"},
+        {"schema_version": 1, "source_git_commit": "main"},
+        {"schema_version": 1, "source_git_commit": head[:12]},
+        {"schema_version": 1, "source_git_commit": head.upper()},
+        {"schema_version": 1, "source_git_commit": f"{head}\n"},
+        {"schema_version": 1, "source_git_commit": ""},
+        {"schema_version": 1, "source_git_commit": 12},
+    ):
+        with pytest.raises(lockfile.LockError):
+            lockfile.stated_source_commit(refused)
+
+
 def test_the_lock_states_the_canonical_commit_a_clean_payload_came_from(tmp_path: Path) -> None:
     """The one state in which the receipt's revision is an account of the payload
     rather than of the moment: every canonical file the deploy read is exactly
