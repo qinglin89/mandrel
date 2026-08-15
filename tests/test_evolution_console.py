@@ -1395,3 +1395,202 @@ def test_status_writes_nothing(
     json.dumps(payload(config))
 
     assert snapshot(config.repo_root) == before
+
+
+# --- what the targets hold ---------------------------------------------------
+#
+# The plan a promotion recorded and the revisions its targets carry are two
+# lists of the same names, and everything here is about not letting the first
+# stand in for the second. A promoted commit reaches a target when that target
+# is redeployed and not before, so the reading comes from each target's own
+# receipt — and every reason it could not be read is a state of that target
+# rather than a defect in this lifecycle.
+
+
+@pytest.fixture
+def managed(
+    config: evolution.EvolutionConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., Path]:
+    """A machine managing target repositories, and nothing outside this test.
+
+    The registry is machine-local and its location is overridable, so the
+    override is cleared: a developer who exported it would otherwise have their
+    own targets read for these assertions.
+    """
+
+    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
+    targets = tmp_path / "targets"
+
+    def register(name: str, *, revision: str | None = None, receipt: bool = True, path: Path | None = None) -> Path:
+        root = path or (targets / name)
+        root.mkdir(parents=True, exist_ok=True)
+        if receipt:
+            (root / ".ai-deploy-lock.json").write_text(
+                json.dumps({"schema_version": 1, "source_git_commit": revision}), encoding="utf-8"
+            )
+        registry = config.repo_root / ".registry" / "repos.local.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        entries = json.loads(registry.read_text(encoding="utf-8")) if registry.is_file() else []
+        entries.append({"name": name, "path": str(root), "manifest": str(root / ".ai-deploy-manifest.json")})
+        registry.write_text(json.dumps(entries), encoding="utf-8")
+        return root
+
+    return register
+
+
+def deployed(config: evolution.EvolutionConfig) -> dict:
+    return payload(config)["deployment"]
+
+
+def test_what_a_target_holds_is_read_from_its_receipt_and_never_from_the_plan(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    managed: Callable[..., Path],
+) -> None:
+    """The two lists side by side: the names the promotion planned for, and the
+    revision each of those repositories actually carries."""
+
+    target = managed("orch-hub", revision=promoted.promotion_revision)
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+
+    block = deployed(config)
+    assert block["promotion"] == promoted.promotion_revision and block["rollback"] is None
+    assert block["targets"] == [
+        {
+            "target": "orch-hub",
+            "path": str(target),
+            "revision": promoted.promotion_revision,
+            "state": "carries",
+            "detail": None,
+        }
+    ]
+    # The plan is still the plan, in its own place and unchanged by the reading.
+    assert payload(config)["last_promotion"]["planned_targets"] == ["orch-hub"]
+
+    text = rendered(config)
+    assert "planned targets: orch-hub — the plan this promotion recorded, not what they hold" in text
+    assert "deployed     what each planned target holds now, from its own .ai-deploy-lock.json:" in text
+    assert f"orch-hub at {promoted.promotion_revision[:12]} — carries this promotion" in text
+
+
+def test_a_target_deployed_before_the_promotion_is_the_redeploy_it_is_owed(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    release: str,
+    managed: Callable[..., Path],
+) -> None:
+    """The state the plan would have hidden: the promotion is on the source line
+    and that repository is still running what came before it."""
+
+    managed("orch-hub", revision=release)
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+
+    assert [item["state"] for item in deployed(config)["targets"]] == ["behind"]
+    assert f"orch-hub at {release[:12]} — does not carry this promotion" in rendered(config)
+
+
+def test_the_reasons_a_target_cannot_be_placed_are_not_one_state(
+    config: evolution.EvolutionConfig, release: str, tmp_path: Path, managed: Callable[..., Path]
+) -> None:
+    """Five different next steps, and none of them is "redeploy": a name this
+    machine manages no repository for, a repository nothing has deployed to, a
+    receipt tied to no source commit, a revision this checkout does not hold, and
+    a name two registered repositories share. Reporting any of them as `behind`
+    would name work that is not owed."""
+
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        at=PROMOTED_AT,
+        targets=("elsewhere", "fresh", "untied", "far-off", "twice-over"),
+    )
+    managed("fresh", receipt=False)
+    managed("untied", revision=None)
+    managed("far-off", revision="f" * 40)
+    managed("twice-over", revision=promotion.promotion_revision)
+    managed("twice-over", revision=release, path=tmp_path / "elsewhere" / "twice-over")
+    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+
+    targets = deployed(config)["targets"]
+    states = {item["target"]: item for item in targets}
+    assert [item["target"] for item in targets] == ["elsewhere", "fresh", "untied", "far-off", "twice-over"]
+    assert states["elsewhere"]["state"] == "unregistered" and states["elsewhere"]["path"] is None
+    assert states["fresh"]["state"] == "no-receipt"
+    assert states["untied"]["state"] == "unstated" and states["untied"]["revision"] is None
+    assert states["far-off"]["state"] == "unplaceable"
+    # A plan names one target, and picking between two repositories registered
+    # under that name would answer for one the plan may not have meant.
+    assert states["twice-over"]["state"] == "ambiguous" and states["twice-over"]["path"] is None
+
+    text = rendered(config)
+    assert "elsewhere — no repository of that name is registered on this machine, so this machine cannot say" in text
+    assert "fresh — no deploy receipt at" in text
+    assert "untied — the receipt ties its payload to no source commit" in text
+    assert "far-off at ffffffffffff — this checkout does not hold that commit" in text
+    assert "twice-over — 2 repositories are registered under that name" in text
+
+
+def test_a_target_carrying_a_reversed_promotion_is_not_a_target_up_to_date(
+    config: evolution.EvolutionConfig, release: str, managed: Callable[..., Path]
+) -> None:
+    """The one state whose meaning turns on the rollback: with an inverse commit
+    on the line, a target still carrying the promotion is running the change that
+    was taken back, and the redeploy it is owed is the reversal. The target that
+    took the reversal reads as the different state it is."""
+
+    promotion = promote_candidate(config, batch_id=FIRST, at=PROMOTED_AT, targets=("orch-hub", "shipped-back"))
+    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    reversal = rollback.reverse(config, reason="the counterfactual confirmed the regression", now=NOW)
+    managed("orch-hub", revision=promotion.promotion_revision)
+    managed("shipped-back", revision=reversal.revision)
+
+    block = deployed(config)
+    assert block["promotion"] == promotion.promotion_revision and block["rollback"] == reversal.revision
+    assert {item["target"]: item["state"] for item in block["targets"]} == {
+        "orch-hub": "carries",
+        "shipped-back": "reversed",
+    }
+
+    text = rendered(config)
+    assert "orch-hub at" in text and "carries this promotion and not the commit that took it back out" in text
+    assert "shipped-back at" in text and "carries the inverse commit as well" in text
+
+
+def test_a_file_this_machine_cannot_read_is_that_target_and_not_the_console(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    managed: Callable[..., Path],
+) -> None:
+    """The opposite of how this package treats its own malformed records, and
+    deliberately: an evolution record that will not read back is damage to the
+    lifecycle, while a file in somebody else's repository — or in a local
+    inventory — is a question this reading could not answer. Taking the gate,
+    the pool and the experiment away from an operator over it would be the
+    wrong trade."""
+
+    target = managed("orch-hub", receipt=False)
+    (target / ".ai-deploy-lock.json").write_text("{ not json", encoding="utf-8")
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+
+    assert deployed(config)["targets"][0]["state"] == "unreadable"
+    assert "orch-hub — unreadable: " in rendered(config)
+    # The rest of the reading is untouched by it.
+    assert payload(config)["phase"] == "batch-frozen"
+
+    (config.repo_root / ".registry" / "repos.local.json").write_text("{}", encoding="utf-8")
+    assert [item["state"] for item in deployed(config)["targets"]] == ["unreadable"]
+    assert payload(config)["phase"] == "batch-frozen"
+
+
+def test_a_repository_that_promoted_nothing_reads_no_targets(
+    config: evolution.EvolutionConfig, managed: Callable[..., Path]
+) -> None:
+    """Null rather than an empty list: the plan is where the targets in play come
+    from, so with no promotion there is nothing to answer for — which is a
+    different thing from a promotion whose targets all read as absent."""
+
+    managed("orch-hub", revision=git_rev(config.repo_root, "HEAD"))
+    freeze_cohort(config, FIRST, effective=None)
+
+    assert payload(config)["deployment"] is None
+    assert "deployed" not in rendered(config)

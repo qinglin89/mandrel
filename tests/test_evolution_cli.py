@@ -40,6 +40,7 @@ from evolution_fixtures import (
     HUB_PROTOCOL_LEGACY,
     HUB_REVISION,
     RELEASE_REF,
+    REPO_ROOT,
     FakeHarness,
     admitted_task,
     complete_task,
@@ -77,6 +78,7 @@ from ai_native_deployment.evolution import (
     analysis_task,
     assessment,
     batches,
+    deployment,
     hub,
     importer,
     lineage,
@@ -1816,6 +1818,46 @@ def test_the_verbs_this_cli_offers_are_the_ones_the_gate_names(
         assert parsed.expect == "1-abc"
 
 
+def test_the_documented_console_is_the_console_this_build_offers() -> None:
+    """The standalone claim is the documentation's to keep: a verb an operator
+    cannot find is one orch-hub is needed for, whatever the command tree says.
+
+    Asserted against the operational reference rather than a doc of its own,
+    because that is where an operator looks — and asserted verb by verb, since
+    the way this drifts is one command added without its row. The states a
+    target's receipt reads as go the same way: they are what an operator acts
+    on, and a state nothing documents is a word with no meaning attached.
+    """
+
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    for verb in sorted(cli._wired_verbs(phase)):
+        # Followed by a space or the closing backtick, so `assess` is not
+        # documented by `assess-measure`'s row happening to start with it.
+        assert f"| `{verb} " in text or f"| `{verb}`" in text, f"{verb} is wired and not documented"
+    for verb in ("list", "sync", "status", "start"):
+        assert f"evolution {verb}" in text
+
+    for state in (
+        deployment.HOLDING_CARRIES,
+        deployment.HOLDING_REVERSED,
+        deployment.HOLDING_BEHIND,
+        deployment.HOLDING_UNPLACEABLE,
+        deployment.HOLDING_UNSTATED,
+        deployment.HOLDING_NO_RECEIPT,
+        deployment.HOLDING_UNREADABLE,
+        deployment.HOLDING_UNREGISTERED,
+        deployment.HOLDING_AMBIGUOUS,
+    ):
+        assert f"| `{state}` |" in text, f"{state} is a state this reading emits and nothing documents"
+
+    # The two fields a surface acts on, and the shape of the token it passes
+    # back.
+    assert "state_revision" in text and "allowed_actions" in text
+    assert f"`{phase.STATE_REVISION_VERSION}-<16 hex>`" in text
+    assert f"`schema_version: {phase.SCHEMA_VERSION}`" in text
+
+
 # --- the release, as commands ------------------------------------------------
 #
 # What the change lineage produces and what is done about it afterwards: a
@@ -1958,6 +2000,63 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     assert code == 0
     assert "this run wrote nothing: the rollback above is the one on record" in out
     assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_the_console_reads_what_a_planned_target_holds_beside_the_plan(
+    lineage_repo: Path,
+    release: str,
+    feed_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The acceptance this slice is for: a promotion plans targets and deploys
+    nothing, so the console reads each one's own receipt and prints the two
+    lists apart. The whole cycle behind it runs through `aii-2` and nothing
+    else."""
+
+    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "promote", "--reason", "the replay showed fewer rounds", "--target", "orch-hub", *where], capsys)
+    promoted = git_rev(lineage_repo, RELEASE_REF)
+
+    target = tmp_path / "orch-hub"
+    target.mkdir()
+    (target / ".ai-deploy-lock.json").write_text(
+        json.dumps({"schema_version": 1, "source_git_commit": release}), encoding="utf-8"
+    )
+    registry = lineage_repo / ".registry" / "repos.local.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps([{"name": "orch-hub", "path": str(target), "manifest": str(target / ".ai-deploy-manifest.json")}]),
+        encoding="utf-8",
+    )
+
+    code, out, _ = run(["evolution", "status", *where], capsys)
+
+    assert code == 0
+    assert "planned targets: orch-hub — the plan this promotion recorded, not what they hold" in out
+    assert f"orch-hub at {release[:12]} — does not carry this promotion" in out
+
+    code, out, _ = run(["evolution", "status", "--json", *where], capsys)
+    block = json.loads(out)["deployment"]
+
+    assert code == 0
+    assert block["promotion"] == promoted
+    assert block["targets"] == [
+        {"target": "orch-hub", "path": str(target), "revision": release, "state": "behind", "detail": None}
+    ]
+
+    # Redeployed, and the same command says so — the plan never moved.
+    (target / ".ai-deploy-lock.json").write_text(
+        json.dumps({"schema_version": 1, "source_git_commit": promoted}), encoding="utf-8"
+    )
+    code, out, _ = run(["evolution", "status", *where], capsys)
+
+    assert code == 0
+    assert f"orch-hub at {promoted[:12]} — carries this promotion" in out
 
 
 def test_a_promotion_run_again_reports_the_merge_rather_than_making_a_second(

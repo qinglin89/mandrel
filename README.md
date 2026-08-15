@@ -282,6 +282,10 @@ gates.
 ./aii-2 evolution start --feed-dir ...   # sync, then freeze a batch if policy allows
 ```
 
+Those four are the import half. What a frozen cohort then becomes — experiments,
+rounds, replays, a promotion, its reversal, and the next cohort's reading of the
+release — is [the lifecycle console](#the-lifecycle-console) below.
+
 Every subcommand takes `--repo <path>` to work on another checkout, and
 `status` takes `--json` for the same shape a script can read. Exit status is 0
 for any completed run — including a `start` that formed no batch, which is the
@@ -300,6 +304,9 @@ evolution: pool 4/20
   admission    no batch — pool-below-minimum
   batches      0 frozen, none current
   revisions    none in play — no experiment has frozen a base
+  actions      start
+               21 other verb(s) refuse here; `--json` states each reason
+  state        1-ac1087623f3fa990 — what this reading is of
 ```
 
 One label is chosen by what blocks the next action: an open batch first (it is
@@ -313,6 +320,238 @@ the manifests, the closure records and drafts beside them, the runtime pool,
 Two of them are machine-local — the admitted change tasks and an open batch's
 analysis lifecycle both come from gitignored `.ai-tasks/` — so another clone
 reads the batch's committed closure record instead.
+
+### The lifecycle console
+
+Every operation the contract defines has exactly one `aii-2 evolution` verb, so
+this CLI is sufficient on its own: a Web surface is an optional visualization and
+interaction adapter over the same JSON and the same verbs, never a second
+implementation of the lifecycle. `status` names each verb it allows and gives
+every refused one a reason, so the ordinary loop is `status`, then the verb it
+named.
+
+None of them decides anything. Which drafts belong together, whether an attempt
+is worth continuing, whether the evidence justifies the source line, whether a
+release is kept — all of it is a human judgement stated here and recorded
+(invariant 9). Every verb below takes `--repo` and the optional
+`--expect <state_revision>` described under
+[the JSON and action contract](#the-json-and-action-contract).
+
+**The change lineage of a batch**
+
+| Verb | What it does |
+|---|---|
+| `create <draft>... [--base <rev>] [--reason ...]` | admit a group of drafts as a new experiment; a batch's first experiment freezes the base (`HEAD` unless named) |
+| `add-tasks <draft>...` | admit further drafts into the open experiment's open round |
+| `reject <draft>... --reason ...` | decline drafts at the admission gate; terminal for those proposals |
+| `seal-round` | observe every admitted task complete and pin the round's candidate revision |
+| `revise --reason ...` | open the next round, from the candidate already pinned |
+| `abandon --reason ... [--experiment <id>]` | end the open experiment without replacing it |
+| `supersede --reason ... [--experiment <id>]` | replace it with a fresh attempt; the operation creates the successor |
+| `conclude-no-change --reason ...` | end the batch having changed nothing (invariant 7) |
+
+**The evidence, and the source line**
+
+| Verb | What it does |
+|---|---|
+| `replay-start --source-ref <ref> --expectation ...` | request the measurement of the sealed candidate integrated onto that line, and record the run once one is stated |
+| `replay-conclude --outcome ... --detail ...` | record what the harness reported for the run that is going |
+| `replay-abandon --reason ...` | record why a run ended when its harness cannot say |
+| `replay-withdraw` | give up a request the harness never answered for |
+| `promote --reason ... [--target <name>]...` | carry the replayed candidate onto the source line and end the batch with it |
+| `rollback --reason ...` | add and record the inverse commit for the latest promotion |
+
+**The release the next cohort owes a reading of**
+
+| Verb | What it does |
+|---|---|
+| `assess --verdict ... --confidence ... --rationale ... [--metric NAME UNIT BEFORE AFTER BETTER]...` | record this cohort's reading of the release before it |
+| `assess-measure --expectation ...` | request the pinned counterfactual, and record its run once one is stated |
+| `assess-conclude --outcome ... --detail ...` | record what the harness reported for it |
+| `assess-abandon --reason ...` | record why that run ended when its harness cannot say |
+| `assess-withdraw` | give up a counterfactual request the harness never answered for |
+| `assess-resolve --verdict ... --confidence ... --rationale ...` | revise the reading on the strength of the completed run |
+| `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next base freeze waits on; `rolled-back` runs the reversal itself |
+
+`settle` is one verb and not a sequence: a `rolled-back` settlement performs the
+rollback, adopts an inverse already on the line, and finishes one left prepared.
+`rollback` is for a reversal that answers no gate.
+
+#### One cycle, end to end
+
+```bash
+./aii-2 evolution start                      # freeze a cohort when policy allows
+# work the generated analysis task; commit its findings and closure record
+./aii-2 evolution create loader-fallback hook-side-loader --reason "one change"
+# work the admitted change tasks; commit the work on the experiment's ref
+./aii-2 evolution seal-round                 # pins the round's candidate revision
+./aii-2 evolution replay-start --source-ref refs/heads/main \
+    --expectation "fewer remediation rounds, quality unchanged"
+# ...run that evaluation yourself, then state what is running:
+./aii-2 evolution replay-start --source-ref refs/heads/main \
+    --expectation "fewer remediation rounds, quality unchanged" \
+    --case-set loader-regressions <sha256> 12 \
+    --evaluator claude claude-opus-5 --harness local-replay 0.1.0 <sha256> \
+    --handle run-7
+./aii-2 evolution replay-conclude --outcome completed --detail "12 of 12 judged" \
+    --metric "remediation rounds" rounds 2.0 1.0 lower --handle run-7
+./aii-2 evolution promote --reason "the replay justifies it" --target orch-hub
+./aii-2 deploy ../orch-hub                   # promotion is not deployment
+```
+
+The cohort frozen after that promotion owes a reading of it, and no later base is
+frozen until the reading is settled (invariant 17):
+
+```bash
+./aii-2 evolution start
+./aii-2 evolution assess --verdict improved --confidence medium \
+    --rationale "..." --metric "remediation rounds" rounds 2.1 1.4 lower
+./aii-2 evolution assess-measure --expectation "..."   # the pinned counterfactual
+# ...run it, state it, `assess-conclude` it, then `assess-resolve` the reading
+./aii-2 evolution settle --settlement retain --reason "the reading holds"
+```
+
+Either path can end differently and both endings are verbs: `conclude-no-change`
+for a batch whose evidence justified nothing, `abandon` or `supersede` for an
+attempt that did not work out, and `settle --settlement rolled-back` for a
+release the next cohort read as a regression.
+
+#### The harness is you
+
+Four verbs need something outside this checkout, and all four cross the same
+boundary: `replay-start`, `replay-conclude`, `assess-measure`,
+`assess-conclude`. Nothing here schedules or triggers an evaluation, so the
+harness those verbs speak to is the operator.
+
+- **A start is two commands over one request.** The first writes the request,
+  prints the integration to exercise, and stops — the position is held and
+  nothing is running. Run the evaluation however you run it, then run the same
+  verb again stating what is running: `--case-set`, `--evaluator`, `--harness`,
+  `--handle`, plus `--rubric` and `--exclude` where they apply. That statement is
+  all or none; a partial one is refused before anything is allocated.
+- **`--handle` is the run's name and it matters later.** It is opaque here and
+  stored unread, and it is what the matching `*-conclude` polls — a run recorded
+  without one could only ever be abandoned. Giving it to `*-conclude` is a
+  precondition: numbers named for another run are refused rather than recorded.
+- **A rerun of a completed attempt has to state that attempt back.** A second run
+  of the same round replaces the first as that round's evidence, so its cohort,
+  exclusions, evaluator and harness configuration must be restated exactly;
+  anything else is refused as the substitution it would be. The gate allows
+  `replay-start` there — it is the harness that refuses — so a surface driving
+  `allowed_actions` should expect it. `status` prints what to restate.
+
+#### What the targets hold
+
+`promote --target <name>` records a **plan**, and deploys nothing. `status` reads
+the other half beside it: for each planned name it resolves this machine's
+registry entry, reads that target's own `.ai-deploy-lock.json`, and asks Git
+where the revision that receipt states sits relative to the promotion.
+
+```text
+  promoted     6f1c0a5b2e33 from evolution-batch-0001-exp-01 round 1 (evolution-batch-0001)
+               41ab99c0f7de onto refs/heads/main at 9d2e8c17b40a, tree 5b1f0e93aa72
+               planned targets: orch-hub, quantx — the plan this promotion recorded, not what they hold
+  deployed     what each planned target holds now, from its own .ai-deploy-lock.json:
+               orch-hub at 6f1c0a5b2e33 — carries this promotion
+               quantx at 9d2e8c17b40a — does not carry this promotion; `aii-2 deploy` is what carries it there
+```
+
+| State | What it means, and what it asks for |
+|---|---|
+| `carries` | that receipt's revision has the promotion in its history |
+| `reversed` | it has the inverse commit too, so the change is off that target as well |
+| `behind` | it does not have the promotion — the redeploy that is actually owed |
+| `unplaceable` | this checkout cannot place that revision — it does not hold the commit, or Git could not answer |
+| `unstated` | the receipt ties its payload to no source commit, so nothing places what it holds |
+| `no-receipt` | the repository is registered and nothing has been deployed to it |
+| `unreadable` | the receipt, or the registry naming it, could not be read |
+| `unregistered` | no repository of that name is registered on this machine |
+| `ambiguous` | two registered repositories share that name, so neither can answer for the plan |
+
+The block is null until something has been promoted: the plan is where the
+targets in play come from, so with no promotion there is nothing to answer for.
+
+All of it is machine-local: the registry is this machine's inventory and a
+receipt is a file in a repository this tool does not own. A clone that manages
+nothing therefore reads every planned target as `unregistered`, which is an
+answer rather than a finding — and a broken registry or receipt is reported as
+that one target's state rather than failing the whole reading. It is in no
+`state_revision`, and it gates no verb: a promotion is not a deployment, and a
+deployment is not lifecycle state.
+
+### The JSON and action contract
+
+`status --json` is the machine shape of everything above, at
+`schema_version: 7`. Alongside the pool, admission, batches, gate, experiments,
+revisions, replay, release, `last_promotion` and `deployment` blocks it carries
+the two fields a surface acts on:
+
+```json
+{
+  "state_revision": "1-ac1087623f3fa990",
+  "allowed_actions": [
+    {
+      "action": "seal-round",
+      "allowed": false,
+      "object": {"type": "experiment", "id": "evolution-batch-0002-exp-01"},
+      "reason": "round 1 of evolution-batch-0002-exp-01 is not ready to seal: ['2026-08-11-loader-fallback']; ...",
+      "recovers": null
+    }
+  ]
+}
+```
+
+- **Every verb is emitted every time**, refused ones included. A menu listing
+  only what is legal leaves "why not" to be discovered by running it.
+- **`reason` is the operation's own sentence.** The gate asks the owning module's
+  read-only predicate rather than restating its policy, so an operator meets one
+  wording whether they read `status` or ran the command.
+- **`object` is the id the verb takes** — the experiment a decision names, the
+  batch a conclusion ends, the promotion a rollback reverses — and is null where
+  the verb is about something that does not exist here. That is the difference
+  between a refusal an operator can act on and one that is simply not what this
+  lifecycle is at.
+- **`recovers` names a redo.** Every operation is redoable by being run again
+  with the same arguments: it finishes what an interrupted run left and reports
+  what is already on record. A non-null `recovers` says that is what running the
+  verb here would do — an already-sealed round, a batch that concluded, a
+  rollback already on the line — so a surface can offer the repair without
+  presenting it as new work. The human form marks those `(redo)`.
+- **A verb the gate allows may still refuse**, on four conditions that belong to
+  the moment of the write rather than to a reading: whether a working tree sits
+  on the source line, whether later work stands on the promotion a rollback would
+  reverse, whether an admitted task's file is the copy admission published, and
+  whatever Git or the harness answers under the lock. Arguments are the same —
+  this says whether the verb may run at all, not whether your drafts exist. A
+  verb it refuses is refused.
+
+`state_revision` is what makes acting on the reading safe. It is a digest —
+`1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
+records under `evolution/batches` and `evolution/experiments`,
+`evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
+records name, and `HEAD` (which is the base a first admission would freeze). Pass
+it back on any mutation:
+
+```bash
+./aii-2 evolution seal-round --expect 1-ac1087623f3fa990
+```
+
+The operation re-derives it first thing under the single-writer lock and refuses
+if the lifecycle moved, before it writes anything. `--expect` is optional: an
+operator reading `status` and typing the next verb is their own single writer,
+while a surface that is not — a Web adapter, orch-hub, a script resuming — passes
+the token. Two refusals are deliberately different sentences: a token from
+another scheme does not describe this repository, and a token that no longer
+matches means this repository moved. A caller treating them as one retries the
+wrong thing forever.
+
+The clock, `.ai-tasks/`, and the ledger are outside the digest on purpose — a
+token that expired overnight would refuse operations over a repository nobody
+wrote to, a task finishing is this machine's own work, and the ledger is an audit
+rather than flow state.
+
+Mutations print for humans and take no `--json`; `status` is the machine shape,
+and it is where a surface reads what a verb did.
 
 ### Report source
 

@@ -150,6 +150,8 @@ from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
 from .batches import REASON_CURRENT_BATCH, AdmissionDecision, awaiting_analysis, evaluate_admission
 from .config import EvolutionConfig
+from .deployment import TargetHolding
+from .deployment import describe as describe_deployment
 from .errors import BatchError
 from .lineage import (
     DECISION_ABANDONED,
@@ -596,6 +598,12 @@ class LifecycleStatus:
     # owes it. None when there is no release before it at all — which is most
     # batches, and is ordinary rather than missing.
     release: ReleaseReading | None = None
+    # What each target the last promotion was planned for actually holds, read
+    # from that target's own deploy receipt. None when nothing has been promoted:
+    # the plan is where the targets in play come from, so with no promotion there
+    # is no list to answer for — never an empty one, which would read as a
+    # promotion that planned nothing.
+    deployment: tuple[TargetHolding, ...] | None = None
     # Every verb, and whether this state accepts it. Derived last, from the
     # fields above and in the order the operations check them.
     actions: tuple[Action, ...] = ()
@@ -742,6 +750,9 @@ class LifecycleStatus:
             "replay": _replay_json(self.evidence, self.replays),
             "release": _release_json(self.release),
             "last_promotion": _promotion_json(self.last_promotion),
+            # What those planned targets hold now — the reading beside the plan,
+            # and never a field inside it.
+            "deployment": _deployment_json(self.last_promotion, self.deployment),
             # What this reading is of. A mutation is given it back and refuses
             # when it no longer describes the repository.
             "state_revision": self.state_revision,
@@ -823,6 +834,7 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         current_batch_id=current.batch_id if current else None,
     )
 
+    promotion = _promotion(lineage.last_promoted)
     reading = LifecycleStatus(
         phase=_phase(current=current, stage_open=stage_open, pool=decision.task_count),
         decision=decision,
@@ -834,12 +846,13 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         ref=current.ref if current else None,
         history=current.terminal_experiments if current else (),
         revisions=_revisions(current),
-        last_promotion=_promotion(lineage.last_promoted),
+        last_promotion=promotion,
         pending_successor=_pending_successor(current),
         evidence=_evidence(config, current),
         replays=_replays(config, current),
         batches=tuple(_record(item) for item in lineage.batches),
         release=_release(config, lineage, current),
+        deployment=_deployment(config, promotion),
     )
     return reading, lineage
 
@@ -1067,6 +1080,32 @@ def _rollback(promoted: BatchLineage) -> Rollback | None:
         # Git again here would be a second answer to one question, and the
         # expensive half of it.
         unconfirmed=promoted.rollback_unconfirmed,
+    )
+
+
+def _deployment(config: EvolutionConfig, promotion: Promotion | None) -> tuple[TargetHolding, ...] | None:
+    """What the promotion's planned targets hold, read from their own receipts.
+
+    Asked of the last promotion alone, and of no history entry. What a target
+    holds is one revision rather than one per promotion, so the older entries
+    would each re-answer the same question against a commit further back — and
+    the answer an operator acts on is about the change most recently put on the
+    line.
+
+    The rollback revision is handed over whether or not the line has been
+    recorded as carrying it, because the question is where a target's own
+    revision sits and an inverse commit reaches a target the moment that target
+    is deployed from a line holding it (`assessment._resolve`, same order and the
+    same reason).
+    """
+
+    if promotion is None:
+        return None
+    return describe_deployment(
+        config,
+        targets=promotion.planned_targets,
+        promotion=promotion.revision,
+        rollback=None if promotion.rollback is None else promotion.rollback.revision,
     )
 
 
@@ -2122,6 +2161,43 @@ def _promotion_json(promotion: Promotion | None) -> dict[str, Any] | None:
             "reverted_at": promotion.rollback.reverted_at,
             "reason": promotion.rollback.reason,
         },
+    }
+
+
+def _deployment_json(
+    promotion: Promotion | None,
+    holdings: tuple[TargetHolding, ...] | None,
+) -> dict[str, Any] | None:
+    """The deployment reading, with the two commits its states are relative to.
+
+    Null when nothing has been promoted, and null as well for a reading assembled
+    by hand — a status built without this derivation says nothing about targets
+    rather than reporting that none of them carry anything.
+
+    The promotion and the inverse commit are restated here rather than left to be
+    joined from `last_promotion`, because `carries` and `reversed` are claims
+    about *those* two commits: a surface that showed the states without them
+    would be reporting an ancestry answer with the question missing.
+    """
+
+    if promotion is None or holdings is None:
+        return None
+    return {
+        "promotion": promotion.revision,
+        "rollback": None if promotion.rollback is None else promotion.rollback.revision,
+        "targets": [
+            {
+                "target": holding.target,
+                # Machine-local, and null wherever the name resolved to no single
+                # repository here.
+                "path": holding.path,
+                # The receipt's own `source_git_commit`, as it states it.
+                "revision": holding.revision,
+                "state": holding.state,
+                "detail": holding.detail,
+            }
+            for holding in holdings
+        ],
     }
 
 

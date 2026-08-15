@@ -3006,18 +3006,29 @@ def prepared_promotion_at_version_1(config: evolution.EvolutionConfig) -> experi
 
 
 def test_the_planned_targets_are_a_plan_and_never_a_deployment(
-    config: evolution.EvolutionConfig, batch: Path, release: str
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A promoted revision reaches a target when that target is redeployed and
     not before, so the record says what was intended and the rendering says
-    where to ask what is actually there."""
+    where to ask what is actually there.
 
+    The registry location is overridable and machine-local, so the override is
+    cleared: what this asserts is about the plan, not about which repositories
+    the machine running the suite happens to manage.
+    """
+
+    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
     prepared(config)
     experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     text = render.format_status(phase.describe(config, now=PROMOTED))
     assert "planned targets: orch-hub, ai-native-development" in text
-    assert "deployed only where `aii-2 status` says so" in text
+    assert "the plan this promotion recorded, not what they hold" in text
+    # And the reading beside it, which is where what they hold is answered: this
+    # machine manages neither of those names, and says so per target rather than
+    # letting the plan above stand in for it.
+    assert "what each planned target holds now, from its own .ai-deploy-lock.json:" in text
+    assert "orch-hub — no repository of that name is registered on this machine" in text
 
 
 def test_a_promotion_may_plan_no_target_yet(

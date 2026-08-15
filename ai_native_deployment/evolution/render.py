@@ -27,6 +27,14 @@ from .assessment import (
     Withdrawn,
 )
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
+from .deployment import (
+    HOLDING_BEHIND,
+    HOLDING_CARRIES,
+    HOLDING_REVERSED,
+    HOLDING_UNREADABLE,
+    HOLDING_UNREGISTERED,
+    TargetHolding,
+)
 from .experiments import (
     AdmissionResult,
     ConclusionResult,
@@ -815,6 +823,7 @@ def format_status(status: LifecycleStatus) -> str:
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
     lines.extend(_release_lines(status.release))
     lines.extend(_promotion_lines(status.last_promotion))
+    lines.extend(_deployment_lines(status.last_promotion, status.deployment))
     lines.extend(_action_lines(status))
     return "\n".join(lines)
 
@@ -994,7 +1003,7 @@ def _promotion_lines(promotion: Promotion | None) -> list[str]:
         ),
     ]
     planned = ", ".join(promotion.planned_targets) if promotion.planned_targets else "none named"
-    lines.append(_field("", f"planned targets: {planned} — deployed only where `aii-2 status` says so"))
+    lines.append(_field("", f"planned targets: {planned} — the plan this promotion recorded, not what they hold"))
     lines.extend(_rollback_lines(promotion.rollback))
     return lines
 
@@ -1029,6 +1038,56 @@ def _rollback_lines(rollback: Rollback | None) -> list[str]:
             )
         ]
     return [_field("", f"rolled back by {rollback.revision[:12]} at {rollback.reverted_at} — {rollback.reason}")]
+
+
+def _deployment_lines(promotion: Promotion | None, holdings: tuple[TargetHolding, ...] | None) -> list[str]:
+    """What those planned targets hold now, each read from its own receipt.
+
+    A block of its own under the plan, with a line saying which of the two it is.
+    The plan and the reading look alike — both are that list of names — and the
+    one mistake this surface must not invite is taking the first for the second,
+    so they are never on one line and the reading names the file it came from.
+
+    Nothing is printed for a promotion that planned no targets: `planned targets:
+    none named` above is the whole of that state, and a heading over an empty
+    list would read as targets nobody could answer for.
+    """
+
+    if promotion is None or not holdings:
+        return []
+    reversed_promotion = promotion.rollback is not None
+    lines = [_field("deployed", "what each planned target holds now, from its own .ai-deploy-lock.json:")]
+    for holding in holdings:
+        lines.append(_field("", _target_line(holding, reversed_promotion=reversed_promotion)))
+    return lines
+
+
+def _target_line(holding: TargetHolding, *, reversed_promotion: bool) -> str:
+    """One target, and where what it holds sits relative to the promotion.
+
+    `carries` is the one state whose meaning turns on something outside it: with
+    an inverse commit on the line, a target still carrying the promotion is
+    running the change that was taken back rather than being up to date, and the
+    redeploy it is owed is the reversal. Reporting both as "carries this
+    promotion" would make the good state and the outstanding one read alike.
+    """
+
+    named = holding.target if holding.revision is None else f"{holding.target} at {holding.revision[:12]}"
+    if holding.state == HOLDING_CARRIES and reversed_promotion:
+        return f"{named} — carries this promotion and not the commit that took it back out; redeploy to reverse it"
+    if holding.state == HOLDING_CARRIES:
+        return f"{named} — carries this promotion"
+    if holding.state == HOLDING_REVERSED:
+        return f"{named} — carries the inverse commit as well, so the change is off that target too"
+    if holding.state == HOLDING_BEHIND:
+        return f"{named} — does not carry this promotion; `aii-2 deploy` is what carries it there"
+    if holding.state == HOLDING_UNREGISTERED:
+        return f"{named} — {holding.detail}, so this machine cannot say"
+    if holding.state == HOLDING_UNREADABLE:
+        # The one state whose sentence is a file and an error rather than a
+        # reading, so it says which of the two it is.
+        return f"{named} — unreadable: {holding.detail}"
+    return f"{named} — {holding.detail}"
 
 
 def _release_lines(release: ReleaseReading | None) -> list[str]:
