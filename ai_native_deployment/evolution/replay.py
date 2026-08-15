@@ -732,6 +732,24 @@ class RunConcluded:
 # nothing on the surface to resolve it.
 
 
+def resumed_start(history: History) -> PendingRun | None:
+    """The request a start run here would resume rather than make.
+
+    A start with one of these outstanding is that request answered: the position,
+    the integration and the expectation come from the record and the harness is
+    asked for the same run, so what the operator restates is checked against it
+    rather than acted on (`_require_same_request`).
+
+    Which is also why this is the one form of a start that no state refuses. The
+    two conditions a fresh request is made under were checked when it was made
+    (`_request`), the ref among them — and a ref that has moved since is what the
+    next attempt is for, not a reason to leave a run the harness may be going
+    with named by nothing.
+    """
+
+    return history.pending
+
+
 def redone_conclusion(history: History) -> Replay | None:
     """The run a conclusion redone would report the result of.
 
@@ -937,7 +955,7 @@ def start(
 
         history = read_replays(config, experiment)
         replays = history.replays
-        requested = history.pending
+        requested = resumed_start(history)
         resumed = requested is not None
         if requested is None:
             requested = _request(

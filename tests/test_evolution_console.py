@@ -275,9 +275,9 @@ class DeadHarness:
         return None
 
 
-def measured_round(config: evolution.EvolutionConfig, release: str) -> None:
-    """A batch, an experiment, a sealed round, and a completed run on it — the
-    state a promotion is argued from."""
+def sealed_round(config: evolution.EvolutionConfig) -> str:
+    """A batch, an experiment, and a round whose candidate is pinned — the state
+    a run is started from. Returns the experiment's ref."""
 
     freeze_cohort(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
@@ -286,6 +286,26 @@ def measured_round(config: evolution.EvolutionConfig, release: str) -> None:
         complete_task(config, item.task_id)
     git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, "candidate work"))
     experiments.seal_round(config, now=FROZEN_AT)
+    return admission.ref
+
+
+def move_ref(config: evolution.EvolutionConfig, ref: str) -> None:
+    """The experiment's ref advanced past the candidate its record pins.
+
+    Work committed under a round that was already measured, which is the state
+    every operation that pins something refuses over — and, until the gate asked
+    each operation rather than assuming the preamble, the state that withheld the
+    verbs answering for a run already going.
+    """
+
+    git_update_ref(config.repo_root, ref, git_commit(config.repo_root, "work after the seal"))
+
+
+def measured_round(config: evolution.EvolutionConfig, release: str) -> None:
+    """A batch, an experiment, a sealed round, and a completed run on it — the
+    state a promotion is argued from."""
+
+    sealed_round(config)
     harness = FakeHarness(report=completed_report())
     replay.start(config, harness, source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT)
     replay.conclude(config, harness, now=FROZEN_AT)
@@ -1133,6 +1153,85 @@ def test_a_withdrawal_over_nothing_outstanding_is_offered_rather_than_refused(
     assert offered["allowed"] is True
     assert "no replay request is outstanding" in offered["recovers"]
     assert replay.withdraw(config, now=FROZEN_AT).withdrawn is False
+
+
+def test_a_moved_ref_leaves_the_verbs_that_answer_for_a_run_alone(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The ref hold belongs to the operations that pin something. A run that is
+    going was pinned when the ref agreed, and what a conclusion writes is how that
+    run ended — so a ref moved since makes the evidence stale, which the reading
+    says, rather than unrecordable, which withholding the verb would make it."""
+
+    ref = sealed_round(config)
+    replay.start(config, FakeHarness(report=None), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT)
+    move_ref(config, ref)
+
+    named = verbs(config)
+    assert named["replay-conclude"]["allowed"] is True
+    assert named["replay-abandon"]["allowed"] is True
+
+    # The same ref, still held where the operation holds it: a seal pins the next
+    # candidate, so it refuses here in its own words.
+    assert refusal(config, "seal-round") == raised(lambda: experiments.seal_round(config, now=NOW))
+
+    concluded = replay.conclude(config, FakeHarness(report=completed_report()), now=NOW)
+    assert concluded.recorded is True and concluded.outcome == replay.RESULT_COMPLETED
+
+
+def test_an_outstanding_request_is_resumed_over_the_ref_that_moved_under_it(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """A request the harness never answered for is the state a run may be going
+    in with nothing here naming it. Its two ways out are resuming the start and
+    withdrawing the request, and neither asks the ref — a resume pins nothing, it
+    records what the request already pinned."""
+
+    ref = sealed_round(config)
+    with pytest.raises(RuntimeError):
+        replay.start(config, DeadHarness(), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT)
+    move_ref(config, ref)
+
+    named = verbs(config)
+    assert named["replay-start"]["allowed"] is True
+    assert "resumes that request" in named["replay-start"]["recovers"]
+    # Allowed and not a redo: a request is outstanding, so this one has something
+    # to give up rather than a landed write to report.
+    assert named["replay-withdraw"]["allowed"] is True and named["replay-withdraw"]["recovers"] is None
+
+    resumed = replay.start(
+        config, FakeHarness(report=None), source_ref=RELEASE_REF, expectation=EXPECTATION, now=NOW
+    )
+    assert resumed.resumed is True, "the operation recorded the run the request had asked for"
+
+    # And with that request answered, a start is a fresh one again — the single
+    # form here that pins an integration, and the ref is its own hold.
+    assert refusal(config, "replay-start") == raised(
+        lambda: replay.start(config, FakeHarness(), source_ref=RELEASE_REF, expectation=EXPECTATION, now=NOW)
+    )
+
+
+def test_a_request_outstanding_over_a_revised_round_is_still_the_one_to_resume(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The other half of what a resume does not ask. `replay.start_refusal` is
+    about making a request, and a round opened since is a reason to make no new
+    one — never a reason to withhold the verb that records the run the harness
+    was already asked for."""
+
+    sealed_round(config)
+    with pytest.raises(RuntimeError):
+        replay.start(config, DeadHarness(), source_ref=RELEASE_REF, expectation=EXPECTATION, now=FROZEN_AT)
+    experiments.revise(config, reason="the loader fallback needs a second pass", now=FROZEN_AT)
+
+    offered = verbs(config)["replay-start"]
+    assert offered["allowed"] is True
+    assert "round 1 attempt 1" in offered["recovers"]
+
+    resumed = replay.start(
+        config, FakeHarness(report=None), source_ref=RELEASE_REF, expectation=EXPECTATION, now=NOW
+    )
+    assert resumed.resumed is True and resumed.round_number == 1
 
 
 def test_the_state_revision_follows_the_artifacts_and_not_the_clock(

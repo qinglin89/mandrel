@@ -1338,18 +1338,29 @@ def _revise_action(
     return Action(ACTION_REVISE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_revise_refusal(status, held))
 
 
-def _attempt_refusal(status: LifecycleStatus, held: _Held, action: str) -> str | None:
+def _attempt_refusal(status: LifecycleStatus, held: _Held, action: str, *, ref: bool = True) -> str | None:
     """The open experiment these verbs act on, or why there is none.
 
     None is the answer only where there is one, which is what lets every caller
     below read `status.experiment` after it. The verb's own word is the one the
     operation puts in that sentence (`guards.require_open_experiment`), so a
     refusal here reads as the one running it would give.
+
+    `ref` is False for the verbs whose operation makes no such check, and they
+    are all of one kind: what a replay records is a run that already happened,
+    so a ref that moved since makes its evidence stale rather than unrecordable
+    (`replay.conclude`) and holding the verb here would discard the only durable
+    form of the measurement. The one replay verb that does ask is the one that
+    pins a new integration — a fresh request, and not the resume of one
+    (`replay.resumed_start`).
     """
 
     if held.lineage or held.current is None:
         return held.lineage
-    return guards.open_experiment_refusal(held.current, action) or held.ref
+    refusal = guards.open_experiment_refusal(held.current, action)
+    if refusal is not None or not ref:
+        return refusal
+    return held.ref
 
 
 def _add_tasks_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -1417,13 +1428,19 @@ def _revise_refusal(status: LifecycleStatus, held: _Held) -> str | None:
 
 
 def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
-    """Measuring the pinned candidate, and answering for a run that was started."""
+    """Measuring the pinned candidate, and answering for a run that was started.
+
+    The ref hold the verbs above run is part of exactly one of these, which is
+    the one that pins something: a fresh request. The other three — and a resume,
+    which is a request already pinned — act on a run that happened, and refusing
+    them over a ref that moved since would strand it (`_attempt_refusal`).
+    """
 
     experiment = status.experiment
     object_id = experiment.experiment_id if experiment else None
     history = status.replays if not held.lineage and experiment is not None else None
     return (
-        Action(ACTION_REPLAY_START, *_on(OBJECT_EXPERIMENT, object_id), refusal=_replay_start_refusal(status, held)),
+        _replay_start_action(status, held, object_id, history),
         _run_action(
             status,
             held,
@@ -1483,10 +1500,12 @@ def _withdraw_action(
     The one verb of the replay module that never refuses on the record: with
     nothing outstanding it reports that and writes nothing
     (`replay.redone_withdrawal`), so refusing it here would withhold the verb
-    that finishes an interrupted withdrawal.
+    that finishes an interrupted withdrawal. The ref is the same story told
+    about the other half — this is the way out of a request whatever has
+    happened since, and a moved ref is one of the things that happen.
     """
 
-    hold = _attempt_refusal(status, held, "withdraw a replay request of")
+    hold = _attempt_refusal(status, held, "withdraw a replay request of", ref=False)
     if hold is None and history is not None and replay_ops.redone_withdrawal(history):
         return Action(
             ACTION_REPLAY_WITHDRAW,
@@ -1500,14 +1519,53 @@ def _withdraw_action(
     return Action(ACTION_REPLAY_WITHDRAW, *_on(OBJECT_EXPERIMENT, object_id), refusal=hold)
 
 
-def _replay_start_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    """A start, or the resume of a request the harness never answered for."""
+def _replay_start_action(
+    status: LifecycleStatus, held: _Held, object_id: str | None, history: History | None
+) -> Action:
+    """Measuring the pinned candidate, or resuming the request that already asked
+    for it.
 
-    hold = _attempt_refusal(status, held, "replay")
+    The resume is this verb's recovery form and its narrow one: the position, the
+    integration and the expectation come from the request, and what it does is
+    record the run the harness may already be going with. Offering it as an
+    ordinary start would read as a second run of the round; refusing it, as the
+    ref hold used to, leaves that run named by nothing at all.
+    """
+
+    outstanding = replay_ops.resumed_start(history) if history is not None else None
+    refusal = _replay_start_refusal(status, held, history, outstanding)
+    if refusal is None and outstanding is not None:
+        return Action(
+            ACTION_REPLAY_START,
+            OBJECT_EXPERIMENT,
+            object_id,
+            recovery=(
+                f"round {outstanding.round_number} attempt {outstanding.attempt} was requested at "
+                f"{outstanding.requested_at} and no run is recorded for it; run again naming "
+                f"{outstanding.integration.merge_input_ref} and the same expectation, this resumes that request "
+                "rather than starting a second run of the round"
+            ),
+        )
+    return Action(ACTION_REPLAY_START, *_on(OBJECT_EXPERIMENT, object_id), refusal=refusal)
+
+
+def _replay_start_refusal(
+    status: LifecycleStatus, held: _Held, history: History | None, outstanding: PendingRun | None
+) -> str | None:
+    """What a fresh request refuses, and nothing a resume does not.
+
+    `replay.start_refusal` is about making a request — an unsealed round, and a
+    run still going — and a start with one outstanding makes none: the operation
+    asks neither that nor the ref, and the only thing between it and the record
+    is whether the arguments restate the request, which is not a state
+    (`replay.start`).
+    """
+
+    hold = _attempt_refusal(status, held, "replay", ref=outstanding is None)
     experiment = status.experiment
-    if hold is not None or experiment is None or status.replays is None:
+    if hold is not None or experiment is None or history is None or outstanding is not None:
         return hold
-    return replay_ops.start_refusal(experiment, status.replays)
+    return replay_ops.start_refusal(experiment, history)
 
 
 def _run_refusal(status: LifecycleStatus, held: _Held, action: str, word: str) -> str | None:
@@ -1515,9 +1573,13 @@ def _run_refusal(status: LifecycleStatus, held: _Held, action: str, word: str) -
 
     Not one question: an abandonment writes one particular result, so a run that
     ended some other way is refused there and reported back by a conclusion.
+
+    Neither asks the ref. What they write is how a run that already happened
+    ended, and evidence a moved ref makes stale is reported as stale by the
+    reading rather than withheld from the record.
     """
 
-    hold = _attempt_refusal(status, held, word)
+    hold = _attempt_refusal(status, held, word, ref=False)
     experiment = status.experiment
     if hold is not None or experiment is None or status.replays is None:
         return hold
