@@ -22,6 +22,12 @@ holding a ref where it was observed until the record saying so has landed. They
 are here for the same reason as the rest — two operations ask each of them, and
 an operator meets one refusal rather than one per module.
 
+One question here is not about the lineage at all but about the *reading* an
+operator acted on: `state_revision` digests the durable state, and a mutation
+handed the token a reading carried refuses where the repository has moved since.
+It is here for the same reason as the rest — the console publishes the token and
+every guarded operation checks it, and a digest computed two ways is two tokens.
+
 Nothing here writes. `settled` publishes this machine's analysis closures, which
 is a record catching up with a task lifecycle rather than a change to the
 lineage, and is exactly what the freeze does before it reads.
@@ -39,16 +45,20 @@ refusal phrased for an admission is the wrong sentence over a seal.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator
+from pathlib import Path
+from typing import Any, Iterator
 
 from .batches import awaiting_analysis, record_closures
 from .config import EvolutionConfig
 from .errors import BatchError, RefHoldError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
-from .revisions import checked_out_refs, held_at
+from .revisions import checked_out_refs, held_at, ref_tip
 
 
 def current_cycle(
@@ -241,6 +251,204 @@ def _no_open_experiment(current: BatchLineage, action: str) -> str:
         "never reopened, and what continues a batch is the next attempt — a grouped admission of the drafts "
         "it needs"
     )
+
+
+# --- the state a reading was of ----------------------------------------------
+#
+# The scheme `state_revision` is computed by. A token from another scheme is a
+# different thing from a lifecycle that moved, and only the version tells them
+# apart — so a mutation refusing a stale expectation can say which happened.
+STATE_REVISION_VERSION = 1
+_REVISION_DIGITS = 16
+
+# The commit an operation resolves when nothing on record names one. Exactly one
+# does — the grouped admission that freezes a batch's first base takes `HEAD`
+# where the operator names no revision (`experiments._base_revision`) — and it is
+# in play whenever that admission is, which is before any record of this batch
+# exists to name it. A checkout moved between the reading and the write is
+# therefore a different base than the one the reading was taken against, and the
+# cost of covering it is a token that stops being current when the operator
+# switches branch: the safe direction, since the alternative is freezing a base
+# nobody read.
+_HEAD = "HEAD"
+
+# What a durable record calls a ref. Everything else in these records is a
+# revision — `reverted_from` and the pinned candidates included — and a revision
+# is covered by the bytes that state it.
+_REF_FIELDS = frozenset({"ref", "base_release_ref", "merge_input_ref", "source_ref"})
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """Everything `state_revision` is a digest of, read in one pass.
+
+    A value rather than a digest so it can be compared with the same reading
+    taken a moment later: the token says *what* the state is, and two of these
+    say whether it was one state throughout.
+    """
+
+    # Every durable record, by repository-relative path and content hash.
+    records: tuple[tuple[str, str], ...]
+    # Where each ref in play stands, or None where this checkout does not hold it.
+    tips: tuple[tuple[str, str | None], ...]
+
+
+def state_revision(inputs: Inputs) -> str:
+    """A digest of the durable state the lifecycle was derived from.
+
+    What it is for: a mutation handed the revision an operator saw can refuse
+    rather than act on a lifecycle another writer moved in between. So what it
+    covers is what a writer changes — the versioned records under `evolution/`,
+    the policy that reads them, the machine's pending pool, and the tips of the
+    refs in play — and not what a reading merely mentions.
+
+    Three things are deliberately outside it. The clock: `waited_days` and the
+    freeze it releases move on their own, and a token that expired overnight
+    would refuse operations over a repository nobody wrote to. `.ai-tasks/`: a
+    task finishing is this machine's own work rather than a competing writer's,
+    and every operation re-reads it under the lock. The audit ledger: it is not
+    flow state, and a line appended beside a record already covered here would
+    move the revision twice for one operation.
+
+    Truncated on purpose. This detects a lifecycle that moved between a read and
+    a write — the writer re-derives every refusal under the lock regardless — so
+    what it needs is to be short enough to pass on a command line.
+    """
+
+    digest = hashlib.sha256()
+    digest.update(f"{STATE_REVISION_VERSION}\n".encode())
+    for path, content in inputs.records:
+        digest.update(f"{path}={content}\n".encode())
+    for ref, tip in inputs.tips:
+        digest.update(f"{ref}={tip or ''}\n".encode())
+    return f"{STATE_REVISION_VERSION}-{digest.hexdigest()[:_REVISION_DIGITS]}"
+
+
+def read_inputs(config: EvolutionConfig) -> Inputs:
+    """Read everything the token is over, independently of any reading.
+
+    Independent on purpose, and that is the whole shape of this: the console
+    takes it before and after the reading it accompanies, so a ref set derived
+    from that reading could not bracket it. The refs therefore come from the
+    records — every ref a durable record names is a line this lifecycle stands
+    on — rather than from what a reading made of them, which also covers the ones
+    no reading mentions.
+    """
+
+    records: list[tuple[str, str]] = []
+    refs = {_HEAD}
+    for path in _authoritative_paths(config):
+        try:
+            data = path.read_bytes()
+        except OSError:
+            # A file that went away under the walk. Left out rather than raised:
+            # it reads as a difference between the two brackets, which is what
+            # the console's retry is for, and a record genuinely gone is a state
+            # the reading itself reports.
+            continue
+        records.append((path.relative_to(config.repo_root).as_posix(), hashlib.sha256(data).hexdigest()))
+        refs |= _refs_named(data)
+    return Inputs(
+        records=tuple(records),
+        tips=tuple((ref, ref_tip(config.repo_root, ref)) for ref in sorted(refs)),
+    )
+
+
+def require_expected(config: EvolutionConfig, expected: str | None) -> None:
+    """The lifecycle still stands where the caller's reading left it.
+
+    Asked under the single-writer lock and before anything else, because that is
+    the only place the answer holds until the write: outside it the token would
+    be compared against a state another writer is free to move before this one
+    records anything. First, too, because the preamble below publishes this
+    machine's analysis closures — a write, and one that would change the very
+    digest being compared.
+    """
+
+    refusal = expectation_refusal(config, expected)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | None:
+    """Why the state a caller read is not the state this operation would act on.
+
+    None where no expectation was given, which is the ordinary terminal path: an
+    operator reading the status and typing the next verb is their own single
+    writer. A surface acting on a reading somebody else may have moved — a Web
+    adapter, orch-hub, a script resuming — passes the token, and this is what
+    makes that safe.
+
+    A token from another scheme is refused rather than compared, and said so:
+    "this does not describe this repository" and "this repository moved" are
+    different facts, and a caller that reads them as one will retry the wrong
+    thing forever.
+    """
+
+    if expected is None:
+        return None
+    token = expected.strip()
+    version, separator, digest = token.partition("-")
+    if not separator or version != str(STATE_REVISION_VERSION) or not digest:
+        return (
+            f"'{expected}' is not a state revision this build computes; the scheme is "
+            f"{STATE_REVISION_VERSION}-<digest>, and a token from another one says nothing about whether this "
+            "lifecycle moved — so it is refused rather than compared. Take the current one from the `state` line "
+            "of `aii-2 evolution status` in this checkout"
+        )
+    current = state_revision(read_inputs(config))
+    if token == current:
+        return None
+    return (
+        f"the evolution records moved since {token} was read: they now stand at {current}. This verb was asked "
+        "for the state that token describes, and what it would act on is a different one — read the lifecycle "
+        "again with `aii-2 evolution status` and decide over what is there now"
+    )
+
+
+def _authoritative_paths(config: EvolutionConfig) -> list[Path]:
+    """Every file the lifecycle is derived from, in one order.
+
+    Walked rather than listed, so a record this workspace grows later is covered
+    by being written rather than by somebody remembering to add it here.
+    """
+
+    known = [config.path, config.state_path]
+    for root in (config.batches_root, config.experiments_root):
+        known.extend(root.rglob("*"))
+    return sorted(path for path in known if path.is_file())
+
+
+def _refs_named(data: bytes) -> set[str]:
+    """Every ref this record names, wherever it names it.
+
+    Walked rather than read field by field for the reason the paths above are:
+    a record that grows another integration, another line, or another nesting is
+    covered by stating it in one of these fields rather than by somebody
+    remembering this function. A file that is not a record parses as nothing and
+    names none — drafts are bytes at the admission gate, and their bytes are
+    already covered.
+    """
+
+    try:
+        record = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        return set()
+    found: set[str] = set()
+    _collect_refs(record, found)
+    return found
+
+
+def _collect_refs(node: Any, found: set[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _REF_FIELDS and isinstance(value, str) and value.startswith("refs/"):
+                found.add(value)
+            else:
+                _collect_refs(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_refs(item, found)
 
 
 def reason(text: str, requirement: str) -> str:

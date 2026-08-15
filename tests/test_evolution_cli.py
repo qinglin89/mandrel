@@ -40,6 +40,7 @@ from evolution_fixtures import (
     HUB_PROTOCOL_LEGACY,
     HUB_REVISION,
     admitted_task,
+    complete_task,
     experiment_decision,
     experiment_round,
     git_checkout,
@@ -1513,3 +1514,296 @@ def test_lock_contention_is_reported_with_its_holder(
     assert code == 2
     assert "4242" in err and "another-host" in err
     assert "remove it if no run is active" in err
+
+
+# --- the change lineage, as commands -----------------------------------------
+#
+# The console's other half: `status` says what may be done next, and these are
+# the verbs that do it. Two properties are under test here and neither is about
+# argparse. The first is that the whole lineage of a batch is reachable from the
+# command line alone — no operation exists only in a library caller or only in
+# orch-hub. The second is what a run reports: every one of these operations is
+# redoable by being run again, so a command that found the work already done has
+# to say so rather than claim the decision it read.
+#
+# The expectation token is the third. A surface that is not the only writer acts
+# on a reading somebody else may have moved, and `--expect` is what makes that
+# safe: the operation compares it under its own lock, which is the only place the
+# answer holds until the write.
+
+
+@pytest.fixture
+def lineage_repo(repo: Path) -> Path:
+    """The workspace under Git, which a change lineage needs: an experiment
+    freezes a base revision and creates a durable ref at it."""
+
+    git_repo(repo, tag="v2.2.0")
+    return repo
+
+
+def gate(config: evolution.EvolutionConfig, feed_root: Path, *drafts: str) -> str:
+    """A frozen batch whose analysis ended, with drafts waiting at the human
+    admission gate — the state every verb below acts from."""
+
+    fill_pool(config, feed_root, TARGET)
+    frozen = freeze(config)
+    batch_id = frozen.batch_id or ""
+    close_batch(config, batch_id, frozen.analysis_task_id or "")
+    for draft_id in drafts:
+        draft(config, batch_id, draft_id)
+    return batch_id
+
+
+def token(config: evolution.EvolutionConfig) -> str:
+    """What `status` publishes for a caller about to act on this reading."""
+
+    return phase.describe(config, now=NOW).state_revision
+
+
+def finish_admitted_tasks(config: evolution.EvolutionConfig) -> None:
+    """Every task of the open round completed on this machine, and work
+    committed on the experiment's ref — what a seal observes and pins."""
+
+    experiment = lineage.describe(config).current.open_experiment
+    for task in experiment.last_round.tasks:
+        complete_task(config, task.task_id)
+    git_update_ref(config.repo_root, experiment.ref, git_commit(config.repo_root, "candidate work"))
+
+
+def test_the_whole_change_lineage_is_reachable_from_the_command_line(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The acceptance for this half of the console: one batch driven from its
+    admission gate to its outcome with `aii-2` and nothing else — a grouped
+    admission, a round filled, sealed and revised, a draft declined, the attempt
+    abandoned, and the batch concluded having changed nothing."""
+
+    config = evolution.load_config(lineage_repo)
+    batch_id = gate(config, feed_root, "loader-fallback", "prefetch-injection", "wider-rubric")
+    where = ["--repo", str(lineage_repo)]
+
+    code, out, _ = run(["evolution", "create", "loader-fallback", *where], capsys)
+    assert code == 0
+    assert f"{batch_id}-exp-01 created, round 1" in out
+    assert phase.describe(config, now=NOW).phase == phase.PHASE_IMPLEMENTING
+
+    code, out, _ = run(["evolution", "add-tasks", "prefetch-injection", *where], capsys)
+    assert code == 0
+    assert "already open, round 1" in out and "prefetch-injection" in out
+
+    finish_admitted_tasks(config)
+    code, out, _ = run(["evolution", "seal-round", *where], capsys)
+    assert code == 0
+    assert "round 1 is candidate-ready" in out
+    assert "2 task(s) complete" in out
+    assert phase.describe(config, now=NOW).phase == phase.PHASE_CANDIDATE_READY
+
+    code, out, _ = run(["evolution", "revise", "--reason", "the loader fallback measured worse", *where], capsys)
+    assert code == 0
+    assert "round 2 open" in out
+    assert phase.describe(config, now=NOW).phase == phase.PHASE_IMPLEMENTING
+
+    code, out, _ = run(["evolution", "reject", "wider-rubric", "--reason", "not this cohort's evidence", *where], capsys)
+    assert code == 0
+    assert "1 draft(s) declined" in out
+
+    code, out, _ = run(
+        ["evolution", "abandon", "--reason", "the approach was wrong", "--experiment", f"{batch_id}-exp-01", *where],
+        capsys,
+    )
+    assert code == 0
+    assert f"abandoned: {batch_id}-exp-01, round 2 of {batch_id}" in out
+    assert phase.describe(config, now=NOW).phase == phase.PHASE_CONCLUSION_PENDING
+
+    code, out, _ = run(["evolution", "conclude-no-change", "--reason", "no protocol change justified", *where], capsys)
+    assert code == 0
+    assert f"{batch_id} ended with no change" in out
+    assert lineage.describe(config).current is None
+
+
+def test_supersede_creates_the_successor_and_the_command_names_it(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The successor is the operation's to create — the CLI has none to allocate
+    or name, and what it reports is the one that came back."""
+
+    config = evolution.load_config(lineage_repo)
+    batch_id = gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+
+    code, out, _ = run(
+        ["evolution", "supersede", "--reason", "a narrower change answers the same finding", *where], capsys
+    )
+
+    assert code == 0
+    assert f"{batch_id}-exp-02 (created now)" in out
+    assert "empty round 1" in out
+    assert lineage.describe(config).current.open_experiment.experiment_id == f"{batch_id}-exp-02"
+
+
+def test_a_verb_run_again_reports_the_record_rather_than_a_second_decision(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every operation here is redoable, and the difference between doing a thing
+    and finding it done is the whole of what these commands report. A seal run
+    twice states the pin on record; a rejection run twice writes nothing."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback", "wider-rubric")
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+    finish_admitted_tasks(config)
+
+    run(["evolution", "seal-round", *where], capsys)
+    code, out, _ = run(["evolution", "seal-round", *where], capsys)
+    assert code == 0
+    assert "was already candidate-ready" in out
+    assert "this run wrote nothing: the pin above is the one on record" in out
+
+    run(["evolution", "reject", "wider-rubric", "--reason", "answered by the loader work", *where], capsys)
+    before = snapshot(lineage_repo)
+    code, out, _ = run(["evolution", "reject", "wider-rubric", "--reason", "answered by the loader work", *where], capsys)
+    assert code == 0
+    assert "already declined" in out
+    assert "this run wrote nothing" in out
+    assert snapshot(lineage_repo) == before
+
+
+def test_admitting_further_drafts_is_not_the_redo_of_an_admission(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both leave `created` False and only one of them wrote nothing, so that
+    flag cannot be what the report is derived from: `add-tasks` never creates an
+    experiment and admits into one every time it is not a redo. The result says
+    `recorded` for exactly this, and an adapter that guessed instead would tell an
+    operator their drafts were already admitted."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback", "prefetch-injection")
+    where = ["--repo", str(lineage_repo)]
+    run(["evolution", "create", "loader-fallback", *where], capsys)
+
+    _, redone, _ = run(["evolution", "create", "loader-fallback", *where], capsys)
+    assert "this run wrote nothing" in redone
+
+    _, added, _ = run(["evolution", "add-tasks", "prefetch-injection", *where], capsys)
+    assert "this run wrote nothing" not in added
+    assert "prefetch-injection" in added
+    admitted = {task.draft_id for task in lineage.describe(config).current.open_experiment.last_round.tasks}
+    assert admitted == {"loader-fallback", "prefetch-injection"}
+
+    _, again, _ = run(["evolution", "add-tasks", "prefetch-injection", *where], capsys)
+    assert "this run wrote nothing" in again
+
+
+def test_a_verb_refuses_the_reading_another_writer_moved_under(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What `--expect` is for. The token describes the state a decision was made
+    against; a lifecycle that moved since is a different one, and acting on it is
+    what a surface reading a stale console would otherwise do."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback", "wider-rubric")
+    where = ["--repo", str(lineage_repo)]
+    stale = token(config)
+
+    # Another writer, between the reading and the verb.
+    run(["evolution", "reject", "wider-rubric", "--reason", "answered elsewhere", *where], capsys)
+    before = snapshot(lineage_repo)
+
+    code, _, err = run(["evolution", "create", "loader-fallback", "--expect", stale, *where], capsys)
+
+    assert code == 2
+    assert f"the evolution records moved since {stale} was read" in err
+    assert snapshot(lineage_repo) == before
+
+    code, out, _ = run(["evolution", "create", "loader-fallback", "--expect", token(config), *where], capsys)
+    assert code == 0
+    assert "created, round 1" in out
+
+
+def test_a_token_from_another_scheme_is_refused_rather_than_compared(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """"This does not describe this repository" and "this repository moved" are
+    different facts, and a caller reading them as one retries the wrong thing
+    forever."""
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(lineage_repo)]
+
+    code, _, err = run(["evolution", "create", "loader-fallback", "--expect", "99-deadbeefdeadbeef", *where], capsys)
+
+    assert code == 2
+    assert "is not a state revision this build computes" in err
+    assert lineage.describe(config).current.open_experiment is None
+
+
+def test_a_refused_expectation_stops_before_the_operation_writes_anything(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The check is first inside the lock, before the preamble that publishes this
+    machine's analysis closures — itself a write, and one that would change the
+    very digest being compared. So a batch whose analysis finished and whose
+    closure record is still owed stays exactly as it was."""
+
+    config = evolution.load_config(lineage_repo)
+    fill_pool(config, feed_root, TARGET)
+    frozen = freeze(config)
+    batch_id = frozen.batch_id or ""
+    record_findings(config, batch_id)
+    complete_analysis_task(config, frozen.analysis_task_id or "")
+    draft(config, batch_id, "loader-fallback")
+    closure = config.batches_root / batch_id / batches.CLOSURE_FILENAME
+    assert not closure.exists()
+    before = snapshot(lineage_repo)
+
+    code, _, err = run(
+        ["evolution", "create", "loader-fallback", "--expect", "1-0000000000000000", "--repo", str(lineage_repo)],
+        capsys,
+    )
+
+    assert code == 2
+    assert "the evolution records moved since" in err
+    assert not closure.exists()
+    assert snapshot(lineage_repo) == before
+
+
+def test_the_verbs_this_cli_offers_are_the_ones_the_gate_names(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A command the gate has no verb for is a lifecycle only the console
+    believes in, so the names come from `phase.ACTION_*` on both sides and this
+    is what holds them together. The other direction — a verb `status` emits that
+    is not a command yet — is what remains of the console rather than a defect,
+    so it is not asserted here.
+
+    Every one of them also takes the state token and the workspace, which is what
+    lets a surface pass the action it read from the gate straight to a command
+    line.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback")
+    emitted = {item["action"] for item in phase.describe(config, now=NOW).to_json()["allowed_actions"]}
+
+    wired = cli._lineage_verbs(phase)
+
+    assert wired
+    assert wired <= emitted
+    parser = cli.build_parser()
+    for verb in sorted(wired):
+        parsed = parser.parse_args(["evolution", verb, *_minimal(verb), "--expect", "1-abc", "--repo", "/tmp/x"])
+        assert parsed.evolution_command == verb
+        assert parsed.expect == "1-abc"
+
+
+def _minimal(verb: str) -> list[str]:
+    """The arguments a verb needs to parse — not to run."""
+
+    drafts = ["a-draft"] if verb in ("create", "add-tasks", "reject") else []
+    reason = ["--reason", "why"] if verb in ("reject", "revise", "abandon", "supersede", "conclude-no-change") else []
+    return drafts + reason

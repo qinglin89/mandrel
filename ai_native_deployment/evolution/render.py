@@ -1,9 +1,10 @@
-"""Operator-facing text for the four evolution commands.
+"""Operator-facing text for the evolution commands.
 
-One module rather than a formatter beside each result type, because the four
-commands describe one lifecycle: `sync`'s "feed drained" and `status`'s
-"completeness unproven" are the same fact, and wording that drifts apart teaches
-an operator that they are two.
+One module rather than a formatter beside each result type, because the commands
+describe one lifecycle: `sync`'s "feed drained" and `status`'s "completeness
+unproven" are the same fact, and wording that drifts apart teaches an operator
+that they are two. The same holds across the read and the verbs — what `status`
+calls candidate-ready is what `seal-round` reports having made.
 
 Nothing here is persisted — terminal output, not committed content — so it is
 the one place a rejection's verbatim diagnostic may be shown. Everything that
@@ -16,6 +17,14 @@ from pathlib import Path
 
 from .assessment import SETTLEMENT_RETAIN, Frame, Measurement, Subject
 from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
+from .experiments import (
+    AdmissionResult,
+    ConclusionResult,
+    DecisionResult,
+    RejectionResult,
+    ReviseResult,
+    SealResult,
+)
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate, PreparedPromotion
 from .phase import (
@@ -106,6 +115,140 @@ def format_freeze(result: FreezeResult, repo_root: Path) -> str:
 
 def format_start(result: StartResult, repo_root: Path) -> str:
     return f"{format_sync(result.sync)}\n{format_freeze(result.freeze, repo_root)}"
+
+
+# --- what a lifecycle verb did -----------------------------------------------
+#
+# Each of these reports two things that read alike and are not the same: what is
+# on record now, and what *this run* put there. Every operation in this package
+# is redoable by being run again with the same arguments, so a command that
+# finished someone else's interrupted work — or found the whole thing already
+# done — has to say so rather than report a decision it only read. The flags the
+# operations return for exactly this (`created`, `recorded`, `sealed`, `opened`,
+# `successor_created`, and a copy's `restored`) are what these lines are of.
+
+
+def format_admission(result: AdmissionResult, repo_root: Path) -> str:
+    """A grouped admission, or drafts added to the round that is open.
+
+    One formatter for both because they return one result and describe one
+    fact — which drafts this experiment's open round now holds. `created` is what
+    tells them apart, and `recorded` is the separate question of whether this run
+    made the admission or found it: a redone selection has the record already and
+    only its copies left to write, which `add-tasks` reaches by being run twice
+    exactly as `create` does.
+    """
+
+    opened = "created" if result.created else "already open"
+    lines = [
+        f"admission: {result.experiment_id} {opened}, round {result.round_number} of {result.batch_id}",
+        _field("base", _short(result.base_revision)),
+        _field("ref", result.ref),
+    ]
+    if not result.admitted:
+        lines.append(_field("admitted", "no draft — this round already held every one named"))
+        return "\n".join(lines)
+
+    for index, item in enumerate(result.admitted):
+        note = " (copy written now, from a run that recorded it and stopped)" if item.restored else ""
+        lines.append(
+            _field("admitted" if index == 0 else "", f"{item.draft_id} → {_relative(item.task_path, repo_root)}{note}")
+        )
+    if not result.recorded and not result.restored:
+        lines.append(_field("", "this run wrote nothing: the admission and its copies were already on record"))
+    lines.append(_field("", "a session implementing one of these works on the ref above, never on this checkout"))
+    return "\n".join(lines)
+
+
+def format_rejection(result: RejectionResult, repo_root: Path) -> str:
+    """Drafts turned down at the admission gate, and where that is recorded."""
+
+    verb = "declined" if result.recorded else "already declined"
+    lines = [f"reject: {len(result.declined)} draft(s) {verb} in {result.batch_id}"]
+    for index, draft_id in enumerate(result.declined):
+        lines.append(_field("drafts" if index == 0 else "", draft_id))
+    lines.append(_field("record", _relative(result.record_path, repo_root)))
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same decision was already on record"))
+    lines.append(_field("", "declining is terminal for the proposal; re-arguing the idea means a new draft"))
+    return "\n".join(lines)
+
+
+def format_seal(result: SealResult) -> str:
+    """A round made candidate-ready, and the tasks that were observed for it."""
+
+    state = "is candidate-ready" if result.sealed else "was already candidate-ready"
+    lines = [
+        f"seal-round: {result.experiment_id} round {result.round_number} {state}",
+        _field("candidate", _short(result.candidate_revision)),
+        _field("sealed", result.sealed_at),
+    ]
+    if result.observed:
+        lines.append(_field("observed", f"{len(result.observed)} task(s) complete: {', '.join(result.observed)}"))
+    elif result.sealed:
+        # Every task had been observed by a run whose seal did not land: the
+        # observations were durable, the pin was what was missing.
+        lines.append(_field("observed", "nothing new — an earlier run had observed every task of this round"))
+    if not result.sealed:
+        lines.append(_field("", "this run wrote nothing: the pin above is the one on record"))
+    lines.append(_field("", "replay and any promotion name this revision, never the ref tip"))
+    return "\n".join(lines)
+
+
+def format_revision(result: ReviseResult) -> str:
+    """The next round of an experiment, opened from the candidate before it."""
+
+    state = "open" if result.opened else "already open"
+    lines = [
+        f"revise: {result.experiment_id} round {result.round_number} {state}, revising {_short(result.revised_from)}",
+        _field("reason", result.reason),
+    ]
+    if not result.opened:
+        lines.append(_field("", "this run wrote nothing: the same revision was already on record"))
+    lines.append(
+        _field("", f"the round is empty — `add-tasks` admits what answers it; round {result.round_number - 1}'s evidence still names {_short(result.revised_from)}")
+    )
+    return "\n".join(lines)
+
+
+def format_decision(result: DecisionResult) -> str:
+    """An attempt turned into history, and the successor a supersession creates.
+
+    Two facts rather than one, because the interruption that costs a supersession
+    its successor leaves exactly the state where the decision is on record and the
+    attempt it names does not exist — which is what the redo of this command
+    finishes.
+    """
+
+    named = result.experiment_id if result.recorded else f"{result.experiment_id} was already {result.outcome}"
+    lines = [
+        f"{result.outcome}: {named}, round {result.round_number} of {result.batch_id}",
+        _field("reason", result.reason),
+        _field("decided", result.decided_at),
+    ]
+    if result.successor_id:
+        created = "created now" if result.successor_created else "already there"
+        lines.append(_field("successor", f"{result.successor_id} ({created})"))
+        lines.append(_field("", f"{result.successor_ref} — at the batch's base, with an empty round 1"))
+    if not result.recorded and not result.successor_created:
+        lines.append(_field("", "this run wrote nothing: the same decision was already on record"))
+    return "\n".join(lines)
+
+
+def format_conclusion(result: ConclusionResult, repo_root: Path) -> str:
+    """The batch outcome that ends a cycle having changed nothing."""
+
+    state = "ended" if result.recorded else "had already ended"
+    lines = [
+        f"conclude-no-change: {result.batch_id} {state} with no change",
+        _field("reason", result.reason),
+        _field("decided", result.decided_at),
+        _field("record", _relative(result.record_path, repo_root)),
+    ]
+    if not result.recorded:
+        lines.append(_field("", "this run wrote nothing: the same conclusion was already on record"))
+    lines.append(_field("", "nothing was fabricated on the way out: no candidate, no merge, no deployment"))
+    return "\n".join(lines)
 
 
 def format_status(status: LifecycleStatus) -> str:

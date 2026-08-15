@@ -17,6 +17,28 @@ def _add_workspace_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo", help="evolution workspace root (default: this checkout)")
 
 
+def _add_expectation_argument(parser: argparse.ArgumentParser) -> None:
+    """The state the caller decided this verb from.
+
+    Optional, because an operator reading `status` and typing the next verb is
+    their own single writer. A surface that is not — a Web adapter, orch-hub, a
+    script resuming — passes the `state_revision` its reading carried, and the
+    operation refuses under the lock where the lifecycle has moved since. That
+    check belongs to the operation and not here: outside its lock the answer
+    stops being true before the write.
+    """
+
+    parser.add_argument(
+        "--expect",
+        metavar="STATE_REVISION",
+        help="the state_revision this decision was made against; refuse if the lifecycle has moved since",
+    )
+
+
+def _add_reason_argument(parser: argparse.ArgumentParser, what: str) -> None:
+    parser.add_argument("--reason", required=True, help=f"the human reason {what} (recorded, and required)")
+
+
 def _add_feed_arguments(parser: argparse.ArgumentParser) -> None:
     """Where reports come from, and how far one run reads.
 
@@ -113,8 +135,95 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--justification",
         help="written human reason recorded in the manifest when --force forms a below-target batch",
     )
+    _add_expectation_argument(evolution_start)
 
+    _add_lineage_commands(evolution_subparsers)
     return parser
+
+
+def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
+    """The verbs that move a batch's change lineage.
+
+    One command per domain operation, named exactly as `status` names it in
+    `allowed_actions` — a surface reading that gate has the verb and the object
+    id it needs, with nothing to translate. None of them decides anything: which
+    drafts belong together, whether an attempt is worth continuing, and whether a
+    batch changed nothing are human judgements the operator states here and the
+    operation records (invariant 9).
+    """
+
+    from .evolution import phase
+
+    create = subparsers.add_parser(
+        phase.ACTION_CREATE, help="admit a group of drafts as a new experiment on the current batch"
+    )
+    create.add_argument("draft", nargs="+", help="draft id, as `status` lists it at the admission gate")
+    create.add_argument(
+        "--base",
+        help="source revision the first experiment of a batch freezes (default: HEAD); later ones take that commit",
+    )
+    create.add_argument("--reason", help="optional note recorded with the admission")
+    _add_workspace_argument(create)
+    _add_expectation_argument(create)
+
+    add_tasks = subparsers.add_parser(
+        phase.ACTION_ADD_TASKS, help="admit further drafts into the open experiment's open round"
+    )
+    add_tasks.add_argument("draft", nargs="+", help="draft id waiting at the admission gate")
+    _add_workspace_argument(add_tasks)
+    _add_expectation_argument(add_tasks)
+
+    reject = subparsers.add_parser(phase.ACTION_REJECT, help="decline drafts at the admission gate, with the reason")
+    reject.add_argument("draft", nargs="+", help="draft id to decline; declining is terminal for that proposal")
+    _add_reason_argument(reject, "these drafts were declined")
+    _add_workspace_argument(reject)
+    _add_expectation_argument(reject)
+
+    seal = subparsers.add_parser(
+        phase.ACTION_SEAL_ROUND, help="observe the open round's tasks complete and pin its candidate revision"
+    )
+    _add_workspace_argument(seal)
+    _add_expectation_argument(seal)
+
+    revise = subparsers.add_parser(
+        phase.ACTION_REVISE, help="open the next round of the open experiment, from the candidate already pinned"
+    )
+    _add_reason_argument(revise, "the sealed round is being revised")
+    _add_workspace_argument(revise)
+    _add_expectation_argument(revise)
+
+    abandon = subparsers.add_parser(phase.ACTION_ABANDON, help="end the open experiment without replacing it")
+    _add_reason_argument(abandon, "this attempt was dropped")
+    _add_experiment_argument(abandon)
+    _add_workspace_argument(abandon)
+    _add_expectation_argument(abandon)
+
+    supersede = subparsers.add_parser(
+        phase.ACTION_SUPERSEDE, help="replace the open experiment with a fresh attempt at the same change"
+    )
+    _add_reason_argument(supersede, "this attempt is being replaced")
+    _add_experiment_argument(supersede)
+    _add_workspace_argument(supersede)
+    _add_expectation_argument(supersede)
+
+    conclude = subparsers.add_parser(
+        phase.ACTION_CONCLUDE_NO_CHANGE, help="end the current batch having changed nothing (invariant 7)"
+    )
+    _add_reason_argument(conclude, "this batch's evidence justified no change")
+    _add_workspace_argument(conclude)
+    _add_expectation_argument(conclude)
+
+
+def _add_experiment_argument(parser: argparse.ArgumentParser) -> None:
+    """Which attempt the decision is about.
+
+    Optional in the operation and passed whenever the caller has it, because it
+    is the only thing that tells an interrupted supersession redone from an
+    untouched successor superseded in its turn. `status` names the experiment
+    this verb would act on, so a surface reading the gate always has it.
+    """
+
+    parser.add_argument("--experiment", help="experiment id this decision is about, as `status` names it")
 
 
 def _evolution(args: argparse.Namespace) -> int:
@@ -139,6 +248,10 @@ def _evolution(args: argparse.Namespace) -> int:
         print(json.dumps(status.to_json(), indent=2, sort_keys=True) if args.json else render.format_status(status))
         return 0
 
+    if args.evolution_command in _lineage_verbs(phase):
+        print(_lineage(config, args))
+        return 0
+
     feed = _evolution_feed(config, args.feed_dir)
     if args.evolution_command == "list":
         result = importer.list_candidates(config, feed, page_size=args.page_size, max_pages=args.max_pages)
@@ -155,11 +268,81 @@ def _evolution(args: argparse.Namespace) -> int:
         feed,
         forced=args.force,
         justification=args.justification,
+        expect=args.expect,
         page_size=args.page_size,
         max_pages=args.max_pages,
     )
     print(render.format_start(started, config.repo_root))
     return 0
+
+
+def _lineage_verbs(phase) -> frozenset[str]:
+    """The verbs that move a batch's change lineage, by the name
+    `allowed_actions` gives them.
+
+    Derived from those constants rather than spelled again, here and in the
+    parser, so a verb cannot be offered under one name and dispatched under
+    another — and so a surface acting on the gate's JSON can pass the action it
+    read straight to the command line.
+    """
+
+    return frozenset(
+        {
+            phase.ACTION_CREATE,
+            phase.ACTION_ADD_TASKS,
+            phase.ACTION_REJECT,
+            phase.ACTION_SEAL_ROUND,
+            phase.ACTION_REVISE,
+            phase.ACTION_ABANDON,
+            phase.ACTION_SUPERSEDE,
+            phase.ACTION_CONCLUDE_NO_CHANGE,
+        }
+    )
+
+
+def _lineage(config, args: argparse.Namespace) -> str:
+    """Run one lineage verb and describe what it did.
+
+    Nothing is decided here. Each branch passes the operator's selection, reason
+    and expected state to the operation that owns the guards, the lock, and the
+    recoverable write order, and formats what came back — including whether this
+    run wrote anything at all, which a redo is entitled to report and an adapter
+    is not entitled to guess.
+    """
+
+    from .evolution import experiments, phase, render
+
+    command = args.evolution_command
+    if command == phase.ACTION_CREATE:
+        return render.format_admission(
+            experiments.create(config, args.draft, base=args.base, reason=args.reason, expect=args.expect),
+            config.repo_root,
+        )
+    if command == phase.ACTION_ADD_TASKS:
+        return render.format_admission(
+            experiments.add_tasks(config, args.draft, expect=args.expect), config.repo_root
+        )
+    if command == phase.ACTION_REJECT:
+        return render.format_rejection(
+            experiments.reject(config, args.draft, reason=args.reason, expect=args.expect), config.repo_root
+        )
+    if command == phase.ACTION_SEAL_ROUND:
+        return render.format_seal(experiments.seal_round(config, expect=args.expect))
+    if command == phase.ACTION_REVISE:
+        return render.format_revision(experiments.revise(config, reason=args.reason, expect=args.expect))
+    if command in (phase.ACTION_ABANDON, phase.ACTION_SUPERSEDE):
+        end = experiments.abandon if command == phase.ACTION_ABANDON else experiments.supersede
+        return render.format_decision(
+            end(config, reason=args.reason, experiment_id=args.experiment, expect=args.expect)
+        )
+    if command == phase.ACTION_CONCLUDE_NO_CHANGE:
+        return render.format_conclusion(
+            experiments.conclude_no_change(config, reason=args.reason, expect=args.expect), config.repo_root
+        )
+    # Named above as a lineage verb and not dispatched here, which is a verb
+    # added to one list and not the other. Raised rather than fallen through to
+    # the last branch: the last branch ends a batch.
+    raise AssertionError(f"{command} is a lineage verb with no dispatch")
 
 
 def _evolution_feed(config, feed_dir: str | None):

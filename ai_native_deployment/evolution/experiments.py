@@ -70,6 +70,14 @@ orphaned active task is work a turn selection will dispatch with nothing behind
 it. Redoing the same selection is the resume path throughout — the operations
 recognise their own interrupted work rather than requiring a repair by hand.
 
+**The state a caller read.** Every operation here takes an optional `expect` —
+the `state_revision` of the reading it was decided from (`phase.describe`) — and
+`guards.require_expected` checks it first thing under the lock, which is the one
+place the answer holds until the write. Omitted, nothing is checked: an operator
+reading the status and typing the next verb is their own single writer. Passed,
+a lifecycle another writer moved in between is refused rather than acted on,
+which is what lets a surface that is not the only writer act on a reading at all.
+
 **Copies, not moves** (contract: Change admission). The draft stays in the batch
 that proposed it, and the experiment record holds the draft id, the sha256 of the
 bytes admitted, and the task id the copy took. The copy is the draft plus one
@@ -101,6 +109,7 @@ from .guards import (
     no_open_experiment,
     reason as require_reason,
     require_consistent_ref,
+    require_expected,
     require_line_not_checked_out,
     require_no_pending_successor,
     require_open_experiment,
@@ -215,6 +224,11 @@ class AdmissionResult:
     # False when the experiment already existed: `add-tasks`, or the same
     # selection run again after an interruption.
     created: bool
+    # False when this run found the admission on record rather than making it —
+    # the same selection redone, whose remaining work is the copies. `created`
+    # cannot say it: `add-tasks` never creates an experiment and admits into one
+    # every time it is not a redo.
+    recorded: bool = True
 
     @property
     def restored(self) -> tuple[str, ...]:
@@ -757,6 +771,7 @@ def create(
     *,
     base: str | None = None,
     reason: str | None = None,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> AdmissionResult:
     """Admit a group of drafts as a new experiment on the current batch.
@@ -780,6 +795,7 @@ def create(
 
     moment = _moment(now)
     with single_writer_lock(config):
+        require_expected(config, expect)
         known = settled(config, now=moment)
         current = current_cycle(config, now=moment, known=known)
         requested = _requested(draft_ids)
@@ -847,6 +863,7 @@ def add_tasks(
     config: EvolutionConfig,
     draft_ids: Iterable[str],
     *,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> AdmissionResult:
     """Admit further drafts into the open experiment's open round.
@@ -859,6 +876,7 @@ def add_tasks(
 
     moment = _moment(now)
     with single_writer_lock(config):
+        require_expected(config, expect)
         current = current_cycle(config, now=moment)
         requested = _requested(draft_ids)
         batch = current.batch
@@ -906,6 +924,7 @@ def reject(
     draft_ids: Iterable[str],
     *,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> RejectionResult:
     """Decline drafts at the admission gate, with the reason.
@@ -925,6 +944,7 @@ def reject(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         current = current_cycle(config, now=moment)
         batch = current.batch
         requested = _requested(draft_ids)
@@ -1026,7 +1046,7 @@ def _redo_reject(
 # --- rounds ------------------------------------------------------------------
 
 
-def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealResult:
+def seal_round(config: EvolutionConfig, *, expect: str | None = None, now: datetime | None = None) -> SealResult:
     """Make the open round candidate-ready: observe its tasks, pin its candidate.
 
     Invariant 16. A round is measured only once every task admitted into it has
@@ -1047,6 +1067,7 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
 
     moment = _moment(now)
     with single_writer_lock(config):
+        require_expected(config, expect)
         current = current_cycle(config, now=moment)
         experiment = require_open_experiment(current, "seal")
         # Before the already-sealed shortcut, not after it: a ref that has moved
@@ -1106,7 +1127,13 @@ def seal_round(config: EvolutionConfig, *, now: datetime | None = None) -> SealR
         )
 
 
-def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None) -> ReviseResult:
+def revise(
+    config: EvolutionConfig,
+    *,
+    reason: str,
+    expect: str | None = None,
+    now: datetime | None = None,
+) -> ReviseResult:
     """Open the next round of the open experiment, from an already-pinned one.
 
     What makes the previous round's evidence stale is this record rather than
@@ -1130,6 +1157,7 @@ def revise(config: EvolutionConfig, *, reason: str, now: datetime | None = None)
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         current = current_cycle(config, now=moment)
         experiment = require_open_experiment(current, "revise")
         require_consistent_ref(current)
@@ -1219,6 +1247,7 @@ def abandon(
     *,
     reason: str,
     experiment_id: str | None = None,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> DecisionResult:
     """End the open experiment, without replacing it.
@@ -1237,7 +1266,7 @@ def abandon(
     `experiment_id` names the attempt this decision is about (see `_end_attempt`).
     """
 
-    return _end_attempt(config, DECISION_ABANDONED, reason, experiment_id=experiment_id, now=now)
+    return _end_attempt(config, DECISION_ABANDONED, reason, experiment_id=experiment_id, expect=expect, now=now)
 
 
 def supersede(
@@ -1245,6 +1274,7 @@ def supersede(
     *,
     reason: str,
     experiment_id: str | None = None,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> DecisionResult:
     """Replace the open experiment with a fresh attempt at the same change.
@@ -1265,7 +1295,7 @@ def supersede(
     superseded in its turn.
     """
 
-    return _end_attempt(config, DECISION_SUPERSEDED, reason, experiment_id=experiment_id, now=now)
+    return _end_attempt(config, DECISION_SUPERSEDED, reason, experiment_id=experiment_id, expect=expect, now=now)
 
 
 def _end_attempt(
@@ -1274,6 +1304,7 @@ def _end_attempt(
     reason: str,
     *,
     experiment_id: str | None,
+    expect: str | None,
     now: datetime | None,
 ) -> DecisionResult:
     """Record a terminal decision on the open experiment, and whatever it creates.
@@ -1308,6 +1339,7 @@ def _end_attempt(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         # A supersession finishes its own interrupted run, so it is the one
         # operation that may act on a batch owing a successor.
         current = current_cycle(config, now=moment, finishing=outcome == DECISION_SUPERSEDED)
@@ -2359,6 +2391,7 @@ def conclude_no_change(
     config: EvolutionConfig,
     *,
     reason: str,
+    expect: str | None = None,
     now: datetime | None = None,
 ) -> ConclusionResult:
     """End the current batch having changed nothing (invariant 7).
@@ -2389,6 +2422,7 @@ def conclude_no_change(
     )
 
     with single_writer_lock(config):
+        require_expected(config, expect)
         lineage = settled(config, now=moment)
         current = lineage.current
         if current is None:
@@ -3403,7 +3437,7 @@ def _finish(
     """Write whatever an already-recorded admission still owes `.ai-tasks/`."""
 
     written = tuple(_restore_task(config, current, experiment, round_, task) for task in tasks)
-    return _result(current.batch, experiment, round_, written, created=False)
+    return _result(current.batch, experiment, round_, written, created=False, recorded=False)
 
 
 def _restore_task(
@@ -3706,6 +3740,7 @@ def _result(
     written: tuple[Admitted, ...],
     *,
     created: bool,
+    recorded: bool = True,
 ) -> AdmissionResult:
     return AdmissionResult(
         batch_id=batch.batch_id,
@@ -3715,6 +3750,7 @@ def _result(
         ref=experiment.ref,
         admitted=written,
         created=created,
+        recorded=recorded,
     )
 
 

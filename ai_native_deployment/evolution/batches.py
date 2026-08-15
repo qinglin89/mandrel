@@ -442,6 +442,7 @@ def start(
     forced: bool = False,
     justification: str | None = None,
     runner_revision: str | None = None,
+    expect: str | None = None,
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> StartResult:
@@ -458,11 +459,23 @@ def start(
     frozen manifest with no way to be analyzed; making either wait for a
     reachable feed would leave the repository stuck on an outage that has
     nothing to do with it.
+
+    `expect` is the `state_revision` of the reading this run was decided from,
+    and it is checked first thing under the lock like every other guarded
+    operation's. A freeze is a decision about a *particular* pool — the cohort it
+    forms is immutable — so a pool another writer imported into since that
+    reading is exactly what this refuses to freeze.
     """
+
+    # Locally imported: `guards` reads this module's closures and stage
+    # observation, so the dependency runs that way and the token check is the one
+    # thing needed back.
+    from .guards import require_expected
 
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
     with single_writer_lock(config):
+        require_expected(config, expect)
         # Before anything is closed, repaired, imported, or frozen: which batch
         # is current is the question all four of those hang off, so a repository
         # whose lineage does not answer it once stops the run here rather than
