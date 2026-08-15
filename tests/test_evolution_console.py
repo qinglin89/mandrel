@@ -15,6 +15,13 @@ against a cohort that disagrees, a promotion still on the line against one an
 inverse commit took back off it, and — the one an operator would act wrongly on —
 "no note" against "nothing outstanding".
 
+The gate is the same property asked about verbs rather than fields: every one of
+them is named in every state, the ones this state accepts are exactly the ones
+its operations accept, and each of the rest carries the reason it does not. The
+case that makes it more than a menu is the reading that acts differently from how
+it reads — a recorded rollback this checkout cannot recompute — where offering
+"run it again" would send an operator at a verb that refuses.
+
 Everything runs against a real repository with real operations behind it, for the
 reason the promotion and assessment suites do: which side of a release a report
 falls on is a question about Git ancestry, and a fixture standing in for it would
@@ -24,15 +31,18 @@ prove only that the package agrees with itself.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
     RELEASE_REF,
     FakeHarness,
+    complete_task,
     completed_report,
+    experiment_decision,
     experiment_round,
+    git_commit,
     git_repo,
     git_rev,
     git_update_ref,
@@ -45,6 +55,7 @@ from evolution_fixtures import (
     write_draft,
     write_experiment,
     write_manifest,
+    write_rollback,
 )
 
 from ai_native_deployment import evolution
@@ -156,6 +167,19 @@ def status(config: evolution.EvolutionConfig) -> phase.LifecycleStatus:
     return phase.describe(config, now=NOW)
 
 
+def verbs(config: evolution.EvolutionConfig) -> dict:
+    """Every verb the gate emitted, by name — the shape a console indexes."""
+
+    emitted = payload(config)["allowed_actions"]
+    by_name = {item["action"]: item for item in emitted}
+    assert len(by_name) == len(emitted), "a verb is emitted once"
+    return by_name
+
+
+def allows(config: evolution.EvolutionConfig) -> set[str]:
+    return {name for name, item in verbs(config).items() if item["allowed"]}
+
+
 def rendered(config: evolution.EvolutionConfig) -> str:
     return render.format_status(status(config))
 
@@ -257,8 +281,6 @@ def measured_round(config: evolution.EvolutionConfig, release: str) -> None:
     freeze_cohort(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
-    from evolution_fixtures import complete_task, git_commit
-
     for item in admission.admitted:
         complete_task(config, item.task_id)
     git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, "candidate work"))
@@ -610,6 +632,215 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
     assert emitted["summary"] in text.splitlines()[0]
     assert emitted["release"]["assessed"]["revision"][:12] in text
     assert emitted["batches"]["history"][0]["batch_id"] in text
+
+
+# --- the gate ----------------------------------------------------------------
+
+
+def test_every_verb_is_named_and_the_refused_ones_carry_a_reason(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """A batch working its first round: the only things to do are end the attempt,
+    because the round's task is not finished, nothing has measured anything, and
+    the gate is empty. Every other verb is still named, with the reason it is not
+    one of them — a menu that listed only the legal verbs would leave "why not" to
+    be discovered by running them."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+
+    named = verbs(config)
+    assert {name for name, item in named.items() if item["allowed"]} == {"abandon", "supersede"}
+    assert all(item["reason"] for item in named.values() if not item["allowed"])
+    assert all(item["reason"] is None for item in named.values() if item["allowed"])
+    # The id a decision is given, which is the point of the object: a console
+    # holding it already has the value `abandon --experiment-id` takes.
+    assert named["abandon"]["object"] == {"type": "experiment", "id": admission.experiment_id}
+    assert "no batch has promoted anything" in named["rollback"]["reason"]
+    assert named["rollback"]["object"] is None
+    assert "follows no promotion" in named["assess"]["reason"]
+
+    text = rendered(config)
+    assert f"actions      abandon — {admission.experiment_id}" in text
+    assert "other verb(s) refuse here" in text
+
+    # The one the seal is waiting for is the task, and it is read where the task
+    # is: `.ai-tasks/` is machine-local, so this is the machine that may seal.
+    assert "not ready to seal" in named["seal-round"]["reason"]
+    for item in admission.admitted:
+        complete_task(config, item.task_id)
+    assert "seal-round" in allows(config)
+
+
+def test_a_prepared_promotion_leaves_promote_the_only_verb_on_that_attempt(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The narrowest state the lifecycle has: the merge may already be on the
+    source line with only its records missing, so the three verbs that would move
+    the experiment out from under it refuse and the one that finishes it does
+    not."""
+
+    prepare_promotion(config, release)
+
+    named = verbs(config)
+    assert named["promote"]["allowed"] is True
+    assert named["promote"]["object"] == {"type": "experiment", "id": f"{FIRST}-exp-01"}
+    for verb in ("revise", "abandon", "supersede"):
+        assert not named[verb]["allowed"]
+        assert "prepared onto" in named[verb]["reason"]
+
+
+def test_a_supersession_owing_its_successor_accepts_only_its_own_redo(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The decision landed and the attempt it names does not exist, so the batch
+    has nothing to work in. Every verb but the redo refuses, and the redo is given
+    the attempt that ended — the id that tells it from an untouched successor
+    superseded in its turn."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    write_experiment(
+        config.experiments_root,
+        f"{FIRST}-exp-01",
+        base_revision=git_rev(config.repo_root, "HEAD"),
+        rounds=[experiment_round(1)],
+        decision=experiment_decision("superseded", superseded_by=f"{FIRST}-exp-02"),
+    )
+
+    assert status(config).phase == phase.PHASE_SUPERSEDE_PENDING
+    named = verbs(config)
+    assert {name for name, item in named.items() if item["allowed"]} == {"supersede"}
+    assert named["supersede"]["object"] == {"type": "experiment", "id": f"{FIRST}-exp-01"}
+    assert "which was never created" in named["abandon"]["reason"]
+
+
+def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The reading of a release is the generated analysis task's own second
+    question, taken before the dispositions close. Gating it on the stage having
+    ended — as every verb that writes into the change lineage is — would refuse it
+    exactly when it is meant to be used."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+
+    named = verbs(config)
+    assert named["assess"]["allowed"] is True
+    assert named["assess"]["object"] == {"type": "release", "id": SECOND}
+    assert "still in its analysis stage" in named["create"]["reason"]
+    assert "still in its analysis stage" in named["seal-round"]["reason"]
+    # The other six act on a reading, and there is none yet.
+    assert "recorded no reading" in named["settle"]["reason"]
+
+
+def test_a_first_base_freeze_names_the_settlement_it_waits_on(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """Invariant 17 from the operator's side: an admission that would freeze this
+    batch's base is refused until the release before it is settled, and the
+    refusal says whose record that is rather than leaving it to be met at the
+    freeze."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    analyzed(config, SECOND, drafts=("loader-fallback",))
+
+    named = verbs(config)
+    assert not named["create"]["allowed"]
+    assert "nothing has read" in named["create"]["reason"]
+    assert "invariant 17" in named["create"]["reason"]
+    # Declining a draft is not what the settlement gates — only the base is.
+    assert named["reject"]["allowed"] is True
+
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        now=NOW,
+    )
+    assert "nobody has settled it" in verbs(config)["create"]["reason"]
+
+    assessment.settle(
+        config,
+        settlement=assessment.SETTLEMENT_RETAIN,
+        reason="nothing measured against the release",
+        now=NOW,
+    )
+    assert "create" in allows(config)
+
+
+def test_an_in_flight_rollback_is_offered_only_where_this_checkout_can_finish_it(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The one reading here that acts differently from how it reads. Both records
+    say the same thing — an inverse commit exists and the line has not been
+    recorded as carrying it — and the rollback operation refuses on the one whose
+    commit this checkout cannot recompute, so a surface deriving "run it again"
+    from the record alone offers a verb that will not run."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    rollback.reverse(config, reason="the counterfactual confirmed the regression", now=NOW)
+    record = json.loads(promoted_rollback_path(config).read_text(encoding="utf-8"))
+
+    # A run interrupted between the commit landing and the record saying so.
+    promoted_rollback_path(config).write_text(json.dumps({**record, "reverted_at": None}), encoding="utf-8")
+    assert "rollback" in allows(config)
+    assert "run the rollback again to finish it" in rendered(config)
+
+    # The same state, recorded against commits this checkout does not hold — the
+    # ordinary shape of a rollback prepared on another machine.
+    write_rollback(
+        config.batches_root,
+        FIRST,
+        experiment_id=f"{FIRST}-exp-01",
+        promotion_revision=promoted.promotion_revision,
+        reverted_at=None,
+    )
+    refusal = verbs(config)["rollback"]
+    assert not refusal["allowed"]
+    assert "cannot be confirmed here" in refusal["reason"]
+    text = rendered(config)
+    assert "this checkout cannot confirm that commit" in text
+    assert "run the rollback again to finish it" not in text
+
+
+def promoted_rollback_path(config: evolution.EvolutionConfig) -> Path:
+    return config.batches_root / FIRST / "rollback.json"
+
+
+def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """What the token is for: a mutation handed it can refuse rather than act on a
+    lifecycle another writer moved. So it moves when a record does — and not with
+    time, since a token that expired overnight would refuse operations over a
+    repository nobody wrote to."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback", "hook-side-loader"))
+
+    first = status(config).state_revision
+    assert first.startswith(f"{phase.STATE_REVISION_VERSION}-")
+    assert phase.describe(config, now=NOW + timedelta(days=30)).state_revision == first
+
+    experiments.reject(config, ["hook-side-loader"], reason="one report is not recurrence", now=NOW)
+    assert status(config).state_revision != first
+
+
+def test_the_state_revision_follows_the_refs_the_lifecycle_stands_on(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """A source line that moved is not visible in any record, and it is what makes
+    replay evidence stale — so the refs in play are part of what this reading is
+    of."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    before = status(config).state_revision
+
+    git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "later work on the source line"))
+    assert status(config).state_revision != before
 
 
 def test_status_writes_nothing(

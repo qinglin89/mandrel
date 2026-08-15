@@ -72,23 +72,62 @@ depends on it — admitted change tasks are named by the experiment record, whic
 is committed. Staged evaluation bundles under `.ai-evolution/` are machine-local
 too, which is why a current batch reports how much of its evidence is present
 *here* rather than treating an absent bundle as damage.
+
+**The gate.** Beside the reading, this answers what may be *done* with it:
+`allowed_actions` names every verb the lifecycle has, says which of them this
+state accepts, and gives the rest a reason. It is derived from the same facts and
+in the same order the guarded operations check them, so an operator meets a
+refusal here rather than at a write — and the narrowings that used to be
+reachable only as a refusal (a prepared promotion, a supersession owing its
+successor, a release nobody settled, a recorded rollback this checkout cannot
+confirm) are what it exists for.
+
+It is a reading, and the operation stays the authority. Four conditions are
+deliberately not asked here, each because the answer belongs to the moment of the
+write rather than to a status: whether some working tree is sitting on the source
+line, whether a later attempt stands on the promotion a rollback would reverse,
+whether an admitted task's file is the copy that admission published, and
+whatever the harness or Git answers while the single-writer lock is held. Nor is
+any argument a verb is given — which drafts an admission selects, which way a
+settlement goes — since this says whether the verb may run at all. A verb this
+gate allows may still refuse on one of those; a verb it refuses is refused.
+
+`state_revision` is the token that makes acting on this reading safe. It is a
+digest of the durable state the lifecycle is derived from — the versioned records,
+the pool, the policy, and the tips of the refs in play — so a mutation given the
+revision an operator saw can refuse rather than act on a lifecycle another writer
+has changed underneath it. It deliberately does not cover `.ai-tasks/`: a task
+finishing is this machine's own work rather than a competing writer's, and every
+operation re-reads it under the lock anyway.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from .analysis_task import task_finished
 from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
-from .batches import AdmissionDecision, awaiting_analysis, evaluate_admission
+from .batches import REASON_CURRENT_BATCH, AdmissionDecision, awaiting_analysis, evaluate_admission
 from .config import EvolutionConfig
-from .lineage import BatchLineage, Experiment, Gate, Lineage, PreparedPromotion, RefState, Round
+from .lineage import (
+    DECISION_PROMOTED,
+    BatchLineage,
+    Experiment,
+    Gate,
+    Lineage,
+    PreparedPromotion,
+    RefState,
+    Round,
+)
 from .lineage import describe as describe_lineage
 from .manifests import OUTCOME_PROMOTED, load_batches
-from .replay import Evidence, History, PendingRun, WithdrawnRequest, describe_evidence, read_replays
-from .revisions import Revision
+from .replay import Evidence, History, PendingRun, Replay, WithdrawnRequest, describe_evidence, read_replays
+from .revisions import Revision, ref_tip
 from .state import artifacts_dir_name, load_state
 
 SCHEMA_VERSION = 7
@@ -118,6 +157,48 @@ COUNTERFACTUAL_REQUESTED = "requested"
 COUNTERFACTUAL_RUNNING = "running"
 COUNTERFACTUAL_FAILED = "failed"
 COUNTERFACTUAL_COMPLETED = "completed"
+
+# Every verb the lifecycle has, named as the operator runs it. One name per
+# domain operation and no name without one: a verb this surface offers that no
+# operation implements is a lifecycle only the console believes in.
+ACTION_START = "start"
+ACTION_CREATE = "create"
+ACTION_REJECT = "reject"
+ACTION_ADD_TASKS = "add-tasks"
+ACTION_SEAL_ROUND = "seal-round"
+ACTION_REVISE = "revise"
+ACTION_REPLAY_START = "replay-start"
+ACTION_REPLAY_CONCLUDE = "replay-conclude"
+ACTION_REPLAY_ABANDON = "replay-abandon"
+ACTION_REPLAY_WITHDRAW = "replay-withdraw"
+ACTION_PROMOTE = "promote"
+ACTION_ABANDON = "abandon"
+ACTION_SUPERSEDE = "supersede"
+ACTION_CONCLUDE_NO_CHANGE = "conclude-no-change"
+ACTION_ROLLBACK = "rollback"
+ACTION_ASSESS = "assess"
+ACTION_ASSESS_MEASURE = "assess-measure"
+ACTION_ASSESS_CONCLUDE = "assess-conclude"
+ACTION_ASSESS_ABANDON = "assess-abandon"
+ACTION_ASSESS_WITHDRAW = "assess-withdraw"
+ACTION_ASSESS_RESOLVE = "assess-resolve"
+ACTION_SETTLE = "settle"
+
+# What each verb acts on. The id is the durable one the operation itself takes —
+# an `experiment_id` a decision may name, the batch a conclusion ends, the
+# promotion a rollback reverses — so a surface holding one of these has the value
+# to send rather than a label it would have to translate.
+OBJECT_POOL = "pool"
+OBJECT_BATCH = "batch"
+OBJECT_EXPERIMENT = "experiment"
+OBJECT_PROMOTION = "promotion"
+OBJECT_RELEASE = "release"
+
+# The scheme `state_revision` is computed by. A token from another scheme is a
+# different thing from a lifecycle that moved, and only the version tells them
+# apart — so a mutation refusing a stale expectation can say which happened.
+STATE_REVISION_VERSION = 1
+_REVISION_DIGITS = 16
 
 
 @dataclass(frozen=True)
@@ -181,12 +262,20 @@ class Rollback:
     been recorded as carrying it — an operation in flight rather than a rollback
     that did not happen. The two are different next steps: one is done, and the
     other is finished by running the rollback again.
+
+    Unless it cannot be. `unconfirmed` is why this checkout could not settle that
+    the recorded commit is the promotion taken back out of the line it was made
+    from — an object it does not hold, or a Git that cannot compute the revert —
+    and the rollback operation refuses on exactly that while the reader carries
+    on. It is the one state here that reads differently from how it acts, which
+    is why it is a field rather than something the next attempt tells you.
     """
 
     revision: str
     reverted_from: str
     reverted_at: str | None
     reason: str
+    unconfirmed: str | None = None
 
 
 @dataclass(frozen=True)
@@ -375,6 +464,42 @@ class ReleaseReading:
 
 
 @dataclass(frozen=True)
+class Action:
+    """One verb, whether this state accepts it, and what it would act on.
+
+    Every verb is emitted every time, refused ones included, because a menu that
+    listed only what is legal would leave "why not" to be discovered by running
+    it — which is the whole failure this surface exists to prevent.
+
+    `object_type` is null where the verb is about something that does not exist
+    here: no promotion to reverse, no release to read, no experiment to end. That
+    is the difference between a verb an operator can do something about and one
+    that is simply not what this lifecycle is at, and it is what a rendering
+    decides how loudly to say a refusal by.
+    """
+
+    action: str
+    object_type: str | None = None
+    object_id: str | None = None
+    # Why this state does not accept the verb, in one line. None means it does.
+    refusal: str | None = None
+
+    @property
+    def allowed(self) -> bool:
+        return self.refusal is None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "allowed": self.allowed,
+            "object": None
+            if self.object_type is None
+            else {"type": self.object_type, "id": self.object_id},
+            "reason": self.refusal,
+        }
+
+
+@dataclass(frozen=True)
 class PendingSuccessor:
     """A supersession whose decision landed and whose successor did not.
 
@@ -419,6 +544,12 @@ class LifecycleStatus:
     # owes it. None when there is no release before it at all — which is most
     # batches, and is ordinary rather than missing.
     release: ReleaseReading | None = None
+    # Every verb, and whether this state accepts it. Derived last, from the
+    # fields above and in the order the operations check them.
+    actions: tuple[Action, ...] = ()
+    # What the answer above is about. A mutation handed this value can refuse
+    # rather than act on a lifecycle that moved since it was read.
+    state_revision: str = ""
 
     @property
     def open_round(self) -> Round | None:
@@ -448,6 +579,12 @@ class LifecycleStatus:
     @property
     def replay_withdrawn(self) -> tuple[WithdrawnRequest, ...]:
         return self.replays.withdrawn if self.replays else ()
+
+    @property
+    def allowed(self) -> tuple[Action, ...]:
+        """The verbs this state accepts, in lifecycle order."""
+
+        return tuple(action for action in self.actions if action.allowed)
 
     @property
     def implementation_tasks(self) -> tuple[str, ...]:
@@ -533,6 +670,12 @@ class LifecycleStatus:
             "replay": _replay_json(self.evidence, self.replays),
             "release": _release_json(self.release),
             "last_promotion": _promotion_json(self.last_promotion),
+            # What this reading is of. A mutation is given it back and refuses
+            # when it no longer describes the repository.
+            "state_revision": self.state_revision,
+            # Every verb, refused ones included: what may be done next, and why
+            # the rest may not.
+            "allowed_actions": [action.to_json() for action in self.actions],
         }
 
 
@@ -565,7 +708,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
         current_batch_id=current.batch_id if current else None,
     )
 
-    return LifecycleStatus(
+    reading = LifecycleStatus(
         phase=_phase(current=current, stage_open=stage_open, pool=decision.task_count),
         decision=decision,
         pool_complete=state.feed_exhausted,
@@ -582,6 +725,14 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
         replays=_replays(config, current),
         batches=tuple(_record(item) for item in lineage.batches),
         release=_release(config, lineage, current),
+    )
+    # The gate last, over the assembled reading: what may be done next is a
+    # question about all of it at once, and deriving it from anything narrower is
+    # how a surface comes to offer a verb some other field already refuses.
+    return replace(
+        reading,
+        actions=_actions(config, reading),
+        state_revision=_state_revision(config, reading),
     )
 
 
@@ -804,7 +955,819 @@ def _rollback(promoted: BatchLineage) -> Rollback | None:
         reverted_from=record["reverted_from"],
         reverted_at=record["reverted_at"],
         reason=record["reason"],
+        # The lineage's own answer, taken while it held the record to it. Asking
+        # Git again here would be a second answer to one question, and the
+        # expensive half of it.
+        unconfirmed=promoted.rollback_unconfirmed,
     )
+
+
+# --- the gate ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Held:
+    """The refusals more than one verb shares, settled once.
+
+    The order is the preamble every guarded operation runs before it writes
+    (`guards.current_cycle`), and asking it in that order is what makes the gate's
+    answer the operation's: a verb refused by the batch it would act on is
+    refused for that reason rather than for whatever the experiment underneath it
+    happens to be doing.
+    """
+
+    # No batch is current, or the current one is still in its analysis stage.
+    stage: str | None
+    # A supersession recorded its decision and not the successor it named.
+    successor: str | None
+    # The open experiment's ref stands off the history its record pins.
+    ref: str | None
+    # A promotion of the open experiment is prepared and not finished.
+    prepared: str | None
+
+    @property
+    def lineage(self) -> str | None:
+        """The whole preamble, for the verbs that run all of it."""
+
+        return self.stage or self.successor
+
+
+def _actions(config: EvolutionConfig, status: LifecycleStatus) -> tuple[Action, ...]:
+    """Every verb, and what this state does with it.
+
+    Emitted in lifecycle order — the pool, the gate, the work, its measurement,
+    the decisions, the reversal, the release — so a reader scanning for what to
+    do next reads them in the order they happen.
+    """
+
+    held = _Held(
+        stage=_stage_refusal(status),
+        successor=_successor_refusal(status),
+        ref=_ref_refusal(status),
+        prepared=_prepared_refusal(status),
+    )
+    return (
+        _start_action(status),
+        *_gate_actions(status, held),
+        *_work_actions(config, status, held),
+        *_replay_actions(status, held),
+        *_decision_actions(status, held),
+        _rollback_action(status),
+        *_release_actions(status),
+    )
+
+
+def _on(object_type: str, object_id: str | None) -> tuple[str | None, str | None]:
+    """The object a verb acts on, or nothing where it does not exist here."""
+
+    return (object_type, object_id) if object_id is not None else (None, None)
+
+
+def _stage_refusal(status: LifecycleStatus) -> str | None:
+    current = status.current_batch
+    if current is None:
+        return (
+            "no batch is current; a cohort is frozen by `start`, and every change lineage belongs to one "
+            "(invariant 14)"
+        )
+    if not current.analysis_complete:
+        return (
+            f"{current.batch_id} is still in its analysis stage; its dispositions reach the admission gate when "
+            "that task completes and the closure record says so (invariant 6)"
+        )
+    return None
+
+
+def _successor_refusal(status: LifecycleStatus) -> str | None:
+    pending = status.pending_successor
+    if pending is None:
+        return None
+    return (
+        f"{pending.experiment_id} was superseded by {pending.successor_id}, which was never created; the batch has "
+        "nothing to work in until that supersession is redone for the reason on record"
+    )
+
+
+def _ref_refusal(status: LifecycleStatus) -> str | None:
+    """A ref standing off the history its record pins stops every write into it.
+
+    "Cannot tell" is not one: a clone that never fetched `refs/evolution/*` has no
+    answer, which says nothing about the lineage (`guards.require_consistent_ref`).
+    """
+
+    ref = status.ref
+    if ref is None or ref.consistent is not False:
+        return None
+    if ref.chain_break is not None:
+        earlier, later = ref.chain_break
+        return (
+            f"{ref.ref}: {later[:12]} does not descend from {earlier[:12]}, which the record pins before it; work "
+            "admitted onto that history leaves the revisions the record names unreachable"
+        )
+    return (
+        f"{ref.ref} stands at {(ref.tip or 'nothing')[:12]}, not on the history of the {ref.pinned[:12]} its record "
+        f"pins ({ref.state}); the ref only fast-forwards, and work admitted now would be measured as part of a "
+        "candidate nobody can identify"
+    )
+
+
+def _prepared_refusal(status: LifecycleStatus) -> str | None:
+    prepared = status.prepared_promotion
+    experiment = status.experiment
+    if prepared is None or experiment is None:
+        return None
+    return (
+        f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto "
+        f"{prepared.merge_input_ref}; the line may already be carrying it, so `promote` finishes that promotion or "
+        "discards it, and this is available afterwards"
+    )
+
+
+def _start_action(status: LifecycleStatus) -> Action:
+    """Freezing the next cohort.
+
+    Refused for one reason, and a short pool is not it: `start` is a discovery
+    pass and then an admission, so running it below the target imports whatever
+    has arrived and reports no batch — a normal outcome rather than a refusal.
+    What it cannot do is form a cohort beside one whose cycle is still running.
+    """
+
+    decision = status.decision
+    if decision.reason != REASON_CURRENT_BATCH:
+        return Action(ACTION_START, OBJECT_POOL)
+    return Action(
+        ACTION_START,
+        OBJECT_POOL,
+        refusal=(
+            f"{decision.current_batch_id} is current and no outcome has been recorded for it; the pool keeps "
+            "accumulating and the next cohort forms once that batch concludes (invariant 14)"
+        ),
+    )
+
+
+def _gate_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+    """The two terminal answers a draft at the admission gate can be given."""
+
+    batch_id = status.current_batch.batch_id if status.current_batch else None
+    return (
+        Action(ACTION_CREATE, *_on(OBJECT_BATCH, batch_id), refusal=_create_refusal(status, held)),
+        Action(ACTION_REJECT, *_on(OBJECT_BATCH, batch_id), refusal=_reject_refusal(status, held)),
+    )
+
+
+def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    if held.lineage:
+        return held.lineage
+    experiment = status.experiment
+    if experiment is not None:
+        return (
+            f"{experiment.experiment_id} is open, and a batch runs one attempt at a time (invariant 14); "
+            "`add-tasks` admits further drafts into its open round, and redoing the same selection is what finishes "
+            "an interrupted admission"
+        )
+    if not _waiting(status):
+        return (
+            "no draft is waiting at the admission gate; what an experiment admits is a proposal this batch's own "
+            "analysis made and nobody has decided yet"
+        )
+    return _base_refusal(status)
+
+
+def _base_refusal(status: LifecycleStatus) -> str | None:
+    """Invariant 17, asked only where a base is about to be frozen.
+
+    A batch whose first experiment already froze one takes that commit rather
+    than resolving one, so the release before it is not asked about again: the
+    decision can no longer change what this batch starts from.
+    """
+
+    if status.revisions.base is not None:
+        return None
+    release = status.release
+    if release is None or release.settled:
+        return None
+    owner = "this batch" if release.owned_here else release.owner_id
+    subject = release.frame.subject
+    reading = release.reading
+    if reading is None:
+        return (
+            f"nothing has read the {subject.batch_id} release ({subject.revision[:12]}) that {owner} owes, and the "
+            "base every alternative here starts from is the line that reading is settled onto (invariant 17)"
+        )
+    return (
+        f"{owner} reads the {subject.batch_id} release {reading.verdict!r} and nobody has settled it; the "
+        "settlement is what says whether the base carries the release or the reversal of it (invariant 17)"
+    )
+
+
+def _reject_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    if held.lineage:
+        return held.lineage
+    if not _waiting(status):
+        return (
+            "no draft is waiting at the admission gate; declining is terminal, and a draft already decided is not "
+            "decided again"
+        )
+    return None
+
+
+def _work_actions(config: EvolutionConfig, status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+    """The three that move an attempt: admit into its round, pin it, open the next."""
+
+    experiment = status.experiment
+    object_id = experiment.experiment_id if experiment else None
+    return (
+        Action(ACTION_ADD_TASKS, *_on(OBJECT_EXPERIMENT, object_id), refusal=_add_tasks_refusal(status, held)),
+        Action(ACTION_SEAL_ROUND, *_on(OBJECT_EXPERIMENT, object_id), refusal=_seal_refusal(config, status, held)),
+        Action(ACTION_REVISE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_revise_refusal(status, held)),
+    )
+
+
+def _attempt_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    """The open experiment these verbs act on, or why there is none.
+
+    None is the answer only where there is one, which is what lets every caller
+    below read `status.experiment` after it.
+    """
+
+    if held.lineage:
+        return held.lineage
+    if status.experiment is None:
+        batch_id = status.current_batch.batch_id if status.current_batch else ""
+        return (
+            f"{batch_id} has no open experiment; a terminal decision is never reopened, and what continues a batch "
+            "is the next attempt — a grouped admission of the drafts it needs"
+        )
+    return held.ref
+
+
+def _add_tasks_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    hold = _attempt_refusal(status, held)
+    experiment = status.experiment
+    if hold is not None or experiment is None:
+        return hold
+    if experiment.open_round is None:
+        return (
+            f"round {experiment.last_round.number} of {experiment.experiment_id} is candidate-ready; its candidate "
+            "is pinned and its evidence names it, so `revise` opens the round further work is admitted into "
+            "(invariant 16)"
+        )
+    if not _waiting(status):
+        return (
+            "no draft is waiting at the admission gate; a round admits proposals this batch's analysis made, and "
+            "one already admitted or declined is decided"
+        )
+    return None
+
+
+def _seal_refusal(config: EvolutionConfig, status: LifecycleStatus, held: _Held) -> str | None:
+    hold = _attempt_refusal(status, held)
+    experiment = status.experiment
+    if hold is not None or experiment is None:
+        return hold
+    round_ = experiment.open_round
+    if round_ is None:
+        pinned = (experiment.last_round.candidate_revision or "")[:12]
+        return f"round {experiment.last_round.number} of {experiment.experiment_id} is already sealed at {pinned}"
+    if not round_.tasks:
+        return (
+            f"round {round_.number} of {experiment.experiment_id} has admitted nothing; a seal pins the revision a "
+            "task set produced, and an empty round accounts for none of it"
+        )
+    outstanding = _unobserved(config, round_)
+    if outstanding:
+        return (
+            f"round {round_.number} of {experiment.experiment_id} is not ready to seal: {list(outstanding)}; a "
+            "candidate that does not contain the change it was admitted for is not what anyone means to measure, "
+            "and `.ai-tasks/` is machine-local — a task nobody here holds is observed where it was worked"
+        )
+    return None
+
+
+def _unobserved(config: EvolutionConfig, round_: Round) -> tuple[str, ...]:
+    """Admitted tasks this machine cannot see finished.
+
+    The same question the seal asks (`experiments._observe_completions`) and one
+    check short of it: whether the file standing at that id is the copy the
+    admission published belongs to the seal, under the lock, at the moment it
+    records the observation. A task the record already shows complete is not
+    asked about at all — the observation is durable and the file is not.
+    """
+
+    return tuple(task_id for task_id in round_.unfinished if not task_finished(config, task_id))
+
+
+def _revise_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    hold = _attempt_refusal(status, held)
+    experiment = status.experiment
+    if hold is not None or experiment is None:
+        return hold
+    if held.prepared:
+        return held.prepared
+    open_round = experiment.open_round
+    if open_round is not None:
+        return (
+            f"round {open_round.number} of {experiment.experiment_id} is still open; a revision appends to a round "
+            "whose candidate is already pinned, so seal this one first (invariant 16)"
+        )
+    return None
+
+
+def _replay_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+    """Measuring the pinned candidate, and answering for a run that was started."""
+
+    experiment = status.experiment
+    object_id = experiment.experiment_id if experiment else None
+    return (
+        Action(ACTION_REPLAY_START, *_on(OBJECT_EXPERIMENT, object_id), refusal=_replay_start_refusal(status, held)),
+        Action(ACTION_REPLAY_CONCLUDE, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, "concluded")),
+        Action(ACTION_REPLAY_ABANDON, *_on(OBJECT_EXPERIMENT, object_id), refusal=_run_refusal(status, held, "ended")),
+        Action(ACTION_REPLAY_WITHDRAW, *_on(OBJECT_EXPERIMENT, object_id), refusal=_withdraw_refusal(status, held)),
+    )
+
+
+def _replay_start_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    """A start, or the resume of a request the harness never answered for."""
+
+    hold = _attempt_refusal(status, held)
+    experiment = status.experiment
+    if hold is not None or experiment is None:
+        return hold
+    open_round = experiment.open_round
+    if open_round is not None:
+        return (
+            f"round {open_round.number} of {experiment.experiment_id} is still open; a round is measured once its "
+            "candidate is pinned, because an open round's tip moves (invariant 16)"
+        )
+    going = _running_replay(status)
+    if going is not None:
+        return (
+            f"round {going.round_number} attempt {going.attempt} is still running under {going.harness.id}; a round "
+            "is measured against one integration at a time — conclude that run first"
+        )
+    return None
+
+
+def _run_refusal(status: LifecycleStatus, held: _Held, action: str) -> str | None:
+    """Concluding a run and ending one ask the same three questions."""
+
+    hold = _attempt_refusal(status, held)
+    experiment = status.experiment
+    if hold is not None or experiment is None:
+        return hold
+    request = status.replay_request
+    if request is not None:
+        return (
+            f"round {request.round_number} attempt {request.attempt} is outstanding and no run is recorded for it, "
+            f"so there is nothing here to be {action}; start the replay again to record what the harness began, or "
+            "withdraw the request"
+        )
+    runs = status.replays.replays if status.replays else ()
+    if not runs:
+        return (
+            f"{experiment.experiment_id} has no recorded run to be {action}; a harness invocation nothing here "
+            "named is not one this controller can speak for"
+        )
+    newest = runs[-1]
+    if not newest.running:
+        outcome = newest.result.outcome if newest.result is not None else ""
+        return (
+            f"round {newest.round_number} attempt {newest.attempt} already ended {outcome!r}; a run ends once, and "
+            "what measures the round again is another attempt"
+        )
+    return None
+
+
+def _withdraw_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    hold = _attempt_refusal(status, held)
+    if hold:
+        return hold
+    if status.replay_request is None:
+        return (
+            "no replay request is outstanding; a withdrawal takes back a request the harness never answered for, "
+            "and a run that happened is ended with a reason instead"
+        )
+    return None
+
+
+def _running_replay(status: LifecycleStatus) -> Replay | None:
+    """The newest recorded run of the open round, while it is still going."""
+
+    runs = status.replays.replays if status.replays else ()
+    newest = runs[-1] if runs else None
+    return newest if newest is not None and newest.running else None
+
+
+def _decision_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+    """The three ways an attempt ends, and the way a batch ends without one."""
+
+    experiment = status.experiment
+    object_id = experiment.experiment_id if experiment else None
+    pending = status.pending_successor
+    unfinished = _unfinished_promotion(status)
+    batch_id = status.current_batch.batch_id if status.current_batch else None
+    return (
+        Action(
+            ACTION_PROMOTE,
+            *_on(OBJECT_EXPERIMENT, unfinished.experiment_id if unfinished is not None else object_id),
+            refusal=_promote_refusal(status, held),
+        ),
+        Action(ACTION_ABANDON, *_on(OBJECT_EXPERIMENT, object_id), refusal=_abandon_refusal(status, held)),
+        # A supersession that recorded its decision and not the successor it
+        # named is redone against the attempt that ended, which is the id the
+        # decision sits on — the value this object exists to hand over.
+        Action(
+            ACTION_SUPERSEDE,
+            *_on(OBJECT_EXPERIMENT, pending.experiment_id if pending is not None else object_id),
+            refusal=_supersede_refusal(status, held),
+        ),
+        Action(ACTION_CONCLUDE_NO_CHANGE, *_on(OBJECT_BATCH, batch_id), refusal=_conclude_refusal(status, held)),
+    )
+
+
+def _unfinished_promotion(status: LifecycleStatus) -> Experiment | None:
+    """A promotion whose decision landed and whose batch outcome did not.
+
+    The batch is still current, its newest attempt is terminal, and that decision
+    is a promotion — which is a state nothing else may be written over and this
+    verb's own redo (`experiments._finish_promotion`). It reaches the phase label
+    as `proposals-pending` or `conclusion-pending`, neither of which says so, and
+    the gate is where it becomes visible.
+    """
+
+    if status.current_batch is None or status.experiment is not None:
+        return None
+    newest = status.history[-1] if status.history else None
+    if newest is None or newest.decision is None or newest.decision.outcome != DECISION_PROMOTED:
+        return None
+    return newest
+
+
+def _promote_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    unfinished = _unfinished_promotion(status)
+    if unfinished is not None:
+        if held.lineage:
+            return held.lineage
+        if unfinished.promotion is None:
+            return (
+                f"{unfinished.experiment_id} was promoted by a build that recorded no merge unit on the experiment, "
+                "and the outcome that ends this batch states the merge unit and the targets it was planned for; "
+                "the plan was never written down, so this batch cannot be concluded from what is on record"
+            )
+        return None
+    hold = _attempt_refusal(status, held)
+    if hold:
+        return hold
+    waiting = _waiting(status)
+    if waiting:
+        return (
+            f"{status.current_batch.batch_id if status.current_batch else ''} still has draft(s) {list(waiting)} "
+            "at its admission gate, and a promotion ends the batch and the gate with it — admit them or decline them"
+        )
+    if held.prepared:
+        # The one state a prepared promotion does not refuse: this verb is what
+        # finishes it, or discards it once the line proves it never arrived.
+        return None
+    request = status.replay_request
+    if request is not None:
+        return (
+            f"round {request.round_number} attempt {request.attempt} is outstanding, so a run may be going that no "
+            "record names; a promotion ends the experiment and with it every operation that could answer for that "
+            "run — start the replay again, or withdraw the request"
+        )
+    going = _running_replay(status)
+    if going is not None:
+        return (
+            f"round {going.round_number} attempt {going.attempt} is still running under {going.harness.id}; a "
+            "promotion ends the experiment, and nothing could afterwards record how that run finished"
+        )
+    evidence = status.evidence
+    if evidence is not None and evidence.promotable:
+        return None
+    return _unpromotable(evidence)
+
+
+def _unpromotable(evidence: Evidence | None) -> str:
+    """Why the round's evidence does not describe the tree a promotion carries.
+
+    In the reader's own words, and both shortfalls: `drift` is what this checkout
+    established and `unverified` is what it could not answer, and a promotion is
+    refused on either (contract: what is derived).
+    """
+
+    if evidence is None:
+        return "no round has been replayed, and a promotion carries the tree a completed run measured"
+    notes = [*evidence.drift, *(f"unverified here: {note}" for note in evidence.unverified)]
+    tail = f" — {'; '.join(notes)}" if notes else ""
+    return f"the round's replay evidence is {evidence.state}{tail}"
+
+
+def _abandon_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    hold = _attempt_refusal(status, held)
+    if hold:
+        return hold
+    return held.prepared
+
+
+def _supersede_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    """Also the redo of an interrupted supersession, which is the one operation
+    that may act on a batch owing the attempt one named."""
+
+    if status.pending_successor is not None:
+        return held.stage
+    return _abandon_refusal(status, held)
+
+
+def _conclude_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+    if held.lineage:
+        return held.lineage
+    unfinished = _unfinished_promotion(status)
+    if unfinished is not None:
+        return (
+            f"{unfinished.experiment_id} records a promotion, so this batch concluded by promoting it; the outcome "
+            "names which attempt it was and the revision that carries it — `promote` writes it"
+        )
+    experiment = status.experiment
+    if experiment is not None:
+        return (
+            f"{experiment.experiment_id} is still open; a batch's outcome is recorded after its last attempt ends, "
+            "so abandon or supersede that one first — an abandoned attempt stays in the record as the evidence it is"
+        )
+    waiting = _waiting(status)
+    if waiting:
+        return (
+            f"{status.current_batch.batch_id if status.current_batch else ''} still has draft(s) {list(waiting)} "
+            "at its admission gate; 'the evidence justified no change' is a claim this batch's own analysis does "
+            "not support — admit them or decline them, both of which are terminal"
+        )
+    return None
+
+
+def _rollback_action(status: LifecycleStatus) -> Action:
+    """Taking the newest promotion back off the line it was put on.
+
+    Not gated on the analysis stage or on anything about the current batch: what
+    it acts on is a promotion an earlier cohort recorded, and the batch running
+    now is where the reading of that promotion lives rather than what it reverses.
+    """
+
+    promotion = status.last_promotion
+    if promotion is None:
+        return Action(
+            ACTION_ROLLBACK,
+            refusal=(
+                "no batch has promoted anything, so there is nothing on the source line to take back; a rollback "
+                "reverses the promotion this repository most recently recorded"
+            ),
+        )
+    record = promotion.rollback
+    refusal = None
+    if record is not None and record.reverted_at is not None:
+        refusal = (
+            f"{promotion.revision[:12]} was already taken off {promotion.merge_input_ref} by {record.revision[:12]} "
+            f"at {record.reverted_at}; only the newest promotion is reversed, and it is reversed once"
+        )
+    elif record is not None and record.unconfirmed is not None:
+        refusal = (
+            f"the inverse commit {record.revision[:12]} on record cannot be confirmed here — {record.unconfirmed}; "
+            f"that record is what moves {promotion.merge_input_ref} and what says the promotion came off it, so it "
+            "is acted on from a checkout holding the commits it names"
+        )
+    return Action(ACTION_ROLLBACK, OBJECT_PROMOTION, promotion.revision, refusal)
+
+
+_RELEASE_ACTIONS = (
+    ACTION_ASSESS,
+    ACTION_ASSESS_MEASURE,
+    ACTION_ASSESS_CONCLUDE,
+    ACTION_ASSESS_ABANDON,
+    ACTION_ASSESS_WITHDRAW,
+    ACTION_ASSESS_RESOLVE,
+    ACTION_SETTLE,
+)
+
+
+def _release_actions(status: LifecycleStatus) -> tuple[Action, ...]:
+    """The seven verbs of the release reading, which the analysis stage does not
+    gate.
+
+    Deliberately outside the preamble every other verb here runs. The reading is
+    the generated analysis task's own second question, taken while the
+    dispositions are still being written — so gating these on that stage having
+    ended would refuse them exactly when they are meant to be used
+    (`assessment._owing_frame`).
+    """
+
+    release = status.release
+    if release is None:
+        absent = _no_release(status)
+        return tuple(Action(action, refusal=absent) for action in _RELEASE_ACTIONS)
+    refusals = _reading_refusals(release)
+    return tuple(Action(action, OBJECT_RELEASE, release.owner_id, refusals[action]) for action in _RELEASE_ACTIONS)
+
+
+def _no_release(status: LifecycleStatus) -> str:
+    if status.current_batch is None:
+        return (
+            "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
+            "cohort's answer about the promotion before it (invariant 14)"
+        )
+    return (
+        f"{status.current_batch.batch_id} follows no promotion; a repository that promoted nothing before this "
+        "cohort and a predecessor that concluded `no-change` both leave nothing to measure against (invariant 7)"
+    )
+
+
+def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
+    """Each release verb against the reading as it now stands.
+
+    Four states of the counterfactual and two of the reading itself, and the
+    order they are asked in is the readers' own: whose record it is, whether
+    there is a reading at all, whether its gate has answered, and only then what
+    the run underneath it is doing.
+    """
+
+    subject = release.frame.subject
+    reading = release.reading
+    decision = None if reading is None else reading.decision
+    state = release.counterfactual_state
+
+    if not release.owned_here and decision is not None:
+        foreign = (
+            f"the reading of the {subject.batch_id} release belongs to {release.owner_id}, which settled it "
+            f"{decision.settlement!r} at {decision.decided_at}; a later cohort reads the line as it now is rather "
+            "than that release"
+        )
+        return {action: foreign for action in _RELEASE_ACTIONS}
+
+    if reading is None:
+        unread = (
+            f"{release.owner_id} has recorded no reading of the {subject.batch_id} release "
+            f"({subject.revision[:12]}); the cohorts are read first, and what they come to is the suspicion a "
+            "pinned run is started to settle"
+        )
+        return {action: (None if action == ACTION_ASSESS else unread) for action in _RELEASE_ACTIONS}
+
+    read = (
+        f"{release.owner_id} has already read the {subject.batch_id} release {reading.verdict!r}; a cohort reads a "
+        "release once, and `assess-resolve` is what revises that reading on a completed run"
+    )
+    if decision is not None:
+        settled = (
+            f"the reading of the {subject.batch_id} release was settled {decision.settlement!r} at "
+            f"{decision.decided_at}; nothing is added to a reading once its gate answers, and a release read again "
+            "afterwards is the next cohort's reading of the line as it now is"
+        )
+        return {
+            **{action: settled for action in _RELEASE_ACTIONS},
+            ACTION_ASSESS: read,
+            ACTION_SETTLE: (
+                f"the gate answered {decision.settlement!r} at {decision.decided_at}; it answers once, and the "
+                "decision the next base was frozen on is not one to re-take"
+            ),
+        }
+
+    return {
+        ACTION_ASSESS: read,
+        ACTION_ASSESS_MEASURE: _measure_refusal(state),
+        ACTION_ASSESS_CONCLUDE: _running_refusal(release, "concluded"),
+        ACTION_ASSESS_ABANDON: _running_refusal(release, "ended"),
+        ACTION_ASSESS_WITHDRAW: None
+        if state == COUNTERFACTUAL_REQUESTED
+        else (
+            "no run request is outstanding; a withdrawal takes back a request the harness never answered for, and "
+            "a run that happened is ended with a reason instead"
+        ),
+        ACTION_ASSESS_RESOLVE: None
+        if state == COUNTERFACTUAL_COMPLETED
+        else (
+            f"the pinned counterfactual is {state}, and what a reading is resolved by is a completed run; the "
+            f"cohorts left this one at {reading.verdict!r} on their own"
+        ),
+        ACTION_SETTLE: (
+            "a measurement is still in flight; nothing may be added to a reading once its gate answers, so "
+            "conclude the run, end it, or withdraw the request first"
+        )
+        if release.in_flight
+        else None,
+    }
+
+
+def _measure_refusal(state: str) -> str | None:
+    """A failed run is answered by another attempt, and a completed one is not."""
+
+    if state == COUNTERFACTUAL_RUNNING:
+        return (
+            "the pinned counterfactual is still running; a release is measured against one pinned pair at a time, "
+            "so a second run started under it would leave two answers with nothing to choose between them"
+        )
+    if state == COUNTERFACTUAL_COMPLETED:
+        return (
+            "the pinned counterfactual has already completed; the release is measured once, and a second completed "
+            "run would leave a reader choosing which of two answers the reading rests on"
+        )
+    return None
+
+
+def _running_refusal(release: ReleaseReading, action: str) -> str | None:
+    """Both verbs that answer for a run act on one that is going."""
+
+    state = release.counterfactual_state
+    if state == COUNTERFACTUAL_RUNNING:
+        return None
+    if state == COUNTERFACTUAL_REQUESTED:
+        return (
+            f"a run request is outstanding and no run is recorded for it, so there is nothing to be {action}; ask "
+            "again to record what the harness began, or withdraw the request"
+        )
+    if state == COUNTERFACTUAL_NONE:
+        return (
+            f"no counterfactual of this release has been started, so there is no run to be {action}; a harness "
+            "invocation nothing here named is not one this controller can speak for"
+        )
+    return f"the pinned counterfactual already ended {state!r}; a run ends once, and another attempt measures again"
+
+
+def _waiting(status: LifecycleStatus) -> tuple[str, ...]:
+    return status.gate.waiting if status.gate is not None else ()
+
+
+# --- the revision this reading is of -----------------------------------------
+
+
+def _state_revision(config: EvolutionConfig, status: LifecycleStatus) -> str:
+    """A digest of the durable state the lifecycle was derived from.
+
+    What it is for: a mutation handed the revision an operator saw can refuse
+    rather than act on a lifecycle another writer moved in between. So what it
+    covers is what a writer changes — the versioned records under `evolution/`,
+    the policy that reads them, the machine's pending pool, and the tips of the
+    refs in play — and not what a reading merely mentions.
+
+    Three things are deliberately outside it. The clock: `waited_days` and the
+    freeze it releases move on their own, and a token that expired overnight
+    would refuse operations over a repository nobody wrote to. `.ai-tasks/`: a
+    task finishing is this machine's own work rather than a competing writer's,
+    and every operation re-reads it under the lock. The audit ledger: it is not
+    flow state, and a line appended beside a record already covered here would
+    move the revision twice for one operation.
+
+    Truncated on purpose. This detects a lifecycle that moved between a read and
+    a write — the writer re-derives every refusal under the lock regardless — so
+    what it needs is to be short enough to pass on a command line.
+    """
+
+    digest = hashlib.sha256()
+    digest.update(f"{STATE_REVISION_VERSION}\n".encode())
+    for path in _authoritative_paths(config):
+        data = path.read_bytes()
+        digest.update(f"{path.relative_to(config.repo_root).as_posix()}:{len(data)}\n".encode())
+        digest.update(data)
+    for ref in sorted(_refs_in_play(status)):
+        digest.update(f"{ref}={ref_tip(config.repo_root, ref) or ''}\n".encode())
+    return f"{STATE_REVISION_VERSION}-{digest.hexdigest()[:_REVISION_DIGITS]}"
+
+
+def _authoritative_paths(config: EvolutionConfig) -> list[Path]:
+    """Every file the lifecycle is derived from, in one order.
+
+    Walked rather than listed, so a record this workspace grows later is covered
+    by being written rather than by somebody remembering to add it here.
+    """
+
+    known = [config.path, config.state_path]
+    for root in (config.batches_root, config.experiments_root):
+        known.extend(root.rglob("*"))
+    return sorted(path for path in known if path.is_file())
+
+
+def _refs_in_play(status: LifecycleStatus) -> set[str]:
+    """The refs whose movement changes what the lifecycle allows.
+
+    The experiment's own ref, and every source line something here integrated
+    onto: a merge input that moves is what makes replay evidence stale, which is
+    the difference between a promotion and a refusal.
+    """
+
+    refs: set[str] = set()
+    if status.ref is not None:
+        refs.add(status.ref.ref)
+    base = status.revisions.base
+    if base is not None and base.ref is not None:
+        refs.add(base.ref)
+    prepared = status.prepared_promotion
+    if prepared is not None:
+        refs.add(prepared.merge_input_ref)
+    request = status.replay_request
+    if request is not None:
+        refs.add(request.integration.merge_input_ref)
+    if status.evidence is not None and status.evidence.replay is not None:
+        refs.add(status.evidence.replay.integration.merge_input_ref)
+    if status.last_promotion is not None:
+        refs.add(status.last_promotion.merge_input_ref)
+    if status.release is not None:
+        refs.add(status.release.assessed.merge_input_ref)
+    return refs
 
 
 def _replay_json(evidence: Evidence | None, history: History | None) -> dict[str, Any] | None:

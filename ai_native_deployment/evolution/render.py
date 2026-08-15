@@ -26,6 +26,7 @@ from .phase import (
     COUNTERFACTUAL_RUNNING,
     ROUND_CANDIDATE_READY,
     ROUND_OPEN,
+    Action,
     BatchRecord,
     LifecycleRevisions,
     LifecycleStatus,
@@ -36,6 +37,7 @@ from .phase import (
 from .replay import Evidence, PendingRun, WithdrawnRequest
 
 FIELD_WIDTH = 13
+HEX_DIGITS = "0123456789abcdef"
 
 
 def format_list(result: ListResult) -> str:
@@ -148,7 +150,57 @@ def format_status(status: LifecycleStatus) -> str:
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
     lines.extend(_release_lines(status.release))
     lines.extend(_promotion_lines(status.last_promotion))
+    lines.extend(_action_lines(status))
     return "\n".join(lines)
+
+
+def _action_lines(status: LifecycleStatus) -> list[str]:
+    """What may be done next, and how much of the rest refuses.
+
+    The verbs are the one thing the lines above cannot say. Their refusals are
+    what those lines already explain — a round nobody sealed, evidence that went
+    stale, a release nobody settled — so this names the count and leaves the
+    sentences to the JSON, where a surface acting on them reads them. Every one
+    is emitted there; what is bounded here is how much of it an operator who can
+    already see the state has to scroll past.
+
+    The revision comes last and is deliberately the last line of the whole
+    reading: it is what an operator passes to the verb they just chose, and it
+    describes everything above it.
+    """
+
+    if not status.actions:
+        # Nothing was derived — a reading assembled by hand rather than a state
+        # in which every verb refuses, which is a different thing to say.
+        return []
+    allowed = status.allowed
+    lines: list[str] = []
+    for index, action in enumerate(allowed):
+        lines.append(_field("actions" if index == 0 else "", _action(action)))
+    if not allowed:
+        lines.append(_field("actions", "none — every verb refuses in this state"))
+    refused = len(status.actions) - len(allowed)
+    if refused:
+        lines.append(_field("", f"{refused} other verb(s) refuse here; `--json` states each reason"))
+    if status.state_revision:
+        lines.append(_field("state", f"{status.state_revision} — what this reading is of"))
+    return lines
+
+
+def _action(action: Action) -> str:
+    """One verb and the object it would act on, which is the id it is given."""
+
+    return action.action if action.object_id is None else f"{action.action} — {_short(action.object_id)}"
+
+
+def _short(object_id: str) -> str:
+    """A revision is shortened the way every other revision here is.
+
+    A batch or experiment id is left whole: it is already the name an operator
+    types, and the JSON states every id in full for whatever passes it on.
+    """
+
+    return object_id[:12] if len(object_id) == 40 and not object_id.strip(HEX_DIGITS) else object_id
 
 
 def _concluded_lines(batches: tuple[BatchRecord, ...]) -> list[str]:
@@ -287,11 +339,20 @@ def _rollback_lines(rollback: Rollback | None) -> list[str]:
     if rollback is None:
         return []
     if rollback.reverted_at is None:
+        prepared = (
+            f"rollback prepared as {rollback.revision[:12]} from {rollback.reverted_from[:12]} — the source line "
+            "has not been recorded as carrying it"
+        )
+        if rollback.unconfirmed is None:
+            return [_field("", f"{prepared}; run the rollback again to finish it")]
+        # The one reading here that acts differently from how it reads: the
+        # record stands and the operation refuses on it, so telling an operator
+        # to run it again would offer a verb that will not run.
         return [
             _field(
                 "",
-                f"rollback prepared as {rollback.revision[:12]} from {rollback.reverted_from[:12]} — the source "
-                "line has not been recorded as carrying it; run the rollback again to finish it",
+                f"{prepared}, and this checkout cannot confirm that commit — {rollback.unconfirmed}; it is "
+                "finished from a checkout holding the commits it names",
             )
         ]
     return [_field("", f"rolled back by {rollback.revision[:12]} at {rollback.reverted_at} — {rollback.reason}")]

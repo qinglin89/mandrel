@@ -346,6 +346,17 @@ class BatchLineage:
     # batch that promoted, and what this says is that the promotion is no longer
     # what the line carries.
     rollback: Mapping[str, Any] | None = None
+    # Why this checkout could not confirm that `rollback` is the promotion taken
+    # back out of the line it was made from — the answer `require_inverse` gives
+    # when the objects are not here or Git cannot compute the revert. None where
+    # it confirmed, and also where there is no record to confirm: `rollback` is
+    # read first, and this qualifies it rather than standing on its own.
+    #
+    # Kept because the operation that acts on such a record refuses on exactly
+    # this (`rollback._require_confirmed_inverse`), while the reader carries on:
+    # a surface deriving "run it again" from the record alone would offer a verb
+    # that refuses. Computing it twice would mean two answers to one question.
+    rollback_unconfirmed: str | None = None
 
     @property
     def batch_id(self) -> str:
@@ -707,8 +718,9 @@ def _batch_lineage(
         _require_ended_attempts(batch, experiments, open_experiment, outcome)
         _require_one_promotion(config, batch, experiments, outcome)
     rollback = read_rollback(config, batch)
+    unconfirmed = None
     if rollback is not None:
-        _require_reversed_promotion(config, batch, outcome, rollback)
+        unconfirmed = _require_reversed_promotion(config, batch, outcome, rollback)
 
     return BatchLineage(
         batch=batch,
@@ -718,6 +730,7 @@ def _batch_lineage(
         gate=_gate(config, batch, consumed),
         ref=describe_ref(config, open_experiment) if open_experiment else None,
         rollback=rollback,
+        rollback_unconfirmed=unconfirmed,
     )
 
 
@@ -1049,7 +1062,7 @@ def _require_reversed_promotion(
     batch: Batch,
     outcome: Mapping[str, Any] | None,
     rollback: Mapping[str, Any],
-) -> None:
+) -> str | None:
     """The rollback reverses the promotion this batch actually recorded.
 
     Checked here for `_require_checkable_merge_unit`'s reason: a rollback says
@@ -1073,6 +1086,10 @@ def _require_reversed_promotion(
     rollback. What Git did answer is not skipped, whichever way it went — a
     revert that conflicts is as much an answer about the record as one producing
     another tree.
+
+    Returns what could not be checked here, which the lineage carries: the
+    operation that acts on this record refuses on exactly that, so the answer is
+    kept rather than asked for a second time by whoever needs it.
     """
 
     path = batch.rollback_path
@@ -1112,7 +1129,7 @@ def _require_reversed_promotion(
                 f"{rollback['tree'][:12]} made from {[rollback['reverted_from'][:12]]}; the commit on the source "
                 "line is what the record is held to"
             )
-    require_inverse(config, path, outcome, rollback)
+    return require_inverse(config, path, outcome, rollback)
 
 
 def require_inverse(
