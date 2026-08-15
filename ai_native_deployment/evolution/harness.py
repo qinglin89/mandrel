@@ -28,21 +28,23 @@ said rather than faked:
   writes the request, says what to run, and stops (`Unanswered`), so the handle
   that arrives afterwards is one the operator went and got.
 - *Reproduce or refuse.* A rerun of a completed attempt is asked for the earlier
-  run's selections by name. That request is not checked against what is stated,
-  deliberately: the controller records what a harness answered with rather than
-  what it was asked for, so a substitution stands visible beside the attempt it
-  was meant to reproduce instead of being hidden behind the request — or barred,
-  which would leave a case set the harness no longer holds unmeasurable forever.
-  What the console owes is that the operator sees the request: the reproduction
-  is stated in full when the run is asked for.
+  run's selections by name, and a harness that cannot exercise them raises
+  rather than running the nearest thing it can. This is the harness, so the
+  check is here: a second attempt replaces the first as its round's evidence
+  (`replay.describe_evidence`), so a substituted cohort does not stand *beside*
+  the run it was meant to reproduce — it stands where that run's numbers stood,
+  and a promotion is argued from it. The controller keeping what the harness
+  answered with is what makes such a substitution legible after the fact; it is
+  not a licence to make one. The operator sees the request either way: the
+  reproduction is stated in full when the run is asked for.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .errors import BatchError, EvolutionError
-from .replay import ReplayPlan, ReplayReport, ReplayRequest
+from .replay import CaseSet, Evaluator, Harness, ReplayPlan, ReplayReport, ReplayRequest
 
 
 class Unanswered(EvolutionError):
@@ -93,6 +95,7 @@ class StatedHarness:
     def start(self, request: ReplayRequest) -> ReplayPlan:
         if self.plan is None:
             raise Unanswered(request)
+        _require_reproduced(request, self.plan)
         return self.plan
 
     def poll(self, handle: str) -> ReplayReport | None:
@@ -103,3 +106,84 @@ class StatedHarness:
                 "name the run this record has going, or leave it unnamed to answer for whatever that is"
             )
         return self.report
+
+
+def _require_reproduced(request: ReplayRequest, stated: ReplayPlan) -> None:
+    """A rerun exercises the selections it was asked for, or this refuses.
+
+    The Protocol's own rule, held up where the Protocol puts it: the cohort, the
+    evaluator and the configuration of a rerun are not a choice, and a harness
+    that cannot resolve them raises rather than measuring the nearest thing it
+    still has (`replay.ReplayHarness.start`).
+
+    Enforced rather than reported because of where the numbers land. A second
+    attempt of a round replaces the first as that round's evidence, so a
+    substituted cohort is not a second reading beside the first — it is the one a
+    promotion is argued from, wearing the provenance of the attempt it displaced.
+    The record does keep what was answered, which is what makes a substitution
+    findable afterwards; refusing it is what keeps it from having to be found.
+
+    Everything the request states but the run's own name (`_unnamed`).
+    """
+
+    asked = request.reproduce
+    if asked is None:
+        return
+    compared = (
+        ("cases", stated.cases, asked.cases, _cases),
+        ("evaluator", stated.evaluator, asked.evaluator, _evaluator),
+        ("harness", _unnamed(stated.harness), _unnamed(asked.harness), _configuration),
+    )
+    # The values are compared and only the differing ones described: a sentence
+    # states what an operator has to read, and two selections that differ in
+    # something it does not say still differ.
+    differences = [
+        f"{what} {describe(here)} where {describe(there)} was asked for"
+        for what, here, there, describe in compared
+        if here != there
+    ]
+    if not differences:
+        return
+    raise BatchError(
+        f"{request.experiment_id} round {request.round_number} attempt {request.attempt} reruns an attempt that "
+        f"completed, and exercises what that one did: {'; '.join(differences)}. A rerun measures the same cohort "
+        "over an integration that moved, so numbers from another one would not stand beside that attempt — they "
+        "would replace it as this round's evidence and be what a promotion is argued from. State what that "
+        "attempt ran, or give this position up (`replay-withdraw`): a different cohort is a different "
+        "measurement, and it belongs to a round of its own"
+    )
+
+
+def _cases(cases: CaseSet) -> str:
+    """A cohort as an operator restates it — every part they type, in full.
+
+    Hashes unshortened here although they are shortened almost everywhere else:
+    this sentence is read by someone about to retype them, and the exclusions are
+    listed rather than counted for the same reason. A cohort that agrees on its
+    id, its hash and its size and holds a different case out of it is a different
+    cohort, and counting them would leave that difference unsayable.
+    """
+
+    excluded = "; ".join(f"{item.case_id} ({item.reason})" for item in cases.excluded)
+    return f"{cases.case_set_id} {cases.case_set_sha256} ({cases.count} case(s), excluding {excluded or 'nothing'})"
+
+
+def _evaluator(evaluator: Evaluator) -> str:
+    return f"{evaluator.backend}/{evaluator.model} rubric {evaluator.rubric_revision or '<none>'}"
+
+
+def _unnamed(harness: Harness) -> Harness:
+    """The harness without its name for the run.
+
+    What a rerun reproduces is which harness, at which revision, under which
+    configuration. The handle is the one thing it does not: a rerun is a new run
+    and takes the name its harness issues for it — the request carries the
+    reproduced run's handle to say which run is being repeated, and the record
+    refuses two runs wearing one name (`replay._require_distinct_handles`).
+    """
+
+    return replace(harness, handle=None)
+
+
+def _configuration(harness: Harness) -> str:
+    return f"{harness.id} {harness.revision} ({harness.config_sha256})"

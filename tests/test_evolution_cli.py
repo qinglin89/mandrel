@@ -1845,12 +1845,17 @@ EVALUATOR = ("claude", "claude-opus-5")
 HARNESS = ("local-replay", "0.1.0", "d" * 64)
 
 
-def running(handle: str) -> list[str]:
-    """What the harness is running, as the operator states it."""
+def running(handle: str, cases: tuple[str, str, str] = CASE_SET) -> list[str]:
+    """What the harness is running, as the operator states it.
+
+    `cases` is overridden by the one test that needs a run to state a cohort
+    other than the one the fixture harness resolves: a rerun asked to reproduce a
+    completed attempt.
+    """
 
     return [
         "--case-set",
-        *CASE_SET,
+        *cases,
         "--exclude",
         "case-9",
         "needs a credentialed backend",
@@ -2566,6 +2571,65 @@ def test_nothing_is_pinned_until_what_is_running_is_stated_in_full(
     assert snapshot(lineage_repo) == before
     experiment = lineage.describe(config).current.open_experiment
     assert replay.read_replays(config, experiment).pending is None
+
+    # The optional halves are a partial statement too. An evaluator states a
+    # rubric revision only where it has one, so it cannot be required — but a
+    # command naming one is an operator describing a run, and reading it as the
+    # silence that records a request would allocate a position and drop what they
+    # said.
+    code, _, err = run(["evolution", "replay-start", *asked, "--rubric", "r7", *where], capsys)
+
+    assert code == 2
+    assert "this states --rubric and not --case-set, --evaluator, --harness, --handle" in err
+    assert snapshot(lineage_repo) == before
+    assert replay.read_replays(config, experiment).pending is None
+
+
+def test_a_rerun_states_what_the_attempt_it_repeats_measured(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The console is the harness, so the Protocol's reproduce-or-refuse rule is
+    the console's to hold up (`replay.ReplayHarness.start`).
+
+    What makes it a refusal rather than a note: a second attempt of a round
+    replaces the first as that round's evidence, so a substituted cohort does not
+    stand beside the run it was asked to repeat — it stands where that run's
+    numbers stood, and is what a promotion would be argued from. The request
+    survives the refusal, which is the point of writing it before the harness is
+    asked: the position is held, and the same verb stating the right cohort
+    resumes it.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    experiment = lineage.describe(config).current.open_experiment
+    another_cohort = ("loader-regressions-trimmed", "e" * 64, "9")
+
+    code, _, err = run(["evolution", "replay-start", *asked, *running("run-0102", another_cohort), *where], capsys)
+
+    assert code == 2
+    assert "round 1 attempt 2 reruns an attempt that completed" in err
+    assert "loader-regressions-trimmed" in err and CASE_SET[0] in err
+    history = replay.read_replays(config, experiment)
+    # Refused before it became a run, and after the request that holds the
+    # position: nothing measured this attempt, and the position is not freed.
+    assert [item.attempt for item in history.replays] == [1]
+    assert history.pending is not None and history.pending.attempt == 2
+
+    code, out, _ = run(["evolution", "replay-start", *asked, *running("run-0102"), *where], capsys)
+
+    assert code == 0
+    assert "attempt 2 resumed" in out
+    repeated = replay.read_replays(config, experiment).replays[-1]
+    assert repeated.attempt == 2 and repeated.running
+    # The whole of what a rerun reproduces, and the one thing it does not: this
+    # run is the earlier one's cohort, evaluator and configuration under a name
+    # of its own.
+    first = replay.read_replays(config, experiment).replays[0]
+    assert (repeated.cases, repeated.evaluator) == (first.cases, first.evaluator)
+    assert repeated.harness.handle == "run-0102" and first.harness.handle == "run-0101"
 
 
 def test_numbers_are_recorded_against_the_run_they_were_read_from(

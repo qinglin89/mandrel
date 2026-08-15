@@ -629,6 +629,26 @@ class LifecycleStatus:
         return self.replays.pending if self.replays else None
 
     @property
+    def replay_running(self) -> Replay | None:
+        """The run that is going, whatever the evidence above is a reading of.
+
+        Not the same question as `evidence.replay`, and the difference is a real
+        state rather than a corner: a completed run whose merge input has not
+        moved stays the round's evidence when a second attempt is started beside
+        it (`replay.describe_evidence`, step 1), because evidence that is still
+        exact stays exact. The verbs that answer for a run act on the newest one
+        regardless — so in that state the reading names attempt 1 while
+        `replay-conclude` polls attempt 2, and the handle a surface needs to
+        conclude with is the one this field carries.
+
+        The newest run alone, and only while it is running: an ended one is what
+        the conclude/abandon recoveries already name, and everything before it is
+        history the record keeps.
+        """
+
+        return _running(self.replays)
+
+    @property
     def replay_withdrawn(self) -> tuple[WithdrawnRequest, ...]:
         return self.replays.withdrawn if self.replays else ()
 
@@ -1983,35 +2003,29 @@ def _replay_json(evidence: Evidence | None, history: History | None) -> dict[str
     need the position it holds. It is also deliberately absent from `drift`
     exactly when the evidence is promotable, so "no note" never means "nothing
     outstanding" — this field is what says that.
+
+    `running` is the second of the same kind. `run` is what the reading is of,
+    and the two are not always one run: a completed attempt whose merge input has
+    not moved outranks a second attempt started beside it, while the verbs that
+    answer for a run act on the newest. A surface reading `run` alone would offer
+    `replay-conclude` and be unable to say which external run it is for.
     """
 
     if evidence is None:
         return None
     run = evidence.replay
     pending = history.pending if history else None
+    going = _running(history)
     return {
         "state": evidence.state,
         "round": evidence.round_number,
         "promotable": evidence.promotable,
-        "run": None
-        if run is None
-        else {
-            "round": run.round_number,
-            "attempt": run.attempt,
-            "started_at": run.started_at,
-            "candidate_revision": run.integration.candidate_revision,
-            "merge_input_revision": run.integration.merge_input_revision,
-            "merge_input_ref": run.integration.merge_input_ref,
-            "tree": run.integration.tree,
-            # Who ran it and their own name for it. Opaque here and the only
-            # thing that connects this record to the work: a run is concluded by
-            # asking that harness about that handle, so a surface offering the
-            # conclusion has to be able to say which run it is answering for.
-            "harness": run.harness.id,
-            "handle": run.harness.handle,
-            "outcome": None if run.result is None else run.result.outcome,
-            "concluded_at": None if run.result is None else run.result.concluded_at,
-        },
+        "run": None if run is None else _run_json(run),
+        # The run in flight, which the reading above may not be about. Emitted
+        # whenever there is one rather than only when the two differ: "which run
+        # is going" is then one field to read rather than a comparison a surface
+        # has to know to make.
+        "running": None if going is None else _run_json(going),
         "request": None
         if pending is None
         else {
@@ -2038,6 +2052,46 @@ def _replay_json(evidence: Evidence | None, history: History | None) -> dict[str
         ],
         "drift": list(evidence.drift),
         "unverified": list(evidence.unverified),
+    }
+
+
+def _running(history: History | None) -> Replay | None:
+    """The run in flight, which is the newest one and only while it is going.
+
+    One derivation for the field and the property that publishes it, so a surface
+    and this module cannot come to disagree about which run a conclusion would
+    act on — `replay.conclude` takes the newest entry, and `redone_conclusion`
+    names it once it has ended.
+    """
+
+    replays = history.replays if history else ()
+    newest = replays[-1] if replays else None
+    return newest if newest is not None and newest.running else None
+
+
+def _run_json(run: Replay) -> dict[str, Any]:
+    """One recorded run, in the shape both the reading and the run in flight take.
+
+    One projection rather than two: the difference between them is which run it
+    is, never what a reader may ask about it.
+    """
+
+    return {
+        "round": run.round_number,
+        "attempt": run.attempt,
+        "started_at": run.started_at,
+        "candidate_revision": run.integration.candidate_revision,
+        "merge_input_revision": run.integration.merge_input_revision,
+        "merge_input_ref": run.integration.merge_input_ref,
+        "tree": run.integration.tree,
+        # Who ran it and their own name for it. Opaque here and the only thing
+        # that connects this record to the work: a run is concluded by asking
+        # that harness about that handle, so a surface offering the conclusion
+        # has to be able to say which run it is answering for.
+        "harness": run.harness.id,
+        "handle": run.harness.handle,
+        "outcome": None if run.result is None else run.result.outcome,
+        "concluded_at": None if run.result is None else run.result.concluded_at,
     }
 
 
@@ -2240,7 +2294,11 @@ def _counterfactual_json(release: ReleaseReading) -> dict[str, Any]:
             "base_revision": run.integration.base_revision,
             "candidate_revision": run.integration.candidate_revision,
             "source_ref": run.integration.source_ref,
+            # Who is running it and their own name for it, for the reason a
+            # replay's run carries both: `assess-conclude` polls that harness
+            # about that handle, and nothing else on this record names the work.
             "harness": run.harness.id,
+            "handle": run.harness.handle,
             "expectation": run.expectation,
             "outcome": None if run.result is None else run.result.outcome,
             "concluded_at": None if run.result is None else run.result.concluded_at,

@@ -843,21 +843,28 @@ def _plan(replay, args: argparse.Namespace) -> Any:
     """What the operator says their harness is running, or nothing at all.
 
     Nothing is the first half of a start: the controller records its request and
-    the run is described afterwards. A statement is all four parts or none —
-    stating some of them describes a run that could not be repeated from the
-    record, and the record is the only durable form a request has.
+    the run is described afterwards. A statement is all four required parts or
+    none — stating some of them describes a run that could not be repeated from
+    the record, and the record is the only durable form a request has.
+
+    The two optional parts count as a statement without being one. An evaluator
+    states a rubric revision only where it has one and a cohort holds cases out
+    only where it does, so neither can be required — but a command naming one of
+    them is an operator describing a run, and taking it for the silence that
+    records a request would allocate a position and drop what they said.
     """
 
-    stated = {
+    required = {
         "--case-set": args.case_set,
         "--evaluator": args.evaluator,
         "--harness": args.harness,
         "--handle": args.handle,
     }
+    stated = {**required, "--exclude": args.exclude, "--rubric": args.rubric}
     given = [name for name, value in stated.items() if value]
-    if not given and not args.exclude:
+    if not given:
         return None
-    missing = [name for name, value in stated.items() if not value]
+    missing = [name for name, value in required.items() if not value]
     if missing:
         raise evolution_errors.BatchError(
             f"a harness states all of what it is running or none of it; this states {', '.join(given)} and not "

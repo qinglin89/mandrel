@@ -354,6 +354,41 @@ def test_a_run_that_is_going_names_the_harness_and_the_handle_it_answers_to(
     assert "at local-replay, handle 'run-0101'" in rendered(config)
 
 
+def test_a_run_going_beside_a_promotable_reading_is_named_as_well(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The reading and the run in flight are two questions, and one state pulls
+    them apart: a completed attempt whose merge input has not moved stays the
+    round's evidence when a second attempt is started beside it, because evidence
+    that is still exact stays exact — while the verbs that answer for a run act on
+    the newest one.
+
+    So a surface reading the evidence alone offers `replay-conclude` over attempt
+    1's handle and is answered about attempt 2. The field this asserts is what
+    tells it which run that conclusion is for.
+    """
+
+    measured_round(config, release)
+    going = FakeHarness(report=None)
+    replay.start(config, going, source_ref=RELEASE_REF, expectation=EXPECTATION, now=NOW)
+
+    block = payload(config)["replay"]
+    assert block["state"] == replay.EVIDENCE_COMPLETE and block["promotable"] is True
+    assert (block["run"]["attempt"], block["run"]["handle"]) == (1, "run-0101")
+    assert (block["running"]["attempt"], block["running"]["handle"]) == (2, "run-0102")
+
+    text = rendered(config)
+    assert "round 1 attempt 2 is running at local-replay, handle 'run-0102'" in text
+    assert "the reading above is the earlier attempt, and a conclusion answers for this one" in text
+
+    # And the run named there is the run the offered verb acts on, which is the
+    # whole of what the field is for.
+    assert phase.ACTION_REPLAY_CONCLUDE in allows(config)
+    going.report = completed_report()
+    concluded = replay.conclude(config, going, now=NOW)
+    assert (concluded.attempt, concluded.replay.harness.handle) == (2, "run-0102")
+
+
 def test_a_withdrawn_position_is_reported_rather_than_lost(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
@@ -628,7 +663,13 @@ def test_the_counterfactual_is_four_states_and_a_request_is_the_first(
     going = payload(config)["release"]["counterfactual"]
     assert going["state"] == phase.COUNTERFACTUAL_RUNNING
     assert going["request"] is None and going["run"]["outcome"] is None
+    # Which run it is, in both forms. `assess-conclude` polls that harness about
+    # that handle, and nothing else on this record names the work — so a surface
+    # given the harness alone can offer the verb and not say what it answers for.
+    handle = assessment.read(config, assessment.describe_current(config).batch).counterfactual.harness.handle
+    assert handle and going["run"]["handle"] == handle
     assert "counterfactual: running since" in rendered(config)
+    assert f"at local-replay, handle {handle!r}" in rendered(config)
 
     harness.report = completed_report()
     assessment.conclude(config, harness, now=NOW)

@@ -60,6 +60,7 @@ from .replay import (
     Evaluator,
     Evidence,
     PendingRun,
+    Replay,
     ReplayPlan,
     ReplayRequest,
     RequestWithdrawn,
@@ -408,23 +409,31 @@ def _reproduce_lines(reproduce: ReplayPlan | None) -> list[str]:
     """The selections a rerun is asked for, where there are any.
 
     A further attempt at a round whose previous one completed asks for that run's
-    cohort, evaluator and configuration by name. Stated here because it is what
-    the operator has to reproduce, and not enforced anywhere: the record states
-    what a harness answered with rather than what it was asked for, so a
-    substitution stands visible beside the attempt it was meant to reproduce.
+    cohort, evaluator and configuration by name, and states them here because
+    this is where the operator reads what to run — and, for the harness this
+    console has, what to state back: a stated plan that differs from this is
+    refused rather than recorded (`harness._require_reproduced`), since a second
+    attempt replaces the first as the round's evidence.
+
+    The excluded cases are listed rather than counted, unlike everywhere else
+    this cohort is rendered. A reader elsewhere is being told what a run
+    measured; this reader is about to retype it, and a cohort holding a different
+    case out is a different cohort.
     """
 
     if reproduce is None:
         return []
+    excluded = [_field("", f"holding out {item.case_id} ({item.reason})") for item in reproduce.cases.excluded]
     return [
         _field("reproduce", f"cases {_cases(reproduce.cases)}"),
+        *excluded,
         _field("", f"evaluator {_evaluator(reproduce.evaluator)}"),
         _field(
             "",
             f"harness {reproduce.harness.id} {reproduce.harness.revision} "
             f"({_short(reproduce.harness.config_sha256)})",
         ),
-        _field("", "this attempt reruns a completed one; a harness that substituted something states what it ran"),
+        _field("", "this attempt reruns a completed one; exercise exactly that, or give the position up"),
     ]
 
 
@@ -801,7 +810,7 @@ def format_status(status: LifecycleStatus) -> str:
     lines.extend(_gate_lines(status.gate))
     lines.extend(_experiment_lines(status))
     lines.extend(_prepared_lines(status.prepared_promotion))
-    lines.extend(_replay_lines(status.evidence))
+    lines.extend(_replay_lines(status.evidence, status.replay_running))
     lines.extend(_request_lines(status.replay_request, status.replay_withdrawn))
     lines.extend(_revision_lines(status.revisions, open_experiment=status.experiment is not None))
     lines.extend(_release_lines(status.release))
@@ -1181,7 +1190,16 @@ def _counterfactual_lines(release: ReleaseReading) -> list[str]:
     elif run is not None:
         where = f"round {run.position.round_number} attempt {run.position.attempt}"
         if state == COUNTERFACTUAL_RUNNING:
-            lines.append(_field("", f"counterfactual: running since {run.started_at} at {run.harness.id} ({where})"))
+            # Named the way a replay's run is, and for the same reason:
+            # `assess-conclude` asks that harness about that handle, and an
+            # operator answering for the run states it back.
+            lines.append(
+                _field(
+                    "",
+                    f"counterfactual: running since {run.started_at} at {run.harness.id}, handle "
+                    f"{run.harness.handle!r} ({where})",
+                )
+            )
         elif state == COUNTERFACTUAL_FAILED:
             detail = run.result.detail if run.result else ""
             lines.append(_field("", f"counterfactual: failed ({where}) — {detail}; ask for another to measure again"))
@@ -1318,7 +1336,7 @@ def _gate_lines(gate: Gate | None) -> list[str]:
     return lines
 
 
-def _replay_lines(evidence: Evidence | None) -> list[str]:
+def _replay_lines(evidence: Evidence | None, running: Replay | None) -> list[str]:
     """What the current round has been measured by, and what stops it counting.
 
     The two shortfalls are shown apart because an operator acts on them
@@ -1327,6 +1345,13 @@ def _replay_lines(evidence: Evidence | None) -> list[str]:
     `unverified` is a question this checkout could not put to Git, and is
     answered by fetching the ref and asking again. A promotion is refused on
     either.
+
+    `running` is the run in flight, which the reading is not always about: a
+    completed attempt whose merge input has not moved stays this round's
+    evidence when a second one is started beside it, while a conclusion answers
+    for the newest. Where they are the same run this says so once; where they are
+    not it names both, because an operator told "completed" over a run still
+    going would conclude one and be answered about the other.
     """
 
     if evidence is None:
@@ -1334,11 +1359,18 @@ def _replay_lines(evidence: Evidence | None) -> list[str]:
     run = evidence.replay
     where = "" if run is None else f" (round {run.round_number} attempt {run.attempt})"
     lines = [_field("replay", f"{evidence.state}{where}")]
-    if run is not None and run.running:
+    if running is not None:
         # The one thing that reaches the work itself: concluding a run means
         # asking that harness about that name, and an operator answering for one
         # states it back.
-        lines.append(_field("", f"at {run.harness.id}, handle {run.harness.handle!r}"))
+        named = f"at {running.harness.id}, handle {running.harness.handle!r}"
+        beside = run is not None and (run.round_number, run.attempt) != (running.round_number, running.attempt)
+        if beside:
+            named = (
+                f"round {running.round_number} attempt {running.attempt} is running {named} — the reading above "
+                "is the earlier attempt, and a conclusion answers for this one"
+            )
+        lines.append(_field("", named))
     if evidence.promotable and run is not None and run.result is not None:
         lines.append(_field("", run.result.detail))
     for note in evidence.drift:
