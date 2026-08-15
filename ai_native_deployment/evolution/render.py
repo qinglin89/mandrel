@@ -459,6 +459,18 @@ def format_settlement(result: Settled, repo_root: Path) -> str:
     made is reported here rather than left for the operator to run separately —
     and a settlement that adopted a reversal already on the line says so, since
     nothing was committed by this run.
+
+    Three runs, not two, and the composed rollback's own `reverted` is what tells
+    them apart rather than the reversal's presence: this settlement moved the
+    line, or it found its inverse already there and wrote the completion record a
+    stopped rollback never got to, or the reversal was complete before the gate
+    was answered at all and this run touched Git not at all. The middle one is a
+    durable interrupted state (`rollback.RollbackResult.reverted`), which is why
+    reading a non-null reversal as "committed here" would report a move that did
+    not happen. `reverted` is about the line rather than the object: a settlement
+    that landed an inverse an interrupted run had already prepared reports it the
+    same way it reports one it made, because what the operator is being told is
+    where the release now stands.
     """
 
     decision = result.decision
@@ -472,8 +484,16 @@ def format_settlement(result: Settled, repo_root: Path) -> str:
     ]
     if decision.settlement == SETTLEMENT_RETAIN:
         lines.append(_field("", "the release stays the line the first experiment of this batch freezes its base on"))
-    elif result.reversal is not None:
+    elif result.reversal is not None and result.reversal.reverted:
         lines.append(_field("inverse", f"{_short(result.reversal.revision)} — committed by this settlement"))
+    elif result.reversal is not None:
+        lines.append(
+            _field(
+                "inverse",
+                f"{_short(result.reversal.revision)} — found on the line: a rollback committed it and stopped "
+                "before its record, which this settlement finished",
+            )
+        )
     elif decision.rollback_revision is not None:
         lines.append(
             _field("inverse", f"{_short(decision.rollback_revision)} — already on the line when the gate answered")

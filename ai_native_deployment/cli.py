@@ -272,12 +272,15 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
         "--metric",
         action="append",
         default=[],
-        metavar="NAME:UNIT:BEFORE:AFTER:BETTER",
+        nargs=5,
+        metavar=("NAME", "UNIT", "BEFORE", "AFTER", "BETTER"),
         help=(
             "a quantity both cohorts came to, repeatable "
-            f"(e.g. review-rounds:rounds:1.8:1.2:{assessment.BETTER_LOWER}); an empty side is one that cohort does "
-            f"not state, which a quantity called better in some direction may not have — record it "
-            f"{assessment.BETTER_NEITHER!r} instead"
+            f"(e.g. --metric review-rounds rounds 1.8 1.2 {assessment.BETTER_LOWER}); an empty side is one that "
+            f"cohort does not state, which a quantity called better in some direction may not have — record it "
+            f"{assessment.BETTER_NEITHER!r} instead. Five values rather than one packed field: the record holds any "
+            "non-empty string as a name or a unit, delimiters included, and a shape that reserved one would put "
+            "`latency:p95` beyond this console while the library accepts it"
         ),
     )
     _add_workspace_argument(assess)
@@ -583,42 +586,44 @@ def _release(config, args: argparse.Namespace) -> str:
     raise AssertionError(f"{command} is a release verb with no dispatch")
 
 
-def _measurements(assessment, stated: list[str]) -> list[Any]:
+def _measurements(assessment, stated: list[list[str]]) -> list[Any]:
     """The quantities an operator read off this machine's evaluation artifacts.
 
-    Five fields because that is what the record holds: the metric, its unit, what
+    Five values because that is what the record holds: the metric, its unit, what
     each cohort came to, and which direction is better. A side left empty is one
     that cohort does not state — a quantity nothing measured before the release is
     an ordinary reading, and it is a different fact from zero.
 
-    Only the shape is checked here. Whether `better` is a direction this build
+    They arrive as five separate arguments and are carried through untouched,
+    which is what keeps this a lossless adapter over the record's own shape: the
+    schema takes any non-empty string for the name and the unit, so a packed
+    field would have to reserve a delimiter and a schema-valid `latency:p95`
+    would then be sayable through the library and not through this console. The
+    count is argparse's to enforce for the same reason — it is the argument's
+    shape rather than anything about the release.
+
+    Only the numbers are checked here. Whether `better` is a direction this build
     knows, and whether the numbers support the verdict argued from them, are the
     record's own rules and are answered where every other reader of them is
     (`assessment.parse`).
     """
 
     parsed = []
-    for item in stated:
-        fields = item.split(":")
-        if len(fields) != 5:
-            raise evolution_errors.BatchError(
-                f"{item!r} is not a measurement: the shape is NAME:UNIT:BEFORE:AFTER:BETTER, five fields, with an "
-                "empty BEFORE or AFTER where that cohort states none"
-            )
-        metric, unit, before, after, better = (field.strip() for field in fields)
+    for metric, unit, before, after, better in stated:
+        where = f"--metric {metric} {unit} {before} {after} {better}"
         parsed.append(
             assessment.Measurement(
                 metric=metric,
                 unit=unit,
-                before=_quantity(before, item),
-                after=_quantity(after, item),
+                before=_quantity(before, where),
+                after=_quantity(after, where),
                 better=better,
             )
         )
     return parsed
 
 
-def _quantity(stated: str, item: str) -> float | None:
+def _quantity(stated: str, where: str) -> float | None:
     """One side of a measurement: a number, or nothing at all."""
 
     if not stated:
@@ -627,7 +632,7 @@ def _quantity(stated: str, item: str) -> float | None:
         return float(stated)
     except ValueError:
         raise evolution_errors.BatchError(
-            f"{item!r} states {stated!r} where a measurement holds a number; an empty field is how a cohort that "
+            f"{where!r} states {stated!r} where a measurement holds a number; an empty value is how a cohort that "
             "measured nothing here is stated"
         ) from None
 

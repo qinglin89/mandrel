@@ -84,6 +84,7 @@ from ai_native_deployment.evolution import (
     render,
     reports,
     replay,
+    rollback,
 )
 
 TARGET = 2
@@ -2038,7 +2039,11 @@ def test_the_release_reading_and_its_gate_are_one_verb_each(
             "--rationale",
             "no frozen manifest states what kind of work either cohort did",
             "--metric",
-            "review-rounds:rounds:1.8:1.2:lower",
+            "review-rounds",
+            "rounds",
+            "1.8",
+            "1.2",
+            assessment.BETTER_LOWER,
             *where,
         ],
         capsys,
@@ -2125,6 +2130,74 @@ def test_a_rolled_back_settlement_runs_the_reversal_itself(
     assert code == 0
     assert "this run wrote nothing: the same answer was already on record" in out
     assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_a_settlement_finishes_a_reversal_the_line_had_already_taken(
+    lineage_repo: Path,
+    release: str,
+    feed_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composed reversal has a recovery state of its own, and what this run
+    did to the line is not what its presence says.
+
+    A rollback interrupted between the ref move and the record saying the line
+    carries it leaves the promotion reading as effective, so the settlement still
+    composes the rollback — which recognises its own commit on the line, moves
+    nothing, and finishes the record (`RollbackResult.reverted` is False). The
+    operator is told that rather than told this settlement committed an inverse,
+    which would be a move that did not happen.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    promoted = assessing(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    # The rollback is finished as it was prepared, so this is the sentence both
+    # runs give (`rollback._require_same_rollback`).
+    why = "the release is not worth the risk it carries"
+    run(
+        [
+            "evolution",
+            "assess",
+            "--verdict",
+            assessment.VERDICT_INCONCLUSIVE,
+            "--confidence",
+            assessment.CONFIDENCE_LOW,
+            "--rationale",
+            "the cohorts place nothing on either side",
+            *where,
+        ],
+        capsys,
+    )
+
+    with monkeypatch.context() as stopped:
+        stopped.setattr(rollback, "_finish", _interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            run(["evolution", "rollback", "--reason", why, *where], capsys)
+
+    inverse = git_rev(lineage_repo, RELEASE_REF)
+    assert inverse != promoted
+    # The line took it and nothing recorded that, which is why the settlement
+    # below reaches the rollback at all rather than adopting a finished one.
+    assert lineage.describe(config).last_promoted.promotion_effective is True
+
+    code, out, _ = run(
+        ["evolution", "settle", "--settlement", assessment.SETTLEMENT_ROLLED_BACK, "--reason", why, *where], capsys
+    )
+
+    assert code == 0
+    assert f"settled {assessment.SETTLEMENT_ROLLED_BACK}" in out
+    assert "found on the line" in out
+    assert "committed by this settlement" not in out
+    assert git_rev(lineage_repo, RELEASE_REF) == inverse
+    assert lineage.describe(config).last_promoted.promotion_effective is False
+
+
+def _interrupted(*args: object, **kwargs: object) -> None:
+    """Die the way a killed process does, leaving whatever landed before it."""
+
+    raise KeyboardInterrupt("stopped before the record")
 
 
 def test_the_counterfactual_is_ended_given_up_and_read_from_the_command_line(
@@ -2245,12 +2318,17 @@ def test_a_release_verb_refuses_the_reading_another_writer_moved_under(
 def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The one thing this adapter checks itself: the shape of a `--metric`, which
-    is an argument rather than a policy. An empty side is a cohort that measured
-    nothing — a different fact from zero, and the reason the fields are not
-    simply required — while whether a one-sided quantity may be called better in
-    some direction is the record's own rule, asked where every other reader of it
-    is."""
+    """What this adapter checks itself, and what it deliberately does not.
+
+    The count is the argument's own shape and is argparse's; the two quantities
+    are checked here, because a side is a number or nothing at all and an empty
+    one is a cohort that measured nothing — a different fact from zero, and the
+    reason the values are not simply required. The name and the unit are carried
+    whole: the record takes any non-empty string for either, delimiters included,
+    so five values are what keeps this console able to say everything the library
+    can. Whether a one-sided quantity may be called better in some direction is
+    the record's own rule, asked where every other reader of it is.
+    """
 
     config = evolution.load_config(lineage_repo)
     assessing(config, feed_root, capsys)
@@ -2264,24 +2342,52 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
         "the cohorts place nothing on either side",
     ]
 
-    code, _, err = run(["evolution", "assess", *reading, "--metric", "review-rounds:rounds:1.8:lower", *where], capsys)
-    assert code == 2
-    assert "NAME:UNIT:BEFORE:AFTER:BETTER" in err
+    # Last on the line, which is where the count is the whole of what is wrong:
+    # an option following a short `--metric` is taken as its fifth value, and
+    # what refuses then is the leftover argument or the direction vocabulary.
+    with pytest.raises(SystemExit) as exit_code:
+        run(["evolution", "assess", *reading, *where, "--metric", "review-rounds", "rounds", "1.8", "lower"], capsys)
+    assert exit_code.value.code == 2
+    assert "expected 5 arguments" in capsys.readouterr().err
 
     code, _, err = run(
-        ["evolution", "assess", *reading, "--metric", "review-rounds:rounds:some:1.2:lower", *where], capsys
+        ["evolution", "assess", *reading, "--metric", "review-rounds", "rounds", "some", "1.2", "lower", *where],
+        capsys,
     )
     assert code == 2
     assert "where a measurement holds a number" in err
     assert assessment.read(config, assessment.describe_current(config).batch) is None
 
     code, out, _ = run(
-        ["evolution", "assess", *reading, "--metric", "review-rounds:rounds::1.2:neither", *where], capsys
+        [
+            "evolution",
+            "assess",
+            *reading,
+            "--metric",
+            "review-rounds",
+            "rounds",
+            "",
+            "1.2",
+            assessment.BETTER_NEITHER,
+            # A name and a unit the schema takes and a packed field could not
+            # carry: the delimiter is part of the value, not a boundary in it.
+            "--metric",
+            "latency:p95",
+            "requests:s",
+            "1.8",
+            "1.2",
+            assessment.BETTER_LOWER,
+            *where,
+        ],
+        capsys,
     )
     assert code == 0
     reading_record = assessment.read(config, assessment.describe_current(config).batch)
     assert reading_record.metrics[0].before is None
     assert reading_record.metrics[0].after == 1.2
+    assert reading_record.metrics[1].metric == "latency:p95"
+    assert reading_record.metrics[1].unit == "requests:s"
+    assert "latency:p95" in out
 
 
 def _minimal(verb: str) -> list[str]:
