@@ -1670,6 +1670,46 @@ def test_a_receipt_is_placed_only_where_it_states_a_commit_this_build_wrote(
     assert git_rev(config.repo_root, "HEAD") == promotion.promotion_revision
 
 
+def test_a_receipt_that_states_no_source_commit_is_not_one_stating_none(
+    config: evolution.EvolutionConfig,
+    release: str,
+    managed: Callable[..., Path],
+) -> None:
+    """The two absences of one field, and they are two different next steps.
+
+    A receipt stating `null` is the deploy contract's own answer — that deploy
+    could not tie the payload it wrote to a commit, so nothing places what that
+    target holds and the operator's move is to commit the canonical work and
+    redeploy. A receipt with no such field never came from a deploy this build
+    reads: it answers nothing, and the operator's move is to look at the file.
+    Both asked in one reading, because the way they collapse is a reader taking
+    the second for the first and reporting a document it could not read as a
+    target it merely could not place.
+    """
+
+    promotion = promote_candidate(config, batch_id=FIRST, at=PROMOTED_AT, targets=("truncated", "untied"))
+    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    root = managed("truncated", receipt=False)
+    (root / ".ai-deploy-lock.json").write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+    managed("untied", revision=None)
+
+    targets = {item["target"]: item for item in deployed(config)["targets"]}
+    assert targets["truncated"]["state"] == "unreadable"
+    assert targets["untied"]["state"] == "unstated"
+    # Neither states a revision, which is exactly why the state is what tells
+    # them apart and the detail is what an operator acts on.
+    assert [targets["truncated"]["revision"], targets["untied"]["revision"]] == [None, None]
+    assert ".ai-deploy-lock.json: source_git_commit is absent" in targets["truncated"]["detail"]
+    assert "the receipt ties its payload to no source commit" in targets["untied"]["detail"]
+
+    # The human form says the same two things, the unreadable one naming the file
+    # it could not read as well as what was wrong with it.
+    text = rendered(config)
+    assert f"truncated — unreadable: {targets['truncated']['detail']}" in text
+    assert "source_git_commit is absent" in text
+    assert "untied — the receipt ties its payload to no source commit" in text
+
+
 def test_a_repository_that_promoted_nothing_reads_no_targets(
     config: evolution.EvolutionConfig, managed: Callable[..., Path]
 ) -> None:

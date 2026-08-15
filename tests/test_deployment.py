@@ -264,6 +264,14 @@ def test_a_receipt_states_a_source_commit_only_as_the_object_id_a_deploy_wrote(t
     against the reading checkout's own position and would move whenever that did.
     An unsupported schema is refused for the neighbouring reason: a field this
     build knows by name may mean something else in the document that wrote it.
+
+    The field's two absences are the third thing asked, and they are not one
+    answer: every receipt this contract writes states `source_git_commit`, so a
+    document without it never came from a deploy this build reads, while its
+    explicit null is that deploy saying the payload it wrote matches no commit.
+    Reading the first as the second puts a truncated file's silence into the
+    contract's mouth — a reader would report a target as merely unplaceable when
+    the receipt cannot answer at all.
     """
 
     source = make_source(tmp_path)
@@ -279,6 +287,9 @@ def test_a_receipt_states_a_source_commit_only_as_the_object_id_a_deploy_wrote(t
         [],
         "a receipt",
         {"source_git_commit": head},
+        # The truncated receipt, beside the stated null above: `get` answers None
+        # for both, and only one of them is an answer.
+        {"schema_version": 1},
         {"schema_version": 2, "source_git_commit": head},
         {"schema_version": True, "source_git_commit": head},
         # Refused as a version rather than raised on as an unhashable one: a

@@ -36,9 +36,9 @@ will not read leaves this machine unable to say which repository any planned nam
 is.
 
 **What it believes a receipt about.** Only what the deploy contract wrote:
-`lockfile.stated_source_commit` holds the file to a schema this build reads and
-to a full object id, and anything else is that target's `unreadable` state rather
-than a revision. The reason is the question this module asks — where a revision
+`lockfile.stated_source_commit` holds the file to a schema this build reads, to a
+receipt that states the field at all, and to a full object id, and anything else
+is that target's `unreadable` state rather than a revision. The reason is the question this module asks — where a revision
 sits relative to the promotion, asked of *this* repository's Git. A receipt
 naming `HEAD`, a branch, or an abbreviation would be resolved against this
 checkout rather than against what that target holds, so its answer would move
@@ -231,6 +231,11 @@ def _holding(
         # The receipt's own null, and an ordinary one: a deploy states a source
         # commit only where the payload it copied matched that commit's tree
         # exactly (contract: When a lock may be published as one).
+        #
+        # Only that null reaches here. A receipt omitting the field is refused
+        # above and read as `unreadable`, which is the difference between a
+        # target whose payload nothing can place and a document that could not
+        # answer — and the sentence below is written for the first of those.
         return TargetHolding(
             target=name,
             path=path,

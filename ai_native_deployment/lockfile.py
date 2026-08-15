@@ -312,6 +312,15 @@ def stated_source_commit(lock: object) -> str | None:
     commit only where the payload it wrote matched that commit's canonical tree
     exactly (`payload_source_commit`), and a receipt stating none is saying that
     what it holds cannot be placed by anyone.
+
+    Which is why the field's absence is not that answer and is refused with the
+    rest. Every receipt this contract writes states it — `build_lock` fills it
+    from `payload_source_commit`, whose own answer for an unplaceable payload is
+    the explicit null — so a document without the key never came from a deploy
+    this build reads, and reading it as the null would put a truncated file's
+    silence into the contract's mouth. The two are a different fact for the
+    reader: null is a target whose payload nothing can place, and absence is a
+    receipt that answers nothing at all.
     """
 
     if not isinstance(lock, dict):
@@ -326,7 +335,12 @@ def stated_source_commit(lock: object) -> str | None:
         raise LockError(
             f"deploy receipt schema_version {version!r}; this build reads {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
         )
-    commit = lock.get("source_git_commit")
+    # Presence before value, and `in` rather than `get`: the two states this
+    # field has are told apart by nothing else, since a `get` answers None for
+    # both the receipt that states no commit and the receipt that states nothing.
+    if "source_git_commit" not in lock:
+        raise LockError("source_git_commit is absent; a receipt states the field even where it names no commit")
+    commit = lock["source_git_commit"]
     if commit is None:
         return None
     if not isinstance(commit, str) or len(commit) not in _OBJECT_ID_WIDTHS or commit.strip(_HEX_DIGITS):

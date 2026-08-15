@@ -450,7 +450,11 @@ is held to the shape this deploy contract writes before any of that: a schema
 this build reads, and a full commit id rather than a name. `HEAD`, a branch, or
 an abbreviation would be resolved against *this* checkout instead of against what
 that target holds, so it reads as `unreadable` rather than as a placement that
-moves whenever this repository does.
+moves whenever this repository does. A receipt that omits `source_git_commit`
+reads as `unreadable` too, and is not the `unstated` below: every receipt this
+contract writes states the field, so its absence is a document that answers
+nothing, where its null is the deploy's own answer that nothing places what that
+target holds.
 
 ```text
   promoted     6f1c0a5b2e33 from evolution-batch-0001-exp-01 round 1 (evolution-batch-0001)
@@ -469,7 +473,7 @@ moves whenever this repository does.
 | `unplaceable` | this checkout cannot place that revision — it does not hold the commit, or Git could not answer |
 | `unstated` | the receipt ties its payload to no source commit, so nothing places what it holds |
 | `no-receipt` | the repository is registered and nothing has been deployed to it |
-| `unreadable` | the receipt, or the registry naming it, could not be read — including a receipt whose schema this build does not read, or that states something other than a commit id |
+| `unreadable` | the receipt, or the registry naming it, could not be read — including a receipt whose schema this build does not read, or that states no `source_git_commit` or something other than a commit id |
 | `unregistered` | no repository of that name is registered on this machine |
 | `ambiguous` | two registered repositories share that name, so neither can answer for the plan |
 
