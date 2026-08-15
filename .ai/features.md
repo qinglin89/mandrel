@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-15
-verified-against: 5ff1f7eb68cb461c508545fdca7120fc894a4121
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # Features
@@ -20,10 +20,11 @@ verified-against: 5ff1f7eb68cb461c508545fdca7120fc894a4121
 | Evolution report feed | published; client reconciled; complete protocol identity live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, atomic pair translation in `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
-| Evolution lifecycle CLI | implemented | `aii-2 evolution list|sync|status|start`; human and JSON phase rendering |
-| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes, phase JSON v6 |
-| Replay and release decisions | implemented | durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
-| Cross-batch release assessment | domain implemented; CLI/status exposure pending | derived provenance cohorts/exclusions, durable assessment and counterfactual, retain/rollback settlement, next-base gate |
+| Evolution lifecycle CLI | implemented | complete standalone `aii-2 evolution` verb set; schema-v7 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
+| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes, phase JSON v7 |
+| Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
+| Cross-batch release assessment | implemented | derived provenance cohorts/exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |
+| Evolution deployment visibility | implemented | planned target names kept separate from validated machine-local deploy-lock placement states; observation gates no lifecycle verb |
 
 ## Evolution Behavior Chain
 

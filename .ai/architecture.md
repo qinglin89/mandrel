@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-14
-verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
+last-updated: 2026-08-15
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # Architecture
@@ -71,7 +71,9 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 
 ## Evolution Flow
 
-`aii-2 evolution list|sync|status|start` is the human-triggered controller.
+`aii-2 evolution` is the authoritative standalone human-triggered controller;
+an optional Web surface consumes its JSON/actions rather than implementing a
+second lifecycle.
 It consumes a protected orch-hub feed or deterministic local bundles, validates
 and hashes complete L1+L2 reports, deduplicates them by completed source task,
 and persists the cursor, drain proof, pending pool, rejections, and processed
@@ -88,7 +90,9 @@ cohort after a promotion owns a release-assessment record derived from frozen
 manifests, per-target effective revisions, and lineage; a pinned counterfactual
 can settle its direction, then a human retain/rollback decision selects the line
 the next experiment base must contain. The obligation remains with that cohort
-if it concludes before answering and stays repeatable for recovery.
+if it concludes before answering and stays repeatable for recovery. Replay and
+counterfactual harness crossings are operator-stated, durable two-step
+request/run exchanges; promotion remains separate from deployment.
 
 One whole-lineage derivation governs both status and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
@@ -96,7 +100,10 @@ the current batch, open attempt, gate, round, and revisions from any checkout.
 `.ai-tasks/` supplies local completion observations, never historical identity;
 the audit ledger is not flow state. Per-experiment replay histories and prepared
 promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
-commits are the release-decision state. Versioned `evolution/` holds safe policy, schemas,
+commits are the release-decision state. Schema-v7 status adds a digest of those
+authoritative inputs, per-verb allowed/refused/recovery actions, and a
+machine-local reading of planned targets' validated deploy locks; the deployment
+reading neither enters the digest nor gates lifecycle actions. Versioned `evolution/` holds safe policy, schemas,
 manifests, lineage, sanitized cases, and audit while raw report content and
 credentials stay ignored. Analysis, canonical implementation, replay,
 promotion, deployment, and rollback remain separate reviewed/human-gated steps.

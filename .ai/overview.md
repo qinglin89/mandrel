@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-15
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # Project Overview
@@ -23,12 +23,11 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 - `aii-2` deploy, dry-run, drift status, local registry, orchestrator bootstrap,
   portable lock receipts, and repository-local workflow skills with
   personal-skill precedence detection.
-- Human-triggered `aii-2 evolution list|sync|status|start` control of the local
-  report pool, immutable analysis batches, and derived lifecycle status; the
-  domain layer also owns guarded draft admission, experiment rounds, terminal
-  decisions, exact-integration replay records, exact-tree promotion, inverse
-  rollback, cross-batch release assessments and settlements, and batch outcomes
-  on durable artifacts and Git refs.
+- Human-triggered `aii-2 evolution` control of the full lifecycle: report pool,
+  immutable batches, guarded draft/round/experiment decisions, operator-stated
+  exact-integration replay, exact-tree promotion and inverse rollback,
+  cross-batch assessment/settlement, and schema-v7 status with stale-state
+  tokens, allowed actions, recovery forms, and per-target deployment readings.
 - One deterministic regression entrypoint shared by local runs, CI, and the
   optional pre-push hook; credentialed live probes remain manual.
 - Project-specific evolution workspace for evidence-batched changes to this

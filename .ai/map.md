@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-13
-verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
+last-updated: 2026-08-15
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # Project Map
@@ -20,10 +20,11 @@ verified-against: 6500048506f19e10b2e15cd46a9afde261ed2fa9
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | `aii-2 evolution list|sync|status|start`, ignored runtime pool/artifacts, derived phase JSON v6 |
+| Evolution controller | evolution package, CLI | complete standalone `aii-2 evolution` verb set, ignored runtime pool/artifacts, schema-v7 status, state revision and allowed/refused/recovery actions |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
-| Evolution replay/releases | replay/rollback/revision services, evolution policy | replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v6 |
-| Release effectiveness gate | assessment/lineage/experiment/rollback services, evolution policy | release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
+| Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v7 |
+| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, evolution policy | CLI-visible release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
+| Evolution deployment visibility | deployment/lockfile/registry/revision services | planned target names beside validated machine-local deploy-lock placement states; observation is outside lifecycle state |
 | Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |
 
 ## Change Impact

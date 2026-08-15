@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-14
-verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
+last-updated: 2026-08-15
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # Modules
@@ -11,7 +11,7 @@ verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 |---|---|---|
 | CLI | `ai_native_deployment/cli.py`, `aii-2` | Parse/dispatch deploy, status, registry, and evolution commands |
 | Deployment | `ai_native_deployment/deploy.py` | Map/filter/render/copy current canonical files; bootstrap; content/mode, entrypoint, and skill-precedence drift checks; removed-file orphan detection/pruning pending |
-| Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, and hashes |
+| Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, hashes, and validated supported-schema/full-object-id reading |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |
 | Workflow skills | `canonical/claude/skills/` | Versioned per-target skills; Claude native discovery and repo-local paths for other backends |
 | Protocol contracts | `canonical/protocols/` | Conduct and role-specific behavioral contracts |
@@ -21,10 +21,12 @@ verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `ai_native_deployment/evolution/` | Config/schema/feed boundaries; report import, runtime state and ledger; manifest freeze, analysis tasks and closure; phase-v6 rendering |
+| Evolution controller | `ai_native_deployment/evolution/phase.py`, `render.py`; `ai_native_deployment/cli.py` | Schema-v7 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, and standalone CLI routing |
 | Evolution lineage | `ai_native_deployment/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `ai_native_deployment/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback and Git/ref recovery |
 | Evolution release assessment | `ai_native_deployment/evolution/assessment.py`, `experiments.py` | Derived cross-batch cohort frame; assessment formation/read validation; pinned counterfactual request/run recovery; retain/rollback settlement; first-base sequencing |
+| Evolution stated harness | `ai_native_deployment/evolution/harness.py` | Operator-stated replay/counterfactual starts and polls; completed-attempt reproduction guard |
+| Evolution deployment reading | `ai_native_deployment/evolution/deployment.py`, `lockfile.py`, `registry.py` | Place planned targets from validated machine-local deploy receipts; preserve unregistered/unreadable/unplaceable states without gating the lifecycle |
 
 ## Boundary Rules
 

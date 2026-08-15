@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-15
-verified-against: 5ff1f7eb68cb461c508545fdca7120fc894a4121
+verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ---
 
 # APIs and Interfaces
@@ -17,30 +17,38 @@ verified-against: 5ff1f7eb68cb461c508545fdca7120fc894a4121
 | `registry remove <name-or-path>` | Remove local tracking only |
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
-| `evolution status [--json]` | Derive schema-v6 phase, gate, experiment/round history, replay evidence, ref state, distinct revisions, and the last promotion/rollback |
+| `evolution status [--json]` | Derive schema-v7 pool/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result |
 | `evolution start [--force --justification <text>]` | Reconcile, sync, and freeze one batch when admission policy allows; force never waives the minimum |
+| `evolution create|add-tasks|reject|seal-round|revise|abandon|supersede|conclude-no-change` | Drive the guarded, recoverable experiment and batch lineage |
+| `evolution replay-start|replay-conclude|replay-abandon|replay-withdraw|promote|rollback` | Record/resume exact-integration evidence, promote its exact tree, or reverse the latest promotion |
+| `evolution assess|assess-measure|assess-conclude|assess-abandon|assess-withdraw|assess-resolve|settle` | Record the next cohort's release reading/counterfactual and settle retain or composed rollback |
 
 All evolution operations are human-invoked and make no evaluation model call.
 `list` and `status` are read-only; `start` returning no batch is a normal
-successful outcome when policy is not met.
+successful outcome when policy is not met. Lifecycle mutations accept optional
+`--expect <state_revision>` and check it first under their writer lock.
 
 ## Evolution Domain Operations
 
 | Operation | Behavior |
 |---|---|
+| `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` / `abandon` / `supersede` / `conclude_no_change` | Recoverable grouped admission, rounds, terminal experiment decisions, and batch no-change conclusion |
 | `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion cohort's provenance frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
 | `assessment.measure` / `conclude` / `abandon` / `withdraw` / `resolve` | Allocate an experiment-disjoint replay position, persist/recover the pinned before/after counterfactual, and hold a directional verdict to its goal metrics |
 | `assessment.settle` | Idempotently retain the release or compose its audited rollback under one writer lock; the decision gates and constrains the next first experiment base |
 | `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |
 | `experiments.promote` | Prepare and record the exact replayed merge, compare-and-swap the source ref, and publish agreeing experiment/batch outcomes without implying deployment |
 | `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
+| `harness.StatedHarness` | Operator-stated implementation of replay/counterfactual start and poll; enforces completed-attempt reproduction while permitting a new handle |
+| `deployment.describe` | Read each planned target through the machine-local registry and its validated deploy lock; return placement/absence/error states without gating lifecycle status |
+| `lockfile.stated_source_commit` | Accept only supported deploy-lock schemas with a present, null-or-full-object-id `source_git_commit`; distinguish explicit null from a malformed absent field |
 
 ## Persisted Interfaces
 
 | Interface | Ownership / semantics |
 |---|---|
 | `.ai-deploy-manifest.json` | Ignored target-local receipt of rendered hashes and deployed modes used by status |
-| `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt |
+| `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt; readers validate schema and require `source_git_commit` to be present as null or a full object id |
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
 | `orchestrator.toml` | Deployed defaults and named per-backend profiles |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
