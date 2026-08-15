@@ -476,6 +476,51 @@ def test_a_settled_reading_names_the_commit_the_next_base_must_carry(
     assert f"the next first experiment base must contain {promoted.promotion_revision[:12]}" in settled
 
 
+def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """Two facts that a settled `rolled-back` reading would otherwise collapse
+    into one: the reading was formed while the release stood on the source line —
+    which is the question it answered — and the line no longer carries it,
+    because settling `rolled-back` lands the inverse commit after the record is
+    written. Reporting the line's state as the reading's would say this cohort
+    assessed a reversal it never saw, and it is the ordinary end of a regression
+    finding rather than a corner."""
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        now=NOW,
+    )
+    standing = payload(config)["release"]["assessed"]
+    assert standing["standing"] is True and standing["source_line"]["standing"] is True
+
+    settled = assessment.settle(
+        config,
+        settlement=assessment.SETTLEMENT_ROLLED_BACK,
+        reason="the release is taken back off the line while the shortfall is understood",
+        now=NOW,
+    )
+    inverse = settled.decision.rollback_revision
+    assert inverse is not None
+
+    block = payload(config)["release"]
+    # The release as the record is about it: standing, with no reversal named.
+    assert block["assessed"]["standing"] is True
+    assert block["assessed"]["rollback_revision"] is None
+    # The same release as the line now holds it, which the settlement changed.
+    assert block["assessed"]["source_line"]["standing"] is False
+    assert block["assessed"]["source_line"]["rollback_revision"] == inverse
+
+    text = rendered(config)
+    assert f"reversed by {inverse[:12]}" in text
+    assert "read while the release was still on the source line" in text
+    assert f"the next first experiment base must contain {inverse[:12]}" in text
+
+
 def test_the_counterfactual_is_four_states_and_a_request_is_the_first(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:

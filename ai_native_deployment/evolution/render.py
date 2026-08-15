@@ -487,6 +487,11 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
     first experiment of the next cohort has to stand on the line the answer
     chose, and discovering that from a refusal is the miss this line exists to
     prevent.
+
+    The release line above says what the source line carries now; this says what
+    the reading is about, and after a `rolled-back` settlement they are two
+    different states of one release — the ordinary end of a regression finding,
+    where the verdict was reached over a release that was still on the line.
     """
 
     reading = release.reading
@@ -501,6 +506,14 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
     lines = [
         _field("", f"reading: {reading.verdict} ({reading.confidence}) formed {reading.formed_at} — {reading.rationale}")
     ]
+    if release.reversed_after_reading:
+        lines.append(
+            _field(
+                "",
+                "read while the release was still on the source line — the inverse commit came after it, so this "
+                "verdict is a reading of the release and not of the reversal",
+            )
+        )
     goals = [item for item in reading.metrics if item.goal]
     if goals:
         lines.append(_field("", f"goal metrics: {', '.join(_metric(item) for item in goals)}"))

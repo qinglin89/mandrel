@@ -80,7 +80,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .assessment import Assessment, Counterfactual, Frame, Obligation
+from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
 from .batches import AdmissionDecision, awaiting_analysis, evaluate_admission
 from .config import EvolutionConfig
@@ -300,6 +300,41 @@ class ReleaseReading:
     @property
     def settled(self) -> bool:
         return self.obligation.settled
+
+    @property
+    def assessed(self) -> Subject:
+        """The release as the recorded reading is about it, which is not always
+        as the lineage reads it now.
+
+        The two part company on the ordinary end of a regression finding:
+        `assessment.settle(..., "rolled-back")` forms nothing but writes its
+        decision onto a reading formed while the promotion stood, and lands the
+        inverse commit after it. From then on the record answers the
+        standing-release question while the source line no longer carries the
+        release. The reader keeps the record's own subject for that reason
+        (`assessment._read_subject`) — re-deriving it would make every rollback
+        contradict the assessment that justified it — and this is where the
+        distinction reaches the surface.
+
+        Identity is the same on both and only these two fields can differ: a
+        record naming another promotion, candidate, merge input or tree is
+        refused at read.
+        """
+
+        reading = self.reading
+        return self.frame.subject if reading is None else reading.subject
+
+    @property
+    def reversed_after_reading(self) -> bool:
+        """Whether the line stopped carrying the release after it was read.
+
+        Asked of `standing` alone: an inverse commit that is only prepared
+        leaves the promotion standing, and the record drops that commit rather
+        than claiming a reversal (`assessment._as_assessed`), so the two differ
+        there without answering different questions.
+        """
+
+        return self.assessed.standing and not self.frame.subject.standing
 
     @property
     def counterfactual(self) -> Counterfactual | None:
@@ -907,6 +942,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
         return None
     frame = release.frame
     reading = release.reading
+    assessed = release.assessed
     return {
         "owner_batch_id": release.owner_id,
         # False when the cohort that owes the reading already ended: the record
@@ -918,15 +954,27 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
         "owed": frame.owed,
         "settled": release.settled,
         "assessed": {
-            "batch_id": frame.subject.batch_id,
-            "experiment_id": frame.subject.experiment_id,
-            "revision": frame.subject.revision,
-            # Whether the source line still carries the release. Never what the
-            # reading says: `standing` is about the line now, and the reading is
-            # about the question it answered.
-            "standing": frame.subject.standing,
-            "rollback_revision": frame.subject.rollback_revision,
-            "planned_targets": list(frame.subject.planned_targets),
+            "batch_id": assessed.batch_id,
+            "experiment_id": assessed.experiment_id,
+            "revision": assessed.revision,
+            # Which question the reading answered, and never what the line
+            # carries now: settling `rolled-back` writes the decision onto a
+            # reading formed while the release stood and lands the inverse
+            # commit after it, so on the path a regression finding ordinarily
+            # ends these two disagree. Reading the lineage's current standing
+            # here would report a cohort as having assessed a reversal it never
+            # saw.
+            "standing": assessed.standing,
+            "rollback_revision": assessed.rollback_revision,
+            "planned_targets": list(assessed.planned_targets),
+            # The same release as the source line holds it now — the other half
+            # of that pair, and the one a rollback moves. Identity is not
+            # repeated because it cannot differ: a record naming another
+            # promotion is refused at read.
+            "source_line": {
+                "standing": frame.subject.standing,
+                "rollback_revision": frame.subject.rollback_revision,
+            },
         },
         "cohorts": {
             "before": {
