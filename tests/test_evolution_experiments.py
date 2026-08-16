@@ -3661,6 +3661,42 @@ def test_a_batch_owing_its_outcome_meets_that_promotion_wherever_it_is_written_i
     assert experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST).recorded is True
 
 
+def test_the_promotion_owed_an_outcome_is_offered_only_where_its_evidence_reads(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The redo runs its own preamble whole, and reading every replay record this
+    batch holds is part of it — so a record nobody can read refuses the repair as
+    it refuses everything else.
+
+    This state is where the gate could learn it nowhere else. Evidence is derived
+    for the open experiment (`phase._evidence`) and a batch owing its outcome has
+    none, so a malformed record on the attempt that promoted is invisible to the
+    reading — and a gate answering from the reading alone would offer a redo the
+    operation refuses to run. Both surfaces are asserted over the one state,
+    because the property is that they agree."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_conclude_promoted")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+    path = config.experiments_root / EXP_01 / "replays.json"
+    intact = path.read_text(encoding="utf-8")
+    path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError, match="unreadable replay record") as refused:
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+
+    offered = {item.action: item for item in phase.describe(config, now=LATEST).actions}["promote"]
+    assert offered.allowed is False and offered.recovery is None
+    assert offered.refusal == str(refused.value)
+    assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
+
+    # Readable again, and the state is the redo it always was.
+    path.write_text(intact, encoding="utf-8")
+    assert experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST).recorded is True
+
+
 def downgrade(config: evolution.EvolutionConfig, experiment_id: str) -> None:
     """Put a record back into the shape the build before the prepared promotion
     wrote: its version, and no merge unit — the field did not exist there."""

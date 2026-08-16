@@ -56,7 +56,7 @@ from typing import Any, Iterator
 
 from .batches import awaiting_analysis, record_closures
 from .config import EvolutionConfig
-from .errors import BatchError, RefHoldError
+from .errors import BatchError, EvolutionError, RefHoldError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
 from .revisions import checked_out_refs, held_at, ref_tip
@@ -138,13 +138,41 @@ def require_readable_evidence(config: EvolutionConfig, current: BatchLineage) ->
     refused.
     """
 
+    refusal = evidence_refusal(config, current)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def evidence_refusal(config: EvolutionConfig, current: BatchLineage) -> str | None:
+    """Why a batch holding a replay record nobody can read takes no further work.
+
+    Answered by running the reader rather than by looking at the lineage, which
+    is the one thing that makes this question unlike the others here: no record
+    states that another record is unreadable, so the only way to know is to read
+    each of them. What comes back is the reader's own sentence rather than a
+    second one written here — what makes a record unreadable is that module's
+    judgement, and the gate quoting it is the gate saying what the operation
+    would.
+
+    Stated as a refusal for the reason every question here is: the gate reads it
+    (`phase._Held`), and this is the one the gate could not otherwise reach.
+    Evidence is derived for the open experiment alone (`phase._evidence`), so a
+    malformed record on a *terminal* attempt is invisible to the reading while
+    every operation over that batch refuses on it — the promotion owing its
+    outcome among them, whose whole state is that nothing is open.
+    """
+
     # Locally imported: `replay.py` runs this preamble before its own writes, so
     # the dependency between the two points that way. What is needed here is its
     # reader, and a module-level import would close the loop.
     from .replay import read_replays
 
     for experiment in current.experiments:
-        read_replays(config, experiment)
+        try:
+            read_replays(config, experiment)
+        except EvolutionError as exc:
+            return str(exc)
+    return None
 
 
 def settled(config: EvolutionConfig, *, now: datetime) -> Lineage:

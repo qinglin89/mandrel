@@ -856,6 +856,49 @@ def test_a_promotion_owing_its_outcome_accepts_only_the_promote_that_finishes_it
     assert f"promote — {FIRST}-exp-01 (redo)" in rendered(config)
 
 
+def test_the_redo_of_a_promotion_is_withheld_over_a_replay_record_nobody_can_read(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The one hold in that preamble this reading cannot otherwise see. Evidence
+    is derived for the open experiment, and a batch owing its outcome has none —
+    so a malformed record on the attempt that promoted leaves every field above
+    unchanged while `promote` refuses to read it (`guards.evidence_refusal`,
+    which its own operation runs before it writes the outcome).
+
+    Withheld rather than offered: a redo is a promise that running the verb
+    finishes what an interruption left, and one advertised over a record the
+    operation refuses sends an operator at the single verb this state accepts
+    and has it fail."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST)
+    candidate = git_rev(config.repo_root, "HEAD")
+    # Written first, which is what keeps the fixture from bringing the readable
+    # run a promoted decision otherwise comes with.
+    unreadable = config.experiments_root / f"{FIRST}-exp-01" / "replays.json"
+    unreadable.parent.mkdir(parents=True)
+    unreadable.write_text("{", encoding="utf-8")
+    write_experiment(
+        config.experiments_root,
+        f"{FIRST}-exp-01",
+        base_revision=candidate,
+        rounds=[experiment_round(1, candidate_revision=candidate)],
+        decision=experiment_decision("promoted", promotion_revision="f" * 40),
+    )
+
+    named = verbs(config)
+    assert not [name for name, item in named.items() if item["allowed"]]
+    assert named["promote"]["recovers"] is None
+    assert "unreadable replay record" in named["promote"]["reason"]
+    # The other verb that ends a batch says the same thing, because the two read
+    # one predicate rather than each deciding what is readable.
+    assert named["conclude-no-change"]["reason"] == named["promote"]["reason"]
+    # A verb running the whole preamble keeps that preamble's order and meets the
+    # concluded batch first, which is the sentence its own operation raises.
+    assert "concluded by promoting it" in named["create"]["reason"]
+    assert "none — every verb refuses in this state" in rendered(config)
+
+
 def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:

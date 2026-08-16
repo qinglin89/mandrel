@@ -1136,6 +1136,8 @@ class _Held:
     successor: str | None
     # A promotion recorded its decision and not the outcome that ends the batch.
     outcome: str | None
+    # Some replay record this batch holds cannot be read.
+    evidence: str | None
     # The open experiment's ref stands off the history its record pins.
     ref: str | None
     # A promotion of the open experiment is prepared and not finished.
@@ -1145,7 +1147,7 @@ class _Held:
     def lineage(self) -> str | None:
         """The whole preamble, for the verbs that run all of it."""
 
-        return self.ending or self.outcome
+        return self.stage or self.successor or self.outcome or self.evidence
 
     @property
     def ending(self) -> str | None:
@@ -1158,9 +1160,15 @@ class _Held:
         batch being current — and each answers that state in its own words: one
         as the redo it is, the other as the conclusion a batch that promoted
         cannot have (`experiments.conclusion_refusal`).
+
+        Spelled out rather than composed from `lineage`, because what these two
+        drop is a question in the *middle* of it: the outcome. They run the
+        evidence check the full preamble ends with, so composing either property
+        from the other would put that check on the wrong side of the outcome and
+        answer a verb in a sentence its own operation reaches later.
         """
 
-        return self.stage or self.successor
+        return self.stage or self.successor or self.evidence
 
 
 def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage) -> tuple[Action, ...]:
@@ -1190,6 +1198,12 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
         else guards.stage_refusal(current, stage_open=not view.analysis_complete),
         successor=None if current is None else guards.successor_refusal(current),
         outcome=None if current is None else guards.outcome_refusal(current),
+        # The one hold read off the files rather than off the lineage, and the
+        # reason it is here at all: `status` derives evidence for the open
+        # experiment only, so a batch with none — the promotion owing its
+        # outcome — would otherwise offer its redo over a record the operation
+        # refuses to read.
+        evidence=None if current is None else guards.evidence_refusal(config, current),
         ref=None if current is None else guards.ref_refusal(current),
         prepared=None if experiment is None else experiments.prepared_promotion_refusal(experiment),
     )
