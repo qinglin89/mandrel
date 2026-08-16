@@ -431,6 +431,32 @@ class BatchLineage:
 
         return _pending_successor(self.experiments)
 
+    @property
+    def pending_outcome(self) -> Experiment | None:
+        """The attempt whose promotion this batch has recorded no outcome for.
+
+        The same shape as the supersession above and the other half of the same
+        rule. Promoting writes the decision that ends the attempt before the
+        outcome that ends the batch with it, because by then the merge is on the
+        source line and the decision is the only record saying so — and a run
+        stopping between them leaves a batch still current with nothing open.
+        So this is the half-finished promotion, readable on purpose and finished
+        by the operation being redone (`experiments._finish_promotion`).
+
+        The newest attempt only, for `pending_successor`'s reason: a decision
+        ends the newest, and an attempt standing open under a terminal one is a
+        history invariant 14 refuses as it is read. Only while the batch is
+        current, too — a concluded batch that promoted names the same attempt in
+        its outcome, which is history rather than an operation waiting to
+        finish.
+        """
+
+        if not self.current:
+            return None
+        newest = self.experiments[-1] if self.experiments else None
+        decision = newest.decision if newest is not None else None
+        return newest if decision is not None and decision.outcome == DECISION_PROMOTED else None
+
 
 @dataclass(frozen=True)
 class Lineage:

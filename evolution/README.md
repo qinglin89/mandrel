@@ -727,6 +727,16 @@ it was prepared from, which is the experiment's last — an earlier sealed round
 names a candidate this experiment has already revised past, and a completed run
 of that round is exactly what would make promoting it look justified.
 
+The window after the decision is that rule one record along, and the batch rather
+than the experiment is what it holds. The decision ends the attempt and the
+outcome ends the batch, so between them the batch is current with nothing open —
+which is indistinguishable from a batch between attempts, and is why that state
+too is closed to everything but this promotion redone. An admission there takes
+the batch's frozen base and opens a second attempt in a cycle whose answer is
+already on the source line; the redo would then find that attempt, try to promote
+it instead, and refuse on evidence nothing measured, leaving the interrupted
+promotion unfinishable until the new attempt was abandoned.
+
 Promotions recorded before the experiment carried a merge unit are read as what
 they are rather than refused. That shape is an `experiment.json` at version 1: it
 states the promotion revision and nothing about the merge, because the operation
@@ -1593,6 +1603,8 @@ id that is not its copy, a second decision about a proposal already declined, a
 second decision about an attempt that has already ended, a decision naming an
 attempt the batch never had or one older than the attempt that ended, a batch
 owing the successor a supersession recorded — to anything but that supersession
+redone — a batch owing the outcome its promotion concluded it with, which has no
+open attempt and is not a batch between attempts — to anything but that promotion
 redone — a `no-change` conclusion over an open attempt or over one that records a
 promotion, an outcome of either kind over a gate where a proposal is still
 waiting or over a batch owing a successor, a

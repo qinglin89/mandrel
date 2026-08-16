@@ -2,11 +2,12 @@
 
 The contract's Guarded operations section says each of them settles the same
 questions first — which batch is current, whether its analysis stage has ended,
-whether a supersession left it owing an attempt, whether every replay record the
-batch holds can still be read, which experiment is open, and whether that
-experiment's ref still agrees with its record. Those questions have one set of
-answers and one set of refusals, and they are here rather than in the module that
-happens to write first.
+whether a supersession left it owing an attempt, whether a promotion left it
+owing the outcome that ends it, whether every replay record the batch holds can
+still be read, which experiment is open, and whether that experiment's ref still
+agrees with its record. Those questions have one set of answers and one set of
+refusals, and they are here rather than in the module that happens to write
+first.
 
 Three modules write against this lineage: `experiments.py` moves an attempt
 through its rounds and ends it, `replay.py` records the runs measured against a
@@ -70,16 +71,21 @@ def current_cycle(
 ) -> BatchLineage:
     """The batch these operations act on, settled before any of them writes.
 
-    Four questions in one, and all of them are the derivation `status` reads
+    Five questions in one, and all of them are the derivation `status` reads
     rather than a cheaper local reading: which batch is current (invariant 14,
     from the whole lineage — an outcome record its own experiments contradict has
     concluded nothing), whether its analysis stage has ended, whether a
-    supersession left the batch owing an experiment, and what its gate and
-    experiments currently are.
+    supersession left the batch owing an experiment, whether a promotion left it
+    owing the outcome that ends it, and what its gate and experiments currently
+    are.
 
     `finishing` is for the one operation that may act on a batch owing a
     successor: the supersession that is being redone to create it. Every other
-    operation would be building on a lineage with no attempt to build in.
+    operation would be building on a lineage with no attempt to build in. The
+    unfinished promotion below takes no such flag, because the operation that
+    finishes *it* is the one operation here that assembles this preamble itself
+    (`experiments.promote`) — a batch it has concluded is one nothing reached
+    through here may work in.
 
     `known` is for a caller that needs the whole lineage as well — the batches
     before this one, or what the release before it came to. The preamble then
@@ -94,6 +100,7 @@ def current_cycle(
     require_stage_ended(config, current)
     if not finishing:
         require_no_pending_successor(current)
+    require_outcome_recorded(current)
     require_readable_evidence(config, current)
     return current
 
@@ -207,6 +214,44 @@ def successor_refusal(current: BatchLineage) -> str | None:
         f"{current.experiments[-1].experiment_id} was superseded by {successor}, which does not exist; the "
         "decision landed and the attempt it creates did not, so this batch has nothing to work in — redo that "
         "supersession, for the same reason, to finish it"
+    )
+
+
+def require_outcome_recorded(current: BatchLineage) -> None:
+    """A promotion that recorded its decision and not the outcome that ends the
+    batch stops everything but its own redo.
+
+    The supersession above, one decision along: that state is readable on purpose
+    (`lineage.pending_outcome`) because the merge is already on the source line
+    and refusing it in the reader would leave the promotion with no operation
+    able to finish it. This is the other half of that, and it is the whole reason
+    the state needs a refusal at all — with no experiment open, a batch whose
+    cycle is over looks from here exactly like one between attempts, so an
+    admission takes the frozen base and opens a second attempt in a batch that
+    has already concluded. The redo then finds that attempt, tries to promote it
+    instead, and the interrupted promotion cannot be finished until it is
+    abandoned.
+    """
+
+    refusal = outcome_refusal(current)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def outcome_refusal(current: BatchLineage) -> str | None:
+    """Why a batch owing the outcome its promotion ends it with has nothing to
+    work in."""
+
+    promoted = current.pending_outcome
+    if promoted is None:
+        return None
+    decision = promoted.decision
+    revision = (decision.promotion_revision or "") if decision is not None else ""
+    return (
+        f"{promoted.experiment_id} was promoted as {revision[:12]}, so {current.batch_id} concluded by "
+        "promoting it; what is outstanding is the outcome record that ends the batch, and a cycle that ended "
+        "is not one to work in — redo that promotion, for the reason and the targets it was made under, to "
+        "finish it"
     )
 
 

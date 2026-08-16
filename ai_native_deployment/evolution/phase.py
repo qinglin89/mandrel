@@ -155,7 +155,6 @@ from .deployment import describe as describe_deployment
 from .errors import BatchError
 from .lineage import (
     DECISION_ABANDONED,
-    DECISION_PROMOTED,
     DECISION_SUPERSEDED,
     BatchLineage,
     Experiment,
@@ -1135,6 +1134,8 @@ class _Held:
     stage: str | None
     # A supersession recorded its decision and not the successor it named.
     successor: str | None
+    # A promotion recorded its decision and not the outcome that ends the batch.
+    outcome: str | None
     # The open experiment's ref stands off the history its record pins.
     ref: str | None
     # A promotion of the open experiment is prepared and not finished.
@@ -1143,6 +1144,21 @@ class _Held:
     @property
     def lineage(self) -> str | None:
         """The whole preamble, for the verbs that run all of it."""
+
+        return self.ending or self.outcome
+
+    @property
+    def ending(self) -> str | None:
+        """The preamble minus the unfinished promotion, for the two verbs that
+        end a batch.
+
+        Both of them assemble it themselves rather than running
+        `guards.current_cycle` (`experiments.promote`,
+        `experiments.conclude_no_change`), because a promotion is what stops a
+        batch being current — and each answers that state in its own words: one
+        as the redo it is, the other as the conclusion a batch that promoted
+        cannot have (`experiments.conclusion_refusal`).
+        """
 
         return self.stage or self.successor
 
@@ -1173,6 +1189,7 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
         if current is None or view is None
         else guards.stage_refusal(current, stage_open=not view.analysis_complete),
         successor=None if current is None else guards.successor_refusal(current),
+        outcome=None if current is None else guards.outcome_refusal(current),
         ref=None if current is None else guards.ref_refusal(current),
         prepared=None if experiment is None else experiments.prepared_promotion_refusal(experiment),
     )
@@ -1653,15 +1670,10 @@ def _decision_actions(status: LifecycleStatus, held: _Held, lineage: Lineage) ->
     experiment = status.experiment
     object_id = experiment.experiment_id if experiment else None
     pending = status.pending_successor
-    unfinished = _unfinished_promotion(status)
     batch_id = status.current_batch.batch_id if status.current_batch else None
     current = lineage.current
     return (
-        Action(
-            ACTION_PROMOTE,
-            *_on(OBJECT_EXPERIMENT, unfinished.experiment_id if unfinished is not None else object_id),
-            refusal=_promote_refusal(status, held),
-        ),
+        _promote_action(status, held, current, object_id),
         # The hold each of them runs differs by one question: a supersession is
         # the operation that may act on a batch owing a successor, and it is the
         # only one (`guards.current_cycle(finishing=...)`).
@@ -1742,28 +1754,51 @@ def _conclude_action(
     return Action(ACTION_CONCLUDE_NO_CHANGE, *_on(OBJECT_BATCH, batch_id), refusal=_conclude_refusal(status, held))
 
 
-def _unfinished_promotion(status: LifecycleStatus) -> Experiment | None:
-    """A promotion whose decision landed and whose batch outcome did not.
+def _promote_action(
+    status: LifecycleStatus, held: _Held, current: BatchLineage | None, object_id: str | None
+) -> Action:
+    """Carrying the replayed candidate onto the source line, or finishing the
+    promotion that already carried one.
 
-    The batch is still current, its newest attempt is terminal, and that decision
-    is a promotion — which is a state nothing else may be written over and this
-    verb's own redo (`experiments._finish_promotion`). It reaches the phase label
-    as `proposals-pending` or `conclusion-pending`, neither of which says so, and
-    the gate is where it becomes visible.
+    A promotion whose decision landed and whose batch outcome did not is a state
+    nothing else may be written over and this verb's own redo
+    (`lineage.pending_outcome`, `experiments._finish_promotion`). It reaches the
+    phase label as `proposals-pending` or `conclusion-pending`, neither of which
+    says so, and the gate is where it becomes visible — as the repair it is
+    rather than as ordinary work outstanding, since what running it writes is the
+    record the interrupted run owes and nothing on any line moves.
+
+    The redo is offered on the attempt that promoted, because there is nothing
+    open: the decision ended it, and that id is what the operator reads the
+    reason and the targets on record from.
     """
 
-    if status.current_batch is None or status.experiment is not None:
-        return None
-    newest = status.history[-1] if status.history else None
-    if newest is None or newest.decision is None or newest.decision.outcome != DECISION_PROMOTED:
-        return None
-    return newest
+    unfinished = current.pending_outcome if current is not None else None
+    refusal = _promote_refusal(status, held, unfinished)
+    if current is not None and unfinished is not None and refusal is None:
+        return Action(
+            ACTION_PROMOTE,
+            OBJECT_EXPERIMENT,
+            unfinished.experiment_id,
+            recovery=(
+                f"{unfinished.experiment_id} is promoted and {current.batch_id} carries no outcome; that "
+                "promotion redone, for the reason and the targets on record, writes the outcome that ends the "
+                "batch and moves nothing"
+            ),
+        )
+    return Action(
+        ACTION_PROMOTE,
+        *_on(OBJECT_EXPERIMENT, unfinished.experiment_id if unfinished is not None else object_id),
+        refusal=refusal,
+    )
 
 
-def _promote_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    unfinished = _unfinished_promotion(status)
+def _promote_refusal(status: LifecycleStatus, held: _Held, unfinished: Experiment | None) -> str | None:
     if unfinished is not None:
-        return held.lineage or experiments.unfinished_promotion_refusal(unfinished)
+        # Every question this verb's own preamble runs, which is the whole of it
+        # but the unfinished promotion — the state it is here to finish
+        # (`experiments.promote`).
+        return held.ending or experiments.unfinished_promotion_refusal(unfinished)
     hold = _attempt_refusal(status, held, "promote")
     experiment = status.experiment
     if hold is not None or experiment is None or held.current is None:
@@ -1801,10 +1836,11 @@ def _supersede_refusal(status: LifecycleStatus, held: _Held) -> str | None:
 def _conclude_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     """Every way a batch is not one to conclude, in the operation's own words —
     the promoted attempt among them, which is how the promotion interrupted
-    before its outcome reads here."""
+    before its outcome reads here — and why what is asked of the preamble is the
+    part that verb runs rather than the whole of it (`_Held.ending`)."""
 
-    if held.lineage or held.current is None:
-        return held.lineage
+    if held.ending or held.current is None:
+        return held.ending
     return experiments.conclusion_refusal(held.current)
 
 

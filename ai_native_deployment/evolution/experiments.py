@@ -2267,11 +2267,12 @@ def _finish_promotion(
 
     The decision is what makes the promotion real and the outcome is what ends
     the batch, so between them is a batch still current with no experiment open —
-    a state nothing else may be written over and this operation's own redo. What
-    it writes is the outcome the interrupted run would have, and it writes it
-    from the promotion's own record: the merge unit, the reason, and the plan it
-    was prepared under are all there, so nothing this run was called with can
-    become part of a decision that was made before it.
+    a state nothing else may be written over (`guards.require_outcome_recorded`,
+    which is the same reading refused from the other side) and this operation's
+    own redo. What it writes is the outcome the interrupted run would have, and
+    it writes it from the promotion's own record: the merge unit, the reason, and
+    the plan it was prepared under are all there, so nothing this run was called
+    with can become part of a decision that was made before it.
 
     The audit line for the decision is not written again. It may have landed and
     nothing can tell, and an audit is not state — the settled rule for every redo
@@ -2279,9 +2280,9 @@ def _finish_promotion(
     both at the end.
     """
 
-    last = current.experiments[-1] if current.experiments else None
+    last = current.pending_outcome
     decision = last.decision if last is not None else None
-    if last is None or decision is None or decision.outcome != DECISION_PROMOTED:
+    if last is None or decision is None:
         raise no_open_experiment(current, "promote")
     prepared = last.promotion
     if prepared is None:

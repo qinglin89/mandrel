@@ -816,6 +816,46 @@ def test_a_supersession_owing_its_successor_accepts_only_its_own_redo(
     assert "which does not exist" in named["abandon"]["reason"]
 
 
+def test_a_promotion_owing_its_outcome_accepts_only_the_promote_that_finishes_it(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The decision landed and the outcome that ends the batch did not, so the
+    cycle is over and its record does not say so yet. The state reaches the phase
+    label as `conclusion-pending` — which is the phase of a batch waiting to be
+    concluded `no-change`, and this one cannot be — so the gate is where an
+    operator sees it: every verb refuses but the promotion that owns it, offered
+    as the repair it is rather than as work outstanding.
+
+    Written rather than interrupted, for `prepare_promotion`'s reason: the
+    decision is recorded before the outcome, so a run that stops between them
+    leaves exactly this record with no `outcome.json` beside it."""
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST)
+    candidate = git_rev(config.repo_root, "HEAD")
+    write_experiment(
+        config.experiments_root,
+        f"{FIRST}-exp-01",
+        base_revision=candidate,
+        rounds=[experiment_round(1, candidate_revision=candidate)],
+        decision=experiment_decision("promoted", promotion_revision="f" * 40),
+    )
+
+    assert status(config).phase == phase.PHASE_CONCLUSION_PENDING
+    named = verbs(config)
+    assert {name for name, item in named.items() if item["allowed"]} == {"promote"}
+    assert named["promote"]["object"] == {"type": "experiment", "id": f"{FIRST}-exp-01"}
+    # Allowed as the redo it is, so a surface does not offer it as a promotion
+    # still to be made.
+    assert "carries no outcome" in named["promote"]["recovers"]
+    assert "concluded by promoting it" in named["create"]["reason"]
+    assert "the outcome record that ends the batch" in named["add-tasks"]["reason"]
+    # The other verb that ends a batch answers in its own words, as its operation
+    # does: this one promoted, so `no-change` is a claim its record contradicts.
+    assert "record a promotion" in named["conclude-no-change"]["reason"]
+    assert f"promote — {FIRST}-exp-01 (redo)" in rendered(config)
+
+
 def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:

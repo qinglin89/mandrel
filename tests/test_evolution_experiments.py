@@ -2775,9 +2775,15 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     """The contradiction read from the side with nothing to name: a batch whose
-    candidate reached the source line concluded by promoting it."""
+    candidate reached the source line concluded by promoting it.
+
+    The gate is settled before the decision is written, which is the order a
+    promotion actually happens in: it refuses over a draft still waiting
+    (`_require_gate_settled`), and once it has been recorded nothing else writes
+    into the batch it concluded (`guards.require_outcome_recorded`)."""
 
     seal(config, ["loader-fallback"])
+    experiments.reject(config, ["hook-side-loader", "not-worth-it"], reason="not recurrence", now=LATER)
     why = "replay showed fewer remediation rounds with no regression"
     rewrite(
         config,
@@ -2785,7 +2791,6 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
         decision=experiment_decision("promoted", reason=why, promotion_revision="f" * 40),
         promotion=prepared_promotion(candidate_revision=candidate_of(config, EXP_01), reason=why),
     )
-    experiments.reject(config, ["hook-side-loader", "not-worth-it"], reason="not recurrence", now=LATER)
 
     with pytest.raises(evolution.BatchError, match="record a promotion"):
         experiments.conclude_no_change(config, reason="nothing justified", now=LATEST)
@@ -3584,6 +3589,76 @@ def test_a_decision_without_its_outcome_is_finished_by_the_same_promotion(
     # not state, so it is not written a second time.
     assert ledger_types(config).count("experiment-promoted") == 1
     assert ledger_types(config)[-1] == "batch-concluded"
+
+
+def test_an_admission_over_a_promotion_owing_its_outcome_refuses_and_the_redo_finishes_it(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window from the other side. A batch owing its outcome has no open
+    experiment, which is what a grouped admission looks for — so without a
+    refusal it takes the frozen base and opens a second attempt in a batch the
+    source line already carries the answer to. The redo would then find that
+    attempt, try to promote it instead, and refuse on evidence nothing measured:
+    the interrupted promotion could not be finished until the new attempt was
+    abandoned."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_conclude_promoted")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+
+    with pytest.raises(evolution.BatchError, match="concluded by promoting it") as refused:
+        experiments.create(config, ["loader-fallback"], now=LATEST)
+    # The attempt that promoted, and the record still to be written.
+    assert EXP_01 in str(refused.value)
+    assert "the outcome record that ends the batch" in str(refused.value)
+    assert not (config.experiments_root / EXP_02).exists()
+
+    # And the operation that state belongs to still finishes it.
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
+    assert result.recorded is True and result.experiment_id == EXP_01
+    assert outcome_of(config)["outcome"] == "promoted"
+    assert lineage.current_batch(config) is None
+
+
+def test_a_batch_owing_its_outcome_meets_that_promotion_wherever_it_is_written_into(
+    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is the shared preamble's rather than the admission's, because
+    every operation that writes into the lineage has the same problem: the cycle
+    is over. Each of them runs it (`guards.current_cycle`) and meets one sentence.
+
+    The two verbs that end a batch are the exceptions, and they assemble the
+    preamble themselves: this promotion is the redo of that state, and a
+    no-change conclusion refuses it in its own words — the batch promoted, so
+    "the evidence justified no change" is a claim its own record contradicts."""
+
+    prepared(config)
+    interrupt(monkeypatch, "_conclude_promoted")
+    with pytest.raises(OSError):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+    monkeypatch.undo()
+
+    harness = FakeHarness(report=completed_report())
+    for operation in (
+        lambda: experiments.add_tasks(config, ["loader-fallback"], now=LATEST),
+        lambda: experiments.seal_round(config, now=LATEST),
+        lambda: experiments.revise(config, reason="another pass at the loader", now=LATEST),
+        lambda: experiments.abandon(config, reason="on reflection, not this", now=LATEST),
+        # Including the one operation that may act on a batch owing a successor:
+        # the flag that lets it through is about that state and not this one.
+        lambda: experiments.supersede(config, reason="try the loader another way", now=LATEST),
+        lambda: experiments.reject(config, ["loader-fallback"], reason="not recurrence", now=LATEST),
+        lambda: replay.start(config, harness, source_ref=RELEASE_REF, expectation=EXPECTED, now=LATEST),
+    ):
+        with pytest.raises(evolution.BatchError, match="concluded by promoting it"):
+            operation()
+
+    with pytest.raises(evolution.BatchError, match="record a promotion"):
+        experiments.conclude_no_change(config, reason="nothing justified", now=LATEST)
+
+    assert experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST).recorded is True
 
 
 def downgrade(config: evolution.EvolutionConfig, experiment_id: str) -> None:
