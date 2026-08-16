@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-14
-verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
+last-updated: 2026-08-16
+verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
 ---
 
 # Design Principles and Decisions
@@ -38,6 +38,10 @@ verified-against: dcc3f73956ef11af19b40306c650ca1e041a297b
   provenance is inconclusive, never negative evidence. Because manifests carry
   no task-shape provenance, directional claims rest on a completed pinned
   counterfactual whose goal metrics agree.
+- Frozen manifest bytes settle absent and malformed effective-revision
+  exclusions identically in every clone; durable assessment validation requires
+  exact agreement for those reasons. Only Git-dependent placement outcomes may
+  treat an unresolvable revision from another reader as portable uncertainty.
 - The assessment gate answers once with retain or rollback and chooses the line
   every first experiment base must contain. Its obligation survives an owning
   cohort's no-change conclusion; identical settlement retries remain idempotent,

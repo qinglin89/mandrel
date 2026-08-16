@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-16
+verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
 ---
 
 # APIs and Interfaces
@@ -41,7 +41,7 @@ successful outcome when policy is not met. Lifecycle mutations accept optional
 | `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
 | `harness.StatedHarness` | Operator-stated implementation of replay/counterfactual start and poll; enforces completed-attempt reproduction while permitting a new handle |
 | `deployment.describe` | Read each planned target through the machine-local registry and its validated deploy lock; return placement/absence/error states without gating lifecycle status |
-| `lockfile.stated_source_commit` | Accept only supported deploy-lock schemas with a present, null-or-full-object-id `source_git_commit`; distinguish explicit null from a malformed absent field |
+| `lockfile.is_object_id` / `stated_source_commit` | Share the full-object-id predicate with release-assessment placement; accept only supported deploy-lock schemas with a present, null-or-full-object-id `source_git_commit`, distinguishing explicit null from a malformed absent field |
 
 ## Persisted Interfaces
 
@@ -83,8 +83,11 @@ boundary. The client copies orch-hub's nested `provenance.protocol`
 `effective_revision` + `deploy_lock_hash` pair verbatim only when `available` is
 true and both halves are stated; absent, unavailable, legacy, malformed, or
 half-identity sections become two nulls. Imported and frozen records retain that
-pair, while release assessment uses only its revision half for Git ancestry
-placement. The complete-pair path is live-proven; reports imported before the
+pair verbatim; release assessment alone judges the revision half, excluding
+symbolic or abbreviated values as malformed before asking Git for ancestry.
+Durable readers require manifest-settled absent or malformed reasons to agree
+exactly, while clone-dependent unresolvable outcomes remain portable across
+readers. The complete-pair path is live-proven; reports imported before the
 publisher began stating it remain unplaceable and are never retrofitted.
 
 ## API Conventions
