@@ -32,6 +32,34 @@ class LockError(RuntimeError):
     """Raised when a document is not a deploy receipt this build reads."""
 
 
+def is_object_id(value: object) -> bool:
+    """Whether `value` names one commit exactly: a full lowercase object id, as
+    `git rev-parse` writes one.
+
+    The shape a revision has to have before any reader here may place it, and the
+    reason is the resolution rather than the string. `git rev-parse` answers for
+    `HEAD`, a branch, or a tag as readily as for an object id, so a symbolic name
+    is placed against whatever the *reading* repository is currently sitting on
+    and moves whenever that does — reporting a fact about somewhere else as a fact
+    about this checkout's position. An abbreviation is refused for the other half
+    of the same reason: it names one commit today and may name two tomorrow.
+
+    Asked in one place because two readers ask it, and both of them resolve what
+    they read against this repository's Git: a target's deploy receipt
+    (`stated_source_commit`) and the effective revision a report's provenance
+    states (`evolution.assessment`). A second spelling of the rule would let one
+    of them place what the other refuses, over the same string.
+
+    What it is not is a claim that the commit exists here. Whether this clone
+    holds the object is a fact about the clone, and each reader reports that
+    separately — an unresolvable revision is a question this checkout cannot
+    answer, while a revision of the wrong shape is one nobody's checkout should
+    answer.
+    """
+
+    return isinstance(value, str) and len(value) in _OBJECT_ID_WIDTHS and not value.strip(_HEX_DIGITS)
+
+
 @dataclass(frozen=True)
 class DeployedFile:
     """One file as it was deployed: where its bytes came from, where they went,
@@ -298,14 +326,11 @@ def stated_source_commit(lock: object) -> str | None:
     The schema is asked because a version this build does not write is a document
     whose fields it only appears to understand.
 
-    The commit is asked for its exact shape because every reader placing a target
-    by it resolves it in a repository of its own: `git rev-parse` answers for a
-    branch, a tag, or `HEAD` as readily as for a commit id, so a receipt stating
-    a symbolic name would be placed against the reading checkout's own current
-    position and would move whenever that did — reporting a target as carrying a
-    revision nobody ever deployed to it. An abbreviation is refused for the other
-    half of the same reason: it names one commit today and may name two
-    tomorrow. What a deploy writes here is `git rev-parse HEAD`'s own answer
+    The commit is asked for its exact shape (`is_object_id`) because every reader
+    placing a target by it resolves it in a repository of its own: a receipt
+    stating a symbolic name would be placed against the reading checkout's own
+    current position, reporting a target as carrying a revision nobody ever
+    deployed to it. What a deploy writes here is `git rev-parse HEAD`'s own answer
     (`manifest.source_git_commit`), which is a full object id and nothing else.
 
     None is an ordinary answer rather than a complaint: a deploy states a source
@@ -343,6 +368,6 @@ def stated_source_commit(lock: object) -> str | None:
     commit = lock["source_git_commit"]
     if commit is None:
         return None
-    if not isinstance(commit, str) or len(commit) not in _OBJECT_ID_WIDTHS or commit.strip(_HEX_DIGITS):
+    if not is_object_id(commit):
         raise LockError(f"source_git_commit {commit!r} is not a commit id")
     return commit

@@ -985,8 +985,9 @@ of Git as an ancestry question, so a target redeployed at later work that
 includes the promotion is post-release evidence too. The targets a promotion was
 *planned* for are not that reading and never stand in for it. A report that
 cannot be placed is excluded with a reason and stays in view: no effective
-revision recorded, a revision this checkout cannot resolve, or a line that had
-already taken the change back out. Exclusions are for what provenance cannot say
+revision recorded, one recorded as something that is not a commit id, a commit id
+this checkout cannot resolve, or a line that had already taken the change back
+out. Exclusions are for what provenance cannot say
 and never for what the numbers came to — a cohort narrowed to the reports that
 agreed with the change is the base rate invariants 1 and 2 exist to keep
 knowable.
@@ -1011,6 +1012,16 @@ Recovering the lock from the target's own history is closer, and still an
 inference on a repository this system does not own, over a path a feed supplied,
 for the one reading that costs somebody a promoted change. A report that arrived
 without the field stays without it (invariant 4 keeps a missing field missing).
+
+Being that commit, it is held to that commit's shape — a full object id, and the
+same rule a target's own receipt is read by. A branch, a tag, `HEAD`, or an
+abbreviation resolves against whichever repository is doing the reading, so a
+report stating one would be placed by where this checkout happens to stand and
+would change sides when it moved. Such a report is excluded, naming what it
+stated, and it is judged at placement rather than on the way in: the import
+client copies the published string verbatim and repairs nothing, a frozen
+manifest copies the record as staged and is never edited, so a cohort frozen
+before this rule existed is read by it too.
 
 **When a lock may be published as one.** A commit written beside a payload is not
 by itself an account of that payload — and placement reads it as one. Two things

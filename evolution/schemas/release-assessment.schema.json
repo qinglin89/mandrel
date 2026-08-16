@@ -226,9 +226,10 @@
           "pattern": "^evolution-batch-[0-9]{4,}$"
         },
         "reason": {
-          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-unresolvable`: it says something this checkout cannot resolve to a commit, which is a fact about the clone. `post-rollback-effective-revision`: the target held a line that had already taken the promotion back out, which is neither the release nor the state before it.",
+          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-malformed`: it states something that is not a commit id — a branch, a tag, `HEAD`, an abbreviation — which every reader would resolve against its own checkout's position rather than against what that target held, so no repository may place it. `effective-revision-unresolvable`: it states a commit id this checkout cannot resolve, which is a fact about the clone. `post-rollback-effective-revision`: the target held a line that had already taken the promotion back out, which is neither the release nor the state before it.",
           "enum": [
             "effective-revision-absent",
+            "effective-revision-malformed",
             "effective-revision-unresolvable",
             "post-rollback-effective-revision"
           ]

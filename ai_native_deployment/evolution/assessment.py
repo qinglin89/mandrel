@@ -45,16 +45,29 @@ a frozen manifest copies the record as staged — so a cohort built from them
 excludes whole and the counterfactual below is what carries a direction
 (contract: Release assessment).
 
-Reported also means unchecked: `_place` asks Git whether a stated revision
-carries the promotion, and Git answers about that commit, not about what the
-target ran. Whether the commit describes the payload at all is settled where the
-receipt is written — the deploy states no revision when the canonical tree it
-copied was not exactly that commit's — and whether the target still matched that
-receipt while the evaluated work ran is settled by whoever held it, at the
-boundaries of the runs that did the work. Both conditions sit in the contract as
-what a publisher must establish before stating the field, because a revision this
-side cannot verify is one it cannot refuse either: it would place the report, and
-a misplaced report is a direction invented rather than a denominator lost.
+Reported also means unchecked, with one exception: `_place` asks Git whether a
+stated revision carries the promotion, and Git answers about that commit, not
+about what the target ran. Whether the commit describes the payload at all is
+settled where the receipt is written — the deploy states no revision when the
+canonical tree it copied was not exactly that commit's — and whether the target
+still matched that receipt while the evaluated work ran is settled by whoever
+held it, at the boundaries of the runs that did the work. Both conditions sit in
+the contract as what a publisher must establish before stating the field, because
+a revision this side cannot verify is one it cannot refuse either: it would place
+the report, and a misplaced report is a direction invented rather than a
+denominator lost.
+
+The exception is the field's *shape*, which is checkable here and is the one way
+an unverifiable revision would be placed by something other than itself. The
+field is a deploy lock's `source_git_commit`, a full object id; a feed stating
+`HEAD`, a branch or an abbreviation instead would be resolved against this
+repository's own position, so the report would be placed by where the reading
+checkout happens to stand. That is asked of `lockfile.is_object_id`, the rule the
+receipt side reads by, and answered as an exclusion naming what was stated — the
+import client copies the published string verbatim and repairs nothing
+(`hub._stated`), so this is the single place a badly shaped revision is judged,
+and it reaches reports frozen into a manifest before the rule existed as readily
+as ones imported after it.
 
 The shape of the work is the difference nothing frozen states. Two cohorts are
 two different task sets by construction, and no manifest version records what
@@ -119,6 +132,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ..lockfile import is_object_id
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError, ValidationError
 from .guards import reason as require_reason
@@ -182,9 +196,10 @@ SETTLEMENT_ROLLED_BACK = "rolled-back"
 # the unsettled reading rather than a decision.
 SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 
-# Why a frozen report is in neither cohort. All three are about what its
+# Why a frozen report is in neither cohort. All four are about what its
 # provenance can be shown to say, never about what its numbers came to.
 EXCLUDED_REVISION_ABSENT = "effective-revision-absent"
+EXCLUDED_REVISION_MALFORMED = "effective-revision-malformed"
 EXCLUDED_REVISION_UNRESOLVABLE = "effective-revision-unresolvable"
 EXCLUDED_POST_ROLLBACK = "post-rollback-effective-revision"
 
@@ -2717,6 +2732,21 @@ def _place(
     and not the state before it — and it is asked of an inverse still in flight as
     well, since what matters is whether that commit reached the line the report
     was produced at, not whether this controller has finished recording it.
+
+    Before Git is asked anything, the stated revision is held to the shape the
+    field is defined to have: the evaluated target's deploy-lock
+    `source_git_commit`, which is a full object id and nothing else
+    (`lockfile.is_object_id` — the same rule that side is read by, since both
+    resolve what they read against this repository). Git would answer for `HEAD`,
+    a branch, a tag or an abbreviation just as readily, and that answer is a
+    reading of where *this* checkout stands: a report whose provenance stated one
+    of those would be placed by this repository's position at the moment of
+    reading, change sides when the checkout moved, and do it on the one reading
+    that costs somebody a promoted change. So it is excluded, naming what it
+    stated — not repaired, and not completed from anything beside it (invariant
+    4). The exclusion is a fact about the record rather than about the clone,
+    which is what separates it from an unresolvable revision below: every
+    checkout reaches it, and reaches it from committed content alone.
     """
 
     if member.effective_revision is None:
@@ -2728,6 +2758,16 @@ def _place(
         )
 
     stated = member.effective_revision
+    if not is_object_id(stated):
+        return None, Excluded(
+            report_key=member.report_key,
+            batch_id=member.batch_id,
+            reason=EXCLUDED_REVISION_MALFORMED,
+            detail=(
+                f"the report states an effective revision {stated!r}, which is not a commit id; resolving a "
+                "name would place it by where this checkout stands rather than by what that target held"
+            ),
+        )
     if stated not in answers:
         answers[stated] = _resolve(config, stated, assessed)
     resolved, side = answers[stated]
@@ -3503,11 +3543,12 @@ def _require_placement(
     throughout this package.
 
     The exclusions are checked in the direction that can overstate. A report
-    excluded because its manifest states no effective revision is checkable from
-    committed content alone, and a report excluded as post-rollback is checkable
-    wherever Git can answer; a report excluded because the forming machine could
-    not resolve its revision is not checkable at all, and a clone that can
-    resolve it has learned something about itself rather than about the record.
+    excluded because its manifest states no effective revision — or states one
+    that is not a commit id at all — is checkable from committed content alone,
+    and a report excluded as post-rollback is checkable wherever Git can answer; a
+    report excluded because the forming machine could not resolve its revision is
+    not checkable at all, and a clone that can resolve it has learned something
+    about itself rather than about the record.
     """
 
     for side, keys in ((SIDE_BEFORE, before), (SIDE_AFTER, after)):

@@ -101,11 +101,12 @@ supply a missing one: not `provenance.git.newest_sha`, not another report's
 identity, not a lock read from a target today, which would state what that target
 holds now and put its pre-release reports on the far side of a promotion it was
 redeployed onto since. A stated field is checked only for being a non-empty
-string and is then copied unchanged; whether a revision resolves to a commit is
-`assessment`'s question, and it reports an unresolvable one as its own exclusion.
-Anything weaker turns an unverified lock into a cohort placement, which is worse
-than the null it replaced: an excluded report costs a denominator, a misplaced
-one invents a direction.
+string and is then copied unchanged; whether a revision is a commit id at all,
+and whether it resolves to one here, are `assessment`'s questions, asked where a
+report is placed and reported there as its own exclusions. Anything weaker turns
+an unverified lock into a cohort placement, which is worse than the null it
+replaced: an excluded report costs a denominator, a misplaced one invents a
+direction.
 
 **Integrity headers are not trusted.** The raw-artifact route serves bytes that
 no longer match their recorded digest with
@@ -550,10 +551,16 @@ def _stated(value: Any) -> str | None:
     tolerates, losing an eligible report to say what a null says.
 
     A string is otherwise handed on exactly as received, unstripped and
-    unvalidated. The publisher checks the shape it publishes, and a second opinion
-    here would be this side deciding which stated identities count; a string that
-    resolves to no commit is reported by `assessment` as its own exclusion, which
-    is the accurate reading of a report that stated something unusable.
+    unvalidated — including one shaped like nothing the field can be. Whether a
+    revision is a commit id, and whether it resolves to a commit here, are both
+    `assessment`'s questions, asked where a report is placed: that is where a
+    report already imported under an earlier rule has to be answered for anyway,
+    since a frozen manifest copies the record as staged and is never edited, so
+    asking here as well would be a second mechanism deciding nothing the first
+    does not. Refusing at this boundary would also cost more than it saves — the
+    record would carry a null, losing the string an exclusion can name, and a
+    stricter reading still would drop an otherwise eligible report over a
+    provenance field whose absence the design tolerates.
     """
 
     return value if isinstance(value, str) and value.strip() else None

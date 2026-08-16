@@ -73,6 +73,12 @@ MEASURED_AT = datetime(2026, 8, 11, 7, 0, 0, tzinfo=timezone.utc)
 CONCLUDED_AT = datetime(2026, 8, 11, 12, 0, 0, tzinfo=timezone.utc)
 RESOLVED_AT = datetime(2026, 8, 11, 13, 0, 0, tzinfo=timezone.utc)
 
+# A commit id of the right shape that no checkout here holds: the case where
+# placement fails on this clone rather than on the record. Spelled as a full
+# object id on purpose — a shorter string would be refused for its shape and
+# would never reach the question these tests are asking.
+ABSENT_COMMIT = "b1" + "0" * 38
+
 WHY = "the cohort produced at the promoted revision converged in fewer rounds"
 EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 REVERSAL = "the counterfactual confirmed the regression"
@@ -382,7 +388,7 @@ def test_an_unresolvable_effective_revision_is_unverified_rather_than_placed(
     """A revision this checkout cannot resolve is a fact about the clone. It is
     reported as an exclusion nobody can check, never guessed at."""
 
-    second = freeze_second(config, promoted, effective="e1")
+    second = freeze_second(config, promoted, effective=ABSENT_COMMIT)
     frame = assessment.describe(config, second)
 
     assert frame is not None
@@ -396,6 +402,121 @@ def test_an_unresolvable_effective_revision_is_unverified_rather_than_placed(
         assessment.FACET_TASK_SHAPE,
         assessment.FACET_REPOSITORY_COVERAGE,
     )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(lambda promotion: "HEAD", id="head"),
+        pytest.param(lambda promotion: RELEASE_REF, id="a-ref"),
+        pytest.param(lambda promotion: promotion.promotion_revision[:12], id="an-abbreviation"),
+    ],
+)
+def test_a_revision_that_is_not_a_commit_id_is_excluded_rather_than_placed(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    state,
+) -> None:
+    """The field is a deploy lock's `source_git_commit`, and every one of these
+    resolves here — to the promotion, in this checkout, today.
+
+    Which is the whole objection: what they resolve to is a reading of where
+    *this* repository stands, so the placement would follow a `git checkout` made
+    in it and would say that targets carried a release on the strength of it. The
+    report is excluded instead, naming what it stated, and Git is never asked —
+    `unverified` stays empty, because nothing here failed to resolve.
+    """
+
+    stated = state(promoted)
+    second = freeze_second(config, promoted, effective=stated)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    # Resolvable, and resolving to the side this refuses to place it on.
+    assert git_rev(config.repo_root, stated) == promoted.promotion_revision
+    assert frame.after.report_keys == ()
+    assert frame.unverified == ()
+    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_MALFORMED}
+    assert repr(stated) in frame.exclusion("a1").detail
+    # Absent evidence, not a reading against the release: the cohort is empty and
+    # nothing directional may be claimed from it.
+    assert frame.cohorts_support_direction is False
+
+
+def test_a_symbolic_revision_a_feed_published_reaches_the_freeze_and_is_excluded(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    tmp_path: Path,
+) -> None:
+    """The other half of the same rule, over a real import rather than a manifest
+    written by hand.
+
+    Nothing on the way in touches the string: the client copies what the feed
+    published, the pool stages the record whole, and the freeze copies its
+    provenance into the immutable manifest (invariant 4 keeps it unrepaired). So
+    the fresh-import path and a cohort frozen before the rule existed arrive at
+    the same place carrying the same string, and are answered there.
+    """
+
+    evolution.sync(
+        config,
+        write_feed(
+            tmp_path / "feed",
+            [
+                make_record(
+                    key=f"k{index}",
+                    sequence=index,
+                    task_id=f"2026-08-0{index}-task",
+                    effective_revision="HEAD",
+                )
+                for index in (1, 2, 3)
+            ],
+        ),
+    )
+    result = evolution.freeze(config, now=FROZEN_AT, runner_revision="v2.2.0")
+
+    assert result.manifest_path is not None
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert {report["provenance"]["effective_revision"] for report in manifest["reports"]} == {"HEAD"}
+
+    second = next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.after.report_keys == ()
+    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_MALFORMED}
+    assert "'HEAD'" in frame.exclusion("k1").detail
+
+
+def test_a_record_placing_a_revision_that_is_not_a_commit_id_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A malformed revision is a fact about the record, so it is checked in the
+    strict direction — unlike an unresolvable one, which is a fact about the
+    clone. A record placing such a report is refused in every checkout rather
+    than only where the name happens not to resolve."""
+
+    second = freeze_second(config, promoted, effective="HEAD")
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    after = ("a1", "a2", "a3")
+    publish(
+        second,
+        build(
+            frame,
+            after=after,
+            after_task_count=3,
+            excluded=(),
+            metrics=(),
+            comparability=assessment._stated_comparability(frame, frame.before.report_keys, after),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert assessment.EXCLUDED_REVISION_MALFORMED in str(error.value)
 
 
 def test_mixed_provenance_is_named_facet_by_facet(
@@ -1269,7 +1390,7 @@ def test_a_denominator_no_checkout_could_place_is_still_counted(
                 key=f"a{index}",
                 sequence=index,
                 task_id="2026-08-01-task",
-                effective_revision="e1",
+                effective_revision=ABSENT_COMMIT,
             )
             for index in (1, 2, 3)
         ],
