@@ -202,6 +202,14 @@ EXCLUDED_REVISION_ABSENT = "effective-revision-absent"
 EXCLUDED_REVISION_MALFORMED = "effective-revision-malformed"
 EXCLUDED_REVISION_UNRESOLVABLE = "effective-revision-unresolvable"
 EXCLUDED_POST_ROLLBACK = "post-rollback-effective-revision"
+# The two a frozen manifest settles by itself: whether it states an effective
+# revision, and whether what it states is a commit id, are both read off the
+# committed bytes before Git is asked anything, so every clone reaches the same
+# answer. That is what separates them from the two below, which are readings of a
+# repository — and it is why a recorded exclusion naming one of them is held to
+# the derivation exactly (`_require_placement`), including against the
+# `EXCLUDED_REVISION_UNRESOLVABLE` a reader otherwise takes on trust.
+MANIFEST_SETTLED_EXCLUSIONS = frozenset({EXCLUDED_REVISION_ABSENT, EXCLUDED_REVISION_MALFORMED})
 
 SIDE_BEFORE = "before"
 SIDE_AFTER = "after"
@@ -3542,13 +3550,23 @@ def _require_placement(
     reason an unanswerable ancestry check is reported rather than raised
     throughout this package.
 
-    The exclusions are checked in the direction that can overstate. A report
-    excluded because its manifest states no effective revision — or states one
-    that is not a commit id at all — is checkable from committed content alone,
-    and a report excluded as post-rollback is checkable wherever Git can answer; a
-    report excluded because the forming machine could not resolve its revision is
-    not checkable at all, and a clone that can resolve it has learned something
-    about itself rather than about the record.
+    The exclusions are checked as far as each reason is anyone's to check. Two of
+    them a frozen manifest settles by itself — it states no effective revision, or
+    states one that is not a commit id at all — and both are read off committed
+    bytes before Git is asked anything, so every clone reaches the same answer
+    (`MANIFEST_SETTLED_EXCLUSIONS`). Post-rollback is answerable wherever Git can
+    answer at all. Only an unresolvable revision is nobody's to check: a clone
+    that resolves what the forming machine could not has learned something about
+    itself rather than about the record.
+
+    So `unresolvable` is taken on trust in both directions — stated where this
+    checkout placed the report, derived where the record claimed something else —
+    but only between two answers that were Git's to give. Where either side names
+    a manifest-settled reason the two must agree exactly, because there the bytes
+    decide: a record calling a malformed revision unresolvable is not a machine
+    reporting its own limits but a record-level defect wearing the one reason no
+    reader checks, and taking it on trust would put every badly shaped revision
+    back beyond reach of the rule that exists to catch it.
     """
 
     for side, keys in ((SIDE_BEFORE, before), (SIDE_AFTER, after)):
@@ -3567,10 +3585,16 @@ def _require_placement(
                 )
 
     for item in excluded:
-        if item.reason == EXCLUDED_REVISION_UNRESOLVABLE:
-            continue
         derived = frame.exclusion(item.report_key)
-        if derived is not None and derived.reason in (item.reason, EXCLUDED_REVISION_UNRESOLVABLE):
+        if derived is not None and derived.reason == item.reason:
+            continue
+        by_manifest = item.reason in MANIFEST_SETTLED_EXCLUSIONS or (
+            derived is not None and derived.reason in MANIFEST_SETTLED_EXCLUSIONS
+        )
+        unresolvable = item.reason == EXCLUDED_REVISION_UNRESOLVABLE or (
+            derived is not None and derived.reason == EXCLUDED_REVISION_UNRESOLVABLE
+        )
+        if unresolvable and not by_manifest:
             continue
         placed = frame.placement(item.report_key)
         if placed is not None:
@@ -3581,7 +3605,13 @@ def _require_placement(
             found = "places it nowhere at all"
         raise BatchError(
             f"{path}: report {item.report_key!r} is excluded as {item.reason!r}, but this checkout {found}; "
-            "an exclusion states what the provenance could not say, and this one says something else"
+            + (
+                "whether a frozen manifest states a revision, and whether what it states is a commit id, are "
+                "read from committed bytes before Git is asked anything, so that answer is the same in every "
+                f"clone and {EXCLUDED_REVISION_UNRESOLVABLE!r} does not stand in for it in either direction"
+                if by_manifest
+                else "an exclusion states what the provenance could not say, and this one says something else"
+            )
         )
 
 

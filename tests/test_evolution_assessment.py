@@ -1307,6 +1307,90 @@ def test_a_reading_formed_where_the_objects_were_missing_stays_readable(
     assert len(read.excluded) == 3
 
 
+def test_a_record_calling_a_malformed_revision_unresolvable_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The tolerance above is for a commit id a clone could not resolve, and this
+    is not one.
+
+    Whether the manifest states a revision, and whether what it states is a
+    commit id, are read off the frozen bytes before Git is asked anything — so
+    `unresolvable` over a cohort stating `HEAD` is not a machine reporting its own
+    limits, it is a record-level defect wearing the one reason no reader checks.
+    Left tolerated, it would relabel every malformed report as a clone's problem
+    and take the strict direction the shape rule exists for back out.
+    """
+
+    second = freeze_second(config, promoted, effective="HEAD")
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_MALFORMED}
+    publish(
+        second,
+        build(
+            frame,
+            metrics=(),
+            excluded=tuple(
+                assessment.Excluded(
+                    report_key=key,
+                    batch_id=SECOND,
+                    reason=assessment.EXCLUDED_REVISION_UNRESOLVABLE,
+                    detail=f"claimed the machine that formed this could not resolve {key}'s revision",
+                )
+                for key in ("a1", "a2", "a3")
+            ),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            rationale="the after cohort is empty",
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    message = str(error.value)
+    assert f"excluded as {assessment.EXCLUDED_REVISION_UNRESOLVABLE!r}" in message
+    assert f"excludes it as {assessment.EXCLUDED_REVISION_MALFORMED!r}" in message
+
+
+def test_a_record_calling_an_unresolvable_revision_absent_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The same rule from the other side. Here the manifest does state a commit
+    id and this checkout is the one that cannot resolve it — so `absent` is
+    disproved by the very bytes that make the derivation `unresolvable`, and the
+    clone-tolerance runs between answers Git was asked for, not around them."""
+
+    second = freeze_second(config, promoted, effective=ABSENT_COMMIT)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert frame.unverified == ("a1", "a2", "a3")
+    publish(
+        second,
+        build(
+            frame,
+            metrics=(),
+            excluded=tuple(
+                assessment.Excluded(
+                    report_key=key,
+                    batch_id=SECOND,
+                    reason=assessment.EXCLUDED_REVISION_ABSENT,
+                    detail=f"claimed {key} states no effective revision",
+                )
+                for key in ("a1", "a2", "a3")
+            ),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            rationale="the after cohort is empty",
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    message = str(error.value)
+    assert f"excluded as {assessment.EXCLUDED_REVISION_ABSENT!r}" in message
+    assert f"excludes it as {assessment.EXCLUDED_REVISION_UNRESOLVABLE!r}" in message
+
+
 def test_a_report_no_manifest_names_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
