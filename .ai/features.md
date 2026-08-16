@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-16
+verified-against: a3dd44d28f8cde2a377563e52c384ec58724a21c
 ---
 
 # Features
@@ -21,7 +21,7 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
 | Evolution lifecycle CLI | implemented | complete standalone `aii-2 evolution` verb set; schema-v7 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
-| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes, phase JSON v7 |
+| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes; public shared refusals align operations with the console gate, and a promotion decision awaiting its batch outcome blocks every other lineage write while its evidence-readable `promote` redo remains available |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
 | Cross-batch release assessment | implemented | derived provenance cohorts/exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |
 | Evolution deployment visibility | implemented | planned target names kept separate from validated machine-local deploy-lock placement states; observation gates no lifecycle verb |
