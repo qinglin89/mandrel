@@ -55,7 +55,7 @@ jobs:
       - name: Deploy the payload into this checkout
         # The hooks the probe observes are deploy-owned and gitignored, so a
         # fresh checkout has none of them until the repository deploys itself.
-        run: python -m ai_native_deployment.cli deploy .
+        run: python -m mandrel.cli deploy .
 
       - name: Probe the hooks
         env:

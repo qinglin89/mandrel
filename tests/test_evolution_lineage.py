@@ -50,8 +50,8 @@ from evolution_fixtures import (
     write_rollback,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import ledger, lineage, manifests, revisions, schema
+from mandrel import evolution
+from mandrel.evolution import ledger, lineage, manifests, revisions, schema
 
 SCHEMAS = REPO_ROOT / "evolution" / "schemas"
 

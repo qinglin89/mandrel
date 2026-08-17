@@ -13,7 +13,7 @@ letting an evaluator, scheduler, or one unusual task rewrite policy directly.
 |---|---|---|
 | Target repositories | Work, task history, project memory | Global protocol policy |
 | orch-hub | Completed evaluation artifacts, global report feed, scheduling | Evolution admission, protocol changes |
-| `ai-native-development` | Import state, batches, analysis/change tasks, canonical protocol, releases | Target-project implementation decisions |
+| `mandrel` | Import state, batches, analysis/change tasks, canonical protocol, releases | Target-project implementation decisions |
 | Human operator | Evolution start; change and rollout admission | Routine evidence normalization |
 
 Candidate eligibility is artifact-based and independent of how evaluation was
@@ -223,7 +223,7 @@ different moments, and each has its own record:
 ```text
 completed archived-task L1+L2 evaluations
   -> orch-hub global completed-report feed
-  -> human `aii-2 evolution start`
+  -> human `mandrel evolution start`
   -> discover, validate, hash, deduplicate, stage
   -> threshold/age admission check
   -> immutable batch manifest
@@ -909,7 +909,7 @@ measures a tree; whether the promotion argued from it should stand is a later
 judgement against a later cohort, and what this records of it is the operator's
 reason (Promotion evidence). Nor does it say anything about deployment: targets
 carry what they were last deployed with, and a reversed promotion reaches them
-the same way the promotion did — through `aii-2 deploy`, read from each target's
+the same way the promotion did — through `mandrel deploy`, read from each target's
 own receipt.
 
 ### Release assessment
@@ -1047,7 +1047,7 @@ checkable from here:
    file the commit tracks, carrying the bytes and the executable bit the commit
    holds for it, and every canonical file the commit holds that a target
    receives present in the payload — and states nothing otherwise
-   (`ai_native_deployment/lockfile.py`; `aii-2 deploy` prints which of the two
+   (`mandrel/lockfile.py`; `mandrel deploy` prints which of the two
    happened). What it compares is the deployment's own record of the bytes it
    copied and the mode it applied: a source read again once the target has been
    written answers for the file as it stands then, so an edit undone in between,
@@ -1075,7 +1075,7 @@ checkable from here:
    the revision would then name a protocol the evaluated work did not run under.
    The answer is only good as of when it was asked, so it is asked on the machine
    holding the target, at boundaries the work is bracketed by rather than at
-   publication time. `aii-2 status <target>` answers it for a target as it
+   publication time. `mandrel status <target>` answers it for a target as it
    stands: what it compares is content *and* mode, because the payload is both
    and condition 1 vouched for both — a hook chmod'd back to non-executable holds
    every byte the receipt hashes and does not run, so content alone would call
@@ -1668,7 +1668,7 @@ carries the tree the replay exercised, which is why a merge producing anything
 else refuses (Promotion).
 
 Deployment stays a separate, explicit step: targets receive it through
-`aii-2 deploy`, and deployed target files are never edited directly. The
+`mandrel deploy`, and deployed target files are never edited directly. The
 promotion revision is a commit on the source line, distinct from the candidate
 tip that was measured, and distinct again from the effective revision each target
 reaches only when it is redeployed — which is why the outcome records the targets

@@ -35,8 +35,8 @@ from evolution_fixtures import (
     write_outcome,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import analysis_task, batches, ledger, manifests, revisions, state
+from mandrel import evolution
+from mandrel.evolution import analysis_task, batches, ledger, manifests, revisions, state
 
 TARGET = 3
 MINIMUM = 2

@@ -52,8 +52,8 @@ from evolution_fixtures import (
     write_outcome,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import assessment, batches, experiments, lineage, replay, rollback
+from mandrel import evolution
+from mandrel.evolution import assessment, batches, experiments, lineage, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"

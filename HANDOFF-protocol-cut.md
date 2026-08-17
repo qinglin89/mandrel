@@ -41,8 +41,8 @@ The cut now has these stable properties:
 ### P4 target wave and cleanup
 
 State recorded 2026-07-18: orch-hub-test was still at `f2ee85d`; hkchain,
-orch-hub, and quantx were older. Run `aii-2 status` rather than assuming this is
-still current. Each lagging target needs one canonical `aii-2 deploy` before the
+orch-hub, and quantx were older. Run `mandrel status` rather than assuming this is
+still current. Each lagging target needs one canonical `mandrel deploy` before the
 next drill or rollout.
 
 After all targets use the post-cut layout:
@@ -133,7 +133,7 @@ validation gates.
   move write-only procedures back into the ambient channel.
 - Preserve archived and mid-flight task compatibility unless a versioned
   migration explicitly changes the data contract.
-- Edit canonical sources only. Targets receive changes through `aii-2 deploy`;
+- Edit canonical sources only. Targets receive changes through `mandrel deploy`;
   never hand-edit deployed protocol copies.
 
 ## Validation and delivery

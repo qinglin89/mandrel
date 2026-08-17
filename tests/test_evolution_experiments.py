@@ -54,8 +54,8 @@ from evolution_fixtures import (
     write_rejected_drafts,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import (
+from mandrel import evolution
+from mandrel.evolution import (
     analysis_task,
     experiments,
     guards,
@@ -2861,7 +2861,7 @@ PROMOTED = datetime(2026, 8, 8, 9, 0, 0, tzinfo=timezone.utc)
 PROMOTED_AT = "2026-08-08T09:00:00Z"
 EXPECTED = "fewer remediation rounds, with quality and elapsed time unchanged"
 WHY = "replay showed fewer remediation rounds with no regression"
-TARGETS = ("orch-hub", "ai-native-development")
+TARGETS = ("orch-hub", "mandrel")
 
 
 @pytest.fixture
@@ -3022,12 +3022,12 @@ def test_the_planned_targets_are_a_plan_and_never_a_deployment(
     the machine running the suite happens to manage.
     """
 
-    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
+    monkeypatch.delenv("MANDREL_REGISTRY", raising=False)
     prepared(config)
     experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     text = render.format_status(phase.describe(config, now=PROMOTED))
-    assert "planned targets: orch-hub, ai-native-development" in text
+    assert "planned targets: orch-hub, mandrel" in text
     assert "the plan this promotion recorded, not what they hold" in text
     # And the reading beside it, which is where what they hold is answered: this
     # machine manages neither of those names, and says so per target rather than

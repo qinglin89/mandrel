@@ -11,7 +11,7 @@ Five layers, each with exactly one owner:
 ```
   canonical/                 layer 0   source of truth (this repo, git)
         │
-        │  aii-2 deploy      layer 1   copy + render + resolve + record
+        │  mandrel deploy      layer 1   copy + render + resolve + record
         ▼
   <target repo>/             layer 2   deployed payload + target-owned memory
         │
@@ -26,7 +26,7 @@ Five layers, each with exactly one owner:
 
 Everything under `canonical/` is authored here and copied verbatim into target
 repos. Nothing is authored in a target repo; a local edit there is drift, and
-`aii-2 status` reports it as such.
+`mandrel status` reports it as such.
 
 | `canonical/` bucket | lands in target as | what it is |
 |---|---|---|
@@ -49,9 +49,9 @@ Two boundary rules are mechanically enforced by `scripts/boundary-lint.sh`:
 
 ---
 
-## Layer 1 — `aii-2 deploy` writes the payload
+## Layer 1 — `mandrel deploy` writes the payload
 
-`./aii-2 deploy <target>` walks `canonical/`, and for each file:
+`./bin/mandrel deploy <target>` walks `canonical/`, and for each file:
 
 1. **Filters** forbidden paths — `.git`, `.venv`, `__pycache__`, `logs/`,
    `.env*` (except `.env.example`), `sessions.json`, `settings.local.json`,
@@ -67,7 +67,7 @@ Two boundary rules are mechanically enforced by `scripts/boundary-lint.sh`:
 
 Then, once per deploy:
 
-- **`.gitignore`** gets a managed block (`# BEGIN/END ai-native-deployment`)
+- **`.gitignore`** gets a managed block (`# BEGIN/END mandrel`)
   that ignores the whole deployed payload, so target repos don't commit it.
 - **`.ai-deploy-manifest.json`** — target-local state: rendered file hashes,
   absolute paths, source commit, timestamp. Gitignored. This is what `status`
@@ -76,13 +76,13 @@ Then, once per deploy:
   commit, no machine paths. Deliberately *not* gitignored, so a target repo can
   commit it and prove which protocol version it is running.
 - **`.registry/repos.local.json`** in *this* repo — a machine-local inventory of
-  deployed targets, so `aii-2 status --all` can sweep them.
+  deployed targets, so `mandrel status --all` can sweep them.
 
-`aii-2 deploy --dry-run` previews add/update/unchanged/blocked without writing.
+`mandrel deploy --dry-run` previews add/update/unchanged/blocked without writing.
 
 ### What `status` reports
 
-`aii-2 status <target>` reads the manifest and reports drift, nonzero exit on
+`mandrel status <target>` reads the manifest and reports drift, nonzero exit on
 any finding:
 
 | kind | meaning |
@@ -233,10 +233,10 @@ single-file — a directory-form `map/index.md` is drift, and status says so.
 ## Common operations
 
 ```bash
-./aii-2 deploy ../target-repo            # deploy or upgrade
-./aii-2 deploy ../target-repo --dry-run  # preview, writes nothing
-./aii-2 status ../target-repo            # drift check, nonzero exit on drift
-./aii-2 status --all                     # sweep every registered target
+./bin/mandrel deploy ../target-repo            # deploy or upgrade
+./bin/mandrel deploy ../target-repo --dry-run  # preview, writes nothing
+./bin/mandrel status ../target-repo            # drift check, nonzero exit on drift
+./bin/mandrel status --all                     # sweep every registered target
 scripts/boundary-lint.sh                 # charter + reference invariants
 python -m pytest tests/ -q               # deploy, hook-consistency, orchestrator
 ```

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/experiment.schema.json",
+  "$id": "https://mandrel.local/evolution/experiment.schema.json",
   "title": "Evolution experiment record",
   "description": "One attempt at the change a batch's analysis called for: its identity, the batch base it starts from, its durable ref, its append-only rounds, the promotion it prepared, and the terminal decision that turns it into history (contract: Change lineage). This record — not `.ai-tasks/`, not a branch, not the checkout — is what makes an experiment discoverable, which is why it names its own task selections and candidate revisions rather than pointing at files that are machine-local or archived away.\n\nVersion 2 added the prepared promotion. A version-1 record is read against the frozen `experiment-v1.schema.json` and cannot carry one at all — including a version-1 promotion, which recorded the revision alone because that was the whole of what the operation writing it kept. That is why the field could not simply be made optional here: a reader with no version to go on cannot tell a promotion that recorded no merge unit from one that dropped it. For the same reason this version *requires* the key and spells \"none prepared\" as an explicit null — a record with no field at all is a version-1 record and nothing else, so the version answers the question rather than the record's completeness.",
   "type": "object",

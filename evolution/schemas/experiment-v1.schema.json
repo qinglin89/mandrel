@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/experiment-v1.schema.json",
+  "$id": "https://mandrel.local/evolution/experiment-v1.schema.json",
   "title": "Evolution experiment record (version 1, frozen)",
   "description": "The experiment shape this repository shipped before a promotion recorded the merge unit it went as. A version-1 record that ended `promoted` states its promotion revision and no merge unit — not because a field is missing, but because the operation that wrote it recorded none — so the merge unit such a promotion went as is read from the batch outcome and held to the run that measured it. This file is never tightened: it exists so those records keep a defined read path. New records are written at the current version, and any operation that rewrites one writes it at that version.",
   "type": "object",

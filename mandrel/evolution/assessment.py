@@ -2113,7 +2113,7 @@ def no_cohort_refusal() -> str:
     return (
         "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
         "cohort's answer about the promotion before it, and what freezes a cohort is "
-        "`aii-2 evolution start` (invariant 14)"
+        "`mandrel evolution start` (invariant 14)"
     )
 
 

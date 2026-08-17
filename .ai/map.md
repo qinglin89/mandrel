@@ -9,9 +9,9 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 
 | Feature | Modules | Interfaces |
 |---|---|---|
-| Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `aii-2 deploy`, manifest, lock |
-| Drift/readiness | deploy, manifest, registry | `aii-2 status [--all]` |
-| Registry | registry, paths, cli | `aii-2 registry ...`, local registry JSON |
+| Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `mandrel deploy`, manifest, lock |
+| Drift/readiness | deploy, manifest, registry | `mandrel status [--all]` |
+| Registry | registry, paths, cli | `mandrel registry ...`, local registry JSON |
 | Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, venv/env |
 | Role launch policy | canonical orchestrator config/resolver | profile flags, `--print-config` |
 | Context delivery | canonical loader, Claude/Cursor/Codex hooks | imports, sessionStart/Stop hooks |
@@ -20,7 +20,7 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | complete standalone `aii-2 evolution` verb set, ignored runtime pool/artifacts, schema-v7 status, state revision and allowed/refused/recovery actions |
+| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts, schema-v7 status, state revision and allowed/refused/recovery actions |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v7 |
 | Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, evolution policy | CLI-visible release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |

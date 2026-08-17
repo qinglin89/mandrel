@@ -20,10 +20,10 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 ## Scope
 
 - Versioned protocol, workflow, loader/hook, and orchestrator payloads.
-- `aii-2` deploy, dry-run, drift status, local registry, orchestrator bootstrap,
+- `mandrel` deploy, dry-run, drift status, local registry, orchestrator bootstrap,
   portable lock receipts, and repository-local workflow skills with
   personal-skill precedence detection.
-- Human-triggered `aii-2 evolution` control of the full lifecycle: report pool,
+- Human-triggered `mandrel evolution` control of the full lifecycle: report pool,
   immutable batches, guarded draft/round/experiment decisions, operator-stated
   exact-integration replay, exact-tree promotion and inverse rollback,
   cross-batch assessment/settlement, and schema-v7 status with stale-state
@@ -54,7 +54,7 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 | Path | Purpose |
 |---|---|
 | `canonical/` | Deploy-owned source payload |
-| `ai_native_deployment/` | Deployment/status/registry Python package |
+| `mandrel/` | Deployment/status/registry Python package |
 | `tests/` | Deployment, hook, closeout-path, and orchestrator-config tests |
 | `scripts/` | Unified regression gate, optional hook installer, boundary checks |
 | `evolution/` | Normative protocol-evolution contract and sanitized audit |

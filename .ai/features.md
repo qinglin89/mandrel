@@ -20,7 +20,7 @@ verified-against: a3dd44d28f8cde2a377563e52c384ec58724a21c
 | Evolution report feed | published; client reconciled; complete protocol identity live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, atomic pair translation in `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch freeze and analysis-task creation | implemented | admission policy, immutable manifests, closure records, generated task/index |
-| Evolution lifecycle CLI | implemented | complete standalone `aii-2 evolution` verb set; schema-v7 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
+| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v7 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes; public shared refusals align operations with the console gate, and a promotion decision awaiting its batch outcome blocks every other lineage write while its evidence-readable `promote` redo remains available |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
 | Cross-batch release assessment | implemented | derived provenance cohorts/exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |

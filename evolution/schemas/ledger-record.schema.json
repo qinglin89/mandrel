@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/ledger-record.schema.json",
+  "$id": "https://mandrel.local/evolution/ledger-record.schema.json",
   "title": "Evolution ledger record",
   "description": "One sanitized audit line. The ledger records that an event happened; it is never the state store, so no reading of the lifecycle depends on a record being here. `record_type` is the vocabulary of events this controller writes, and it is widened by the task that first writes a new one — a name reserved ahead of the operation only promises an event nothing emits.",
   "type": "object",

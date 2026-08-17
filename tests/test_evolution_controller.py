@@ -23,10 +23,10 @@ from evolution_fixtures import (
     write_manifest,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import config as config_module
-from ai_native_deployment.evolution import feed as feed_module
-from ai_native_deployment.evolution import importer, ledger, reports, schema, state
+from mandrel import evolution
+from mandrel.evolution import config as config_module
+from mandrel.evolution import feed as feed_module
+from mandrel.evolution import importer, ledger, reports, schema, state
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -45,7 +45,7 @@ def config(repo: Path) -> evolution.EvolutionConfig:
 
 
 def test_config_loads_the_shipped_policy_and_hashes_the_file(config: evolution.EvolutionConfig, repo: Path) -> None:
-    from ai_native_deployment.hashing import sha256_bytes
+    from mandrel.hashing import sha256_bytes
 
     assert config.batch.target_task_count == 20
     assert config.batch.minimum_task_count == 10

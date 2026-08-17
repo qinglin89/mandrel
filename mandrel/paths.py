@@ -16,8 +16,8 @@ LOCK_FILENAME = ".ai-deploy-lock.json"
 REGISTRY_RELATIVE_PATH = Path(".registry") / "repos.local.json"
 CLAUDE_USER_SKILLS_RELATIVE_PATH = Path(".claude") / "skills"
 
-GITIGNORE_BEGIN = "# BEGIN ai-native-deployment"
-GITIGNORE_END = "# END ai-native-deployment"
+GITIGNORE_BEGIN = "# BEGIN mandrel"
+GITIGNORE_END = "# END mandrel"
 
 
 def target_path_identity(target_relative_path: str) -> str:
@@ -52,7 +52,7 @@ def target_path_identity(target_relative_path: str) -> str:
 def source_root() -> Path:
     """Return the canonical source checkout root."""
 
-    override = os.environ.get("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT")
+    override = os.environ.get("MANDREL_SOURCE_ROOT")
     if override:
         return Path(override).expanduser().resolve()
     return DEFAULT_SOURCE_ROOT.resolve()
@@ -71,7 +71,7 @@ def lock_path(target_root: Path) -> Path:
 
 
 def registry_path(root: Path | None = None) -> Path:
-    override = os.environ.get("AI_NATIVE_DEPLOYMENT_REGISTRY")
+    override = os.environ.get("MANDREL_REGISTRY")
     if override:
         return Path(override).expanduser().resolve()
     return (root or source_root()) / REGISTRY_RELATIVE_PATH
@@ -83,7 +83,7 @@ def claude_user_skills_root() -> Path:
     same-named deployed one. The override exists for tests and for a relocated
     agent home."""
 
-    override = os.environ.get("AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT")
+    override = os.environ.get("MANDREL_CLAUDE_SKILLS_ROOT")
     if override:
         return Path(override).expanduser().resolve()
     return Path.home() / CLAUDE_USER_SKILLS_RELATIVE_PATH

@@ -110,7 +110,7 @@ def no_current_batch() -> str:
 
     return (
         "no batch is current, and every change lineage belongs to one; freeze a cohort with "
-        "`aii-2 evolution start` and let its analysis produce the drafts (invariant 14)"
+        "`mandrel evolution start` and let its analysis produce the drafts (invariant 14)"
     )
 
 
@@ -467,7 +467,7 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
             f"'{expected}' is not a state revision this build computes; the scheme is "
             f"{STATE_REVISION_VERSION}-<digest>, and a token from another one says nothing about whether this "
             "lifecycle moved — so it is refused rather than compared. Take the current one from the `state` line "
-            "of `aii-2 evolution status` in this checkout"
+            "of `mandrel evolution status` in this checkout"
         )
     current = state_revision(read_inputs(config))
     if token == current:
@@ -475,7 +475,7 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
     return (
         f"the evolution records moved since {token} was read: they now stand at {current}. This verb was asked "
         "for the state that token describes, and what it would act on is a different one — read the lifecycle "
-        "again with `aii-2 evolution status` and decide over what is there now"
+        "again with `mandrel evolution status` and decide over what is there now"
     )
 
 

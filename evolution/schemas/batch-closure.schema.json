@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/batch-closure.schema.json",
+  "$id": "https://mandrel.local/evolution/batch-closure.schema.json",
   "title": "Evolution batch closure record",
   "description": "Committed proof that a batch's analysis task completed. Written by the controller from the completed task's own lifecycle status, never by hand, and committed so every clone reads the same answer: `.ai-tasks/` is machine-local, so task absence says nothing about completion. Its presence is what releases the next batch (contract invariant 12); findings.md alone is a draft an unfinished analysis has already written.",
   "type": "object",

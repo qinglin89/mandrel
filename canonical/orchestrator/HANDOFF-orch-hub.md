@@ -1,4 +1,4 @@
-# Handoff: orch-hub (remote-control service "x") + ai-native-deployment
+# Handoff: orch-hub (remote-control service "x") + mandrel
 
 > Created 2026-07-04 from a **design-only** session (no code written). This is a
 > SEPARATE workstream from `HANDOFF.md` (orchestrator state-machine testing —
@@ -18,7 +18,7 @@ reachable from iPhone/iPad, that drives the existing dev↔review orchestrator
 across MULTIPLE repos: list repos/tasks, start/stop runs, stream logs, and —
 the core loop — capture every orchestrator `HUMAN INPUT NEEDED` escalation,
 push-notify the phone, collect the human answer remotely, and feed it back.
-Plus **ai-native-deployment**: a sibling repo that becomes the canonical,
+Plus **mandrel**: a sibling repo that becomes the canonical,
 version-controlled home of the whole protocol suite, deployed per-repo via the
 user's existing local `aii` command (to be extended).
 
@@ -34,7 +34,7 @@ user's existing local `aii` command (to be extended).
 - Network/deploy: Tailscale + bearer token + launchd.
 - Protocol suite (`ai-coding-*.md`, `.cursor/`, `.codex/`, `.claude/`
   hooks/settings, scripts) centrally managed in sibling repo
-  **ai-native-deployment**; per-repo deployment by extending the existing
+  **mandrel**; per-repo deployment by extending the existing
   local `aii` command.
 - IM bot: list menus (repos + status, per-repo pending tasks, active run per
   repo) via inline keyboards are in scope. Notification channel decision:
@@ -151,7 +151,7 @@ The settled contract below supersedes the earlier sketch.
   map inside x; edit-message-in-place navigation; paginate ~8–10 rows. Same
   design works on Telegram cards if the TG adapter is ever enabled.
 
-### ai-native-deployment + aii
+### mandrel + aii
 
 - Motivation: protocol files are gitignored in quantx → currently ZERO
   version history; multi-repo manual `cp` sync already painful (see the other
@@ -207,13 +207,13 @@ The settled contract below supersedes the earlier sketch.
 
 ## Suggested build order (next session may reorder with user)
 
-1. **ai-native-deployment + aii first**: move suite to canonical repo, deploy
+1. **mandrel + aii first**: move suite to canonical repo, deploy
    back to quantx, verify byte-identical + hooks still fire. Rationale: gives
    version history BEFORE further edits, and the orchestrator change then
    lands once in the canonical home instead of being migrated later.
 2. Orchestrator `--control-dir` + `stop.flag` — DONE 2026-07-06 (landed in
    canonical; mock suite extended with scenarios 23–27, all pre-existing
-   scenarios green; redeploy to targets via `aii-2 deploy`).
+   scenarios green; redeploy to targets via `mandrel deploy`).
 3. orch-hub FastAPI core + Bark notifier + single page.
 4. launchd plist + Tailscale (Serve for HTTPS if wanted).
 5. v2: Feishu long-connection bot, remote intake-task, git diff view.
@@ -223,11 +223,11 @@ The settled contract below supersedes the earlier sketch.
 - Where do x's run-dirs live (orch-hub data dir, e.g. `~/orch-hub/var/` vs
   `~/.orch-hub/`)? Not discussed.
 - `aii`: where is it, what does it do today? (Must read before extending.)
-- Confirm orchestrator code in ai-native-deployment scope (assumed yes).
+- Confirm orchestrator code in mandrel scope (assumed yes).
 - Bark server form: bare binary vs docker on the Mac.
 - Task-tracking style for this workstream: orchestrator/agent-infra work has
   historically been handoff-driven OUTSIDE `.ai-tasks/` (all files
-  gitignored). orch-hub + ai-native-deployment are their own repos → their
+  gitignored). orch-hub + mandrel are their own repos → their
   work naturally lives there; keep quantx `.ai-tasks/` out of it unless the
   user says otherwise.
 
@@ -239,7 +239,7 @@ The settled contract below supersedes the earlier sketch.
   protocol must keep working standalone for manual interactive sessions.
 - Terminal output stays status-level; verbosity goes to log files.
 - Never edit the deployed skills under `.claude/skills/**` in place —
-  ai-native-deployment is their canonical home: edit `canonical/claude/skills/`
+  mandrel is their canonical home: edit `canonical/claude/skills/`
   there and redeploy.
 
 ## Reference paths

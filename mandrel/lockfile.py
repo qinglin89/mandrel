@@ -293,7 +293,7 @@ def build_lock(
     ).encode("utf-8")
     return {
         "schema_version": SCHEMA_VERSION,
-        "source_repo": "ai-native-deployment",
+        "source_repo": "mandrel",
         # Derived here and nowhere else, from the deployment's own record of
         # what it copied: a caller-supplied revision would be a second way to
         # fill the field, and the one that skips the check above.

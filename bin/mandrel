@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -eu
+
+# shellcheck disable=SC1007  # `CDPATH=` empties CDPATH for this cd only, so a
+# user's CDPATH cannot make cd print a different directory. Not a typo.
+# The wrapper lives in bin/, so the importable root is its parent.
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PROG_NAME=${0##*/}
+
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
+else
+  export PYTHONPATH="$REPO_ROOT"
+fi
+
+export MANDREL_PROG="${MANDREL_PROG:-$PROG_NAME}"
+exec python -m mandrel.cli "$@"

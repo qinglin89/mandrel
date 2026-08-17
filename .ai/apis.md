@@ -5,7 +5,7 @@ verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
 
 # APIs and Interfaces
 
-## `aii-2` CLI
+## `mandrel` CLI
 
 | Command | Behavior |
 |---|---|

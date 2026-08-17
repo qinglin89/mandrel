@@ -1,4 +1,4 @@
-"""Command-line entry point for ai-native-deployment."""
+"""Command-line entry point for mandrel."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def _add_feed_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=prog or os.environ.get("AI_NATIVE_DEPLOYMENT_PROG") or "aii-2",
+        prog=prog or os.environ.get("MANDREL_PROG") or "mandrel",
         description="Deploy and check AI-native protocol payloads.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -549,7 +549,7 @@ def _evolution(args: argparse.Namespace) -> int:
     call one domain function, print what it returned.
 
     No policy lives here. Which reports are eligible, whether a batch may form,
-    and what closes one are all decided in `ai_native_deployment.evolution`,
+    and what closes one are all decided in `mandrel.evolution`,
     where the contract's invariants are stated next to the code enforcing them.
 
     Exit status is 0 for every completed run, including a `start` that formed no

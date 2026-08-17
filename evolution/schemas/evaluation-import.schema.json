@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/evaluation-import.schema.json",
+  "$id": "https://mandrel.local/evolution/evaluation-import.schema.json",
   "title": "Imported evolution evaluation report",
   "type": "object",
   "required": [

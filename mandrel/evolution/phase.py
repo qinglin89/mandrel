@@ -290,7 +290,7 @@ class LifecycleRevisions:
     know about a batch that has not concluded. The promotion revision belongs to
     a batch that has (`LifecycleStatus.last_promotion`), and the deployed
     effective revision is per target — it lives in each target's
-    `.ai-deploy-lock.json`, which `aii-2 status` reads, and lags promotion until
+    `.ai-deploy-lock.json`, which `mandrel status` reads, and lags promotion until
     that target is redeployed.
     """
 
@@ -335,7 +335,7 @@ class Promotion:
     `planned_targets` is what the promotion was recorded as intending to
     redeploy, and it is never what any target holds. That is per target, lags
     every promotion until the target is redeployed, and is read from that
-    target's own `.ai-deploy-lock.json` — `aii-2 status`, not this.
+    target's own `.ai-deploy-lock.json` — `mandrel status`, not this.
     """
 
     batch_id: str

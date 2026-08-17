@@ -15,7 +15,7 @@ Load only what the current task needs.
 | Architecture | architecture.md | ownership layers, deployment/session flows, evolution boundary |
 | Design | design.md | invariants, tradeoffs, patterns, anti-patterns |
 | Modules | modules.md | implementation and canonical payload ownership |
-| APIs | apis.md | `aii-2`, orchestrator, files, and integration contracts |
+| APIs | apis.md | `mandrel`, orchestrator, files, and integration contracts |
 | Features | features.md | capability status and cross-module behavior |
 | Conventions | conventions.md | code/docs style, tests, git and deployment workflow |
 | Map | map.md | feature-to-module-to-interface cross-reference |

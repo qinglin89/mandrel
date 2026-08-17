@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/batch-outcome.schema.json",
+  "$id": "https://mandrel.local/evolution/batch-outcome.schema.json",
   "title": "Evolution batch outcome",
   "description": "The terminal record of one batch. Its presence is what ends the batch and releases the next cohort (contract invariant 14), which is why it is committed: `.ai-evolution/` is machine-local, so a batch whose conclusion lived only in runtime state would read as current on every other clone forever.",
   "type": "object",

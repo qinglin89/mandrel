@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/rejected-drafts.schema.json",
+  "$id": "https://mandrel.local/evolution/rejected-drafts.schema.json",
   "title": "Evolution drafts declined at the admission gate",
   "description": "The drafts a human declined rather than admitted, for one batch. Committed, because whether a draft is still waiting at the gate is derived from what took it or turned it down — not from the directory still holding the file, and not from the ledger, which records that events happened and is never read back as state. Without this record a declined proposal waits at the gate forever.",
   "type": "object",

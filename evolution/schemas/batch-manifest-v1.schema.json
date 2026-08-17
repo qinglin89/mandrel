@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/batch-manifest-v1.schema.json",
+  "$id": "https://mandrel.local/evolution/batch-manifest-v1.schema.json",
   "title": "Evolution batch manifest (version 1, frozen)",
   "description": "The manifest shape this repository shipped before per-report cohort provenance existed. A frozen batch is immutable (contract invariant 3), so the schema it was written against is frozen with it: this file is never tightened, and exists so a version-1 manifest keeps a defined read path. New batches are written at the current version.",
   "type": "object",

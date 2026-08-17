@@ -73,8 +73,8 @@ from evolution_fixtures import (
     write_rejected_drafts,
 )
 
-from ai_native_deployment import cli, evolution
-from ai_native_deployment.evolution import (
+from mandrel import cli, evolution
+from mandrel.evolution import (
     analysis_task,
     assessment,
     batches,
@@ -1591,7 +1591,7 @@ def test_the_whole_change_lineage_is_reachable_from_the_command_line(
     lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The acceptance for this half of the console: one batch driven from its
-    admission gate to its outcome with `aii-2` and nothing else — a grouped
+    admission gate to its outcome with `mandrel` and nothing else — a grouped
     admission, a round filled, sealed and revised, a draft declined, the attempt
     abandoned, and the batch concluded having changed nothing."""
 
@@ -1966,7 +1966,7 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The acceptance for this half: the measured candidate goes onto the source
-    line and comes back off it with `aii-2` and nothing else. The rollback leaves
+    line and comes back off it with `mandrel` and nothing else. The rollback leaves
     the promotion exactly what it was — a new commit takes the change back out,
     and nothing about the experiment or the batch outcome is edited."""
 
@@ -2012,10 +2012,10 @@ def test_the_console_reads_what_a_planned_target_holds_beside_the_plan(
 ) -> None:
     """The acceptance this slice is for: a promotion plans targets and deploys
     nothing, so the console reads each one's own receipt and prints the two
-    lists apart. The whole cycle behind it runs through `aii-2` and nothing
+    lists apart. The whole cycle behind it runs through `mandrel` and nothing
     else."""
 
-    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
+    monkeypatch.delenv("MANDREL_REGISTRY", raising=False)
     config = evolution.load_config(lineage_repo)
     measured(config, feed_root, capsys)
     where = ["--repo", str(lineage_repo)]
@@ -2573,7 +2573,7 @@ def test_a_replay_is_started_and_concluded_from_the_command_line(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The acceptance for this slice, on the replay half: a sealed round measured
-    with `aii-2` and nothing else.
+    with `mandrel` and nothing else.
 
     Two commands rather than one, and the domain was already built that way. The
     integration a harness has to exercise is computed as the request is written,

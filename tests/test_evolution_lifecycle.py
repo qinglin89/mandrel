@@ -35,8 +35,8 @@ from evolution_fixtures import (
     write_feed,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import analysis_task, batches, experiments, lineage, phase, render
+from mandrel import evolution
+from mandrel.evolution import analysis_task, batches, experiments, lineage, phase, render
 
 TARGET = 3
 MINIMUM = 2

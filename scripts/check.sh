@@ -172,7 +172,7 @@ check_package_build() {
   if "$PYTHON" -m build --wheel --no-isolation --outdir "$tmp/dist" . \
     && "$PYTHON" -m venv "$tmp/venv" \
     && "$tmp/venv/bin/python" -m pip install --quiet --no-index --no-deps "$tmp"/dist/*.whl \
-    && "$tmp/venv/bin/aii-2" --help >/dev/null; then
+    && "$tmp/venv/bin/mandrel" --help >/dev/null; then
     rc=0
   else
     rc=1

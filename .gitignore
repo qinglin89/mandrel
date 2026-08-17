@@ -17,7 +17,7 @@ build/
 # evolution/ instead.
 /.ai-evolution/
 
-# BEGIN ai-native-deployment
+# BEGIN mandrel
 /.ai-deploy-manifest.json
 /.ai-protocol/
 /.cursor/
@@ -29,4 +29,4 @@ build/
 __pycache__/
 *.py[cod]
 !/.ai-deploy-lock.json
-# END ai-native-deployment
+# END mandrel

@@ -24,7 +24,7 @@ orchestrator. orch-hub must query the orchestrator and must not parse
 
 ## Implemented orchestrator contract
 
-The implementation is in ai-native-deployment's
+The implementation is in mandrel's
 `canonical/orchestrator/` payload and reaches targets through the normal
 deployment command.
 

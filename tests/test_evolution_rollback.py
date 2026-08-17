@@ -47,8 +47,8 @@ from evolution_fixtures import (
     write_rollback,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import experiments, lineage, phase, render, revisions, rollback
+from mandrel import evolution
+from mandrel.evolution import experiments, lineage, phase, render, revisions, rollback
 
 BATCH_ID = "evolution-batch-0001"
 SECOND_BATCH = "evolution-batch-0002"

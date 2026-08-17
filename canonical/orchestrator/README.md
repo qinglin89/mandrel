@@ -44,7 +44,7 @@ is pluggable:
 ```bash
 cd /absolute/path/to/target-repo
 # one-time runtime setup can be done by deployment:
-#   aii-2 deploy --bootstrap-orchestrator /absolute/path/to/target-repo
+#   mandrel deploy --bootstrap-orchestrator /absolute/path/to/target-repo
 # or manually: python3.14 -m venv .cursor/orchestrator/.venv && .cursor/orchestrator/.venv/bin/python -m pip install -r .cursor/orchestrator/requirements.txt
 # edit .cursor/orchestrator/.env only for overrides (and CURSOR_API_KEY when using Cursor)
 .cursor/orchestrator/.venv/bin/python .cursor/orchestrator/orchestrator.py <task-id> [flags]

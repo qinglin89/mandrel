@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/batch-rollback.schema.json",
+  "$id": "https://mandrel.local/evolution/batch-rollback.schema.json",
   "title": "Evolution promotion rollback",
   "description": "The record that takes a promotion back off the source line. It sits beside the `outcome.json` it reverses and never edits it: the promotion happened, and a batch that promoted stays a batch that promoted (contract: Rollback). What this record adds is the inverse commit and the moment the line took it, so every clone reads the same answer to whether that promotion is still effective — a question Git alone answers only where the objects are held.\n\nWritten in two moments, which is what makes an interrupted rollback finishable. The inverse commit is made first and recorded here with `reverted_at` null, because everything after that point is recoverable only by a run that can say which commit was this operation's; then the source line moves; then `reverted_at` is written. A record with a null `reverted_at` is therefore an inverse that may or may not be on the line, and the next run asks Git which — never a rollback that did not happen.",
   "type": "object",

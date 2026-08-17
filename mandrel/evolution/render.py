@@ -310,7 +310,7 @@ def format_promotion(result: PromotionResult, repo_root: Path) -> str:
         _field("record", _relative(result.record_path, repo_root)),
     ]
     planned = ", ".join(result.planned_targets) if result.planned_targets else "none named"
-    lines.append(_field("planned", f"{planned} — this deployed nothing; `aii-2 deploy` is what reaches a target"))
+    lines.append(_field("planned", f"{planned} — this deployed nothing; `mandrel deploy` is what reaches a target"))
     if not result.merged and not result.recorded:
         lines.append(_field("", "this run wrote nothing: the promotion above is the one on record"))
     elif not result.merged:
@@ -984,7 +984,7 @@ def _promotion_lines(promotion: Promotion | None) -> list[str]:
     The targets are labelled `planned` on their own line rather than listed
     beside the revision, because the one thing this must not read as is a report
     of what those repositories hold. A promoted revision reaches a target when
-    that target is redeployed and not before, and `aii-2 status <target>` is
+    that target is redeployed and not before, and `mandrel status <target>` is
     what answers for it.
     """
 
@@ -1080,7 +1080,7 @@ def _target_line(holding: TargetHolding, *, reversed_promotion: bool) -> str:
     if holding.state == HOLDING_REVERSED:
         return f"{named} — carries the inverse commit as well, so the change is off that target too"
     if holding.state == HOLDING_BEHIND:
-        return f"{named} — does not carry this promotion; `aii-2 deploy` is what carries it there"
+        return f"{named} — does not carry this promotion; `mandrel deploy` is what carries it there"
     if holding.state == HOLDING_UNREGISTERED:
         return f"{named} — {holding.detail}, so this machine cannot say"
     if holding.state == HOLDING_UNREADABLE:

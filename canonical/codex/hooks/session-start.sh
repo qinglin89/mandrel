@@ -109,7 +109,7 @@ add_eager_entrypoint() {
 
 # Every eager content doc the memory protocol allows to be upgraded to
 # directory form. Kept in lockstep with CLAUDE_MD_MEMORY_IMPORT_TOPICS in
-# ai_native_deployment/deploy.py (tests/test_hook_eager_set.py).
+# mandrel/deploy.py (tests/test_hook_eager_set.py).
 add_eager_entrypoint "Overview" ".ai/overview.md" ".ai/overview/index.md"
 add_eager_entrypoint "Architecture" ".ai/architecture.md" ".ai/architecture/index.md"
 add_eager_entrypoint "Design" ".ai/design.md" ".ai/design/index.md"

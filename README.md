@@ -1,4 +1,4 @@
-# ai-native-deployment
+# mandrel
 
 This repository is the canonical, version-controlled home for the AI-native
 coding protocol suite and deployment tooling.
@@ -22,7 +22,7 @@ surfaces → what actually ends up in the context window — see
 - `canonical/claude/` deploys to target `.claude/`, including the workflow
   skills under `canonical/claude/skills/`.
 - `canonical/orchestrator/` deploys to target `.cursor/orchestrator/`.
-- `ai_native_deployment/` contains deploy, manifest, registry, status, and CLI code.
+- `mandrel/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
 
 The orchestrator is a canonical deployment payload in this repository.
@@ -34,20 +34,20 @@ deployed to target repositories; deployed copies should not be hand-edited.
 Run from this repository:
 
 ```bash
-python -m ai_native_deployment.cli deploy ../some-target-repo
+python -m mandrel.cli deploy ../some-target-repo
 ```
 
 The repo-local wrapper is shorter and does not require installation:
 
 ```bash
-./aii-2 deploy ../some-target-repo
+./bin/mandrel deploy ../some-target-repo
 ```
 
 To make the deployed orchestrator runtime-ready in the target repo, bootstrap
 its local virtualenv during deploy:
 
 ```bash
-./aii-2 deploy --bootstrap-orchestrator ../some-target-repo
+./bin/mandrel deploy --bootstrap-orchestrator ../some-target-repo
 ```
 
 This creates or updates `.cursor/orchestrator/.venv` with `python3.14 -m venv`,
@@ -61,7 +61,7 @@ log in to `claude` and `codex` for the default `cc-codex` backend, or set
 If installed in editable mode, the same command is exposed as:
 
 ```bash
-aii-2 deploy ../some-target-repo
+mandrel deploy ../some-target-repo
 ```
 
 Deployment writes:
@@ -83,7 +83,7 @@ renders that placeholder to the absolute target repo path.
 Preview a deploy without writing the target repo:
 
 ```bash
-./aii-2 deploy --dry-run ../some-target-repo
+./bin/mandrel deploy --dry-run ../some-target-repo
 ```
 
 Dry-run reports which managed files would be added, updated, left unchanged, or
@@ -95,14 +95,14 @@ lockfiles, `.gitignore`, registry entries, or orchestrator bootstrap files.
 Check one repo:
 
 ```bash
-python -m ai_native_deployment.cli status ../some-target-repo
-./aii-2 status ../some-target-repo
+python -m mandrel.cli status ../some-target-repo
+./bin/mandrel status ../some-target-repo
 ```
 
 Check every locally registered repo:
 
 ```bash
-python -m ai_native_deployment.cli status --all
+python -m mandrel.cli status --all
 ```
 
 Status reads the target `.ai-deploy-manifest.json` and reports:
@@ -156,7 +156,7 @@ no content comparison can see it.
   the deployed contract.
 
 The check reads the personal skills root and writes nothing. It looks under
-`~/.claude/skills`; set `AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT` if the agent
+`~/.claude/skills`; set `MANDREL_CLAUDE_SKILLS_ROOT` if the agent
 home is relocated. See [One-time operator cleanup](#one-time-operator-cleanup).
 
 The manifest is target-local state: it includes rendered file hashes and local
@@ -169,10 +169,10 @@ machine paths, so target repos may commit it for auditability.
 The registry is local machine inventory, not GitHub truth:
 
 ```bash
-python -m ai_native_deployment.cli registry list --json
-./aii-2 registry list --json
-python -m ai_native_deployment.cli registry add ../some-target-repo
-python -m ai_native_deployment.cli registry remove some-target-repo
+python -m mandrel.cli registry list --json
+./bin/mandrel registry list --json
+python -m mandrel.cli registry add ../some-target-repo
+python -m mandrel.cli registry remove some-target-repo
 ```
 
 `registry add` requires the target repo to already have a readable
@@ -223,7 +223,7 @@ before that date keep both copies — see the cleanup below.
 ### One-time operator cleanup
 
 These skills used to be installed machine-globally under `~/.claude/skills/` by
-an `aii-2 skills sync-claude-global` command that no longer exists. **Remove the
+an `mandrel skills sync-claude-global` command that no longer exists. **Remove the
 leftover global copies**, because personal-level skills override project-level
 ones ([skill precedence](https://code.claude.com/docs/en/skills)): a stale
 global copy silently wins over the deployed one, and no content hash can see
@@ -236,8 +236,8 @@ neither — and the stop hooks on all three backends point at `ai-sync-v2` for
 task closeout. Order matters:
 
 ```bash
-./aii-2 status --all                      # find targets reporting canonical changed
-./aii-2 deploy <each-target>              # project-level copies land first
+./bin/mandrel status --all                      # find targets reporting canonical changed
+./bin/mandrel deploy <each-target>              # project-level copies land first
 
 ls ~/.claude/skills                       # review before deleting
 rm -rf ~/.claude/skills/{ai-housekeeping,ai-init,ai-load,ai-sync,ai-sync-v2}
@@ -266,7 +266,7 @@ so a target that has not had this cleanup done says so instead of reporting
 ## Evolution
 
 `evolution/README.md` is the normative contract for changing the canonical
-protocol suite from evidence. `aii-2 evolution` is the mechanical half of it:
+protocol suite from evidence. `mandrel evolution` is the mechanical half of it:
 it discovers already-complete evaluation reports, stages them, freezes an
 immutable cohort when the admission policy allows, and prepares that cohort's
 pending analysis task. It runs against this repository, not a target.
@@ -276,10 +276,10 @@ policy: batch formation, change admission, and canary promotion stay human
 gates.
 
 ```bash
-./aii-2 evolution status                 # lifecycle phase; writes nothing
-./aii-2 evolution list  --feed-dir ...   # inspect candidates; writes nothing
-./aii-2 evolution sync  --feed-dir ...   # import eligible reports into the pool
-./aii-2 evolution start --feed-dir ...   # sync, then freeze a batch if policy allows
+./bin/mandrel evolution status                 # lifecycle phase; writes nothing
+./bin/mandrel evolution list  --feed-dir ...   # inspect candidates; writes nothing
+./bin/mandrel evolution sync  --feed-dir ...   # import eligible reports into the pool
+./bin/mandrel evolution start --feed-dir ...   # sync, then freeze a batch if policy allows
 ```
 
 Those four are the import half. What a frozen cohort then becomes — experiments,
@@ -297,7 +297,7 @@ corrupt local state, lock contention, or an unusable feed.
 `supersede-pending`, `conclusion-pending` — and then the facts behind it:
 
 ```text
-$ ./aii-2 evolution status
+$ ./bin/mandrel evolution status
 evolution: pool 4/20
   pool         4 unique completed task(s); target 20, minimum 10
                oldest pending report imported 5 day(s) ago, max wait 30
@@ -323,7 +323,7 @@ reads the batch's committed closure record instead.
 
 ### The lifecycle console
 
-Every operation the contract defines has exactly one `aii-2 evolution` verb, so
+Every operation the contract defines has exactly one `mandrel evolution` verb, so
 this CLI is sufficient on its own: a Web surface is an optional visualization and
 interaction adapter over the same JSON and the same verbs, never a second
 implementation of the lifecycle. `status` names each verb it allows and gives
@@ -380,35 +380,35 @@ rollback, adopts an inverse already on the line, and finishes one left prepared.
 #### One cycle, end to end
 
 ```bash
-./aii-2 evolution start                      # freeze a cohort when policy allows
+./bin/mandrel evolution start                      # freeze a cohort when policy allows
 # work the generated analysis task; commit its findings and closure record
-./aii-2 evolution create loader-fallback hook-side-loader --reason "one change"
+./bin/mandrel evolution create loader-fallback hook-side-loader --reason "one change"
 # work the admitted change tasks; commit the work on the experiment's ref
-./aii-2 evolution seal-round                 # pins the round's candidate revision
-./aii-2 evolution replay-start --source-ref refs/heads/main \
+./bin/mandrel evolution seal-round                 # pins the round's candidate revision
+./bin/mandrel evolution replay-start --source-ref refs/heads/main \
     --expectation "fewer remediation rounds, quality unchanged"
 # ...run that evaluation yourself, then state what is running:
-./aii-2 evolution replay-start --source-ref refs/heads/main \
+./bin/mandrel evolution replay-start --source-ref refs/heads/main \
     --expectation "fewer remediation rounds, quality unchanged" \
     --case-set loader-regressions <sha256> 12 \
     --evaluator claude claude-opus-5 --harness local-replay 0.1.0 <sha256> \
     --handle run-7
-./aii-2 evolution replay-conclude --outcome completed --detail "12 of 12 judged" \
+./bin/mandrel evolution replay-conclude --outcome completed --detail "12 of 12 judged" \
     --metric "remediation rounds" rounds 2.0 1.0 lower --handle run-7
-./aii-2 evolution promote --reason "the replay justifies it" --target orch-hub
-./aii-2 deploy ../orch-hub                   # promotion is not deployment
+./bin/mandrel evolution promote --reason "the replay justifies it" --target orch-hub
+./bin/mandrel deploy ../orch-hub                   # promotion is not deployment
 ```
 
 The cohort frozen after that promotion owes a reading of it, and no later base is
 frozen until the reading is settled (invariant 17):
 
 ```bash
-./aii-2 evolution start
-./aii-2 evolution assess --verdict improved --confidence medium \
+./bin/mandrel evolution start
+./bin/mandrel evolution assess --verdict improved --confidence medium \
     --rationale "..." --metric "remediation rounds" rounds 2.1 1.4 lower
-./aii-2 evolution assess-measure --expectation "..."   # the pinned counterfactual
+./bin/mandrel evolution assess-measure --expectation "..."   # the pinned counterfactual
 # ...run it, state it, `assess-conclude` it, then `assess-resolve` the reading
-./aii-2 evolution settle --settlement retain --reason "the reading holds"
+./bin/mandrel evolution settle --settlement retain --reason "the reading holds"
 ```
 
 Either path can end differently and both endings are verbs: `conclude-no-change`
@@ -462,7 +462,7 @@ target holds.
                planned targets: orch-hub, quantx — the plan this promotion recorded, not what they hold
   deployed     what each planned target holds now, from its own .ai-deploy-lock.json:
                orch-hub at 6f1c0a5b2e33 — carries this promotion
-               quantx at 9d2e8c17b40a — does not carry this promotion; `aii-2 deploy` is what carries it there
+               quantx at 9d2e8c17b40a — does not carry this promotion; `mandrel deploy` is what carries it there
 ```
 
 | State | What it means, and what it asks for |
@@ -542,7 +542,7 @@ records name, and `HEAD` (which is the base a first admission would freeze). Pas
 it back on any mutation:
 
 ```bash
-./aii-2 evolution seal-round --expect 1-ac1087623f3fa990
+./bin/mandrel evolution seal-round --expect 1-ac1087623f3fa990
 ```
 
 The operation re-derives it first thing under the single-writer lock and refuses
@@ -586,7 +586,7 @@ silently import nothing. The offline path is a local report bundle:
 a fixed one afterwards.
 
 The wire contract, as orch-hub publishes it and the client was reconciled
-against on 2026-08-12 (details in `ai_native_deployment/evolution/hub.py`):
+against on 2026-08-12 (details in `mandrel/evolution/hub.py`):
 
 ```text
 GET <ORCH_HUB_URL><report_feed_path>?limit=<n>[&after=<watermark>]

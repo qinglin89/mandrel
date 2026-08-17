@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/experiment-replays.schema.json",
+  "$id": "https://mandrel.local/evolution/experiment-replays.schema.json",
   "title": "Evolution experiment replay evidence",
   "description": "Every replay run against one experiment's rounds, in the order they were started (contract: Promotion evidence, invariant 10). One file per experiment rather than one per run: a replay is only ever about the round it names, attempts are allocated from what this file already holds, and the evidence is then read beside the record that pins the tree it describes. A replay names both halves of what it exercised — the round's pinned candidate revision, which the seal fixed before the run started (invariant 16), and the source-line commit that candidate was integrated onto, whose drift the pinned candidate alone cannot show. Whether this evidence still describes what a promotion would carry is derived from those pins against the experiment record and Git; nothing here stores that judgement.",
   "type": "object",

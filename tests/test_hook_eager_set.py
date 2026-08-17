@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ai_native_deployment import deploy
+from mandrel import deploy
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOKS = (

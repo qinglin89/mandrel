@@ -59,8 +59,8 @@ from evolution_fixtures import (
     write_rollback,
 )
 
-from ai_native_deployment import evolution
-from ai_native_deployment.evolution import assessment, experiments, phase, render, replay, rollback
+from mandrel import evolution
+from mandrel.evolution import assessment, experiments, phase, render, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -1501,7 +1501,7 @@ def managed(
     own targets read for these assertions.
     """
 
-    monkeypatch.delenv("AI_NATIVE_DEPLOYMENT_REGISTRY", raising=False)
+    monkeypatch.delenv("MANDREL_REGISTRY", raising=False)
     targets = tmp_path / "targets"
 
     def register(name: str, *, revision: str | None = None, receipt: bool = True, path: Path | None = None) -> Path:

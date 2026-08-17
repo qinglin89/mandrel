@@ -15,11 +15,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ai_native_deployment.evolution import analysis_task
-from ai_native_deployment.evolution import assessment
-from ai_native_deployment.evolution import experiments
-from ai_native_deployment.evolution import feed as feed_module
-from ai_native_deployment.evolution import replay
+from mandrel.evolution import analysis_task
+from mandrel.evolution import assessment
+from mandrel.evolution import experiments
+from mandrel.evolution import feed as feed_module
+from mandrel.evolution import replay
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

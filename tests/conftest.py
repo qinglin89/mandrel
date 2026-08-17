@@ -15,5 +15,5 @@ def isolate_user_skills_root(monkeypatch, tmp_path: Path) -> Path:
     is the "nothing shadows anything" case; tests that exercise shadowing
     create it or pass `user_skills_root=` explicitly."""
     root = tmp_path / "user-skills"
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT", str(root))
+    monkeypatch.setenv("MANDREL_CLAUDE_SKILLS_ROOT", str(root))
     return root

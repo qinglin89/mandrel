@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Credentialed live probe: does the published orch-hub feed still answer the
-contract `ai_native_deployment/evolution/hub.py` was reconciled against?
+contract `mandrel/evolution/hub.py` was reconciled against?
 
 NOT part of `scripts/check.sh`, and deliberately so (conventions: credentialed
 and network-dependent probes stay off the required gate). It needs a reachable
@@ -15,7 +15,7 @@ reach. Run it by hand after a client or feed change:
 **Read-only.** It builds the shipped client, reads one page, and verifies one
 report's artifact bytes. It writes no cursor, no pool, no ledger, and no
 artifact — so it is safe to run repeatedly and against an unfamiliar feed, and
-it is not a substitute for `aii-2 evolution sync`, which is what actually
+it is not a substitute for `mandrel evolution sync`, which is what actually
 imports.
 
 What it proves that no unit test can: that the *live* service still serves the
@@ -52,8 +52,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ai_native_deployment import evolution  # noqa: E402
-from ai_native_deployment.evolution import hub, reports  # noqa: E402
+from mandrel import evolution  # noqa: E402
+from mandrel.evolution import hub, reports  # noqa: E402
 
 PAGE_LIMIT = 5
 

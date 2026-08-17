@@ -72,7 +72,7 @@ class ReleaseAssessment:
 
     `standing` is left out for the same reason twice over: a rollback landing
     between the freeze and the reading changes it, and the answer is the
-    lineage's to give (`aii-2 evolution status`).
+    lineage's to give (`mandrel evolution status`).
     """
 
     batch_id: str
@@ -483,7 +483,7 @@ justified is a valid outcome (invariant 7).
   expected benefit, and regression risk.
 - Write the disposition record to `{spec.findings_relative_path}`. It does not
   end the analysis by existing: this stage stays open until this task reaches
-  `completed`, at which point the next `aii-2 evolution` run publishes
+  `completed`, at which point the next `mandrel evolution` run publishes
   `{spec.closure_relative_path}` from that status. Never write that record by
   hand; it attests to a lifecycle, not to a file. Completing this task releases
   the dispositions to the admission gate; the batch itself stays current — and
@@ -559,7 +559,7 @@ other.
   above. Read both from that batch's `outcome.json`, never from the experiment's
   own promotion record — a promotion made at experiment schema version 1 states
   its revision alone.
-- Ask `aii-2 evolution status` whether the source line still carries it. A
+- Ask `mandrel evolution status` whether the source line still carries it. A
   promotion a rollback reversed is a different question from a standing one — the
   cohort after the reversal was produced at a revision the change is not in — and
   the assessment states which of the two it answered.

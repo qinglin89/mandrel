@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-native-development.local/evolution/batch-manifest.schema.json",
+  "$id": "https://mandrel.local/evolution/batch-manifest.schema.json",
   "title": "Evolution batch manifest (version 2)",
   "description": "The shape a freeze writes today. Version 2 adds the per-report cohort provenance invariants 4 and 5 need; version 1 manifests keep their own frozen schema (batch-manifest-v1.schema.json) and stay readable, because a frozen manifest is immutable and cannot be migrated.",
   "type": "object",

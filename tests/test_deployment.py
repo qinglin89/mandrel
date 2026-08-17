@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_native_deployment import cli, deploy, hashing, lockfile, manifest, paths
+from mandrel import cli, deploy, hashing, lockfile, manifest, paths
 
 
 def write(path: Path, content: str = "content\n") -> Path:
@@ -216,7 +216,7 @@ def test_manifest_creation(tmp_path: Path) -> None:
 
     lock = lockfile.read_lock(target)
     lock_text = (target / ".ai-deploy-lock.json").read_text(encoding="utf-8")
-    assert lock["source_repo"] == "ai-native-deployment"
+    assert lock["source_repo"] == "mandrel"
     assert "target_repo_path" not in lock
     assert str(target.resolve()) not in lock_text
     assert ".codex/config.toml" in {item["target_relative_path"] for item in lock["deployed_files"]}
@@ -635,8 +635,8 @@ def test_deploy_cli_reports_a_payload_it_cannot_resolve(
     source = colliding_source(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_REGISTRY", str(tmp_path / "registry.json"))
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(tmp_path / "registry.json"))
 
     assert cli.main(["deploy", str(target)]) == 2
 
@@ -764,7 +764,7 @@ def test_work_outside_the_canonical_tree_leaves_the_revision_stated(tmp_path: Pa
     source = make_source(tmp_path)
     head = commit_source(source)
     write(source / "notes.md", "a scratch note, uncommitted\n")
-    write(source / "ai_native_deployment" / "deploy.py", "# edited tooling, uncommitted\n")
+    write(source / "mandrel" / "deploy.py", "# edited tooling, uncommitted\n")
 
     target = deploy_from(source, tmp_path)
 
@@ -784,8 +784,8 @@ def test_deploy_reports_whether_the_payload_has_a_revision(
     head = commit_source(source)
     target = tmp_path / "target"
     target.mkdir()
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_REGISTRY", str(tmp_path / "registry.json"))
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(tmp_path / "registry.json"))
 
     assert cli.main(["deploy", str(target)]) == 0
     assert f"source revision: {head}" in capsys.readouterr().out
@@ -852,7 +852,7 @@ def test_status_sees_a_deployed_file_stripped_of_its_executable_bit(tmp_path: Pa
     """A deployed file is bytes and a mode. A hook chmod'd back to 0644 holds
     every byte the receipt hashes and does not run, so a check that reads only
     content calls it in sync while the target no longer runs the payload the
-    receipt describes — the state `aii-2 status` is asked about when a release
+    receipt describes — the state `mandrel status` is asked about when a release
     assessment asks whether a target still matches its receipt."""
 
     source, target, _deployed = deploy_to_tmp(tmp_path)
@@ -1247,8 +1247,8 @@ def test_status_cli_exits_nonzero_for_shadowed_skill(tmp_path: Path, monkeypatch
     source, target, _deployed = deploy_to_tmp(tmp_path)
     user_skills = tmp_path / "home-skills"
     personal_skill(user_skills, "demo-skill")
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_SOURCE_ROOT", str(source))
-    monkeypatch.setenv("AI_NATIVE_DEPLOYMENT_CLAUDE_SKILLS_ROOT", str(user_skills))
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_CLAUDE_SKILLS_ROOT", str(user_skills))
 
     exit_code = cli.main(["status", str(target)])
 

@@ -8,8 +8,8 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 ## System Diagram
 
 ```text
-ai-native-development/canonical (source of truth)
-        │ aii-2 deploy/render/resolve/record
+mandrel/canonical (source of truth)
+        │ mandrel deploy/render/resolve/record
         ▼
 target repo deployed payload + target-owned .ai/.ai-tasks
         │ Claude imports / Cursor+Codex hooks / orchestrator injection
@@ -30,7 +30,7 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 | Layer | Owner | State |
 |---|---|---|
 | Canonical contracts/runtime | This Git repository | `canonical/` |
-| Deploy operation | `ai_native_deployment` | copy/render/resolve/record |
+| Deploy operation | `mandrel` | copy/render/resolve/record |
 | Deployed payload | Deployment tool | target `.ai-protocol`, agent dirs, loader, orchestrator |
 | Project memory/tasks | Target repository | target `.ai/`, `.ai-tasks/` |
 | Local inventory/runtime | Machine operator | registry, manifests, venvs, secrets, `.ai-evolution/` |
@@ -71,7 +71,7 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 
 ## Evolution Flow
 
-`aii-2 evolution` is the authoritative standalone human-triggered controller;
+`mandrel evolution` is the authoritative standalone human-triggered controller;
 an optional Web surface consumes its JSON/actions rather than implementing a
 second lifecycle.
 It consumes a protected orch-hub feed or deterministic local bundles, validates

@@ -40,7 +40,7 @@ done
 
 # --- 2. dead doc names -------------------------------------------------------
 dead=$(grep -rnI --exclude-dir=__pycache__ --exclude=boundary-lint.sh 'ai-coding-' \
-         canonical ai_native_deployment tests scripts 2>/dev/null \
+         canonical mandrel tests scripts 2>/dev/null \
        | grep -v 'HANDOFF-orch-hub.md' \
        | grep -v 'legacy' \
        | grep -v 'ai-coding\*\.md' || true)
