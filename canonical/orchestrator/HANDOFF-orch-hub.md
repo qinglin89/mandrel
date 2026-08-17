@@ -26,8 +26,7 @@ user's existing local `aii` command (to be extended).
 
 - NO wall-clock watchdog and NO hang/log-silence detection anywhere (dropped
   entirely, including the x-side notification variant).
-- orch-hub = independent git repo, sibling of quantx
-  (`~/workplace/github.com/qinglin89/orch-hub`).
+- orch-hub = independent git repo, a sibling checkout of the managed targets.
 - x v1 feature set: repo/task list, start/stop, SSE log tail, escalation
   list + answer, push notification. UI = simplest mobile single page
   (beautify later).
@@ -153,7 +152,7 @@ The settled contract below supersedes the earlier sketch.
 
 ### mandrel + aii
 
-- Motivation: protocol files are gitignored in quantx → currently ZERO
+- Motivation: protocol files are gitignored in the target → currently ZERO
   version history; multi-repo manual `cp` sync already painful (see the other
   handoff's sync-discipline section).
 - Canonical home of: `ai-coding-*.md` (excl. `-tmp` drafts), `CLAUDE.md`,
@@ -183,7 +182,7 @@ The settled contract below supersedes the earlier sketch.
   fresh `.ai-tasks/index.md`, per-repo `.env` (secrets never in the
   deployment repo). NEVER copy: `.claude/projects/`,
   `.claude/settings.local.json`, `.venv/`, `logs/`, `sessions.json`.
-- Portability audit (verified 2026-07-04): zero `quantx`/user hardcodes in
+- Portability audit (verified 2026-07-04): zero target-name/user hardcodes in
   `ai-coding-*.md` + `CLAUDE.md` (grep-verified); all six hook scripts
   resolve repo root dynamically (`CURSOR_PROJECT_DIR` / `CLAUDE_PROJECT_DIR`
   / `git rev-parse --show-toplevel`); `.claude/settings.json` uses
@@ -208,7 +207,7 @@ The settled contract below supersedes the earlier sketch.
 ## Suggested build order (next session may reorder with user)
 
 1. **mandrel + aii first**: move suite to canonical repo, deploy
-   back to quantx, verify byte-identical + hooks still fire. Rationale: gives
+   back to the target, verify byte-identical + hooks still fire. Rationale: gives
    version history BEFORE further edits, and the orchestrator change then
    lands once in the canonical home instead of being migrated later.
 2. Orchestrator `--control-dir` + `stop.flag` — DONE 2026-07-06 (landed in
@@ -228,7 +227,7 @@ The settled contract below supersedes the earlier sketch.
 - Task-tracking style for this workstream: orchestrator/agent-infra work has
   historically been handoff-driven OUTSIDE `.ai-tasks/` (all files
   gitignored). orch-hub + mandrel are their own repos → their
-  work naturally lives there; keep quantx `.ai-tasks/` out of it unless the
+  work naturally lives there; keep the target's `.ai-tasks/` out of it unless the
   user says otherwise.
 
 ## Key invariants to preserve (unchanged from the orchestrator workstream)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline validation of orchestrator.py loop mechanics with a mocked SDK.
 
-Builds a throwaway git repo that mimics quantx's layout (.ai-tasks/ gitignored,
+Builds a throwaway git repo that mimics a deployed target's layout (.ai-tasks/ gitignored,
 task file with one unreviewed dev entry) and drives the Orchestrator with a
 FakeAgent whose scripted behaviors edit that repo the way a real session
 would. No CURSOR_API_KEY needed.

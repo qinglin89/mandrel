@@ -7,6 +7,8 @@ name = "mandrel"
 version = "0.1.0"
 description = "Canonical deployment tooling for AI-native coding protocol assets."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
 

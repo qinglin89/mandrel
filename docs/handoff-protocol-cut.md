@@ -1,7 +1,7 @@
 # Handoff: protocol/workflow cut
 
 > Active handoff for the protocol/workflow boundary workstream. It is separate
-> from `canonical/orchestrator/HANDOFF-orch-hub.md` and the quantx orchestrator
+> from `canonical/orchestrator/HANDOFF-orch-hub.md` and the target-side orchestrator
 > state-machine workstream. Read `canonical/orchestrator/README.md` for system
 > orientation and `CHARTER.md` for the normative boundary rules.
 >
@@ -40,8 +40,8 @@ The cut now has these stable properties:
 
 ### P4 target wave and cleanup
 
-State recorded 2026-07-18: orch-hub-test was still at `f2ee85d`; hkchain,
-orch-hub, and quantx were older. Run `mandrel status` rather than assuming this is
+State recorded 2026-07-18: one test target was still at `f2ee85d`; the other
+managed targets were older. Run `mandrel status` rather than assuming this is
 still current. Each lagging target needs one canonical `mandrel deploy` before the
 next drill or rollout.
 

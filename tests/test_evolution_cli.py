@@ -1829,7 +1829,7 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
     on, and a state nothing documents is a word with no meaning attached.
     """
 
-    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
 
     for verb in sorted(cli._wired_verbs(phase)):
         # Followed by a space or the closing backtick, so `assess` is not

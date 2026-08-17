@@ -2,7 +2,7 @@
 """Empirical smoke test: do .cursor/hooks.json hooks (sessionStart / stop) fire
 when an agent runs under the LOCAL Cursor SDK?
 
-Runs a trivial no-tool agent against the quantx repo twice:
+Runs a trivial no-tool agent against the target repo twice:
   1. default setting sources (inline-only)
   2. local.setting_sources = ["project"]
 
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from cursor_sdk import Agent, AgentOptions, CursorAgentError, LocalAgentOptions
 
-REPO = Path(__file__).resolve().parents[2]  # .../quantx
+REPO = Path(__file__).resolve().parents[2]  # the target repo root
 HOOK_LOG = Path.home() / ".cursor" / "ai-hooks.log"
 
 PROBE_PROMPT = (

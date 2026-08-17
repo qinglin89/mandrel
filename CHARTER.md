@@ -4,8 +4,8 @@ Normative rules for how the suite's documents, prompts, hooks, and code divide
 responsibility. Charter seed user-ruled 2026-07-13 (discussion session); supporting
 rules ruled 2026-07-16; ratified 2026-07-16 with the approved cut plan. Maintainer
 law for the canonical repo — this file is NOT deployed to targets. The workstream
-anchor is `HANDOFF-protocol-cut.md`; the leak inventory measured against this
-charter is `AUDIT-protocol-cut.md`.
+anchor is `docs/handoff-protocol-cut.md`; the leak inventory measured against
+this charter is `docs/audit-protocol-cut.md`.
 
 ## Layers
 

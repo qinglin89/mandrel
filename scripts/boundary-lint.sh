@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Boundary lint — mechanical enforcement of the CHARTER.md litmus tests and
-# the post-cut reference invariants (AUDIT-protocol-cut.md §9) over the
+# the post-cut reference invariants (docs/audit-protocol-cut.md §9) over the
 # canonical suite. Run from anywhere: scripts/boundary-lint.sh
 # Also runs as one check of the unified gate, scripts/check.sh.
 #

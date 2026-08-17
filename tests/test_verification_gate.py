@@ -192,7 +192,8 @@ def test_the_orch_hub_probe_is_manual_and_outside_the_gate() -> None:
         assert ORCH_HUB_PROBE.name not in code(automatic), f"{automatic.name} runs the credentialed orch-hub probe"
 
     # Documented where an operator looks for it, since nothing executes it.
-    assert ORCH_HUB_PROBE.name in (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    reference = REPO_ROOT / "docs" / "operations.md"
+    assert ORCH_HUB_PROBE.name in reference.read_text(encoding="utf-8")
 
 
 def test_the_git_hook_defers_to_the_entrypoint() -> None:

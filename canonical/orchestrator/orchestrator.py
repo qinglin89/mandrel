@@ -65,7 +65,7 @@ from pathlib import Path
 # --- paths -----------------------------------------------------------------
 
 ORCH_DIR = Path(__file__).resolve().parent
-REPO = ORCH_DIR.parents[1]  # .../quantx
+REPO = ORCH_DIR.parents[1]  # the target repo root
 TASKS_DIR = REPO / ".ai-tasks"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 INDEX_FILE = TASKS_DIR / "index.md"
