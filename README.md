@@ -40,6 +40,14 @@ running the loop by hand, and a headless scheduler running it unattended. Same
 runbook, same contracts, byte-equivalent delivery. You can take the wheel at
 any session boundary and the scheduler picks up where you left off.
 
+What the snapshot holds is two kinds of thing, and both fail "just re-derive
+it" for different reasons. **Decisions** are absent from the code — what was
+rejected and why, what is deliberately not there. **Conclusions** are present
+but unaffordable — the code implies them, but reaching them from zero costs more
+than a session has. The second kind compounds: each one becomes a starting
+altitude, so later reasoning begins a layer deeper without the working set
+getting any larger.
+
 ### What lands where after deployment
 
 ```text
@@ -169,15 +177,21 @@ such requirement — your agent's normal permission prompts apply.
 
 ## What this costs
 
-Honest numbers from five months of use:
+It costs sessions, not money.
 
 - **~3.8 sessions per task**, development and review combined, most at a
-  top-tier model on high reasoning effort.
-- Per unit of code shipped, this costs **meaningfully more** than ad-hoc
-  prompting.
-- The overhead is a fixed cost amortized over project lifetime. **If you're
-  building something you'll throw away in three weeks, don't use this.** It
-  pays back by eliminating the re-derivation tax — the time an agent spends
+  top-tier model on high reasoning effort. Each is capped near 200k tokens of
+  context — a wrap-up trigger, not a hard stop, and a policy choice well under
+  what the models now hold: precision degrades before capacity does.
+- Run through an agent subscription rather than the API, one more session rounds
+  to nothing, and prompt caching makes interactive work cheaper still. If your
+  constraint is budget, "expensive" is the wrong frame. If it is **throughput** —
+  rate-limit windows, turnaround on one task — the number to look at is 3.8.
+- The overhead is real either way: every session reads the snapshot and writes a
+  log. That is a fixed cost amortized over project lifetime. **If you're
+  building something you'll throw away in three weeks, don't use this** — not
+  because of the price, but because three weeks amortizes nothing.
+- It pays back by eliminating the re-derivation tax: the time an agent spends
   every session rediscovering what the project already knew, plus the
   occasional expensive case where it doesn't rediscover it and confidently
   undoes a deliberate decision.
@@ -223,6 +237,16 @@ That one entrypoint is what developers, agents, the optional Git hook, and CI
 all run; nothing re-lists its steps. Deployable protocol and runtime changes
 are authored **only** under `canonical/`. Deployed copies in target repos are
 never hand-edited: edit here, redeploy, and use `status` to verify.
+
+## Contributing
+
+Issues and discussion are open, and questions about why something is shaped the
+way it is are the most useful thing you can send. **I'm not taking code
+contributions yet** — the protocol contracts are still moving, and merging
+changes into them before that settles would cost more than it adds. That will
+change; when it does, it will say so here.
+
+If you run this and it goes badly, that's a report I want.
 
 ## License
 

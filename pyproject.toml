@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -22,9 +22,10 @@ dev = [
     "ruff==0.16.2",
     "shellcheck-py==0.11.0.1",
     "build==1.5.0",
-    "setuptools>=68",
-    # Only setuptools >= 70.1 builds wheels without it, and the gate runs
-    # `build --no-isolation` against whatever setuptools the interpreter has.
+    # >= 77 understands PEP 639 `license`/`license-files`; older releases
+    # reject the SPDX string outright, and the gate runs `build --no-isolation`
+    # against whatever setuptools the interpreter already has.
+    "setuptools>=77",
     "wheel",
 ]
 
