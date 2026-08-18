@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-16
-verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
+last-updated: 2026-08-18
+verified-against: a7386b18403cebf3a2a9d232c7dd21f74cfbbf77
 ---
 
 # APIs and Interfaces
@@ -50,8 +50,8 @@ successful outcome when policy is not met. Lifecycle mutations accept optional
 | `.ai-deploy-manifest.json` | Ignored target-local receipt of rendered hashes and deployed modes used by status |
 | `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt; readers validate schema and require `source_git_commit` to be present as null or a full object id |
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
-| `orchestrator.toml` | Deployed defaults and named per-backend profiles |
-| `orchestrator.py --print-config` | Machine-readable effective launch snapshot |
+| `orchestrator.toml` | Schema-v3 deployed defaults/profiles plus advisory per-backend/agent model catalog; uncatalogued models remain launchable |
+| `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
 | `evolution/config.toml` | Versioned evolution admission/storage policy |
 | `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
