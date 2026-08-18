@@ -27,7 +27,7 @@ is pluggable:
 | subscription | Cursor only (cheapest) | Claude + OpenAI by default; one provider only when both roles select the same agent |
 | protocol context | orchestrator injects it (SDK doesn't run hooks); `AI_ORCH=1` keeps `.cursor` hooks quiet | native: CC hooks + CLAUDE.md import chain, Codex `.codex` hooks (verified firing in `codex exec` and `claude -p`); no injection, no `AI_ORCH` |
 | end discipline | orchestrator post-checks (sole enforcement) | each tool's Stop-hook chain + the same post-checks as backstop |
-| session ids | SDK agent id | CC: uuid chosen by orchestrator (`--session-id`); Codex: captured from `thread.started`; both recorded in `logs/sessions.json` for resume routing |
+| session ids | SDK agent id | CC: uuid chosen by orchestrator (`--session-id`); Codex: captured from `thread.started`; both recorded in `logs/sessions.json` with the launch model/effort, for resume routing (§5.4) |
 
 ## 1. Prerequisites
 
@@ -409,6 +409,16 @@ as before.
 orchestrator exits with guidance. Unblock manually first (answer the blocker
 in that tool, or edit the task file), then restart the orchestrator.
 
+On `cc-codex` the record also decides the resume model/effort whenever the
+run now selects the *other* agent for that role: the recorded CLI is the only
+one that can reopen the thread, and this run's role pair names a model it
+does not have and an effort from the other axis. Such a session resumes on
+the pair it was launched with (logged as a NOTE); the role pair is used only
+while the role's agent agrees with the record. A pre-existing record from
+before launch pairs were kept has no usable pair for the other agent, so that
+one resume is refused with both ways out: rerun with `--<role>-agent <the
+recorded tool>`, or continue that session manually in it.
+
 ### 5.5 Convergence budget exhausted / dispute
 
 After a `changes-requested` review, the orchestrator counts
@@ -575,7 +585,8 @@ including pre-orchestrator ones).
   close-out plain / native / native-incomplete / native-on-blocked-resume,
   final_review stall), prompt instantiation, context-budget wrap-ups (both
   session kinds), event-stream logging, CLI argv shapes + sessions.json
-  resume routing, the `--control-dir` file channel (question/answer
+  resume routing (both cross-agent directions, on efforts disjoint across
+  the two axes), the `--control-dir` file channel (question/answer
   files, malformed/stale handling, stop.flag, same-kind escalation
   discussion rounds, no-session marker rejection, and unchanged plan-gate
   feedback semantics), and prompt-template startup validation. Run after
@@ -596,7 +607,9 @@ including pre-orchestrator ones).
 - Blocked-by-foreign-session exits with guidance instead of resuming
   (§5.4 caveat); on `cc-codex`, resume routing relies on
   `logs/sessions.json` — a sid missing there falls back to
-  role→configured-tool guessing with a logged warning.
+  role→configured-tool guessing with a logged warning, and a sid recorded
+  under the agent this run did NOT select for that role resumes on its own
+  recorded model/effort (refused outright when the record predates them).
 - Single task per run; no multi-task queue.
 - Codex TUI hook firing is unverified (`codex exec` verified; also
   irrelevant to the `cursor` backend — SDK sessions bypass hooks).

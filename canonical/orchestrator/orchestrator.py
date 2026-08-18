@@ -1401,7 +1401,7 @@ class CursorBackend:
         return CursorSession(self.orch, agent)
 
 
-# -- cc-codex backend (Claude/Codex dev + Codex review, subprocess CLIs) --
+# -- cc-codex backend (Claude/Codex CLI per role, subprocess CLIs) --
 
 def _session_map_load() -> dict:
     if SESSION_MAP.exists():
@@ -1410,9 +1410,15 @@ def _session_map_load() -> dict:
     return {}
 
 
-def _session_map_register(sid: str, tool: str, native_id: str) -> None:
+def _session_map_register(sid: str, tool: str, native_id: str,
+                          model: str, effort: str) -> None:
+    """Record the CLI that owns a session id AND the parameters it launched
+    with. Both halves matter on resume: the tool decides which CLI can reopen
+    the thread, and only that tool's own model/effort namespace is usable
+    there — the role may select the other agent in a later run."""
     m = _session_map_load()
-    m[sid] = {"tool": tool, "native_id": native_id}
+    m[sid] = {"tool": tool, "native_id": native_id,
+              "model": model, "effort": effort}
     SESSION_MAP.parent.mkdir(parents=True, exist_ok=True)
     SESSION_MAP.write_text(json.dumps(m, indent=1))
 
@@ -1528,7 +1534,8 @@ class ClaudeSession(CliSession):
         self.effort = effort
         self.sid = sid or str(uuid.uuid4())
         self.resume = resume
-        _session_map_register(self.sid, "claude", self.sid)
+        _session_map_register(self.sid, "claude", self.sid,
+                              self.model, self.effort)
 
     def _argv(self, prompt: str) -> list[str]:
         argv = ["claude", "-p", "--output-format", "stream-json", "--verbose",
@@ -1700,7 +1707,8 @@ class CodexSession(CliSession):
                 val = thread.get("id")
             if val:
                 self.sid = str(val)
-                _session_map_register(self.sid, "codex", self.sid)
+                _session_map_register(self.sid, "codex", self.sid,
+                                      self.model, self.effort)
                 o.log(f"codex session id: {self.sid}")
         item = ev.get("item") or {}
         itype = item.get("type") or item.get("item_type") or ""
@@ -1846,26 +1854,41 @@ class CliBackend:
 
     def resume_session(self, sid: str, role: str) -> CliSession:
         # The recorded tool is authoritative: a session can only be resumed
-        # in the CLI that created it. The role supplies the model/effort and
-        # the fallback tool when the sid is unknown.
+        # in the CLI that created it, and the model/effort must come from
+        # THAT tool's namespace. The role supplies both only while its agent
+        # agrees with the record — once a run selects the other agent for
+        # this role, its pair names a model the recorded CLI does not have
+        # and an effort from the other axis, so the session resumes with the
+        # parameters it was launched with instead.
         info = _session_map_load().get(sid)
         tool = (info or {}).get("tool") or self._agent(role)
+        if tool not in CLI_AGENTS:
+            raise SessionStartError(f"unknown CLI session tool '{tool}' for {sid}")
+        model, effort = self._params(role)
         if info is None:
             self.orch.log(f"WARNING: sid {sid} not in {SESSION_MAP} — "
                           f"assuming tool={tool} by role. If this session "
                           "was created manually in another tool, resume may "
                           "fail; unblock manually in that tool instead.")
         elif tool != self._agent(role):
+            model, effort = info.get("model"), info.get("effort")
+            if not (isinstance(model, str) and model.strip()
+                    and isinstance(effort, str) and effort.strip()):
+                raise SessionStartError(
+                    f"sid {sid} was created in {tool}, but this run's {role} "
+                    f"agent is {self._agent(role)} and the record carries no "
+                    f"{tool} model/effort. This run's {role} pair belongs to "
+                    f"{self._agent(role)}'s namespace and {tool} would "
+                    f"reject it — rerun with --{role}-agent {tool}, or "
+                    f"continue that session manually in {tool}.")
             self.orch.log(f"NOTE: sid {sid} was created in {tool}, not this "
                           f"run's {role} agent {self._agent(role)} — "
-                          f"resuming in {tool} with the resolved {role} "
-                          "model/effort.")
-        model, effort = self._params(role)
+                          f"resuming in {tool} with the model/effort it was "
+                          f"launched with ({model}@{effort}); this run's "
+                          f"{role} pair belongs to the other agent.")
         if tool == "claude":
             return ClaudeSession(self.orch, model, effort,
                                  sid=sid, resume=True)
-        if tool != "codex":
-            raise SessionStartError(f"unknown CLI session tool '{tool}' for {sid}")
         s = CodexSession(self.orch, model, effort, sid=sid)
         s.first_turn = False  # force the resume argv shape
         return s
@@ -3062,7 +3085,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--backend", choices=["cursor", "cc-codex"],
                     default=None,
                     help=f"cursor = Cursor SDK both roles; cc-codex = "
-                         f"Claude/Codex dev + Codex CLI review "
+                         f"Claude Code / Codex CLI selected per role "
+                         f"(--dev-agent, --review-agent) "
                          f"(effective default: {DEFAULT_BACKEND})")
     ap.add_argument("--dev-agent", choices=sorted(CLI_AGENTS),
                     default=None,

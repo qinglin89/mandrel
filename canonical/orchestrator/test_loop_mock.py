@@ -706,7 +706,10 @@ def scenario_7_cli_event_parsers(repo: Path) -> None:
         "bare codex error after reconnect is part of the retry sequence"
     assert xs._handle_event({"type": "turn.failed", "message": "boom"},
                             chunks) == "error"
-    assert o._session_map_load().get("codex-123", {}).get("tool") == "codex"
+    record = o._session_map_load().get("codex-123", {})
+    assert (record.get("tool"), record.get("model"), record.get("effort")) \
+        == ("codex", xs.model, xs.effort), \
+        f"codex must record its launch pair with the discovered sid: {record}"
 
     xs_unknown = o.CodexSession.__new__(o.CodexSession)
     xs_unknown.orch, xs_unknown.sid = orch, "codex-unknown-error"
@@ -1574,9 +1577,11 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     CliBackend resume routing through logs/sessions.json: claude first turn
     uses --session-id, followups/blocked-resume use --resume; codex resume
     uses the `codex exec resume <sid> <prompt>` subcommand; sid→tool mapping
-    wins over role guessing, missing sids warn. Both roles select an agent,
-    and a resumed session takes its model/effort from the ROLE while the
-    recorded tool decides which CLI is resumed."""
+    wins over role guessing, missing sids warn. Both roles select an agent;
+    a resumed session takes its model/effort from the ROLE while the role's
+    agent agrees with the record, and from the record's own launch pair once
+    the role selects the other agent (whose model/effort the recorded CLI
+    would reject)."""
     orch = new_orch()
 
     # -- claude argv: first turn names the orchestrator-chosen sid
@@ -1599,7 +1604,11 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
                           resume=True)
     argv = cs2._argv("HUMAN ANSWERED: use UTC")
     assert "--resume" in argv and "--session-id" not in argv, argv
-    assert o._session_map_load().get("cc-sid-1", {}).get("tool") == "claude"
+    record = o._session_map_load().get("cc-sid-1", {})
+    assert (record.get("tool"), record.get("model"), record.get("effort")) \
+        == ("claude", "claude-opus-5", "max"), \
+        "the record must carry the launch pair a later cross-agent resume " \
+        f"has to reuse: {record}"
 
     # -- codex argv: fresh exec vs `exec resume <sid> <prompt>`
     xs = o.CodexSession(orch, "gpt-5.5", "xhigh")
@@ -1638,17 +1647,33 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     assert isinstance(fresh, o.CodexSession) \
         and (fresh.model, fresh.effort) == ("gpt-5.5", "xhigh"), \
         "cc-codex default review agent stays Codex CLI"
-    o._session_map_register("known-cc", "claude", "known-cc")
-    o._session_map_register("known-cx", "codex", "known-cx")
+    # `max` is claude-only and `minimal` codex-only: a pair that leaks across
+    # agents on resume cannot survive these assertions silently.
+    o._session_map_register("known-cc", "claude", "known-cc",
+                            "claude-opus-5", "max")
+    o._session_map_register("known-cx", "codex", "known-cx",
+                            "gpt-5.5", "minimal")
     s = b.resume_session("known-cc", "dev")
     assert isinstance(s, o.ClaudeSession) and s.resume \
         and s.sid == "known-cc"
     s = b.resume_session("known-cx", "review")
     assert isinstance(s, o.CodexSession) and not s.first_turn \
         and s.sid == "known-cx", "resume argv shape needs first_turn=False"
+    assert (s.model, s.effort) == ("gpt-5.5", "xhigh"), \
+        "the role's own agent still supplies the pair when it agrees with " \
+        "the record — an operator may raise the effort between runs"
+    # recorded codex + selected claude: the codex CLI reopens the thread, so
+    # the claude pair (claude-opus-5@max) must not reach its argv
     s = b.resume_session("known-cx", "dev")
     assert isinstance(s, o.CodexSession), \
         "sessions.json mapping must win over the role guess"
+    assert (s.model, s.effort) == ("gpt-5.5", "minimal"), \
+        f"a codex thread must resume on its own codex pair, not the dev " \
+        f"agent's claude pair: {(s.model, s.effort)}"
+    argv = s._argv("CONTINUE")
+    assert "model_reasoning_effort=minimal" in argv \
+        and "max" not in argv and "claude-opus-5" not in argv, \
+        f"codex resume argv must carry no claude-axis value: {argv}"
     s = b.resume_session("mystery-sid", "review")
     assert isinstance(s, o.CodexSession), "unknown sid falls back by role"
 
@@ -1665,17 +1690,18 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     # -- a Claude review agent: fresh start, resume, and the close-out
     #    resume all carry the REVIEW model/effort, never the dev pair
     b3 = o.CliBackend(orch, "codex", "gpt-5.5", "xhigh", "claude",
-                      "claude-opus-4-8", "high")
-    assert b3.describe("review") == "claude:claude-opus-4-8@high"
+                      "claude-opus-4-8", "max")
+    assert b3.describe("review") == "claude:claude-opus-4-8@max"
     fresh = b3.new_session("review")
     assert isinstance(fresh, o.ClaudeSession) \
-        and (fresh.model, fresh.effort) == ("claude-opus-4-8", "high"), \
+        and (fresh.model, fresh.effort) == ("claude-opus-4-8", "max"), \
         "--review-agent claude must dispatch review through ClaudeSession " \
         "with the review model/effort"
-    o._session_map_register("review-cc", "claude", "review-cc")
+    o._session_map_register("review-cc", "claude", "review-cc",
+                            "claude-opus-4-8", "max")
     s = b3.resume_session("review-cc", "review")
     assert isinstance(s, o.ClaudeSession) and s.resume \
-        and (s.model, s.effort) == ("claude-opus-4-8", "high"), \
+        and (s.model, s.effort) == ("claude-opus-4-8", "max"), \
         "close-out/blocked resume of a claude review session must reuse " \
         "the review model/effort"
     s = b3.resume_session("mystery-review-sid", "review")
@@ -1683,8 +1709,41 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "unknown review sid falls back to the configured review agent"
     s = b3.resume_session("known-cx", "review")
     assert isinstance(s, o.CodexSession) \
-        and (s.model, s.effort) == ("claude-opus-4-8", "high"), \
-        "the recorded tool still wins over the role fallback"
+        and (s.model, s.effort) == ("gpt-5.5", "minimal"), \
+        "the recorded tool wins over the role fallback, and brings its own " \
+        f"codex pair with it: {(s.model, s.effort)}"
+    # recorded claude + selected codex (b's review agent): the reverse
+    # direction must not hand `gpt-5.5`/`xhigh` to `claude --model/--effort`
+    s = b.resume_session("review-cc", "review")
+    assert isinstance(s, o.ClaudeSession) and s.resume \
+        and (s.model, s.effort) == ("claude-opus-4-8", "max"), \
+        f"a claude thread must resume on its own claude pair: " \
+        f"{(s.model, s.effort)}"
+    argv = s._argv("ANSWERED")
+    assert argv[argv.index("--model") + 1] == "claude-opus-4-8" \
+        and argv[argv.index("--effort") + 1] == "max" \
+        and "gpt-5.5" not in argv and "xhigh" not in argv, \
+        f"claude resume argv must carry no codex-axis value: {argv}"
+    # a record written before launch pairs were kept has no compatible pair
+    # for the other agent — refuse with the two ways out rather than guess
+    legacy = json.loads(o.SESSION_MAP.read_text())
+    legacy["legacy-cc"] = {"tool": "claude", "native_id": "legacy-cc"}
+    o.SESSION_MAP.write_text(json.dumps(legacy))
+    try:
+        b.resume_session("legacy-cc", "review")
+        raise AssertionError("a cross-agent resume with no recorded pair "
+                             "must refuse, not launch the other namespace")
+    except o.SessionStartError as err:
+        assert "--review-agent claude" in str(err) \
+            and "manually in claude" in str(err), err
+    # an unparseable tool is still named before anything else is attempted
+    legacy["broken-tool"] = {"tool": "cursor", "native_id": "broken-tool"}
+    o.SESSION_MAP.write_text(json.dumps(legacy))
+    try:
+        b.resume_session("broken-tool", "review")
+        raise AssertionError("an unknown recorded tool must refuse")
+    except o.SessionStartError as err:
+        assert "unknown CLI session tool 'cursor'" in str(err), err
     log = orch.log_file.read_text()
     assert "WARNING: sid mystery-sid not in" in log, \
         "role-guess fallback must be logged"
@@ -1692,6 +1751,8 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "codex dev fallback must be logged"
     assert "NOTE: sid known-cx was created in codex" in log, \
         "a recorded tool other than the role agent must be logged"
+    assert "launched with (gpt-5.5@minimal)" in log, \
+        "the note must name the pair the resume actually uses"
 
     # -- the same-agent-and-model launch notice
     def notice(backend, dev, review):
