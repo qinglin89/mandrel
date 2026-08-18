@@ -3,7 +3,9 @@
 > Superseded for the Start run UI by
 > `HANDOFF-orch-hub-split-role-profiles.md`. This document describes the
 > original single-profile integration and remains only as compatibility
-> background.
+> background. The response bodies below are the `schema_version: 1` shape;
+> the current shape (schema 2, a selectable `review.agent`, `review.agent`
+> in `sources`) is documented in the split-role handoff.
 
 ## Goal
 
@@ -217,8 +219,10 @@ Custom:
 
 The orchestrator permits explicit fields to override a named profile.
 orch-hub should not mix profile and custom UI modes. One important guard in
-the orchestrator: changing a cc-codex profile's `--dev-agent` also requires
-explicit `--dev-model` and `--dev-effort`.
+the orchestrator: changing a cc-codex profile's agent for a role also
+requires that role's explicit model and effort (`--dev-agent` needs
+`--dev-model` + `--dev-effort`; on schema 2, `--review-agent` needs
+`--review-model` + `--review-effort`).
 
 ### Preview freshness
 

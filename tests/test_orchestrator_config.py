@@ -30,9 +30,31 @@ def query_config(*args: str, env_overrides: dict[str, str] | None = None) -> dic
     return json.loads(proc.stdout)
 
 
+def refuse_config(*args: str, env_overrides: dict[str, str] | None = None) -> str:
+    """Run a rejected selection and return its stderr."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("ORCH_")
+    }
+    if env_overrides:
+        env.update(env_overrides)
+    proc = subprocess.run(
+        [sys.executable, str(ORCHESTRATOR), "--print-config", *args],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2, proc.stdout
+    return proc.stderr
+
+
 def test_default_config_is_visible_without_a_task_or_profile() -> None:
     config = query_config()
 
+    assert config["schema_version"] == 2
     assert config["profile"] == "default"
     assert config["profiles"] == {
         "dev": "default",
@@ -235,6 +257,130 @@ def test_cc_codex_dev_agent_selects_its_default_namespace() -> None:
         "effort": "xhigh",
     }
     assert config["sources"]["dev.agent"] == "cli"
+
+
+def test_cc_codex_review_agent_selects_its_default_namespace() -> None:
+    config = query_config(
+        "--backend", "cc-codex",
+        "--review-agent", "claude",
+    )
+
+    assert config["review"] == {
+        "agent": "claude",
+        "model": "claude-opus-4-8",
+        "effort": "max",
+    }
+    assert config["sources"]["review.agent"] == "cli"
+    assert config["dev"]["agent"] == "claude"
+
+
+def test_review_agent_resolves_by_cli_then_profile_then_env_then_config() -> None:
+    env = {"ORCH_CC_REVIEW_AGENT": "claude"}
+
+    inherited = query_config()
+    from_env = query_config(env_overrides=env)
+    from_profile = query_config("--profile", "standard", env_overrides=env)
+    from_cli = query_config("--review-agent", "claude", env_overrides=env)
+
+    assert inherited["review"]["agent"] == "codex"
+    assert inherited["sources"]["review.agent"] == "config"
+
+    assert from_env["review"]["agent"] == "claude"
+    assert from_env["sources"]["review.agent"] == "env:ORCH_CC_REVIEW_AGENT"
+
+    assert from_profile["review"]["agent"] == "codex"
+    assert from_profile["sources"]["review.agent"] == "profile:standard"
+
+    assert from_cli["review"]["agent"] == "claude"
+    assert from_cli["sources"]["review.agent"] == "cli"
+
+
+def test_review_model_and_effort_follow_the_selected_review_agent() -> None:
+    env = {
+        "ORCH_CODEX_MODEL": "env-codex-review",
+        "ORCH_CODEX_EFFORT": "high",
+        "ORCH_CC_REVIEW_MODEL": "env-claude-review",
+        "ORCH_CC_REVIEW_EFFORT": "low",
+    }
+    codex_review = query_config(env_overrides=env)
+    claude_review = query_config("--review-agent", "claude",
+                                 env_overrides=env)
+
+    assert codex_review["review"]["model"] == "env-codex-review"
+    assert codex_review["review"]["effort"] == "high"
+    assert codex_review["sources"]["review.model"] == "env:ORCH_CODEX_MODEL"
+
+    assert claude_review["review"]["model"] == "env-claude-review"
+    assert claude_review["review"]["effort"] == "low"
+    assert (claude_review["sources"]["review.model"]
+            == "env:ORCH_CC_REVIEW_MODEL")
+
+
+def test_review_effort_is_validated_on_the_selected_agents_axis() -> None:
+    # `max` is legal on the claude effort axis and illegal on the reasoning
+    # axis; `minimal` is the mirror case.
+    assert query_config(
+        "--review-agent", "claude",
+        "--review-effort", "max",
+    )["review"]["effort"] == "max"
+    assert query_config(
+        "--review-agent", "codex",
+        "--review-effort", "minimal",
+    )["review"]["effort"] == "minimal"
+
+    on_reasoning = refuse_config("--review-agent", "codex",
+                                 "--review-effort", "max")
+    on_effort = refuse_config("--review-agent", "claude",
+                              "--review-effort", "minimal")
+
+    assert "review_effort" in on_reasoning
+    assert "for the reasoning axis" in on_reasoning
+    assert "review_effort" in on_effort
+    assert "for the effort axis" in on_effort
+
+
+def test_review_agent_is_rejected_on_the_cursor_backend() -> None:
+    stderr = refuse_config("--backend", "cursor", "--review-agent", "claude")
+
+    assert "--review-agent is only supported with --backend cc-codex" in stderr
+
+
+def test_profile_review_agent_override_requires_a_complete_custom_pair() -> None:
+    stderr = refuse_config(
+        "--backend", "cc-codex",
+        "--profile", "standard",
+        "--review-agent", "claude",
+    )
+
+    assert ("overriding a profile's --review-agent also requires explicit "
+            "--review-model and --review-effort") in stderr
+
+    config = query_config(
+        "--backend", "cc-codex",
+        "--profile", "standard",
+        "--review-agent", "claude",
+        "--review-model", "claude-opus-5",
+        "--review-effort", "max",
+    )
+
+    assert config["review"] == {
+        "agent": "claude",
+        "model": "claude-opus-5",
+        "effort": "max",
+    }
+    assert config["dev"]["model"] == "claude-opus-4-8"
+    assert config["sources"]["dev.model"] == "profile:standard"
+
+
+def test_an_uncatalogued_review_model_still_resolves() -> None:
+    config = query_config(
+        "--review-agent", "claude",
+        "--review-model", "some-unreleased-model",
+        "--review-effort", "high",
+    )
+
+    assert config["review"]["model"] == "some-unreleased-model"
+    assert config["sources"]["review.model"] == "cli"
 
 
 def test_cli_max_sessions_supersedes_an_invalid_environment_value() -> None:

@@ -22,9 +22,9 @@ is pluggable:
 | | `--backend cursor` | `--backend cc-codex` (default) |
 |---|---|---|
 | dev role | Cursor SDK agent, `claude-opus-4-8` | `--dev-agent claude` (default): Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort; `--dev-agent codex`: Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
-| review role | Cursor SDK agent, `gpt-5.5` | Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
-| auth | `CURSOR_API_KEY` (SDK; login not enough) | each selected CLI's own login (`claude` `/login` for the default dev agent, `codex login` for review and Codex dev) |
-| subscription | Cursor only (cheapest) | Claude + OpenAI by default; OpenAI only when `--dev-agent codex` |
+| review role | Cursor SDK agent, `gpt-5.5` | `--review-agent codex` (default): Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort; `--review-agent claude`: Claude Code headless, `claude-opus-4-8` @ `max` effort |
+| auth | `CURSOR_API_KEY` (SDK; login not enough) | each selected CLI's own login: `claude` `/login` for any role on the Claude agent, `codex login` for any role on the Codex agent |
+| subscription | Cursor only (cheapest) | Claude + OpenAI by default; one provider only when both roles select the same agent |
 | protocol context | orchestrator injects it (SDK doesn't run hooks); `AI_ORCH=1` keeps `.cursor` hooks quiet | native: CC hooks + CLAUDE.md import chain, Codex `.codex` hooks (verified firing in `codex exec` and `claude -p`); no injection, no `AI_ORCH` |
 | end discipline | orchestrator post-checks (sole enforcement) | each tool's Stop-hook chain + the same post-checks as backstop |
 | session ids | SDK agent id | CC: uuid chosen by orchestrator (`--session-id`); Codex: captured from `thread.started`; both recorded in `logs/sessions.json` for resume routing |
@@ -34,7 +34,7 @@ is pluggable:
 | Requirement | Why / how |
 |---|---|
 | `CURSOR_API_KEY` set (`cursor` backend only) | The SDK needs a real API key; `cursor-agent login` is NOT sufficient for the SDK. Put it in `.cursor/orchestrator/.env` (copy `.env.example`; loaded automatically at startup, file values win) — or export it (fallback when the file is missing or the key is empty there). |
-| selected CLIs logged in (`cc-codex` backend only) | Default dev uses Claude Code, so `claude` must be logged in (check: `claude -p "hi"`); review and `--dev-agent codex` use Codex, so run `codex login`. |
+| selected CLIs logged in (`cc-codex` backend only) | Log in to whichever CLI the two roles select. Defaults are Claude Code for dev (check: `claude -p "hi"`) and Codex for review (`codex login`); `--dev-agent` / `--review-agent` change which login a run needs. |
 | Clean working tree | Startup refuses otherwise (`working tree is not clean — resolve before orchestrating`). |
 | A **real terminal** (tty) | Every escalation reads an answer from stdin. Running with `< /dev/null` EOF-crashes at the first `HUMAN INPUT NEEDED`. `--once` for a single non-interactive-ish session is usually safe but not guaranteed (a blocked session or request event still needs stdin). **Exception:** with `--control-dir` no tty is needed — escalations go through question/answer files (§5). |
 | `.venv` in this directory | python3.14 + `cursor-sdk` (see `requirements.txt`; the SDK is optional for `cc-codex`). |
@@ -69,9 +69,22 @@ select a role; omitting either inherits `--profile`, while explicitly passing
 resolves to Opus 5 @ max + GPT-5.6 Sol @ xhigh. The Excellent profile uses
 Claude Code's full model name `claude-opus-5` (`opus` is the corresponding
 CLI alias; `opus-5` is not valid). An explicit role flag overrides the
-corresponding profile field. If `--dev-agent` changes a profile from Claude
-to Codex or vice versa, both `--dev-model` and `--dev-effort` must also be
-explicit.
+corresponding profile field. If `--dev-agent` or `--review-agent` changes a
+profile from Claude to Codex or vice versa, that role's `--…-model` and
+`--…-effort` must also be explicit: a profile states one complete
+agent+model+effort selection, so swapping only the agent would otherwise
+launch the other agent's model.
+
+On `cc-codex` both roles select a CLI agent the same way, and each agent
+carries its own model namespace, its own environment variables, and its own
+effort axis — Claude Code `low..max`, Codex
+`none/minimal/low/medium/high/xhigh`. A `--review-effort` legal for one
+review agent is refused for the other, naming the axis. Selecting the same
+agent AND model for both roles is allowed but logs a `NOTICE:` line at
+launch — the review prompt states cross-model independence, and such a run
+has none (separate conversations only). A supervisor can derive the same
+condition from `--print-config` (`dev.agent`/`dev.model` versus
+`review.agent`/`review.model`).
 
 Supervisors can query the exact effective launch values without a task,
 credentials, model-catalog call, or clean-tree check:
@@ -95,8 +108,8 @@ credentials, model-catalog call, or clean-tree check:
 The JSON includes `config_revision`, an `effective_revision` that also changes
 with environment/resolved values, the available profiles, the authoritative
 per-role selections in `profiles.dev` and `profiles.review`, every resolved
-model/effort, backend/dev-agent, session/context limits, launch booleans,
-control directory, and a per-field `sources` map (`cli`, `profile:<name>`,
+model/effort, backend and per-role agent, session/context limits, launch
+booleans, control directory, and a per-field `sources` map (`cli`, `profile:<name>`,
 `env:<name>`, or `config`). The legacy top-level `profile` field remains the
 run-wide `--profile` selection (or `default`) for compatibility. Every real
 run writes the same JSON on the stable startup log line
@@ -112,12 +125,13 @@ snapshot.
 | `--review-profile` | unset | `default`, `standard`, or `excellent` for review; unset inherits `--profile`, while `default` explicitly inherits environment/config |
 | `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
 | `--backend` / `ORCH_BACKEND` | `cc-codex` | `cursor` or `cc-codex` (see §0) |
-| `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions. Review sessions remain Codex CLI. |
+| `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions |
+| `--review-agent` / `ORCH_CC_REVIEW_AGENT` (`cc-codex` only) | `codex` | same axis for the review role, including the close-out session it resumes |
 | `--plan-gate` | off | every dev session first proposes goal+plan and blocks for your confirmation before implementing (see §5.8) |
 | `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_MODEL` (`cc-codex --dev-agent codex`) | `claude-opus-4-8` (cursor/Claude dev) / `gpt-5.5` (Codex dev) | dev-role model, in the selected agent's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
-| `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (cc-codex) | `gpt-5.5` | review-role model |
+| `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (`cc-codex --review-agent codex`) / `ORCH_CC_REVIEW_MODEL` (`cc-codex --review-agent claude`) | `gpt-5.5` (cursor/Codex review) / `claude-opus-4-8` (Claude review) | review-role model, in the selected agent's own namespace |
 | `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_EFFORT` (`cc-codex --dev-agent codex`) | `high` (Cursor) / `max` (Claude dev) / `xhigh` (Codex dev) | dev-role effort. Cursor and Claude Code use the claude effort axis `low..max`; Codex dev uses the reasoning axis `none/minimal/low/medium/high/xhigh` |
-| `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (cc-codex) | `medium` (Cursor) / `xhigh` (cc-codex) | review-role effort: `none/low/medium/high/xhigh`. Canonical top-tier spelling is `xhigh`; Cursor calls it `extra-high`, and the orchestrator translates either spelling |
+| `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (`cc-codex --review-agent codex`) / `ORCH_CC_REVIEW_EFFORT` (`cc-codex --review-agent claude`) | `medium` (Cursor) / `xhigh` (Codex review) / `max` (Claude review) | review-role effort, validated on the selected review agent's axis. Codex/Cursor-gpt reasoning: `none/minimal/low/medium/high/xhigh` (canonical top-tier spelling is `xhigh`; Cursor calls it `extra-high`, and the orchestrator translates either spelling). Claude Code: `low..max` |
 | `ORCH_CODEX_SANDBOX` | `danger-full-access` | cc-codex only: codex `-s` sandbox mode. Full access by default (ruled 2026-07-04): `workspace-write` leaves `.git` read-only, so review-side ai-sync commits and close-out absorption fail |
 | `--max-sessions` / `ORCH_MAX_SESSIONS` | 40 | safety budget per run; exit (resumable) when exhausted |
 | `ORCH_CONTEXT_BUDGET` | 200000 | per-session context ceiling |
@@ -156,7 +170,7 @@ flowchart TD
     C -- completed --> CO[close-out: ai-sync-v2\nverify archive] --> X[exit]
     C -- blocked --> H[HUMAN: answer blocker] --> R1[resume blocked\nconversation] --> P
     C -- else --> U{unreviewed\ndev entries?}
-    U -- yes --> REV[review session\nGPT-5.5] --> CV{verdict\nchanges-requested?}
+    U -- yes --> REV[review session\nreview agent+model] --> CV{verdict\nchanges-requested?}
     CV -- no --> P
     CV -- yes --> B{group budget\nexceeded or reviewer\nescalated?}
     B -- no --> P
@@ -165,7 +179,7 @@ flowchart TD
     F -- yes --> V{latest verdict\nchanges-requested?}
     V -- yes --> DEV
     V -- no --> H3[HUMAN: ruling for\nfresh review] --> REV
-    F -- no --> DEV[dev session\nFable-5] --> P
+    F -- no --> DEV[dev session\ndev agent+model] --> P
 ```
 
 

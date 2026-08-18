@@ -1574,7 +1574,9 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     CliBackend resume routing through logs/sessions.json: claude first turn
     uses --session-id, followups/blocked-resume use --resume; codex resume
     uses the `codex exec resume <sid> <prompt>` subcommand; sid→tool mapping
-    wins over role guessing, missing sids warn."""
+    wins over role guessing, missing sids warn. Both roles select an agent,
+    and a resumed session takes its model/effort from the ROLE while the
+    recorded tool decides which CLI is resumed."""
     orch = new_orch()
 
     # -- claude argv: first turn names the orchestrator-chosen sid
@@ -1625,11 +1627,17 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
         "live that the resumed thread keeps gpt-5.5)"
 
     # -- CliBackend session routing (sessions.json is the truth for resume)
-    b = o.CliBackend(orch, "claude", "claude-opus-5", "max", "gpt-5.5",
-                     "xhigh")
+    b = o.CliBackend(orch, "claude", "claude-opus-5", "max", "codex",
+                     "gpt-5.5", "xhigh")
+    assert b.describe("dev") == "claude:claude-opus-5@max"
+    assert b.describe("review") == "codex:gpt-5.5@xhigh"
     fresh = b.new_session("dev")
     assert isinstance(fresh, o.ClaudeSession), \
         "cc-codex default dev agent stays Claude Code"
+    fresh = b.new_session("review")
+    assert isinstance(fresh, o.CodexSession) \
+        and (fresh.model, fresh.effort) == ("gpt-5.5", "xhigh"), \
+        "cc-codex default review agent stays Codex CLI"
     o._session_map_register("known-cc", "claude", "known-cc")
     o._session_map_register("known-cx", "codex", "known-cx")
     s = b.resume_session("known-cc", "dev")
@@ -1644,7 +1652,7 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     s = b.resume_session("mystery-sid", "review")
     assert isinstance(s, o.CodexSession), "unknown sid falls back by role"
 
-    b2 = o.CliBackend(orch, "codex", "gpt-5.5", "xhigh", "gpt-5.5",
+    b2 = o.CliBackend(orch, "codex", "gpt-5.5", "xhigh", "codex", "gpt-5.5",
                       "xhigh")
     fresh = b2.new_session("dev")
     assert isinstance(fresh, o.CodexSession) \
@@ -1653,11 +1661,59 @@ def scenario_20_cli_argv_and_resume_routing(repo: Path) -> None:
     s = b2.resume_session("mystery-dev-sid", "dev")
     assert isinstance(s, o.CodexSession), \
         "unknown dev sid must fall back to the configured dev agent"
+
+    # -- a Claude review agent: fresh start, resume, and the close-out
+    #    resume all carry the REVIEW model/effort, never the dev pair
+    b3 = o.CliBackend(orch, "codex", "gpt-5.5", "xhigh", "claude",
+                      "claude-opus-4-8", "high")
+    assert b3.describe("review") == "claude:claude-opus-4-8@high"
+    fresh = b3.new_session("review")
+    assert isinstance(fresh, o.ClaudeSession) \
+        and (fresh.model, fresh.effort) == ("claude-opus-4-8", "high"), \
+        "--review-agent claude must dispatch review through ClaudeSession " \
+        "with the review model/effort"
+    o._session_map_register("review-cc", "claude", "review-cc")
+    s = b3.resume_session("review-cc", "review")
+    assert isinstance(s, o.ClaudeSession) and s.resume \
+        and (s.model, s.effort) == ("claude-opus-4-8", "high"), \
+        "close-out/blocked resume of a claude review session must reuse " \
+        "the review model/effort"
+    s = b3.resume_session("mystery-review-sid", "review")
+    assert isinstance(s, o.ClaudeSession) and s.resume, \
+        "unknown review sid falls back to the configured review agent"
+    s = b3.resume_session("known-cx", "review")
+    assert isinstance(s, o.CodexSession) \
+        and (s.model, s.effort) == ("claude-opus-4-8", "high"), \
+        "the recorded tool still wins over the role fallback"
     log = orch.log_file.read_text()
     assert "WARNING: sid mystery-sid not in" in log, \
         "role-guess fallback must be logged"
     assert "WARNING: sid mystery-dev-sid not in" in log, \
         "codex dev fallback must be logged"
+    assert "NOTE: sid known-cx was created in codex" in log, \
+        "a recorded tool other than the role agent must be logged"
+
+    # -- the same-agent-and-model launch notice
+    def notice(backend, dev, review):
+        return o.same_model_notice({
+            "backend": backend,
+            "dev": {"agent": dev[0], "model": dev[1]},
+            "review": {"agent": review[0], "model": review[1]}})
+
+    assert notice("cc-codex", ("claude", "claude-opus-4-8"),
+                  ("codex", "gpt-5.5")) is None
+    assert notice("cc-codex", ("claude", "claude-opus-4-8"),
+                  ("claude", "claude-opus-5")) is None, \
+        "same agent, different model keeps cross-model independence"
+    same = notice("cc-codex", ("claude", "claude-opus-4-8"),
+                  ("claude", "claude-opus-4-8"))
+    assert same and "claude:claude-opus-4-8" in same \
+        and "independence" in same, same
+    # cursor reports no dev agent: both roles are the one SDK
+    assert notice("cursor", (None, "gpt-5.5"), ("cursor", "gpt-5.6-sol")) \
+        is None
+    same = notice("cursor", (None, "gpt-5.5"), ("cursor", "gpt-5.5"))
+    assert same and "cursor:gpt-5.5" in same, same
     print("scenario 20 (CLI argv shapes + sessions.json resume routing): "
           "PASS")
 

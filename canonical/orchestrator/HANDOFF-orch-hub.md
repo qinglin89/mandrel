@@ -10,6 +10,12 @@
 > `effective-config:` startup snapshot. See
 > `HANDOFF-orch-hub-config-profiles.md`; its launch-form contract supersedes
 > this handoff's older “full-flag start form” wording.
+>
+> **2026-08-18 update:** each `cc-codex` role now selects its own CLI agent
+> (`--dev-agent`, `--review-agent`), the launch-configuration JSON is
+> `schema_version: 2`, and `review.agent` is a resolved selection rather than
+> a constant. `HANDOFF-orch-hub-split-role-profiles.md` is the current
+> launch-form contract.
 
 ## Goal
 

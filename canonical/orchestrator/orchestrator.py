@@ -14,13 +14,13 @@ Backends (--backend):
            review=GPT-5.5 by default). Hooks do NOT run under the SDK, so the
            orchestrator injects protocol context itself and exports AI_ORCH=1
            to keep the .cursor hooks quiet. Needs CURSOR_API_KEY.
-  cc-codex (default) Claude Code headless (`claude -p`, dev role,
-           opus-4.8 @ max effort) by default, or Codex CLI dev with
-           `--dev-agent codex`; Codex CLI (`codex exec`, review role,
-           gpt-5.5 @ xhigh effort) reviews. No Cursor dependency; each tool's
-           own hook/import chain loads the protocol natively, so the
-           orchestrator does NOT inject it. Post-checks stay on as an
-           end-discipline backstop.
+  cc-codex (default) each role picks its own CLI agent: dev defaults to
+           Claude Code headless (`claude -p`, opus-4.8 @ max effort) and
+           review to Codex CLI (`codex exec`, gpt-5.5 @ xhigh effort);
+           `--dev-agent` / `--review-agent` swap either one. No Cursor
+           dependency; each tool's own hook/import chain loads the protocol
+           natively, so the orchestrator does NOT inject it. Post-checks stay
+           on as an end-discipline backstop.
 
 Lifecycle the orchestrator owns (both backends):
   - post-session checks: clean tree, session-log entry, legal status per role
@@ -38,6 +38,7 @@ Usage:
         [--dev-profile default|standard|excellent]
         [--review-profile default|standard|excellent]
         [--plan-gate] [--dev-agent claude|codex]
+        [--review-agent claude|codex]
         [--dev-model ID] [--review-model ID]
         [--dev-effort E] [--review-effort E] [--max-sessions N]
     .venv/bin/python orchestrator.py --print-config [the same selection flags]
@@ -129,7 +130,10 @@ EFFORT_AXIS = {"claude": "effort", "fable": "effort", "gpt": "reasoning"}
 CURSOR_REASONING_ALIASES = {"xhigh": "extra-high"}
 CODEX_EFFORT_ALIASES = {"extra-high": "xhigh"}
 
-CLI_DEV_AGENTS = {"claude", "codex"}
+# Both cc-codex roles select from the same CLI agent set; each agent
+# carries its own model namespace and its own effort axis.
+CLI_AGENTS = {"claude", "codex"}
+AGENT_EFFORT_AXIS = {"claude": "effort", "codex": "reasoning"}
 
 # Startup effort allowlists, keyed by parameter axis. The server accepts
 # unknown effort values SILENTLY (verified 2026-07-03 with a bogus value) and
@@ -161,7 +165,7 @@ def effort_error(axis: str, value: str | None) -> str | None:
 
 
 CONFIG_FILE = ORCH_DIR / "orchestrator.toml"
-CONFIG_SCHEMA_VERSION = 1
+CONFIG_SCHEMA_VERSION = 2
 BACKENDS = {"cursor", "cc-codex"}
 CODEX_SANDBOX_ALLOWED = {"read-only", "workspace-write",
                          "danger-full-access"}
@@ -201,25 +205,28 @@ def _effort_axis(model: str) -> str:
     return "effort"
 
 
-def _validate_role(where: str, table: dict, *, dev_axis: str | None = None,
+def _validate_role(where: str, table: dict, *, axis: str | None = None,
                    review_axis: str | None = None,
                    flat: bool = True) -> None:
+    """Validate a role table. `flat` = a both-roles table (dev_* / review_*),
+    where `axis` is the dev axis; otherwise a single agent's model/effort
+    table, where `axis` is that agent's axis whichever role owns it."""
     if flat:
         dev_model = _string(table, "dev_model", where)
         dev_effort = _string(table, "dev_effort", where)
         review_model = _string(table, "review_model", where)
         review_effort = _string(table, "review_effort", where)
-        axes = (dev_axis or _effort_axis(dev_model),
+        axes = (axis or _effort_axis(dev_model),
                 review_axis or _effort_axis(review_model))
         values = ((f"{where}.dev_effort", axes[0], dev_effort),
                   (f"{where}.review_effort", axes[1], review_effort))
     else:
         model = _string(table, "model", where)
         effort = _string(table, "effort", where)
-        values = ((f"{where}.effort", dev_axis or _effort_axis(model),
+        values = ((f"{where}.effort", axis or _effort_axis(model),
                    effort),)
-    for label, axis, effort in values:
-        error = effort_error(axis, effort)
+    for label, value_axis, effort in values:
+        error = effort_error(value_axis, effort)
         if error:
             raise OrchestratorConfigError(f"{label}: {error}")
 
@@ -257,21 +264,17 @@ def load_orchestrator_config(
     cursor = _table(defaults, "cursor", "defaults")
     _validate_role("defaults.cursor", cursor)
     cc = _table(defaults, "cc-codex", "defaults")
-    dev_agent = _string(cc, "dev_agent", "defaults.cc-codex")
-    if dev_agent not in CLI_DEV_AGENTS:
-        raise OrchestratorConfigError(
-            "defaults.cc-codex.dev_agent must be claude or codex")
-    _string(cc, "review_model", "defaults.cc-codex")
-    review_effort = _string(cc, "review_effort", "defaults.cc-codex")
-    error = effort_error("reasoning", review_effort)
-    if error:
-        raise OrchestratorConfigError(
-            f"defaults.cc-codex.review_effort: {error}")
-    cc_dev = _table(cc, "dev", "defaults.cc-codex")
-    for agent, axis in (("claude", "effort"), ("codex", "reasoning")):
-        _validate_role(f"defaults.cc-codex.dev.{agent}",
-                       _table(cc_dev, agent, "defaults.cc-codex.dev"),
-                       dev_axis=axis, flat=False)
+    for role in ("dev", "review"):
+        agent = _string(cc, f"{role}_agent", "defaults.cc-codex")
+        if agent not in CLI_AGENTS:
+            raise OrchestratorConfigError(
+                f"defaults.cc-codex.{role}_agent must be claude or codex")
+        cc_role = _table(cc, role, "defaults.cc-codex")
+        for agent_name, axis in sorted(AGENT_EFFORT_AXIS.items()):
+            _validate_role(f"defaults.cc-codex.{role}.{agent_name}",
+                           _table(cc_role, agent_name,
+                                  f"defaults.cc-codex.{role}"),
+                           axis=axis, flat=False)
 
     profiles = _table(config, "profiles", "config")
     if not profiles:
@@ -286,15 +289,17 @@ def load_orchestrator_config(
         _validate_role(f"profiles.{name}.cursor",
                        _table(profile, "cursor", f"profiles.{name}"))
         profile_cc = _table(profile, "cc-codex", f"profiles.{name}")
-        agent = _string(profile_cc, "dev_agent",
-                        f"profiles.{name}.cc-codex")
-        if agent not in CLI_DEV_AGENTS:
-            raise OrchestratorConfigError(
-                f"profiles.{name}.cc-codex.dev_agent must be claude or codex")
+        agents = {}
+        for role in ("dev", "review"):
+            agents[role] = _string(profile_cc, f"{role}_agent",
+                                   f"profiles.{name}.cc-codex")
+            if agents[role] not in CLI_AGENTS:
+                raise OrchestratorConfigError(
+                    f"profiles.{name}.cc-codex.{role}_agent must be claude "
+                    "or codex")
         _validate_role(f"profiles.{name}.cc-codex", profile_cc,
-                       dev_axis=("effort" if agent == "claude"
-                                 else "reasoning"),
-                       review_axis="reasoning")
+                       axis=AGENT_EFFORT_AXIS[agents["dev"]],
+                       review_axis=AGENT_EFFORT_AXIS[agents["review"]])
 
     revision = hashlib.sha256(raw).hexdigest()
     return config, revision
@@ -338,6 +343,8 @@ DEFAULT_CURSOR_REVIEW_EFFORT = (_env("ORCH_CURSOR_REVIEW_EFFORT")
                                 or CONFIG_CURSOR["review_effort"])
 DEFAULT_CC_DEV_AGENT = (_env("ORCH_CC_DEV_AGENT")
                         or CONFIG_CC["dev_agent"])
+DEFAULT_CC_REVIEW_AGENT = (_env("ORCH_CC_REVIEW_AGENT")
+                           or CONFIG_CC["review_agent"])
 DEFAULT_CC_MODEL = (_env("ORCH_CC_MODEL")
                     or CONFIG_CC["dev"]["claude"]["model"])
 DEFAULT_CC_EFFORT = (_env("ORCH_CC_EFFORT")
@@ -346,10 +353,23 @@ DEFAULT_CODEX_DEV_MODEL = (_env("ORCH_CODEX_DEV_MODEL")
                            or CONFIG_CC["dev"]["codex"]["model"])
 DEFAULT_CODEX_DEV_EFFORT = (_env("ORCH_CODEX_DEV_EFFORT")
                             or CONFIG_CC["dev"]["codex"]["effort"])
+DEFAULT_CC_REVIEW_MODEL = (_env("ORCH_CC_REVIEW_MODEL")
+                           or CONFIG_CC["review"]["claude"]["model"])
+DEFAULT_CC_REVIEW_EFFORT = (_env("ORCH_CC_REVIEW_EFFORT")
+                            or CONFIG_CC["review"]["claude"]["effort"])
 DEFAULT_CODEX_MODEL = (_env("ORCH_CODEX_MODEL")
-                       or CONFIG_CC["review_model"])
+                       or CONFIG_CC["review"]["codex"]["model"])
 DEFAULT_CODEX_EFFORT = (_env("ORCH_CODEX_EFFORT")
-                        or CONFIG_CC["review_effort"])
+                        or CONFIG_CC["review"]["codex"]["effort"])
+# Per-agent environment names, keyed by (role, agent). The codex review pair
+# keeps its historical unqualified names — codex was review-only when they
+# were introduced.
+AGENT_ENV_NAMES = {
+    ("dev", "claude"): ("ORCH_CC_MODEL", "ORCH_CC_EFFORT"),
+    ("dev", "codex"): ("ORCH_CODEX_DEV_MODEL", "ORCH_CODEX_DEV_EFFORT"),
+    ("review", "claude"): ("ORCH_CC_REVIEW_MODEL", "ORCH_CC_REVIEW_EFFORT"),
+    ("review", "codex"): ("ORCH_CODEX_MODEL", "ORCH_CODEX_EFFORT"),
+}
 # Display/backward-compatibility constant. ORCH_MAX_SESSIONS is parsed by the
 # resolver only when no CLI value supersedes it, so a stale invalid env value
 # cannot block an explicit --max-sessions override.
@@ -375,6 +395,7 @@ class ResolvedLaunchConfig:
     dev_agent: str | None
     dev_model: str
     dev_effort: str
+    review_agent: str | None
     review_model: str
     review_effort: str
     max_sessions: int
@@ -399,7 +420,8 @@ class ResolvedLaunchConfig:
                 "effort": self.dev_effort,
             },
             "review": {
-                "agent": "cursor" if self.backend == "cursor" else "codex",
+                "agent": ("cursor" if self.backend == "cursor"
+                          else self.review_agent),
                 "model": self.review_model,
                 "effort": self.review_effort,
             },
@@ -431,6 +453,26 @@ def launch_config_dict(resolved: ResolvedLaunchConfig,
     return result
 
 
+def same_model_notice(config: dict) -> str | None:
+    """Launch notice when both roles resolved to the same agent AND model.
+
+    Legal — the roles still run in separate conversations — but the review
+    prompt states cross-model independence, so a run that reviews its own
+    model's work should say so out loud. Derived from the public launch
+    configuration, so a supervisor can compute the same condition from
+    `--print-config` instead of parsing the log."""
+    dev, review = config["dev"], config["review"]
+    # Only cc-codex names a per-role CLI agent; on cursor both roles are the
+    # one SDK (dev.agent stays null there for response compatibility).
+    agents = [role["agent"] or config["backend"] for role in (dev, review)]
+    if (agents[0], dev["model"]) != (agents[1], review["model"]):
+        return None
+    return (f"NOTICE: dev and review both resolved to {agents[1]}:"
+            f"{review['model']} — the review prompt states cross-model "
+            "independence, and this run has none: same model, separate "
+            "conversations only.")
+
+
 def _resolved_value(*, cli_value, profile_table: dict | None,
                     profile_key: str, env_name: str | None,
                     config_value, profile_name: str | None) -> tuple[object, str]:
@@ -448,6 +490,7 @@ def resolve_launch_config(
         dev_profile: str | None = None,
         review_profile: str | None = None,
         dev_agent: str | None = None, dev_model: str | None = None,
+        review_agent: str | None = None,
         review_model: str | None = None, dev_effort: str | None = None,
         review_effort: str | None = None,
         max_sessions: int | None = None) -> ResolvedLaunchConfig:
@@ -518,9 +561,11 @@ def resolve_launch_config(
     sources["max_sessions"] = max_source
 
     if effective_backend == "cursor":
-        if dev_agent is not None:
-            raise OrchestratorConfigError(
-                "--dev-agent is only supported with --backend cc-codex")
+        for flag, selected in (("--dev-agent", dev_agent),
+                               ("--review-agent", review_agent)):
+            if selected is not None:
+                raise OrchestratorConfigError(
+                    f"{flag} is only supported with --backend cc-codex")
         fields = {}
         for key, cli_value, env_name in (
                 ("dev_model", dev_model, "ORCH_DEV_MODEL"),
@@ -538,56 +583,64 @@ def resolve_launch_config(
                 cli_value=cli_value, profile_table=role_profile_table,
                 profile_key=key, env_name=env_name,
                 config_value=CONFIG_CURSOR[key], profile_name=role_profile)
-        effective_dev_agent = None
+        effective_dev_agent = effective_review_agent = None
     else:
-        effective_dev_agent, agent_source = _resolved_value(
-            cli_value=dev_agent, profile_table=dev_profile_table,
-            profile_key="dev_agent", env_name="ORCH_CC_DEV_AGENT",
-            config_value=CONFIG_CC["dev_agent"],
-            profile_name=effective_dev_profile)
-        if effective_dev_agent not in CLI_DEV_AGENTS:
-            raise OrchestratorConfigError(
-                f"invalid cc-codex dev_agent {effective_dev_agent!r}; "
-                "available: claude, codex")
-        sources["dev.agent"] = agent_source
-        if (dev_profile_table is not None and dev_agent is not None
-                and dev_agent != dev_profile_table["dev_agent"]
-                and (dev_model is None or dev_effort is None)):
-            raise OrchestratorConfigError(
-                "overriding a profile's --dev-agent also requires explicit "
-                "--dev-model and --dev-effort")
-        dev_defaults = CONFIG_CC["dev"][effective_dev_agent]
-        dev_model_env = ("ORCH_CC_MODEL" if effective_dev_agent == "claude"
-                         else "ORCH_CODEX_DEV_MODEL")
-        dev_effort_env = ("ORCH_CC_EFFORT" if effective_dev_agent == "claude"
-                          else "ORCH_CODEX_DEV_EFFORT")
+        # Both roles resolve the same way: agent first, then that agent's own
+        # model/effort namespace.
+        agents: dict[str, str] = {}
+        field_spec = []
+        for role, cli_agent, cli_model, cli_effort in (
+                ("dev", dev_agent, dev_model, dev_effort),
+                ("review", review_agent, review_model, review_effort)):
+            role_profile = (effective_dev_profile if role == "dev"
+                            else effective_review_profile)
+            role_profile_table = (dev_profile_table if role == "dev"
+                                  else review_profile_table)
+            agent, agent_source = _resolved_value(
+                cli_value=cli_agent, profile_table=role_profile_table,
+                profile_key=f"{role}_agent",
+                env_name=f"ORCH_CC_{role.upper()}_AGENT",
+                config_value=CONFIG_CC[f"{role}_agent"],
+                profile_name=role_profile)
+            if agent not in CLI_AGENTS:
+                raise OrchestratorConfigError(
+                    f"invalid cc-codex {role}_agent {agent!r}; "
+                    "available: claude, codex")
+            sources[f"{role}.agent"] = agent_source
+            # A profile states one complete agent+model+effort selection;
+            # swapping only the agent would silently keep the other agent's
+            # model.
+            if (role_profile_table is not None and cli_agent is not None
+                    and cli_agent != role_profile_table[f"{role}_agent"]
+                    and (cli_model is None or cli_effort is None)):
+                raise OrchestratorConfigError(
+                    f"overriding a profile's --{role}-agent also requires "
+                    f"explicit --{role}-model and --{role}-effort")
+            agents[role] = str(agent)
+            agent_defaults = CONFIG_CC[role][agent]
+            model_env, effort_env = AGENT_ENV_NAMES[(role, agent)]
+            field_spec.extend((
+                (f"{role}_model", cli_model, model_env,
+                 agent_defaults["model"], role_profile, role_profile_table),
+                (f"{role}_effort", cli_effort, effort_env,
+                 agent_defaults["effort"], role_profile, role_profile_table),
+            ))
         fields = {}
-        for key, cli_value, env_name, config_value in (
-                ("dev_model", dev_model, dev_model_env,
-                 dev_defaults["model"]),
-                ("dev_effort", dev_effort, dev_effort_env,
-                 dev_defaults["effort"]),
-                ("review_model", review_model, "ORCH_CODEX_MODEL",
-                 CONFIG_CC["review_model"]),
-                ("review_effort", review_effort, "ORCH_CODEX_EFFORT",
-                 CONFIG_CC["review_effort"])):
-            role_profile = (
-                effective_dev_profile if key.startswith("dev_")
-                else effective_review_profile)
-            role_profile_table = (
-                dev_profile_table if key.startswith("dev_")
-                else review_profile_table)
+        for (key, cli_value, env_name, config_value, role_profile,
+             role_profile_table) in field_spec:
             fields[key], sources[key.replace("_", ".", 1)] = _resolved_value(
                 cli_value=cli_value, profile_table=role_profile_table,
                 profile_key=key, env_name=env_name,
                 config_value=config_value, profile_name=role_profile)
+        effective_dev_agent, effective_review_agent = (agents["dev"],
+                                                       agents["review"])
 
     dev_axis = (_effort_axis(str(fields["dev_model"]))
                 if effective_backend == "cursor"
-                else ("effort" if effective_dev_agent == "claude"
-                      else "reasoning"))
+                else AGENT_EFFORT_AXIS[str(effective_dev_agent)])
     review_axis = (_effort_axis(str(fields["review_model"]))
-                   if effective_backend == "cursor" else "reasoning")
+                   if effective_backend == "cursor"
+                   else AGENT_EFFORT_AXIS[str(effective_review_agent)])
     for label, axis, value in (
             ("dev_effort", dev_axis, str(fields["dev_effort"])),
             ("review_effort", review_axis,
@@ -605,6 +658,8 @@ def resolve_launch_config(
                    if effective_dev_agent is not None else None),
         dev_model=str(fields["dev_model"]),
         dev_effort=str(fields["dev_effort"]),
+        review_agent=(str(effective_review_agent)
+                      if effective_review_agent is not None else None),
         review_model=str(fields["review_model"]),
         review_effort=str(fields["review_effort"]),
         max_sessions=effective_max,
@@ -1761,49 +1816,56 @@ class CliBackend:
     injects_protocol = False  # native hook/import chains load the protocol
 
     def __init__(self, orch: "Orchestrator", dev_agent: str, dev_model: str,
-                 dev_effort: str, review_model: str,
+                 dev_effort: str, review_agent: str, review_model: str,
                  review_effort: str) -> None:
-        if dev_agent not in CLI_DEV_AGENTS:
-            raise ValueError(f"invalid cc-codex dev_agent: {dev_agent}")
+        for role, agent in (("dev", dev_agent), ("review", review_agent)):
+            if agent not in CLI_AGENTS:
+                raise ValueError(f"invalid cc-codex {role}_agent: {agent}")
         self.orch = orch
-        self.dev_agent = dev_agent
+        self.dev_agent, self.review_agent = dev_agent, review_agent
         self.dev_model, self.dev_effort = dev_model, dev_effort
         self.review_model, self.review_effort = review_model, review_effort
 
-    def describe(self, role: str) -> str:
-        if role == "dev":
-            return f"{self.dev_agent}:{self.dev_model}@{self.dev_effort}"
-        return f"codex:{self.review_model}@{self.review_effort}"
+    def _agent(self, role: str) -> str:
+        return self.dev_agent if role == "dev" else self.review_agent
 
-    def _codex_params(self, role: str) -> tuple[str, str]:
+    def _params(self, role: str) -> tuple[str, str]:
         if role == "dev":
             return self.dev_model, self.dev_effort
         return self.review_model, self.review_effort
 
+    def describe(self, role: str) -> str:
+        model, effort = self._params(role)
+        return f"{self._agent(role)}:{model}@{effort}"
+
     def new_session(self, role: str) -> CliSession:
-        if role == "dev":
-            if self.dev_agent == "codex":
-                model, effort = self._codex_params(role)
-                return CodexSession(self.orch, model, effort)
-            return ClaudeSession(self.orch, self.dev_model, self.dev_effort)
-        model, effort = self._codex_params(role)
-        return CodexSession(self.orch, model, effort)
+        model, effort = self._params(role)
+        if self._agent(role) == "codex":
+            return CodexSession(self.orch, model, effort)
+        return ClaudeSession(self.orch, model, effort)
 
     def resume_session(self, sid: str, role: str) -> CliSession:
+        # The recorded tool is authoritative: a session can only be resumed
+        # in the CLI that created it. The role supplies the model/effort and
+        # the fallback tool when the sid is unknown.
         info = _session_map_load().get(sid)
-        fallback_tool = self.dev_agent if role == "dev" else "codex"
-        tool = (info or {}).get("tool") or fallback_tool
+        tool = (info or {}).get("tool") or self._agent(role)
         if info is None:
             self.orch.log(f"WARNING: sid {sid} not in {SESSION_MAP} — "
                           f"assuming tool={tool} by role. If this session "
                           "was created manually in another tool, resume may "
                           "fail; unblock manually in that tool instead.")
+        elif tool != self._agent(role):
+            self.orch.log(f"NOTE: sid {sid} was created in {tool}, not this "
+                          f"run's {role} agent {self._agent(role)} — "
+                          f"resuming in {tool} with the resolved {role} "
+                          "model/effort.")
+        model, effort = self._params(role)
         if tool == "claude":
-            return ClaudeSession(self.orch, self.dev_model, self.dev_effort,
+            return ClaudeSession(self.orch, model, effort,
                                  sid=sid, resume=True)
         if tool != "codex":
             raise SessionStartError(f"unknown CLI session tool '{tool}' for {sid}")
-        model, effort = self._codex_params(role)
         s = CodexSession(self.orch, model, effort, sid=sid)
         s.first_turn = False  # force the resume argv shape
         return s
@@ -3002,11 +3064,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"cursor = Cursor SDK both roles; cc-codex = "
                          f"Claude/Codex dev + Codex CLI review "
                          f"(effective default: {DEFAULT_BACKEND})")
-    ap.add_argument("--dev-agent", choices=sorted(CLI_DEV_AGENTS),
+    ap.add_argument("--dev-agent", choices=sorted(CLI_AGENTS),
                     default=None,
                     help="cc-codex only: dev-role CLI agent. Default: "
                          f"{DEFAULT_CC_DEV_AGENT} (claude = Claude Code; "
                          "codex = Codex CLI)")
+    ap.add_argument("--review-agent", choices=sorted(CLI_AGENTS),
+                    default=None,
+                    help="cc-codex only: review-role CLI agent. Default: "
+                         f"{DEFAULT_CC_REVIEW_AGENT}. Selecting the dev "
+                         "agent's model here gives up the cross-model "
+                         "independence the review prompt states")
     ap.add_argument("--plan-gate", action="store_true",
                     help="each dev session first iterates a plan-report in a "
                          "read-only planning session and blocks for human "
@@ -3017,7 +3085,9 @@ def build_parser() -> argparse.ArgumentParser:
                          f"{DEFAULT_CODEX_DEV_MODEL} (cc-codex codex dev)")
     ap.add_argument("--review-model", default=None,
                     help=f"default: {DEFAULT_REVIEW_MODEL} (cursor) / "
-                         f"{DEFAULT_CODEX_MODEL} (cc-codex)")
+                         f"{DEFAULT_CC_REVIEW_MODEL} (cc-codex claude "
+                         f"review) / {DEFAULT_CODEX_MODEL} (cc-codex codex "
+                         "review)")
     ap.add_argument("--dev-effort", default=None,
                     help="dev-role effort. cursor: claude effort axis "
                          f"low..max (default: {DEFAULT_CURSOR_DEV_EFFORT}); "
@@ -3026,12 +3096,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "codex reasoning effort "
                          f"(default: {DEFAULT_CODEX_DEV_EFFORT})")
     ap.add_argument("--review-effort", default=None,
-                    help="review-role effort: none/low/medium/high/xhigh "
-                         "(canonical = codex spelling; the cursor gpt axis "
-                         "calls the top tier 'extra-high' — both spellings "
-                         "are accepted and translated per backend). "
-                         f"Default: cursor = "
-                         f"{DEFAULT_CURSOR_REVIEW_EFFORT}; cc-codex = "
+                    help="review-role effort, validated on the selected "
+                         "review agent's axis: codex/cursor-gpt reasoning "
+                         "none/minimal/low/medium/high/xhigh (cursor calls "
+                         "the top tier 'extra-high'; both spellings are "
+                         "accepted and translated per backend), claude "
+                         f"effort low..max. Default: cursor = "
+                         f"{DEFAULT_CURSOR_REVIEW_EFFORT}; cc-codex claude "
+                         f"= {DEFAULT_CC_REVIEW_EFFORT}; cc-codex codex = "
                          f"{DEFAULT_CODEX_EFFORT}")
     ap.add_argument("--max-sessions", type=int, default=None,
                     help=f"maximum sessions (default: "
@@ -3058,6 +3130,7 @@ def main(argv: list[str] | None = None) -> None:
             review_profile=args.review_profile,
             dev_agent=args.dev_agent,
             dev_model=args.dev_model,
+            review_agent=args.review_agent,
             review_model=args.review_model,
             dev_effort=args.dev_effort,
             review_effort=args.review_effort,
@@ -3095,8 +3168,8 @@ def main(argv: list[str] | None = None) -> None:
                                      dev_effort=dev_effort,
                                      review_effort=review_effort)
     else:
-        dev_agent = resolved.dev_agent
-        assert dev_agent is not None
+        dev_agent, review_agent = resolved.dev_agent, resolved.review_agent
+        assert dev_agent is not None and review_agent is not None
         # NO AI_ORCH here: cc/codex hooks must fire — they carry protocol
         # injection and end-discipline natively for their own sessions.
         orch = Orchestrator(args.task_id, dev_model, review_model, None,
@@ -3104,7 +3177,7 @@ def main(argv: list[str] | None = None) -> None:
                             plan_gate=args.plan_gate,
                             control_dir=args.control_dir)
         orch.backend = CliBackend(orch, dev_agent, dev_model, dev_effort,
-                                  review_model, review_effort)
+                                  review_agent, review_model, review_effort)
 
     orch.log("effective-config: " + json.dumps(
         launch_config, sort_keys=True, separators=(",", ":")))
@@ -3117,6 +3190,9 @@ def main(argv: list[str] | None = None) -> None:
              f"plan_gate={args.plan_gate}"
              + (f" control_dir={orch.control_dir}" if orch.control_dir
                 else ""))
+    notice = same_model_notice(launch_config)
+    if notice:
+        orch.log(notice)
     if not tree_clean():
         sys.exit("working tree is not clean — resolve before orchestrating")
     orch.loop()

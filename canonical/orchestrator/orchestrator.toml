@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [defaults]
 backend = "cc-codex"
@@ -12,10 +12,11 @@ dev_effort = "high"
 review_model = "gpt-5.5"
 review_effort = "medium"
 
+# Both cc-codex roles pick a CLI agent, and each agent carries its own
+# model/effort defaults in its own namespace.
 [defaults."cc-codex"]
 dev_agent = "claude"
-review_model = "gpt-5.5"
-review_effort = "xhigh"
+review_agent = "codex"
 
 [defaults."cc-codex".dev.claude]
 model = "claude-opus-4-8"
@@ -25,9 +26,17 @@ effort = "max"
 model = "gpt-5.5"
 effort = "xhigh"
 
+[defaults."cc-codex".review.claude]
+model = "claude-opus-4-8"
+effort = "max"
+
+[defaults."cc-codex".review.codex]
+model = "gpt-5.5"
+effort = "xhigh"
+
 # Named profiles are complete role selections for each backend. A profile's
-# cc-codex dev_agent is part of the profile; explicit CLI flags may still
-# override any individual field.
+# cc-codex dev_agent and review_agent are part of the profile; explicit CLI
+# flags may still override any individual field.
 [profiles.standard.cursor]
 dev_model = "claude-opus-4-8"
 dev_effort = "max"
@@ -36,6 +45,7 @@ review_effort = "xhigh"
 
 [profiles.standard."cc-codex"]
 dev_agent = "claude"
+review_agent = "codex"
 dev_model = "claude-opus-4-8"
 dev_effort = "max"
 review_model = "gpt-5.5"
@@ -49,6 +59,7 @@ review_effort = "xhigh"
 
 [profiles.excellent."cc-codex"]
 dev_agent = "claude"
+review_agent = "codex"
 dev_model = "claude-opus-5"
 dev_effort = "max"
 review_model = "gpt-5.6-sol"
