@@ -96,7 +96,7 @@ POSTCHECK_CONTRACT = PROMPTS_DIR / "postcheck-contract.md"
 # set they replaced is retired.
 SYNC_SKILL = REPO / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
 LOG_DIR = ORCH_DIR / "logs"
-SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> {tool, native_id} (cli backend)
+SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> tool/native-id/model/effort
 
 # --- env file --------------------------------------------------------------
 
