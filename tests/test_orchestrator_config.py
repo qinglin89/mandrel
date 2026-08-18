@@ -54,7 +54,7 @@ def refuse_config(*args: str, env_overrides: dict[str, str] | None = None) -> st
 def test_default_config_is_visible_without_a_task_or_profile() -> None:
     config = query_config()
 
-    assert config["schema_version"] == 2
+    assert config["schema_version"] == 3
     assert config["profile"] == "default"
     assert config["profiles"] == {
         "dev": "default",
@@ -381,6 +381,11 @@ def test_an_uncatalogued_review_model_still_resolves() -> None:
 
     assert config["review"]["model"] == "some-unreleased-model"
     assert config["sources"]["review.model"] == "cli"
+    # The catalog states what a caller may offer, not what a run may launch.
+    published = config["options"]["agents"]["cc-codex"]["review"]["claude"]
+    assert "some-unreleased-model" not in [
+        entry["id"] for entry in published["models"]
+    ]
 
 
 def test_cli_max_sessions_supersedes_an_invalid_environment_value() -> None:
@@ -411,3 +416,116 @@ def test_profile_dev_agent_override_requires_a_complete_custom_pair() -> None:
 
     assert proc.returncode == 2
     assert "also requires explicit --dev-model and --dev-effort" in proc.stderr
+
+
+def test_option_catalog_publishes_every_selectable_value() -> None:
+    options = query_config()["options"]
+
+    assert options["backends"] == ["cc-codex", "cursor"]
+    assert options["run_profiles"] == ["excellent", "standard"]
+    assert options["role_profiles"] == ["default", "excellent", "standard"]
+    assert options["codex_sandbox"] == [
+        "danger-full-access",
+        "read-only",
+        "workspace-write",
+    ]
+    assert sorted(options["agents"]) == ["cc-codex", "cursor"]
+    for backend, agents in (("cc-codex", ["claude", "codex"]),
+                            ("cursor", ["cursor"])):
+        for role in ("dev", "review"):
+            assert sorted(options["agents"][backend][role]) == agents
+
+
+def test_option_catalog_does_not_narrow_with_the_current_selection() -> None:
+    # One query has to answer every control, so what a caller MAY select is
+    # independent of what this invocation DID select.
+    inherited = query_config()["options"]
+
+    assert query_config("--review-agent", "claude")["options"] == inherited
+    assert query_config("--backend", "cursor")["options"] == inherited
+    assert query_config("--profile", "excellent")["options"] == inherited
+
+
+def test_cc_codex_catalog_efforts_follow_the_agents_own_axis() -> None:
+    agents = query_config()["options"]["agents"]["cc-codex"]
+
+    for role in ("dev", "review"):
+        claude, codex = agents[role]["claude"], agents[role]["codex"]
+        assert claude["effort_axis"] == "effort"
+        assert claude["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+        assert codex["effort_axis"] == "reasoning"
+        assert codex["efforts"] == [
+            "none", "minimal", "low", "medium", "high", "xhigh",
+        ]
+        # The agent fixes the axis, so every catalogued model repeats it —
+        # including the model a caller has not selected yet.
+        for agent_options in (claude, codex):
+            for entry in agent_options["models"]:
+                assert entry["effort_axis"] == agent_options["effort_axis"]
+                assert entry["efforts"] == agent_options["efforts"]
+
+
+def test_cursor_catalog_states_the_axis_per_model_family() -> None:
+    cursor = query_config()["options"]["agents"]["cursor"]["review"]["cursor"]
+
+    # The one SDK takes either model family, so no single axis applies to
+    # the agent and only the per-model statement is meaningful.
+    assert cursor["effort_axis"] is None
+    assert cursor["efforts"] is None
+    by_id = {entry["id"]: entry for entry in cursor["models"]}
+    assert by_id["claude-opus-5"]["effort_axis"] == "effort"
+    assert by_id["claude-opus-5"]["efforts"][-1] == "max"
+    assert by_id["gpt-5.5"]["effort_axis"] == "reasoning"
+    assert "max" not in by_id["gpt-5.5"]["efforts"]
+
+
+def test_every_published_cc_codex_effort_is_accepted_by_its_role_flag() -> None:
+    agents = query_config()["options"]["agents"]["cc-codex"]
+
+    for role in ("dev", "review"):
+        for agent in ("claude", "codex"):
+            offered = agents[role][agent]
+            other = agents[role]["codex" if agent == "claude" else "claude"]
+            for effort in offered["efforts"]:
+                config = query_config(f"--{role}-agent", agent,
+                                      f"--{role}-effort", effort)
+                assert config[role]["effort"] == effort
+                assert config[role]["agent"] == agent
+            for foreign in sorted(set(other["efforts"])
+                                  - set(offered["efforts"])):
+                stderr = refuse_config(f"--{role}-agent", agent,
+                                       f"--{role}-effort", foreign)
+                assert f"for the {offered['effort_axis']} axis" in stderr
+
+
+def test_published_effort_aliases_are_accepted_but_never_offered() -> None:
+    options = query_config()["options"]
+
+    assert options["effort_aliases"] == {
+        "effort": {},
+        "reasoning": {"extra-high": "xhigh"},
+    }
+    assert "extra-high" not in options["efforts"]["reasoning"]
+    assert query_config(
+        "--review-agent", "codex",
+        "--review-effort", "extra-high",
+    )["review"]["effort"] == "extra-high"
+    assert "for the effort axis" in refuse_config(
+        "--review-agent", "claude", "--review-effort", "extra-high")
+
+
+def test_the_deployed_configuration_only_selects_catalogued_models() -> None:
+    # A deployment that shipped a model outside its own catalog would offer
+    # a caller less than it launches itself.
+    for backend in ("cc-codex", "cursor"):
+        for profile in ((), ("--profile", "standard"),
+                        ("--profile", "excellent")):
+            config = query_config("--backend", backend, *profile)
+            published = config["options"]["agents"][backend]
+            for role in ("dev", "review"):
+                # A null agent means the backend itself is the agent.
+                agent = config[role]["agent"] or backend
+                catalogued = [entry["id"]
+                              for entry in published[role][agent]["models"]]
+                assert config[role]["model"] in catalogued, (
+                    backend, profile, role)

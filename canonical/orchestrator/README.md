@@ -116,6 +116,28 @@ run writes the same JSON on the stable startup log line
 `effective-config: {...}` so a supervisor can persist the actual launch
 snapshot.
 
+Beside those resolved values the same JSON carries `options`: everything a
+launch MAY select, independent of what this query did select. It lists
+`backends`, `run_profiles`, `role_profiles` (the role-flag vocabulary,
+including `default`), `codex_sandbox`, the ascending effort vocabulary per
+axis in `efforts` (plus `effort_aliases` for spellings accepted but never
+offered), and `agents[<backend>][<role>][<agent>]` with that agent's
+`effort_axis`, `efforts`, and catalogued `models`. A caller can therefore
+build role-correct controls by filtering on backend, role, and agent without
+restating which axis applies: on `cc-codex` the selected agent fixes the
+axis; on `cursor` both roles run the one SDK — published under the agent name
+`cursor`, and the axis belongs to the model family, so the agent-level
+`effort_axis`/`efforts` are null and each model entry states its own. A role
+whose resolved `agent` is null (cursor dev) looks itself up under the
+backend's own name.
+
+Model ids come from the `[catalog.<backend>.<agent>]` tables in
+`orchestrator.toml` and are advisory: they state what a caller may offer,
+never what a run may launch. `--dev-model` / `--review-model` still accept an
+id outside the catalog, so a new model needs a config edit to be *offered*,
+never to be *used*. Effort values are not advisory — they are the startup
+allowlist itself.
+
 | Flag / env | Default | Meaning |
 |---|---|---|
 | `<task-id>` | — | e.g. `2026-06-23-v1-risk-control` (file `.ai-tasks/<id>.md` must exist; trailing `.md` tolerated) |
@@ -580,7 +602,7 @@ including pre-orchestrator ones).
 ## 8. Testing / maintenance
 
 - `test_loop_mock.py` — offline mock-loop tests (no network, temp repo),
-  30 scenarios: loop mechanics (review dispatch, followups, budgets,
+  31 scenarios: loop mechanics (review dispatch, followups, budgets,
   blocked resume — dev and review roles, foreign-sid guidance exit,
   close-out plain / native / native-incomplete / native-on-blocked-resume,
   final_review stall), prompt instantiation, context-budget wrap-ups (both
@@ -589,8 +611,9 @@ including pre-orchestrator ones).
   the two axes), the `--control-dir` file channel (question/answer
   files, malformed/stale handling, stop.flag, same-kind escalation
   discussion rounds, no-session marker rejection, and unchanged plan-gate
-  feedback semantics), and prompt-template startup validation. Run after
-  ANY orchestrator change:
+  feedback semantics), prompt-template startup validation, and launch-option
+  catalog publication (operator-extended model ids, malformed catalog
+  tables refused). Run after ANY orchestrator change:
   `.venv/bin/python test_loop_mock.py` (needs to run outside a sandbox; it
   shells out to git).
 - `smoke_hooks.py` — one-off empirical checks of hook behavior under the

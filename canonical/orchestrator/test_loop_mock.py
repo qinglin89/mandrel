@@ -2454,6 +2454,70 @@ def scenario_30_prompt_template_validation(repo: Path) -> None:
           "on missing/mismatched templates): PASS")
 
 
+def scenario_31_option_catalog(repo: Path) -> None:
+    """Launch-option catalog: deployment-owned model ids (`[catalog]` in
+    orchestrator.toml) joined with the code-owned effort axes and published
+    as the values a caller may offer, keyed by backend/role/agent. The model
+    list is advisory (an uncatalogued model still launches); a malformed
+    catalog table refuses startup like every other config section."""
+    published = o.build_option_catalog(o.ORCH_CONFIG)
+    codex_review = published["agents"]["cc-codex"]["review"]["codex"]
+    assert codex_review["effort_axis"] == "reasoning"
+    assert codex_review["efforts"] == list(o.EFFORT_VALUES["reasoning"])
+    assert [entry["id"] for entry in codex_review["models"]] == list(
+        o.ORCH_CONFIG["catalog"]["cc-codex"]["codex"]["models"])
+
+    source = o.CONFIG_FILE.read_text()
+    tmp = Path(tempfile.mkdtemp(prefix="orch-config-"))
+    path = tmp / "orchestrator.toml"
+
+    def load(text: str) -> dict:
+        path.write_text(text)
+        return o.load_orchestrator_config(path)[0]
+
+    def refuses(text: str, expected: str) -> None:
+        try:
+            load(text)
+        except o.OrchestratorConfigError as err:
+            assert expected in str(err), (expected, str(err))
+        else:
+            raise AssertionError(f"config must be refused: {expected}")
+
+    claude_entry = ('[catalog."cc-codex".claude]\n'
+                    'models = ["claude-opus-4-8", "claude-opus-5"]')
+    codex_entry = ('[catalog."cc-codex".codex]\n'
+                   'models = ["gpt-5.5", "gpt-5.6-sol"]')
+    catalog_start = source.index("[catalog.")
+    assert claude_entry in source and codex_entry in source
+    try:
+        # the published options are deployment data, not source literals
+        extended = load(source.replace(
+            claude_entry, claude_entry[:-1] + ', "some-new-model"]'))
+        entries = o.build_option_catalog(extended)["agents"]["cc-codex"]
+        for role in ("dev", "review"):
+            assert [entry["id"] for entry in entries[role]["claude"]["models"]] \
+                == ["claude-opus-4-8", "claude-opus-5", "some-new-model"]
+            # a new id inherits its agent's axis with no per-model statement
+            assert entries[role]["claude"]["models"][-1]["efforts"] == list(
+                o.EFFORT_VALUES["effort"])
+
+        refuses(source[:catalog_start], "config.catalog must be a table")
+        refuses(source.replace(codex_entry, ""),
+                "catalog.cc-codex.codex must be a table")
+        refuses(source.replace(codex_entry, codex_entry.replace(
+            '["gpt-5.5", "gpt-5.6-sol"]', "[]")),
+            "catalog.cc-codex.codex.models must be a non-empty array")
+        refuses(source.replace(codex_entry, codex_entry.replace(
+            '"gpt-5.6-sol"', '"gpt-5.5"')),
+            "catalog.cc-codex.codex.models must not repeat a model id")
+        refuses(source.replace("schema_version = 3", "schema_version = 2", 1),
+                "schema_version must be 3")
+    finally:
+        shutil.rmtree(tmp)
+    print("scenario 31 (option catalog: published per backend/role/agent, "
+          "operator-extensible, malformed tables refused): PASS")
+
+
 def main() -> None:
     repo = make_repo()
     try:
@@ -2488,6 +2552,7 @@ def main() -> None:
         scenario_28_session_start_error_logged(repo)
         scenario_29_escalation_discussion(repo)
         scenario_30_prompt_template_validation(repo)
+        scenario_31_option_catalog(repo)
         print("\nALL MOCK-LOOP SCENARIOS PASSED")
     finally:
         with contextlib.suppress(Exception):

@@ -84,7 +84,7 @@ The additive `profiles` object is authoritative:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "profile": "default",
   "profiles": {
     "dev": "standard",
@@ -117,12 +117,104 @@ The legacy top-level `profile` reports only the run-wide `--profile`
 selection. Keep accepting older deployed orchestrators that omit `profiles`;
 for those, derive both role selections from top-level `profile`.
 
+### Option catalog (`options`)
+
+The same response also carries `options`: everything a launch MAY select,
+independent of what the query selected. One query answers every control —
+`options` never narrows with `--backend`, a profile, or a role flag, so it
+does not have to be re-fetched when a selector changes (the resolved
+`dev`/`review` sections still do).
+
+```json
+{
+  "options": {
+    "backends": ["cc-codex", "cursor"],
+    "run_profiles": ["excellent", "standard"],
+    "role_profiles": ["default", "excellent", "standard"],
+    "codex_sandbox": ["danger-full-access", "read-only", "workspace-write"],
+    "efforts": {
+      "effort": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning": ["none", "minimal", "low", "medium", "high", "xhigh"]
+    },
+    "effort_aliases": {"effort": {}, "reasoning": {"extra-high": "xhigh"}},
+    "agents": {
+      "cc-codex": {
+        "dev": {
+          "claude": {
+            "effort_axis": "effort",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "models": [
+              {
+                "id": "claude-opus-4-8",
+                "effort_axis": "effort",
+                "efforts": ["low", "medium", "high", "xhigh", "max"]
+              }
+            ]
+          },
+          "codex": {"...": "same shape on the reasoning axis"}
+        },
+        "review": {"...": "same shape, read per role"}
+      },
+      "cursor": {
+        "dev": {
+          "cursor": {
+            "effort_axis": null,
+            "efforts": null,
+            "models": [
+              {
+                "id": "gpt-5.5",
+                "effort_axis": "reasoning",
+                "efforts": ["none", "minimal", "low", "medium", "high", "xhigh"]
+              }
+            ]
+          }
+        },
+        "review": {"...": "same"}
+      }
+    }
+  }
+}
+```
+
+Rules for building the Custom controls from it:
+
+- Look up `options.agents[backend][role][agent]`. Read the role you are
+  rendering; the two roles publish the same entry per agent today, and a
+  caller that hardcodes that will break when they diverge.
+- A role whose resolved `agent` is null (cursor dev) is looked up under the
+  backend's own name — `cursor` — the same normalization the same-model
+  notice uses.
+- Effort list: use the agent-level `efforts` when it is non-null (`cc-codex`,
+  where the selected agent fixes the axis). On `cursor` it is null because
+  the axis follows the model family: take the chosen model entry's `efforts`.
+  Values are ascending, so render them in the order given.
+- `effort_aliases` maps a spelling that is accepted but never offered onto
+  the published value (`extra-high` → `xhigh` on the reasoning axis). Offer
+  only the published list.
+- `models` is ADVISORY. It states what a caller may offer, never what a run
+  may launch: a model id outside the catalog still launches, so keep the
+  free-text escape in the Custom model control. Effort values are not
+  advisory — they are the orchestrator's startup allowlist, and an unlisted
+  one is refused with the axis named.
+- `models` is deployment data (`[catalog.<backend>.<agent>]` in the target's
+  `orchestrator.toml`), so it can differ per target and change with a
+  redeploy. Do not cache it across targets; `config_revision` changes when it
+  does.
+- Every flag with a fixed vocabulary is in `options`. The ones without one —
+  `--max-sessions`, `--control-dir`, and the boolean switches (`--once`,
+  `--plan-gate`, `--print-config`) — are not, and never will be.
+
 ### Version compatibility
 
-`schema_version` is `2` from this change on. A deployed orchestrator still
-reporting `1` pins review to Codex: do not send `--review-agent` to it, and
-treat its `review.agent` as fixed. Read the version from the query response
-rather than from the target's deployment state.
+`schema_version` is `3` from the option-catalog change on. Read it from the
+query response rather than from the target's deployment state, and degrade by
+version:
+
+| Version | Review agent | `options` |
+|---|---|---|
+| `1` | pinned to Codex — do not send `--review-agent` | absent |
+| `2` | selectable via `--review-agent` | absent — keep the hardcoded per-agent effort lists as the fallback |
+| `3` | selectable | present and authoritative |
 
 ## Launch argument mapping
 
@@ -149,7 +241,7 @@ agent flags and emit only model/effort.
 1. Extend the config-query helper and API endpoint with `dev_profile` and
    `review_profile` query parameters.
 2. Parse the new `profiles` object while retaining compatibility with the
-   older single-profile response, and read `review.agent` (schema 2) instead
+   older single-profile response, and read `review.agent` (schema 2+) instead
    of assuming Codex review.
 3. Replace the single Mode control with independent DEV and REVIEW profile
    controls; keep Backend shared.
@@ -157,8 +249,12 @@ agent flags and emit only model/effort.
    selection changes.
 5. Update launch-argument construction for every preset/custom combination,
    including `--review-agent` and the review effort list that follows the
-   selected review agent.
+   selected review agent — built from `options` (schema 3+) instead of a
+   hardcoded per-agent list, with the model control keeping its free-text
+   escape for an uncatalogued id.
 6. Persist and display both role selections in run snapshots/history.
 7. Cover argument construction, API forwarding/parsing, old-orchestrator
-   compatibility (`schema_version` 1 versus 2), preset/custom mixing,
-   per-agent effort lists, and dialog keyboard behavior.
+   compatibility (`schema_version` 1 versus 2 versus 3, including the
+   fallback when `options` is absent), preset/custom mixing, per-agent
+   effort lists built from `options`, an uncatalogued model id, and dialog
+   keyboard behavior.

@@ -12,9 +12,12 @@
 > this handoff's older “full-flag start form” wording.
 >
 > **2026-08-18 update:** each `cc-codex` role now selects its own CLI agent
-> (`--dev-agent`, `--review-agent`), the launch-configuration JSON is
-> `schema_version: 2`, and `review.agent` is a resolved selection rather than
-> a constant. `HANDOFF-orch-hub-split-role-profiles.md` is the current
+> (`--dev-agent`, `--review-agent`) and `review.agent` is a resolved selection
+> rather than a constant (`schema_version: 2`); the launch-configuration JSON
+> then gained an `options` catalog of every selectable backend, profile,
+> agent, effort, and catalogued model id, keyed by backend/role/agent
+> (`schema_version: 3`), so the launch UI no longer restates model or effort
+> knowledge. `HANDOFF-orch-hub-split-role-profiles.md` is the current
 > launch-form contract.
 
 ## Goal

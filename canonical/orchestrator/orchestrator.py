@@ -134,18 +134,34 @@ CODEX_EFFORT_ALIASES = {"extra-high": "xhigh"}
 # carries its own model namespace and its own effort axis.
 CLI_AGENTS = {"claude", "codex"}
 AGENT_EFFORT_AXIS = {"claude": "effort", "codex": "reasoning"}
+# Which agents each backend offers a role. `cursor` runs both roles on the
+# one SDK, published under the backend's own name — the resolved config
+# reports `review.agent: "cursor"` and `dev.agent: null` there.
+BACKEND_AGENTS = {
+    "cursor": ("cursor",),
+    "cc-codex": ("claude", "codex"),
+}
 
+# Effort vocabulary per parameter axis, ASCENDING — this order is what the
+# option catalog publishes, so a caller can render a control without knowing
+# the axes. Values a run also accepts but never offers live in
+# EFFORT_ACCEPTED_ALIASES.
+EFFORT_VALUES = {
+    # claude/fable axis (cursor `effort` param, claude CLI --effort)
+    "effort": ("low", "medium", "high", "xhigh", "max"),
+    # gpt/codex axis (cursor `reasoning` param, codex model_reasoning_effort)
+    "reasoning": ("none", "minimal", "low", "medium", "high", "xhigh"),
+}
+# Extra spellings an axis accepts but never offers, alias -> published
+# value: extra-high is cursor's name for codex's xhigh (aliased both ways).
+EFFORT_ACCEPTED_ALIASES = {"reasoning": {"extra-high": "xhigh"}}
 # Startup effort allowlists, keyed by parameter axis. The server accepts
 # unknown effort values SILENTLY (verified 2026-07-03 with a bogus value) and
 # falls back to the default effort — so a typo would silently downgrade the
 # run. Reject client-side instead.
 EFFORT_ALLOWED = {
-    # claude/fable axis (cursor `effort` param, claude CLI --effort)
-    "effort": {"low", "medium", "high", "xhigh", "max"},
-    # gpt/codex axis (cursor `reasoning` param, codex model_reasoning_effort);
-    # extra-high = cursor's spelling of codex's xhigh (aliased both ways)
-    "reasoning": {"none", "minimal", "low", "medium", "high", "xhigh",
-                  "extra-high"},
+    axis: set(values) | set(EFFORT_ACCEPTED_ALIASES.get(axis, {}))
+    for axis, values in EFFORT_VALUES.items()
 }
 
 
@@ -165,8 +181,11 @@ def effort_error(axis: str, value: str | None) -> str | None:
 
 
 CONFIG_FILE = ORCH_DIR / "orchestrator.toml"
-CONFIG_SCHEMA_VERSION = 2
-BACKENDS = {"cursor", "cc-codex"}
+CONFIG_SCHEMA_VERSION = 3
+# One carrier for the backend set: a backend exists exactly when its role
+# agent axis is declared, so the flag, the config check, and the published
+# option catalog can never drift apart.
+BACKENDS = set(BACKEND_AGENTS)
 CODEX_SANDBOX_ALLOWED = {"read-only", "workspace-write",
                          "danger-full-access"}
 
@@ -188,6 +207,22 @@ def _string(parent: dict, key: str, where: str) -> str:
         raise OrchestratorConfigError(
             f"{where}.{key} must be a non-empty string")
     return value
+
+
+def _model_list(table: dict, where: str) -> list[str]:
+    """Validate one catalog entry's `models` array: a non-empty list of
+    unique, non-empty model ids. The catalog is advisory — it states what a
+    caller may offer, never what a run may launch."""
+    models = table.get("models")
+    if (not isinstance(models, list) or not models
+            or not all(isinstance(item, str) and item.strip()
+                       for item in models)):
+        raise OrchestratorConfigError(
+            f"{where}.models must be a non-empty array of model ids")
+    if len(set(models)) != len(models):
+        raise OrchestratorConfigError(
+            f"{where}.models must not repeat a model id")
+    return models
 
 
 def _positive_int(parent: dict, key: str, where: str) -> int:
@@ -301,6 +336,14 @@ def load_orchestrator_config(
                        axis=AGENT_EFFORT_AXIS[agents["dev"]],
                        review_axis=AGENT_EFFORT_AXIS[agents["review"]])
 
+    catalog = _table(config, "catalog", "config")
+    for backend_name, agent_names in sorted(BACKEND_AGENTS.items()):
+        backend_catalog = _table(catalog, backend_name, "catalog")
+        for agent_name in agent_names:
+            _model_list(_table(backend_catalog, agent_name,
+                               f"catalog.{backend_name}"),
+                        f"catalog.{backend_name}.{agent_name}")
+
     revision = hashlib.sha256(raw).hexdigest()
     return config, revision
 
@@ -309,6 +352,62 @@ ORCH_CONFIG, ORCH_CONFIG_REVISION = load_orchestrator_config()
 CONFIG_DEFAULTS = ORCH_CONFIG["defaults"]
 CONFIG_CURSOR = CONFIG_DEFAULTS["cursor"]
 CONFIG_CC = CONFIG_DEFAULTS["cc-codex"]
+
+
+def _agent_options(models: list[str], agent: str) -> dict:
+    """One agent's offerable choices. `effort_axis` is the agent's own axis
+    where the agent fixes it (cc-codex); the cursor SDK takes either model
+    family, so there it is null and only the per-model axis is stated."""
+    agent_axis = AGENT_EFFORT_AXIS.get(agent)
+    published = []
+    for model in models:
+        model_axis = agent_axis or _effort_axis(model)
+        published.append({
+            "id": model,
+            "effort_axis": model_axis,
+            "efforts": list(EFFORT_VALUES[model_axis]),
+        })
+    return {
+        "effort_axis": agent_axis,
+        "efforts": (list(EFFORT_VALUES[agent_axis])
+                    if agent_axis is not None else None),
+        "models": published,
+    }
+
+
+def build_option_catalog(config: dict) -> dict:
+    """Every launch value a caller may offer, keyed so it can filter by
+    backend, role, and agent without restating this module's axis knowledge.
+
+    Model ids come from the deployed `[catalog]` tables and are advisory:
+    they state what a caller may offer, never what a run may launch — an
+    uncatalogued model still launches. Effort values are the startup
+    allowlist itself, in ascending order. Both roles currently publish the
+    same entry per agent; callers read their own role rather than assume
+    that."""
+    agents = {}
+    for backend_name, agent_names in BACKEND_AGENTS.items():
+        backend_catalog = config["catalog"][backend_name]
+        by_agent = {
+            agent: _agent_options(backend_catalog[agent]["models"], agent)
+            for agent in agent_names
+        }
+        agents[backend_name] = {"dev": by_agent, "review": by_agent}
+    return {
+        "backends": sorted(BACKENDS),
+        "run_profiles": sorted(config["profiles"]),
+        "role_profiles": ["default", *sorted(config["profiles"])],
+        "codex_sandbox": sorted(CODEX_SANDBOX_ALLOWED),
+        "efforts": {axis: list(values)
+                    for axis, values in sorted(EFFORT_VALUES.items())},
+        # Spellings also accepted on an axis but never offered.
+        "effort_aliases": {axis: dict(EFFORT_ACCEPTED_ALIASES.get(axis, {}))
+                           for axis in sorted(EFFORT_VALUES)},
+        "agents": agents,
+    }
+
+
+OPTION_CATALOG = build_option_catalog(ORCH_CONFIG)
 
 
 def _env(name: str) -> str | None:
@@ -413,6 +512,9 @@ class ResolvedLaunchConfig:
                 "review": self.review_profile or "default",
             },
             "available_profiles": sorted(ORCH_CONFIG["profiles"]),
+            # Selection-independent: what any launch MAY select, beside the
+            # values this one DID select.
+            "options": OPTION_CATALOG,
             "backend": self.backend,
             "dev": {
                 "agent": self.dev_agent,
@@ -3082,7 +3184,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "environment/config inheritance for review")
     ap.add_argument("--once", action="store_true",
                     help="run exactly one session, then exit")
-    ap.add_argument("--backend", choices=["cursor", "cc-codex"],
+    ap.add_argument("--backend", choices=sorted(BACKENDS),
                     default=None,
                     help=f"cursor = Cursor SDK both roles; cc-codex = "
                          f"Claude Code / Codex CLI selected per role "

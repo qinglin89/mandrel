@@ -1,4 +1,4 @@
-schema_version = 2
+schema_version = 3
 
 [defaults]
 backend = "cc-codex"
@@ -64,3 +64,18 @@ dev_model = "claude-opus-5"
 dev_effort = "max"
 review_model = "gpt-5.6-sol"
 review_effort = "xhigh"
+
+# Model ids this deployment vouches for, per backend and CLI agent. Published
+# through `--print-config` so a caller can offer verified choices instead of
+# free text. Advisory only: a model outside a catalog still launches, and the
+# effort vocabulary that applies to a model is never listed here — the
+# orchestrator derives it from the selected agent (cc-codex) or the model
+# family (cursor SDK).
+[catalog.cursor.cursor]
+models = ["claude-opus-4-8", "claude-opus-5", "gpt-5.5", "gpt-5.6-sol"]
+
+[catalog."cc-codex".claude]
+models = ["claude-opus-4-8", "claude-opus-5"]
+
+[catalog."cc-codex".codex]
+models = ["gpt-5.5", "gpt-5.6-sol"]
