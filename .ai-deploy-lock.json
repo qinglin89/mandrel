@@ -1,5 +1,5 @@
 {
-  "canonical_payload_sha256": "d6b424f230ed9d637929afb5d01c29196f6ba30c1f2d4de26531296f8f9a314e",
+  "canonical_payload_sha256": "5afbf95d591e77d03cad50fe6fbd69191bc98767f0199dbb80a73a3b21512b6c",
   "deployed_files": [
     {
       "canonical_relative_path": "canonical/meta/init.md",
@@ -195,44 +195,44 @@
     },
     {
       "canonical_relative_path": "canonical/orchestrator/.env.example",
-      "canonical_sha256": "ac698f62572932c36e6c0159269cf39780868c3105e5c85325899d1d5532064c",
-      "canonical_size_bytes": 1404,
+      "canonical_sha256": "040d66a58b9226909b7e89c9fb0dcabfe9cf44e49177142be0dd7059af9a4863",
+      "canonical_size_bytes": 1762,
       "target_relative_path": ".cursor/orchestrator/.env.example"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/HANDOFF-orch-hub-config-profiles.md",
-      "canonical_sha256": "8174b2a3cd5534dd0c5481b76e67bdde8f954151d663fe704987197131711146",
-      "canonical_size_bytes": 8201,
+      "canonical_sha256": "2ec418fc86113a37e7937be784bfab4db85d6402688acaa82060b18771228c2c",
+      "canonical_size_bytes": 8520,
       "target_relative_path": ".cursor/orchestrator/HANDOFF-orch-hub-config-profiles.md"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/HANDOFF-orch-hub-split-role-profiles.md",
-      "canonical_sha256": "39abeea7aa1f0eb82f573b16dc3decdf69fa772f58c0c66b425ba7c68e4f9b99",
-      "canonical_size_bytes": 3473,
+      "canonical_sha256": "b43066c7c6d2717f469be1fbc763a90586d11cda4d4a911cb27a41f6e3818af0",
+      "canonical_size_bytes": 6308,
       "target_relative_path": ".cursor/orchestrator/HANDOFF-orch-hub-split-role-profiles.md"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/HANDOFF-orch-hub.md",
-      "canonical_sha256": "2b2f8063140013c50916e101138d276503119c2ef4fd5fd993fd03bc0f39bbb5",
-      "canonical_size_bytes": 14834,
+      "canonical_sha256": "eeaf781312dd1940e11916b0805225294ade2be30425ad9bb9056eebd7840906",
+      "canonical_size_bytes": 15155,
       "target_relative_path": ".cursor/orchestrator/HANDOFF-orch-hub.md"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/README.md",
-      "canonical_sha256": "19944fd782af12c50cdde47a01ec13822e2cf1c89ccf931071415f8d582bcb59",
-      "canonical_size_bytes": 36148,
+      "canonical_sha256": "e99832076f85a9ee412454c450918b015e6898c9b63a8a0e0b75d98cc2343e75",
+      "canonical_size_bytes": 37718,
       "target_relative_path": ".cursor/orchestrator/README.md"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/orchestrator.py",
-      "canonical_sha256": "7bd73abe589a426be4e88725ceb1b96094b99293d117ddae30741f78f92d2264",
-      "canonical_size_bytes": 144795,
+      "canonical_sha256": "4d9cfdbdc92db60ba2e50e1528eb7652d2f7426405f0f40a50f232aad39c967f",
+      "canonical_size_bytes": 149353,
       "target_relative_path": ".cursor/orchestrator/orchestrator.py"
     },
     {
       "canonical_relative_path": "canonical/orchestrator/orchestrator.toml",
-      "canonical_sha256": "cae16d6e7c3751f5b77f5c91fc5d8ab35b0c82279fdca225296b4f65e617e38d",
-      "canonical_size_bytes": 1229,
+      "canonical_sha256": "af68ee2f71792541389bf08bd044aac0e1d19b1f43e5ae4d565eeaace989eae9",
+      "canonical_size_bytes": 1533,
       "target_relative_path": ".cursor/orchestrator/orchestrator.toml"
     },
     {
@@ -681,8 +681,8 @@
     },
     {
       "canonical_relative_path": "canonical/orchestrator/test_loop_mock.py",
-      "canonical_sha256": "2040e38bb7aadbf5e6526acc4d6c6cc478f16af2d412c27756f546906914a6a2",
-      "canonical_size_bytes": 103037,
+      "canonical_sha256": "5a9592259a569dafcf38b911a778813c285361febbdcbcf995ba0436ed199bc4",
+      "canonical_size_bytes": 106063,
       "target_relative_path": ".cursor/orchestrator/test_loop_mock.py"
     },
     {
@@ -705,6 +705,6 @@
     }
   ],
   "schema_version": 1,
-  "source_git_commit": "31a58565437f9f59cfb370a48cfac0c0f46b6aa8",
+  "source_git_commit": "669e02527d0ec7309b5218a1ca6394ad72f13d96",
   "source_repo": "mandrel"
 }
