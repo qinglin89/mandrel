@@ -20,6 +20,7 @@ build/
 # BEGIN mandrel
 /.ai-deploy-manifest.json
 /.ai-protocol/
+/.mandrel/
 /.cursor/
 /.codex/
 /.claude/
