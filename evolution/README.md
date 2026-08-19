@@ -244,6 +244,174 @@ completed archived-task L1+L2 evaluations
 batch. The default threshold is in `config.toml`; forced sub-threshold batches
 require a human justification and must still meet the configured minimum.
 
+## The report source
+
+Everything above starts with a feed of completed-evaluation reports, and the
+workflow names orch-hub because that is what this repository's operator points
+at. It is not what the lifecycle requires. The evidence source is one narrow
+boundary — fetch a page of records, fetch one record's artifact bodies — with
+two implementations, and `--feed-dir` is the one that needs no service, no
+token, and no network:
+
+```bash
+./bin/mandrel evolution list --feed-dir ./my-feed   # classify; writes nothing
+./bin/mandrel evolution sync --feed-dir ./my-feed   # validate, hash, import
+```
+
+Without the flag, the protected orch-hub client is built from the environment
+variables `config.toml` names. With it, the reports come out of a directory:
+
+```text
+<feed-dir>/reports/*.json                  one record per file, each conforming
+                                           to schemas/evaluation-import.schema.json
+                                           and ordered by its own `sequence`
+<feed-dir>/artifacts/<report_key>/<name>   the four bodies that record's
+                                           `artifacts` map names
+```
+
+The artifact file name is the artifact's key in the record — `evidence`, not
+`evidence.json`. The wire filenames orch-hub publishes under are the HTTP
+client's business and do not apply here; a directory feed that adds extensions
+is rejected as `artifact-bytes-unavailable`.
+
+### One record
+
+A minimal `reports/0001.json`. The schema closes every object, so a field it
+does not list is a `schema-invalid` rejection rather than an extension point.
+Two of the fields below are optional and may be omitted outright —
+`source.repo_name` and `evaluator.rubric_revision`; the rest are required, but
+most of `provenance` is nullable and a feed of your own may have nothing true
+to say there:
+
+```json
+{
+  "schema_version": 1,
+  "report_key": "report-0001",
+  "sequence": 1,
+  "generated_at": "2026-08-19T10:00:00Z",
+  "source": {
+    "repo_id": "my-repo",
+    "repo_name": "My Repo",
+    "task_id": "2026-08-01-some-task",
+    "evaluation_id": "eval-0001",
+    "archived": true,
+    "completed": true
+  },
+  "evaluator": {
+    "backend": "my-evaluator",
+    "model": "some-model",
+    "schema_version": 1,
+    "rubric_revision": null
+  },
+  "artifacts": {
+    "evidence":        {"sha256": "<64 hex>", "size_bytes": 27, "media_type": "application/json"},
+    "static_metrics":  {"sha256": "<64 hex>", "size_bytes": 26, "media_type": "application/json"},
+    "semantic_report": {"sha256": "<64 hex>", "size_bytes": 29, "media_type": "application/json"},
+    "report_markdown": {"sha256": "<64 hex>", "size_bytes": 23, "media_type": "text/markdown"}
+  },
+  "provenance": {
+    "runner_protocol_revision": null,
+    "deploy_lock_hash": null,
+    "config_revision": null,
+    "effective_revision": null,
+    "dev":    {"agent": null, "model": null, "effort": null, "profile": null},
+    "review": {"agent": null, "model": null, "effort": null, "profile": null}
+  }
+}
+```
+
+Three fields decide more than their size suggests:
+
+- `report_key` is the report's identity: the directory its bodies live in, and
+  what "already decided about this one" is keyed on. It is never reused.
+- `source.repo_id` + `source.task_id` is the *pooling* identity. Batches count
+  unique completed tasks (invariant 1), so a second report for one task is a
+  rerun that enriches the entry without raising the count.
+- `sequence` is the feed's global order, and discovery is a cursor over it. A
+  record added at or below a sequence already synced is never served — the
+  cursor is past it. A feed you append to must therefore hand out strictly
+  increasing sequences for everything it will ever add.
+
+`archived` and `completed` are pinned `true` by the schema. That is
+eligibility, not bookkeeping: evolution reasons about finished work, and a
+report about a task still in flight would put a moving target in an immutable
+cohort.
+
+`provenance.effective_revision` is the one nullable field with a downstream
+consequence. It is the protocol revision the target that produced the report
+actually held, and it is what a release assessment places a report by. Null is
+a legitimate answer and stays legitimate — such reports are simply
+unplaceable, and are excluded from an assessment's denominator rather than
+counted against the release.
+
+Four dummy bodies of exactly the sizes that record declares, and the digests
+to paste into it:
+
+```bash
+mkdir -p my-feed/reports my-feed/artifacts/report-0001
+cd my-feed/artifacts/report-0001
+printf '{"layer":"L1","events":[]}\n'   > evidence
+printf '{"layer":"L1","rounds":2}\n'    > static_metrics
+printf '{"layer":"L2","findings":[]}\n' > semantic_report
+printf '# Report\n\nNo findings.\n'     > report_markdown
+sha256sum *          # or `shasum -a 256 *`; these go in the record
+wc -c *              # the byte counts it declares
+```
+
+Write the record to `my-feed/reports/0001.json` with those digests in place of
+`<64 hex>`, and the two commands at the top of this section list one candidate
+and import it.
+
+### What the importer does with the artifacts
+
+It does not parse them. It requires the four names — `evidence` and
+`static_metrics` (mechanical, L1), `semantic_report` and `report_markdown`
+(judged, L2) — checks each declared `sha256` and `size_bytes` against the
+bytes it fetched, and stores those bytes verbatim under
+`.ai-evolution/imported-artifacts/`. Nothing between the feed and the batch
+manifest looks inside them. A body of arbitrary bytes under a `media_type` of
+`application/json` imports without complaint; a correct-looking record whose
+declared digest does not match its body is rejected as
+`artifact-hash-mismatch`, so a feed cannot serve one report's bytes for
+another's record.
+
+So the shapes our own evaluator emits are **one valid filling of this
+contract, not the required one**. The consumer that reads inside an artifact
+is the batch analysis session, working from
+`.ai-evolution/imported-artifacts/` under the frozen manifest. Somebody else's
+evaluator output works here, on one condition: whoever does the analysis can
+read it and can answer what the triage table asks — recurrence, coverage,
+counterexamples, confidence.
+
+`list` and `sync` differ in exactly this. `list` classifies records and never
+fetches a body, so a record whose artifacts are missing or misnamed still
+lists as `new`; `sync` is where the bytes are fetched and verified. A clean
+`list` is not evidence the bodies are right.
+
+### What a standalone user does not get
+
+Report *production*. The evaluation that yields those four artifacts runs in
+orch-hub here, and orch-hub is private, so a standalone user brings their own
+evaluator or writes the artifacts by hand.
+
+That is the whole of the boundary, and it is narrower than "evolution needs
+orch-hub". Import, eligibility, the pool, the admission threshold, the frozen
+manifest, the analysis task, the change gate, experiments, rounds, replay,
+promotion, rollback, and the release assessment are all in this repository and
+all run against a directory. What is missing upstream of them is the thing
+that writes the evidence down.
+
+### Starting from the test fixtures
+
+There is no committed example feed to copy. The suite's builders live in
+`tests/evolution_fixtures.py` (`make_record`, `write_feed`), and they are
+written for tests rather than for reading: `make_record` is parameterized on
+whatever the import and assessment suites need to vary, and several of its
+defaults exist to make one awkward case reachable rather than to describe a
+report. They are worth reading as an executable second opinion on the schema —
+they are exercised on every run, so they cannot quietly go stale — but the
+template is the record above, not them.
+
 ## Triage and disposition
 
 Every finding cluster receives exactly one primary disposition:

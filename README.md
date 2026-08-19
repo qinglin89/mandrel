@@ -142,8 +142,13 @@ revisions that must survive a replay before a human promotes them.
 **`--feed-dir` is the public entry point.** The evidence source is pluggable: a
 local bundle directory works with no service, no token, and no network. Ours
 happens to be a private control plane that publishes evaluation reports; yours
-can be a directory. The lifecycle, the batching policy, the experiment records,
-and the promotion gates are all here and all usable.
+can be a directory of JSON records and their artifact bodies. The lifecycle,
+the batching policy, the experiment records, and the promotion gates are all
+here and all usable. What is *not* here is report production — the evaluation
+that writes those artifacts runs in the private control plane, so a standalone
+user brings their own evaluator or writes the artifacts by hand. The layout, a
+record you can copy, and what the importer does and does not read are in
+`evolution/README.md` § The report source.
 
 The normative contract is `evolution/README.md` — the invariants are the
 interesting part: batch evidence rather than anecdotes, import the denominator,
