@@ -106,9 +106,11 @@ Check for drift at any time:
 
 ### Running the loop unattended
 
-Optional. The scheduler runs `dev → review → dev → …` over one task, with a
-different model per role, pausing for you on every decision it isn't allowed to
-make itself.
+Optional. The scheduler runs `dev → review → dev → …` over one task, pausing for
+you on every decision it isn't allowed to make itself. Each role selects its own
+agent, model, and effort independently — different models are the useful default,
+since a reviewer that shares the author's blind spots is worth less, but one
+subscription driving both roles is a supported configuration, not a degraded one.
 
 ```bash
 ./bin/mandrel deploy --bootstrap-orchestrator /path/to/your-repo
@@ -207,8 +209,8 @@ It costs sessions, not money.
 | Orchestrator (headless loop) | stable; model profiles need periodic updating |
 | Evolution lifecycle | implemented and usable; the web console and some polish are in flight |
 
-**Tested with:** Claude Code (Opus 4.8 / Opus 5), Codex CLI (GPT-5.5), Cursor
-SDK. Model identifiers live in `canonical/orchestrator/orchestrator.toml`, not
+**Tested with:** Claude Code (Opus 4.8 / Opus 5), Codex CLI (GPT-5.5 / GPT-5.6),
+Cursor SDK. Model identifiers live in `canonical/orchestrator/orchestrator.toml`, not
 in source. They will go stale; update the profile rather than the code.
 
 **Not in scope:** this repository never owns your `.ai/`, `.ai-tasks/`, product
