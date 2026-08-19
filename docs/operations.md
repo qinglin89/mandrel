@@ -24,7 +24,9 @@ surfaces → what actually ends up in the context window — see
 - `canonical/codex/` deploys to target `.codex/`.
 - `canonical/claude/` deploys to target `.claude/`, including the workflow
   skills under `canonical/claude/skills/`.
-- `canonical/orchestrator/` deploys to target `.mandrel/orchestrator/`.
+- `canonical/orchestrator/` deploys to target `.mandrel/orchestrator/`. It
+  used to deploy to `.cursor/orchestrator/`; targets deployed before the move
+  need a [one-time migration](#upgrading-a-target-deployed-before-the-orchestrator-moved).
 - `mandrel/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
 
@@ -92,6 +94,56 @@ Preview a deploy without writing the target repo:
 Dry-run reports which managed files would be added, updated, left unchanged, or
 blocked by a non-file target path. It does not write payload files, manifests,
 lockfiles, `.gitignore`, registry entries, or orchestrator bootstrap files.
+
+### Upgrading a target deployed before the orchestrator moved
+
+The orchestrator used to deploy to `.cursor/orchestrator/`; it now deploys to
+`.mandrel/orchestrator/`, a sibling of `.ai-protocol/` rather than a tenant of
+another tool's directory. A target deployed before the move needs a one-time
+migration. Until it gets one, `status` reports every orchestrator file twice —
+once as `extra deployed file` at the old path, once as `canonical changed ...
+(new canonical file not deployed)` at the new one.
+
+Redeploy with the bootstrap flag. The venv has to be **rebuilt**, not moved: a
+virtualenv hardcodes absolute paths in `bin/*` and `pyvenv.cfg`, so a copied
+`.venv` is a broken interpreter.
+
+```bash
+./bin/mandrel deploy --bootstrap-orchestrator <target>
+```
+
+Then carry the operator-owned state across by hand. `.env`, `.venv/`, and
+`logs/` (with its `sessions.json` session map) are excluded from the payload, so
+deploy has never written them and does not move them either:
+
+- **`.env`** — bootstrap writes `.env` from `.env.example` only when none
+  exists. None exists at the new path, so it writes a fresh scaffold and the
+  configured one stays behind. Copy it over before deleting anything.
+- **`logs/`** — the orchestrator resolves its log dir from its own directory,
+  so a migrated repo starts a fresh one. Past run logs and the session map stay
+  at the old path, and orch-hub locates a past run's log through the `log_dir`
+  stamped into that run's record, so deleting them makes those runs unreadable
+  in the hub. Move them or drop them deliberately.
+
+Update anything that launches the orchestrator by path in the same pass.
+orch-hub resolves the script and the venv interpreter as fixed paths, so a hub
+still pointing at `.cursor/orchestrator/` reports every migrated repository
+unready.
+
+Then remove the abandoned directory:
+
+```bash
+rm -rf <target>/.cursor/orchestrator
+```
+
+**Do that in the same pass as the redeploy**, while `status` can still see it.
+Deploy does not prune a path it no longer writes, and the fresh manifest simply
+stops mentioning the old records — so the `extra deployed file` drift that
+flags the stale tree today disappears at the redeploy, and the target reports
+`in sync` again while still carrying the whole old tree and its broken venv.
+
+`.cursor/` itself stays: it still receives `hooks/`, `hooks.json`, and `rules/`,
+which are genuinely per-tool. Only the orchestrator tenant moved out.
 
 ## Status
 
