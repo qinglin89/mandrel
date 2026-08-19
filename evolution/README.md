@@ -264,7 +264,8 @@ variables `config.toml` names. With it, the reports come out of a directory:
 ```text
 <feed-dir>/reports/*.json                  one record per file, each conforming
                                            to schemas/evaluation-import.schema.json
-                                           and ordered by its own `sequence`
+                                           and ordered by sequence, report key,
+                                           then file name
 <feed-dir>/artifacts/<report_key>/<name>   the four bodies that record's
                                            `artifacts` map names
 ```
@@ -327,10 +328,12 @@ Three fields decide more than their size suggests:
 - `source.repo_id` + `source.task_id` is the *pooling* identity. Batches count
   unique completed tasks (invariant 1), so a second report for one task is a
   rerun that enriches the entry without raising the count.
-- `sequence` is the feed's global order, and discovery is a cursor over it. A
-  record added at or below a sequence already synced is never served — the
-  cursor is past it. A feed you append to must therefore hand out strictly
-  increasing sequences for everything it will ever add.
+- `sequence` is the first component of the directory feed's global order, and
+  discovery is a cursor over the full `(sequence, report_key, file name)`
+  position. A record added later is served only when that position sorts after
+  the stored cursor; at a repeated sequence, that depends on its report key and
+  file name. The simple safe rule for an append-only feed is therefore to hand
+  out strictly increasing sequences for everything it will ever add.
 
 `archived` and `completed` are pinned `true` by the schema. That is
 eligibility, not bookkeeping: evolution reasons about finished work, and a
