@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-12
-verified-against: 19a786f4595f18d5901556ed32dfea5e9da6d0ba
+last-updated: 2026-08-19
+verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 ---
 
 # AI Knowledge Router
@@ -26,7 +26,7 @@ Load only what the current task needs.
 |---|---|
 | Deployment/status change | map.md → features.md → modules.md → apis.md |
 | Canonical protocol change | architecture.md → design.md → features.md → `evolution/README.md` when evidence-driven |
-| Orchestrator change | map.md → modules.md → apis.md → `.cursor/orchestrator/README.md` |
+| Orchestrator change | map.md → modules.md → apis.md → `.mandrel/orchestrator/README.md` |
 | Protocol evolution | architecture.md → design.md → features.md → `evolution/README.md` |
 | API/CLI change | map.md → apis.md → modules.md → architecture.md |
 | Bug/debugging | map.md → modules.md → code/tests |

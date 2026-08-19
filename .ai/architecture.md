@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-19
+verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 ---
 
 # Architecture
@@ -52,7 +52,7 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
    canonical tree. It does not prune files
    removed from the mapping; after the new manifest drops them, `status` cannot
    see the target orphans.
-4. Optional bootstrap builds `.cursor/orchestrator/.venv`, installs
+4. Optional bootstrap builds `.mandrel/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
 5. `status` compares manifest-recorded content/modes with the target and current
    canonical source, plus eager-memory entrypoints and personal-over-project
@@ -120,3 +120,7 @@ promotion, deployment, and rollback remain separate reviewed/human-gated steps.
 
 This repository can deploy/bootstrap itself for orchestration. Canonical edits
 make deployed targets report `canonical changed` until explicitly redeployed.
+Current orchestrator runtime lives under `.mandrel/orchestrator/`. A target
+migrated from the former layout intentionally retains only
+`.cursor/orchestrator/logs/`: historical orch-hub run records keep their
+persisted `log_dir` and are not rewritten to the current deployment path.

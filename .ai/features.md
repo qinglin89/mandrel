@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-16
-verified-against: a3dd44d28f8cde2a377563e52c384ec58724a21c
+last-updated: 2026-08-19
+verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 ---
 
 # Features
@@ -10,7 +10,7 @@ verified-against: a3dd44d28f8cde2a377563e52c384ec58724a21c
 | Canonical payload deployment | implemented | deploy, manifest, lock, canonical buckets |
 | Dry-run and drift status | implemented; removed-file orphan detection pending | preview/status content+mode checks; eager-entrypoint and personal-skill-precedence checks |
 | Managed repo registry | implemented | registry CLI and local JSON |
-| Orchestrator bootstrap | implemented | Python 3.14 venv, requirements, non-overwriting env |
+| Orchestrator bootstrap | implemented | `.mandrel/orchestrator/`; Python 3.14 venv, requirements, non-overwriting env |
 | Split role launch profiles | implemented | dev/review profiles, legacy profile compatibility, print-config |
 | Cross-agent context loading | implemented | Claude imports, Cursor/Codex hooks, eager/lazy/delivered contract |
 | Protocol boundary enforcement | implemented | charter layout/reference/eager/prompt lint |

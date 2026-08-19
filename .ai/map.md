@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-19
+verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 ---
 
 # Project Map
@@ -12,7 +12,7 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 | Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `mandrel deploy`, manifest, lock |
 | Drift/readiness | deploy, manifest, registry | `mandrel status [--all]` |
 | Registry | registry, paths, cli | `mandrel registry ...`, local registry JSON |
-| Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, venv/env |
+| Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, `.mandrel/orchestrator/` venv/env |
 | Role launch policy | canonical orchestrator config/resolver | profile flags, `--print-config` |
 | Context delivery | canonical loader, Claude/Cursor/Codex hooks | imports, sessionStart/Stop hooks |
 | Workflow lifecycle | canonical protocols/workflow/meta | role contracts, runbook, task/memory schemas |

@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-18
-verified-against: a7386b18403cebf3a2a9d232c7dd21f74cfbbf77
+last-updated: 2026-08-19
+verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 ---
 
 # APIs and Interfaces
@@ -9,7 +9,7 @@ verified-against: a7386b18403cebf3a2a9d232c7dd21f74cfbbf77
 
 | Command | Behavior |
 |---|---|
-| `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Preview or deploy canonical payload; optional venv bootstrap |
+| `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Preview or deploy canonical payload; optional `.mandrel/orchestrator/.venv` bootstrap |
 | `status <target>` | Compare manifest-recorded content/modes with the target and current canonical source, plus eager entrypoints and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
 | `status --all` | Check every local registry entry |
 | `registry list [--json]` | Read machine-local managed repos |
@@ -89,6 +89,9 @@ Durable readers require manifest-settled absent or malformed reasons to agree
 exactly, while clone-dependent unresolvable outcomes remain portable across
 readers. The complete-pair path is live-proven; reports imported before the
 publisher began stating it remain unplaceable and are never retrofitted.
+Historical orch-hub run records likewise retain their persisted `log_dir`;
+migrated targets keep the former `.cursor/orchestrator/logs/` tree while new
+runs use `.mandrel/orchestrator/logs/`.
 
 ## API Conventions
 
