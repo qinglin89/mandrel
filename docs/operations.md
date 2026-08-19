@@ -24,7 +24,7 @@ surfaces → what actually ends up in the context window — see
 - `canonical/codex/` deploys to target `.codex/`.
 - `canonical/claude/` deploys to target `.claude/`, including the workflow
   skills under `canonical/claude/skills/`.
-- `canonical/orchestrator/` deploys to target `.cursor/orchestrator/`.
+- `canonical/orchestrator/` deploys to target `.mandrel/orchestrator/`.
 - `mandrel/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
 
@@ -53,9 +53,9 @@ its local virtualenv during deploy:
 ./bin/mandrel deploy --bootstrap-orchestrator ../some-target-repo
 ```
 
-This creates or updates `.cursor/orchestrator/.venv` with `python3.14 -m venv`,
-upgrades `pip`, installs `.cursor/orchestrator/requirements.txt`, and creates
-`.cursor/orchestrator/.env` from `.env.example` only if `.env` does not already
+This creates or updates `.mandrel/orchestrator/.venv` with `python3.14 -m venv`,
+upgrades `pip`, installs `.mandrel/orchestrator/requirements.txt`, and creates
+`.mandrel/orchestrator/.env` from `.env.example` only if `.env` does not already
 exist. Use `--orchestrator-python /path/to/python` if `python3.14` is not the
 right executable on the machine. Credentials and CLI logins are still local:
 log in to `claude` and `codex` for the default `cc-codex` backend, or set
@@ -77,8 +77,8 @@ Deployment writes:
   payload files, `.ai-tasks/`, and the local manifest, but leaves the lockfile
   trackable
 - a local registry entry in `.registry/repos.local.json`
-- with `--bootstrap-orchestrator`: target `.cursor/orchestrator/.venv/` and a
-  non-overwriting `.cursor/orchestrator/.env` scaffold
+- with `--bootstrap-orchestrator`: target `.mandrel/orchestrator/.venv/` and a
+  non-overwriting `.mandrel/orchestrator/.env` scaffold
 
 `canonical/codex/config.toml.template` may contain `{{REPO_ROOT}}`; deploy
 renders that placeholder to the absolute target repo path.
@@ -185,18 +185,18 @@ hooks, or repo contents.
 
 Future `orch-hub` tooling can consume `.registry/repos.local.json` to discover
 managed repos on this machine, then start each target repo's deployed
-`.cursor/orchestrator/orchestrator.py` as a subprocess. This repository does
+`.mandrel/orchestrator/orchestrator.py` as a subprocess. This repository does
 not implement orch-hub. The deployed orchestrator exposes its effective
 defaults and named model/effort profiles as machine-readable JSON:
 
 ```bash
-.cursor/orchestrator/.venv/bin/python \
-  .cursor/orchestrator/orchestrator.py --print-config
+.mandrel/orchestrator/.venv/bin/python \
+  .mandrel/orchestrator/orchestrator.py --print-config
 ```
 
-See `.cursor/orchestrator/README.md` for the resolution precedence and profile
+See `.mandrel/orchestrator/README.md` for the resolution precedence and profile
 contract. A focused orch-hub implementation handoff is deployed as
-`.cursor/orchestrator/HANDOFF-orch-hub-split-role-profiles.md`.
+`.mandrel/orchestrator/HANDOFF-orch-hub-split-role-profiles.md`.
 
 ## Skills
 

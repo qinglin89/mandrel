@@ -204,7 +204,7 @@ def test_manifest_creation(tmp_path: Path) -> None:
     assert ".ai-protocol/protocols/dev.md" in saved["files"]
     assert ".ai-protocol/workflow/runbook.md" in saved["files"]
     assert ".ai-protocol/meta/taskfile.md" in saved["files"]
-    assert ".cursor/orchestrator/orchestrator.toml" in saved["files"]
+    assert ".mandrel/orchestrator/orchestrator.toml" in saved["files"]
 
     rendered_config = (target / ".codex" / "config.toml").read_text(encoding="utf-8")
     assert "{{REPO_ROOT}}" not in rendered_config
@@ -574,8 +574,7 @@ def colliding_source(tmp_path: Path) -> Path:
 
     Reachable from the layout rather than contrived: `repo-root` maps to the
     target root, so it reaches under every other bucket's prefix — here onto the
-    path `codex/config.toml.template` is rendered to. `canonical/orchestrator/x`
-    and `canonical/cursor/orchestrator/x` collide the same way."""
+    path `codex/config.toml.template` is rendered to."""
 
     source = make_source(tmp_path)
     write(source / "canonical" / "repo-root" / ".codex" / "config.toml", "a second claim on the codex config\n")
@@ -1355,11 +1354,11 @@ def test_deploy_excludes_forbidden_files(tmp_path: Path) -> None:
     deployed = deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
     forbidden_targets = [
-        ".cursor/orchestrator/.env",
-        ".cursor/orchestrator/.env.local",
-        ".cursor/orchestrator/logs/run.log",
-        ".cursor/orchestrator/.venv/bin/python",
-        ".cursor/orchestrator/__pycache__/orchestrator.pyc",
+        ".mandrel/orchestrator/.env",
+        ".mandrel/orchestrator/.env.local",
+        ".mandrel/orchestrator/logs/run.log",
+        ".mandrel/orchestrator/.venv/bin/python",
+        ".mandrel/orchestrator/__pycache__/orchestrator.pyc",
         ".claude/settings.local.json",
         ".claude/projects/local.json",
         ".codex/sessions.json",
@@ -1369,7 +1368,7 @@ def test_deploy_excludes_forbidden_files(tmp_path: Path) -> None:
         assert not (target / relative_path).exists()
         assert relative_path not in deployed["files"]
 
-    assert (target / ".cursor" / "orchestrator" / ".env.example").is_file()
+    assert (target / ".mandrel" / "orchestrator" / ".env.example").is_file()
 
 
 def test_gitignore_block_is_idempotent(tmp_path: Path) -> None:
@@ -1384,6 +1383,7 @@ def test_gitignore_block_is_idempotent(tmp_path: Path) -> None:
     assert content.count(deploy.GITIGNORE_BEGIN) == 1
     assert content.count(deploy.GITIGNORE_END) == 1
     assert "existing.log" in content
+    assert "/.mandrel/" in content
     assert "/.cursor/" in content
     assert "/.codex/" in content
     assert "/.claude/" in content
@@ -1405,7 +1405,7 @@ def test_gitignore_block_replaces_old_managed_block(tmp_path: Path) -> None:
                 "existing.log",
                 deploy.GITIGNORE_BEGIN,
                 ".ai-deploy-manifest.json",
-                ".cursor/orchestrator/.venv/",
+                ".mandrel/orchestrator/.venv/",
                 deploy.GITIGNORE_END,
                 "",
             ]
@@ -1417,7 +1417,7 @@ def test_gitignore_block_replaces_old_managed_block(tmp_path: Path) -> None:
     content = (target / ".gitignore").read_text(encoding="utf-8")
     assert content.count(deploy.GITIGNORE_BEGIN) == 1
     assert "/.cursor/" in content
-    assert ".cursor/orchestrator/.venv/" not in content
+    assert ".mandrel/orchestrator/.venv/" not in content
     assert "existing.log" in content
 
 
@@ -1443,22 +1443,22 @@ def test_bootstrap_orchestrator_creates_venv_installs_requirements_and_env(
 
     def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
         calls.append((command, cwd, check))
-        if command == ["python3.14", "-m", "venv", str(target.resolve() / ".cursor" / "orchestrator" / ".venv")]:
-            python_path = target / ".cursor" / "orchestrator" / ".venv" / "bin" / "python"
+        if command == ["python3.14", "-m", "venv", str(target.resolve() / ".mandrel" / "orchestrator" / ".venv")]:
+            python_path = target / ".mandrel" / "orchestrator" / ".venv" / "bin" / "python"
             write(python_path, "#!/bin/sh\n")
 
     monkeypatch.setattr(deploy.subprocess, "run", fake_run)
 
     result = deploy.bootstrap_orchestrator(target)
 
-    venv_path = target.resolve() / ".cursor" / "orchestrator" / ".venv"
+    venv_path = target.resolve() / ".mandrel" / "orchestrator" / ".venv"
     python_path = venv_path / "bin" / "python"
-    requirements_path = target.resolve() / ".cursor" / "orchestrator" / "requirements.txt"
+    requirements_path = target.resolve() / ".mandrel" / "orchestrator" / "requirements.txt"
     assert result.venv_path == venv_path
     assert result.python_path == python_path
     assert result.requirements_path == requirements_path
     assert result.env_created is True
-    assert (target / ".cursor" / "orchestrator" / ".env").read_text(encoding="utf-8") == "TOKEN=\n"
+    assert (target / ".mandrel" / "orchestrator" / ".env").read_text(encoding="utf-8") == "TOKEN=\n"
     assert calls == [
         (["python3.14", "-m", "venv", str(venv_path)], target.resolve(), True),
         ([str(python_path), "-m", "pip", "install", "-U", "pip"], target.resolve(), True),
@@ -1471,21 +1471,21 @@ def test_bootstrap_orchestrator_keeps_existing_env_and_accepts_custom_python(
     monkeypatch,
 ) -> None:
     _source, target, _deployed = deploy_to_tmp(tmp_path)
-    write(target / ".cursor" / "orchestrator" / ".env", "CURSOR_API_KEY=local\n")
+    write(target / ".mandrel" / "orchestrator" / ".env", "CURSOR_API_KEY=local\n")
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
         calls.append(command)
         if command[:3] == ["python3.13", "-m", "venv"]:
-            write(target / ".cursor" / "orchestrator" / ".venv" / "bin" / "python", "#!/bin/sh\n")
+            write(target / ".mandrel" / "orchestrator" / ".venv" / "bin" / "python", "#!/bin/sh\n")
 
     monkeypatch.setattr(deploy.subprocess, "run", fake_run)
 
     result = deploy.bootstrap_orchestrator(target, python_executable="python3.13")
 
     assert result.env_created is False
-    assert (target / ".cursor" / "orchestrator" / ".env").read_text(encoding="utf-8") == "CURSOR_API_KEY=local\n"
-    assert calls[0] == ["python3.13", "-m", "venv", str(target.resolve() / ".cursor" / "orchestrator" / ".venv")]
+    assert (target / ".mandrel" / "orchestrator" / ".env").read_text(encoding="utf-8") == "CURSOR_API_KEY=local\n"
+    assert calls[0] == ["python3.13", "-m", "venv", str(target.resolve() / ".mandrel" / "orchestrator" / ".venv")]
 
 
 def test_deploy_cli_parser_has_orchestrator_bootstrap_flags() -> None:

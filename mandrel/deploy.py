@@ -32,7 +32,7 @@ PAYLOADS: tuple[tuple[str, str], ...] = (
     ("cursor", ".cursor"),
     ("codex", ".codex"),
     ("claude", ".claude"),
-    ("orchestrator", ".cursor/orchestrator"),
+    ("orchestrator", ".mandrel/orchestrator"),
 )
 BUCKET_TARGET_PREFIXES: dict[str, str] = dict(PAYLOADS)
 
@@ -49,6 +49,7 @@ CODEX_CONFIG_TARGET = ".codex/config.toml"
 GITIGNORE_BLOCK = f"""{GITIGNORE_BEGIN}
 /.ai-deploy-manifest.json
 /.ai-protocol/
+/.mandrel/
 /.cursor/
 /.codex/
 /.claude/
@@ -434,17 +435,17 @@ def iter_deployment_items(root: Path | None = None) -> list[DeploymentItem]:
     the target receives.
 
     One item per *target* file, which is what makes it a payload. The buckets
-    overlap by design — `repo-root` maps to the target root, so it reaches under
-    every other bucket's prefix, and `orchestrator` maps inside `cursor`'s — so
-    two canonical files can name one target file, and a target file holds the
-    bytes of one of them. Deployed in bucket order, the later write would
-    silently replace the earlier one while both receipts describe the writes
-    rather than the files left behind: the lock would list two records for a
-    file the target holds one of, and state a canonical commit over bytes no
-    target file carries, which is the placement a release assessment reads as
-    evidence (`evolution/README.md`, Release assessment). Neither the manifest
-    nor `check_status` would see it — both key by target path, so the collision
-    collapses and the dropped file's absence reads as in sync.
+    overlap by design: `repo-root` maps to the target root, so it reaches under
+    every other bucket's prefix. Two canonical files can therefore name one
+    target file, and a target file holds the bytes of one of them. Deployed in
+    bucket order, the later write would silently replace the earlier one while
+    both receipts describe the writes rather than the files left behind: the
+    lock would list two records for a file the target holds one of, and state a
+    canonical commit over bytes no target file carries, which is the placement a
+    release assessment reads as evidence (`evolution/README.md`, Release
+    assessment). Neither the manifest nor `check_status` would see it — both key
+    by target path, so the collision collapses and the dropped file's absence
+    reads as in sync.
 
     Two canonical files name one target file whenever their target paths are
     the same file, which is `target_path_identity` and not string equality: on
@@ -643,7 +644,7 @@ def bootstrap_orchestrator(
     if not target_root.is_dir():
         raise FileNotFoundError(f"target repo does not exist: {target_root}")
 
-    orchestrator_root = target_root / ".cursor" / "orchestrator"
+    orchestrator_root = target_root / ".mandrel" / "orchestrator"
     if not orchestrator_root.is_dir():
         raise FileNotFoundError(f"orchestrator payload is missing: {orchestrator_root}")
 

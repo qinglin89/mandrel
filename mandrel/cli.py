@@ -78,7 +78,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     deploy_parser.add_argument(
         "--bootstrap-orchestrator",
         action="store_true",
-        help="after deployment, create/update .cursor/orchestrator/.venv and install requirements",
+        help="after deployment, create/update .mandrel/orchestrator/.venv and install requirements",
     )
     deploy_parser.add_argument(
         "--orchestrator-python",
@@ -1031,7 +1031,7 @@ def main(argv: list[str] | None = None) -> int:
                 preview = deploy.preview_deploy(args.target)
                 print(deploy.format_deploy_preview(preview))
                 if args.bootstrap_orchestrator:
-                    print("  orchestrator bootstrap: would create/update .cursor/orchestrator/.venv and install requirements")
+                    print("  orchestrator bootstrap: would create/update .mandrel/orchestrator/.venv and install requirements")
                 return 1 if any(change.action == "blocked" for change in preview.changes) else 0
             deployed_manifest = deploy.deploy_canonical(args.target)
             target_root = Path(args.target).expanduser().resolve()

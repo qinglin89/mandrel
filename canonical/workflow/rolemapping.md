@@ -66,7 +66,7 @@ entries in the file, including pre-orchestrator ones.
 
 ## Prompt composition (caller-assembled entry)
 
-Templates under `.cursor/orchestrator/prompts/` (`entry/` + `midflight/`);
+Templates under `.mandrel/orchestrator/prompts/` (`entry/` + `midflight/`);
 composition = mode contract + injected fragments:
 
 | kind | composition |

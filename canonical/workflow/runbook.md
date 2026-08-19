@@ -3,7 +3,7 @@
 How sessions chain over one `.ai-tasks/` task. This is the caller-layer
 spec, single-sourced for its two executors: the **orchestrator**
 (machine executor — implementation notes in the orchestrator README,
-`.cursor/orchestrator/README.md`) and a **human running the same loop
+`.mandrel/orchestrator/README.md`) and a **human running the same loop
 manually**. Role contracts (`.ai-protocol/protocols/`) never restate what is
 written here; every scheduling rule in this file consumes only declared task-
 file data (schema: `.ai-protocol/meta/taskfile.md`).
@@ -93,7 +93,7 @@ escalation pauses the loop for a binding human answer.
    conversation.
 3. **Post-check violations**: declared outputs are verified after every
    session against the postcheck contract
-   (`.cursor/orchestrator/prompts/postcheck-contract.md` — also the human
+   (`.mandrel/orchestrator/prompts/postcheck-contract.md` — also the human
    executor's on-return checklist). Violations are sent back into the same
    conversation to fix, up to 3 followups, then escalate to the human.
 4. **Blocked task** (`status: blocked`): show `blockers:` plus the latest
@@ -144,7 +144,7 @@ escalation pauses the loop for a binding human answer.
   by the caller's backend: orchestrator injection (cursor) or the tools'
   native hooks/import chain (claude/codex). One assembly spec, two backends.
   Headless runs additionally inject the conduct annex
-  (`.cursor/orchestrator/prompts/entry/conduct-annex.md`).
+  (`.mandrel/orchestrator/prompts/entry/conduct-annex.md`).
 - **End (session-side, hook-triggered)**: the session-end procedure
   (`.ai-protocol/workflow/skills/session-end.md`) is carried by the stop-hook
   chain in the same conversation. Orchestrated mode: the post-checks (§4.3)

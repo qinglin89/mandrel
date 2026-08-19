@@ -119,7 +119,7 @@ The settled contract below supersedes the earlier sketch.
   (`KeepAlive`). Never in-process imports the orchestrator (it is full of
   `sys.exit` + blocking loops) — always a subprocess.
 - Spawn per run: each repo's OWN
-  `.cursor/orchestrator/.venv/bin/python .cursor/orchestrator/orchestrator.py
+  `.mandrel/orchestrator/.venv/bin/python .mandrel/orchestrator/orchestrator.py
   <task-id> --control-dir <run-dir> [flags]`, cwd=repo,
   `start_new_session=True` (detached: x restart never kills runs; re-attach =
   scan run-dirs, check pid, resume tailing; pending questions persist as
@@ -135,7 +135,7 @@ The settled contract below supersedes the earlier sketch.
   refuses otherwise), task exists + status legal, `blocked` with foreign
   `claimed-by` sid → warn "unblock manually first" (README §5.4 crash
   caveat), credentials probe (cursor: `CURSOR_API_KEY` in repo's
-  `.cursor/orchestrator/.env`; cc-codex: claude/codex login state — per the
+  `.mandrel/orchestrator/.env`; cc-codex: claude/codex login state — per the
   other handoff claude login was still PENDING, codex verified).
 - Security: this service = remote arbitrary-code execution on the dev machine
   (dev sessions run `--dangerously-skip-permissions`). Tailnet-only, bearer
@@ -253,7 +253,7 @@ The settled contract below supersedes the earlier sketch.
 ## Reference paths
 
 - Orchestrator payload in each managed target repo:
-  `.cursor/orchestrator/{orchestrator.py,README.md,automation-mode.md,test_loop_mock.py}`
+  `.mandrel/orchestrator/{orchestrator.py,README.md,automation-mode.md,test_loop_mock.py}`
 - Protocol files in each managed target repo root: `ai-coding-*.md`, `CLAUDE.md`
 - Hooks/configs: `.cursor/hooks{,.json}`, `.cursor/rules/`, `.codex/hooks` +
   `.codex/config.toml`, `.claude/hooks` + `.claude/settings.json`

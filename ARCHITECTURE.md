@@ -37,7 +37,7 @@ repos. Nothing is authored in a target repo; a local edit there is drift, and
 | `claude/` | `.claude/` | `settings.json` (hook wiring) + hooks + project skills |
 | `cursor/` | `.cursor/` | `hooks.json` + hooks + `rules/*.mdc` |
 | `codex/` | `.codex/` | `config.toml.template` + hooks + adaptation docs |
-| `orchestrator/` | `.cursor/orchestrator/` | the SDK-driven multi-session caller |
+| `orchestrator/` | `.mandrel/orchestrator/` | the SDK-driven multi-session caller |
 
 Two boundary rules are mechanically enforced by `scripts/boundary-lint.sh`:
 
@@ -105,6 +105,7 @@ any finding:
   CLAUDE.md                    deploy-owned  loader: imports + verb→contract map
   .ai-protocol/                deploy-owned  contracts, schemas, caller procedure
   .claude/ .cursor/ .codex/    deploy-owned  hook wiring per tool
+  .mandrel/orchestrator/       deploy-owned  the unattended scheduler + its venv
   .ai-deploy-manifest.json     deploy-owned  local state (gitignored)
   .ai-deploy-lock.json         deploy-owned  portable proof (committable)
 
@@ -147,7 +148,7 @@ Notes that matter in practice:
   unrelated repos even when promoted to user scope — the documented fallback
   when project-scope hooks don't fire in the TUI.
 - **`AI_ORCH=1` disables the Cursor hook.** Orchestrated sessions
-  (`.cursor/orchestrator/`) assemble their own context and own the lifecycle;
+  (`.mandrel/orchestrator/`) assemble their own context and own the lifecycle;
   double injection would fight them.
 - **Skills ship on the ordinary channel.** `canonical/claude/skills/` deploys
   to `<target>/.claude/skills/` with everything else, so the manifest and the

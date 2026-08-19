@@ -56,6 +56,7 @@ your-repo/
   .ai-tasks/            active work, one file per task. Local, gitignored.
   .ai-protocol/         the deployed contracts — deploy-owned, do not hand-edit
   .claude/ .cursor/ .codex/   per-tool hooks, rules, and workflow skills — deploy-owned
+  .mandrel/orchestrator/  the unattended scheduler — deploy-owned
   CLAUDE.md             the loader — deploy-owned, rendered for your repo
   .ai-deploy-lock.json  portable receipt; commit it if you want version audit
 ```
@@ -116,10 +117,10 @@ subscription driving both roles is a supported configuration, not a degraded one
 ./bin/mandrel deploy --bootstrap-orchestrator /path/to/your-repo
 
 cd /path/to/your-repo
-.cursor/orchestrator/.venv/bin/python .cursor/orchestrator/orchestrator.py <task-id>
+.mandrel/orchestrator/.venv/bin/python .mandrel/orchestrator/orchestrator.py <task-id>
 ```
 
-Read `.cursor/orchestrator/README.md` before you do. It runs agents with
+Read `.mandrel/orchestrator/README.md` before you do. It runs agents with
 permission prompts disabled — see [Safety](#safety).
 
 ---

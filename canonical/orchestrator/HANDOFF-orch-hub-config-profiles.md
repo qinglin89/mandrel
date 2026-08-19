@@ -50,8 +50,8 @@ required, and this path does not require credentials, a clean tree, or a
 provider model-catalog call.
 
 ```bash
-<repo>/.cursor/orchestrator/.venv/bin/python \
-  <repo>/.cursor/orchestrator/orchestrator.py \
+<repo>/.mandrel/orchestrator/.venv/bin/python \
+  <repo>/.mandrel/orchestrator/orchestrator.py \
   --print-config
 ```
 

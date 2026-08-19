@@ -101,7 +101,7 @@ SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> tool/native-id/model/effort
 # --- env file --------------------------------------------------------------
 
 def _load_env_file() -> None:
-    """Load KEY=VALUE pairs from .cursor/orchestrator/.env (gitignored with
+    """Load KEY=VALUE pairs from .mandrel/orchestrator/.env (gitignored with
     the rest of the directory). File values take precedence; a key absent or
     empty in the file falls back to the exported environment."""
     env_file = ORCH_DIR / ".env"

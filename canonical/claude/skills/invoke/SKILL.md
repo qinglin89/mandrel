@@ -47,4 +47,4 @@ guess.
 
 The paste fallback and the human's on-return verification are documented in
 the runbook (`.ai-protocol/workflow/runbook.md` §6; postcheck contract:
-`.cursor/orchestrator/prompts/postcheck-contract.md`).
+`.mandrel/orchestrator/prompts/postcheck-contract.md`).

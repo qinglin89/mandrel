@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-# Orchestrator guard: SDK-driven sessions (.cursor/orchestrator/) inject the
+# Orchestrator guard: SDK-driven sessions (.mandrel/orchestrator/) inject the
 # protocol context themselves and own the lifecycle. AI_ORCH=1 is exported
 # only by the orchestrator's process tree — never set interactively.
 if [ "${AI_ORCH:-}" = "1" ]; then exit 0; fi

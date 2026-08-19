@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-# Orchestrator guard: SDK-driven sessions (.cursor/orchestrator/) run their
+# Orchestrator guard: SDK-driven sessions (.mandrel/orchestrator/) run their
 # own post-session checks; a followup_message here would fight the
 # orchestrator's loop. AI_ORCH=1 is exported only by the orchestrator's
 # process tree — never set interactively.

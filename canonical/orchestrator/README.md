@@ -33,7 +33,7 @@ is pluggable:
 
 | Requirement | Why / how |
 |---|---|
-| `CURSOR_API_KEY` set (`cursor` backend only) | The SDK needs a real API key; `cursor-agent login` is NOT sufficient for the SDK. Put it in `.cursor/orchestrator/.env` (copy `.env.example`; loaded automatically at startup, file values win) — or export it (fallback when the file is missing or the key is empty there). |
+| `CURSOR_API_KEY` set (`cursor` backend only) | The SDK needs a real API key; `cursor-agent login` is NOT sufficient for the SDK. Put it in `.mandrel/orchestrator/.env` (copy `.env.example`; loaded automatically at startup, file values win) — or export it (fallback when the file is missing or the key is empty there). |
 | selected CLIs logged in (`cc-codex` backend only) | Log in to whichever CLI the two roles select. Defaults are Claude Code for dev (check: `claude -p "hi"`) and Codex for review (`codex login`); `--dev-agent` / `--review-agent` change which login a run needs. |
 | Clean working tree | Startup refuses otherwise (`working tree is not clean — resolve before orchestrating`). |
 | A **real terminal** (tty) | Every escalation reads an answer from stdin. Running with `< /dev/null` EOF-crashes at the first `HUMAN INPUT NEEDED`. `--once` for a single non-interactive-ish session is usually safe but not guaranteed (a blocked session or request event still needs stdin). **Exception:** with `--control-dir` no tty is needed — escalations go through question/answer files (§5). |
@@ -45,14 +45,14 @@ is pluggable:
 cd /absolute/path/to/target-repo
 # one-time runtime setup can be done by deployment:
 #   mandrel deploy --bootstrap-orchestrator /absolute/path/to/target-repo
-# or manually: python3.14 -m venv .cursor/orchestrator/.venv && .cursor/orchestrator/.venv/bin/python -m pip install -r .cursor/orchestrator/requirements.txt
-# edit .cursor/orchestrator/.env only for overrides (and CURSOR_API_KEY when using Cursor)
-.cursor/orchestrator/.venv/bin/python .cursor/orchestrator/orchestrator.py <task-id> [flags]
+# or manually: python3.14 -m venv .mandrel/orchestrator/.venv && .mandrel/orchestrator/.venv/bin/python -m pip install -r .mandrel/orchestrator/requirements.txt
+# edit .mandrel/orchestrator/.env only for overrides (and CURSOR_API_KEY when using Cursor)
+.mandrel/orchestrator/.venv/bin/python .mandrel/orchestrator/orchestrator.py <task-id> [flags]
 ```
 
 Runtime defaults and named profiles live in `orchestrator.toml`. All
 `ORCH_*` variables and `CURSOR_API_KEY` are read from
-`.cursor/orchestrator/.env` first, then from the exported environment. The
+`.mandrel/orchestrator/.env` first, then from the exported environment. The
 selection precedence is:
 
 ```text
@@ -91,17 +91,17 @@ credentials, model-catalog call, or clean-tree check:
 
 ```bash
 # inherited default
-.cursor/orchestrator/.venv/bin/python \
-  .cursor/orchestrator/orchestrator.py --print-config
+.mandrel/orchestrator/.venv/bin/python \
+  .mandrel/orchestrator/orchestrator.py --print-config
 
 # named profile for a selected backend
-.cursor/orchestrator/.venv/bin/python \
-  .cursor/orchestrator/orchestrator.py --print-config \
+.mandrel/orchestrator/.venv/bin/python \
+  .mandrel/orchestrator/orchestrator.py --print-config \
   --backend cc-codex --profile excellent
 
 # independently select each role
-.cursor/orchestrator/.venv/bin/python \
-  .cursor/orchestrator/orchestrator.py --print-config \
+.mandrel/orchestrator/.venv/bin/python \
+  .mandrel/orchestrator/orchestrator.py --print-config \
   --dev-profile standard --review-profile excellent
 ```
 

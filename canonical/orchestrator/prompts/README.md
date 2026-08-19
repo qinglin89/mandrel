@@ -49,5 +49,5 @@ rules (charter litmus 4).
   asserts prompt substrings and the startup validation.
 
 These files deploy with the orchestrator bucket to
-`.cursor/orchestrator/prompts/` (edit canonical only; never deployed
+`.mandrel/orchestrator/prompts/` (edit canonical only; never deployed
 copies).
