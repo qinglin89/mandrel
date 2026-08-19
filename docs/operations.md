@@ -112,35 +112,42 @@ virtualenv hardcodes absolute paths in `bin/*` and `pyvenv.cfg`, so a copied
 ./bin/mandrel deploy --bootstrap-orchestrator <target>
 ```
 
-Then carry the operator-owned state across by hand. `.env`, `.venv/`, and
-`logs/` (with its `sessions.json` session map) are excluded from the payload, so
-deploy has never written them and does not move them either:
+Then settle the operator-owned state by hand. `.env`, `.venv/`, and `logs/`
+(with its `sessions.json` session map) are excluded from the payload, so deploy
+has never written them and does not move them either:
 
 - **`.env`** — bootstrap writes `.env` from `.env.example` only when none
   exists. None exists at the new path, so it writes a fresh scaffold and the
   configured one stays behind. Copy it over before deleting anything.
-- **`logs/`** — the orchestrator resolves its log dir from its own directory,
-  so a migrated repo starts a fresh one. Past run logs and the session map stay
-  at the old path, and orch-hub locates a past run's log through the `log_dir`
-  stamped into that run's record, so deleting them makes those runs unreadable
-  in the hub. Move them or drop them deliberately.
+- **`logs/`** — leave it where it is. The orchestrator resolves its log dir
+  from its own directory, so a migrated repo starts a fresh one under
+  `.mandrel/orchestrator/logs/` while past run logs and the session map stay at
+  the old path. orch-hub locates a past run's log through the `log_dir` stamped
+  into that run's record, so the old directory *is* the historical access path:
+  moving or deleting those files makes every pre-migration run unreadable in
+  the hub, and copying them forward would make the same run resolvable twice.
 
 Update anything that launches the orchestrator by path in the same pass.
 orch-hub resolves the script and the venv interpreter as fixed paths, so a hub
 still pointing at `.cursor/orchestrator/` reports every migrated repository
 unready.
 
-Then remove the abandoned directory:
+Then remove the abandoned payload from the old directory, keeping `logs/`:
 
 ```bash
-rm -rf <target>/.cursor/orchestrator
+find <target>/.cursor/orchestrator -maxdepth 1 -mindepth 1 \
+  ! -name logs -exec rm -rf {} +
 ```
 
 **Do that in the same pass as the redeploy**, while `status` can still see it.
 Deploy does not prune a path it no longer writes, and the fresh manifest simply
 stops mentioning the old records — so the `extra deployed file` drift that
 flags the stale tree today disappears at the redeploy, and the target reports
-`in sync` again while still carrying the whole old tree and its broken venv.
+`in sync` again while still carrying a full copy of the old payload and a venv
+whose interpreter no longer resolves.
+
+What is left behind afterwards is `.cursor/orchestrator/logs/` and nothing
+else. That is the intended end state, not an unfinished cleanup.
 
 `.cursor/` itself stays: it still receives `hooks/`, `hooks.json`, and `rules/`,
 which are genuinely per-tool. Only the orchestrator tenant moved out.
