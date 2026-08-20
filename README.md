@@ -12,8 +12,8 @@ for a protocol built around one invariant:
 
 Day 1 and day 300, a fresh session faces the same *shape* of context: a small
 constant set of project invariants, one task file, and a routed handful of
-relevant documents. The corpus behind it grows. The slice loaded into any given
-session does not.
+relevant documents. The corpus behind it grows. The slice is bounded by the
+task rather than being allowed to grow merely because the project is older.
 
 In use for five months across four repositories — **286 completed tasks**, the
 largest project a ~122k-line Go service whose curated snapshot sits at ~34k
@@ -31,9 +31,9 @@ no runtime service, no model lock-in.
 
 | | Mechanism | Where |
 |---|---|---|
-| **Work** | Tasks sized to one context window (~200k tokens), with a specified handoff shape. The task file is ground truth; its lifecycle includes development, review, remediation, handoff, and completion. Review converges through frozen finding groups, delta-only re-review, severity gates, and one-shot dispute escalation. | `canonical/meta/taskfile.md`, `canonical/protocols/review.md` |
-| **Memory** | A curated, timeless project snapshot. Writes happen **only** at task completion, and a fact must pass three admission tests — derivation cost, stability, leverage — to get in. | `canonical/meta/memory.md` |
-| **Control** | A deterministic caller re-parses the task file, selects the next legal role, assembles and injects context and contracts, verifies declared outputs, counts convergence budgets, and escalates decisions it may not make. | `canonical/workflow/runbook.md`, `canonical/orchestrator/README.md` |
+| **Work** | Development sessions are bounded to one effective context window (~200k tokens), with a specified handoff shape when work needs more than one. The task file is ground truth; its lifecycle includes development, review, remediation, handoff, and completion. Review converges through frozen finding groups, delta-only re-review, severity gates, and one-shot dispute escalation. | `canonical/meta/taskfile.md`, `canonical/protocols/review.md` |
+| **Memory** | A curated, timeless project snapshot. Initialization creates it; thereafter durable task findings enter at completion closeout, while explicit housekeeping is the separate maintenance path. A fact must pass three admission tests — derivation cost, stability, leverage — to get in. | `canonical/meta/memory.md` |
+| **Control** | A deterministic caller re-parses the task file, selects the next legal role, builds the role prompt with its contract and entry checklist, verifies declared outputs, counts convergence budgets, and escalates decisions it may not make. Backend hooks or imports provide eager context; task frontmatter tells the session which additional documents to preload. | `canonical/workflow/runbook.md`, `canonical/orchestrator/README.md` |
 
 Role contracts remain caller-agnostic and self-contained: a session receives
 its own contract, not the caller's choreography or the next dispatch. That
