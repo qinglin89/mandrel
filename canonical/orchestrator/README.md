@@ -1,7 +1,8 @@
 # Orchestrator operations manual
 
-Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task with a
-different model per role. The orchestrator is the **machine executor** of the
+Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task with an
+independently configured agent, model, and effort for each role; both roles may
+use the same selection. The orchestrator is the **machine executor** of the
 workflow spec (`.ai-protocol/workflow/runbook.md` + `rolemapping.md`) — a
 dumb scheduler: it reads the task file (status + session log), dispatches the
 next session, verifies declared outputs afterwards, and pauses for a human on
@@ -80,10 +81,10 @@ carries its own model namespace, its own environment variables, and its own
 effort axis — Claude Code `low..max`, Codex
 `none/minimal/low/medium/high/xhigh`. A `--review-effort` legal for one
 review agent is refused for the other, naming the axis. Selecting the same
-agent AND model for both roles is allowed but logs a `NOTICE:` line at
-launch — the review prompt states cross-model independence, and such a run
-has none (separate conversations only). A supervisor can derive the same
-condition from `--print-config` (`dev.agent`/`dev.model` versus
+agent AND model for both roles is allowed but logs a `NOTICE:` line at launch.
+The run still has fresh-context independence because the roles use separate
+conversations; it lacks only cross-model diversity. A supervisor can derive the
+same condition from `--print-config` (`dev.agent`/`dev.model` versus
 `review.agent`/`review.model`).
 
 Supervisors can query the exact effective launch values without a task,

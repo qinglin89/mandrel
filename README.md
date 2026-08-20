@@ -25,20 +25,22 @@ words. Background and evidence: **[Context isn't the bottleneck. Drift is.][post
 
 ## What it actually is
 
-Three mechanisms and a boundary discipline. Markdown contracts plus a small
-amount of Python and Bash — no runtime service, no model lock-in.
+Three mechanisms: task-scoped work, selective memory, and deterministic control
+outside the model. Markdown contracts plus a small amount of Python and Bash —
+no runtime service, no model lock-in.
 
 | | Mechanism | Where |
 |---|---|---|
-| **Work** | Tasks sized to one context window (~200k tokens), with a specified handoff shape. The task file is ground truth; no cross-session decision derives from conversation memory. | `canonical/meta/taskfile.md` |
+| **Work** | Tasks sized to one context window (~200k tokens), with a specified handoff shape. The task file is ground truth; its lifecycle includes development, review, remediation, handoff, and completion. Review converges through frozen finding groups, delta-only re-review, severity gates, and one-shot dispute escalation. | `canonical/meta/taskfile.md`, `canonical/protocols/review.md` |
 | **Memory** | A curated, timeless project snapshot. Writes happen **only** at task completion, and a fact must pass three admission tests — derivation cost, stability, leverage — to get in. | `canonical/meta/memory.md` |
-| **Review** | A bounded convergence loop: finding groups frozen at first review, delta-only re-review, only correctness blocks completion, disputes escalate once to a human. | `canonical/protocols/review.md` |
-| **Boundaries** | Role contracts are anonymous and self-contained — a session never knows other kinds of session exist. The caller owns all sequencing. | `CHARTER.md` |
+| **Control** | A deterministic caller re-parses the task file, selects the next legal role, assembles and injects context and contracts, verifies declared outputs, counts convergence budgets, and escalates decisions it may not make. | `canonical/workflow/runbook.md`, `canonical/orchestrator/README.md` |
 
-That last one is why there are **two interchangeable executors**: a human
-running the loop by hand, and a headless scheduler running it unattended. Same
-runbook, same contracts, byte-equivalent delivery. You can take the wheel at
-any session boundary and the scheduler picks up where you left off.
+Role contracts remain caller-agnostic and self-contained: a session receives
+its own contract, not the caller's choreography or the next dispatch. That
+boundary enables **two interchangeable executors**: a human running the loop by
+hand, and a headless scheduler running it unattended. Same runbook, same
+contracts, byte-equivalent delivery. You can take the wheel at any session
+boundary and the scheduler picks up where you left off.
 
 What the snapshot holds is two kinds of thing, and both fail "just re-derive
 it" for different reasons. **Decisions** are absent from the code — what was
@@ -109,9 +111,10 @@ Check for drift at any time:
 
 Optional. The scheduler runs `dev → review → dev → …` over one task, pausing for
 you on every decision it isn't allowed to make itself. Each role selects its own
-agent, model, and effort independently — different models are the useful default,
-since a reviewer that shares the author's blind spots is worth less, but one
-subscription driving both roles is a supported configuration, not a degraded one.
+agent, model, and effort independently. They may differ, but do not have to:
+review independence comes first from a separate fresh-context conversation.
+Different models add diversity; using the same agent, model, and subscription
+for both roles is fully supported.
 
 ```bash
 ./bin/mandrel deploy --bootstrap-orchestrator /path/to/your-repo
@@ -172,7 +175,7 @@ verification after the fact:
   a human declares `status: blocked` and stops
 - post-session checks that verify every declared output, with a bounded number
   of fix round-trips before escalating to you
-- review as a separate session with a separate model
+- review as a separate fresh-context session; it may share the dev model
 - a required clean working tree, so every session's changes are a reviewable
   git delta
 
@@ -185,24 +188,28 @@ such requirement — your agent's normal permission prompts apply.
 
 ## What this costs
 
-It costs sessions, not money.
+The underlying consumption is tokens. Session count is still useful because
+the workflow draws an operating boundary around each one.
 
-- **~3.8 sessions per task**, development and review combined, most at a
-  top-tier model on high reasoning effort. Each is capped near 200k tokens of
-  context — a wrap-up trigger, not a hard stop, and a policy choice well under
-  what the models now hold: precision degrades before capacity does.
-- Run through an agent subscription rather than the API, one more session rounds
-  to nothing, and prompt caching makes interactive work cheaper still. If your
-  constraint is budget, "expensive" is the wrong frame. If it is **throughput** —
-  rate-limit windows, turnaround on one task — the number to look at is 3.8.
-- The overhead is real either way: every session reads the snapshot and writes a
-  log. That is a fixed cost amortized over project lifetime. **If you're
-  building something you'll throw away in three weeks, don't use this** — not
-  because of the price, but because three weeks amortizes nothing.
-- It pays back by eliminating the re-derivation tax: the time an agent spends
-  every session rediscovering what the project already knew, plus the
-  occasional expensive case where it doesn't rediscover it and confidently
-  undoes a deliberate decision.
+- Tasks averaged **3.8 sessions**, development and review combined, most at a
+  top-tier model on high reasoning effort.
+- A session is expected to wrap at roughly 200k tokens of context. That is a
+  handoff policy, not a hard stop — the heaviest single session in the archive
+  peaked near 390k. Each session reloads assembled context, occupies a
+  rate-limit window, and — after the first — introduces a handoff. The 3.8
+  average says how many such working envelopes a task used; it does not measure
+  token consumption.
+- These agents ran through subscriptions rather than metered APIs, so the
+  archive does not support a credible per-task dollar estimate. Another session
+  has no itemized price, but it still consumes subscription capacity and
+  wall-clock time.
+- Every session also writes a log, and every task pays for review and
+  absorption. That fixed overhead only amortizes when the project lives long
+  enough for preserved decisions to be reused. **If you're building something
+  you'll throw away in three weeks, don't use this.**
+- For me, the tradeoff has been more work per task and less re-derivation over
+  the project's lifetime — including fewer cases where an agent fails to
+  recover a deliberate decision and confidently undoes it.
 
 ---
 

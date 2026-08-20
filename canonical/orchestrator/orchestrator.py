@@ -2,9 +2,10 @@
 """Dev↔review orchestrator for the ai-protocol workflow (local,
 single-machine, status-driven state machine, pluggable execution backend).
 
-Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task, with a
-different model per role. The orchestrator is a dumb scheduler: it reads task
-status + session log, advances or pauses, and never decides. Any
+Runs the `dev → review → dev → …` loop over one `.ai-tasks/` task, with an
+independently configured agent, model, and effort per role; both roles may use
+the same selection. The orchestrator is a dumb scheduler: it reads task status
++ session log, advances or pauses, and never decides. Any
 human-decision event — Confirm-tier, load-bearing uncertainty, disputed
 finding, over-budget convergence group — pauses the loop and pulls the human
 in on stdin.
