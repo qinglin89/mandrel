@@ -19,7 +19,7 @@ In use for five months across four repositories — **286 completed tasks**, the
 largest project a ~122k-line Go service whose curated snapshot sits at ~34k
 words. Background and evidence: **[Context isn't the bottleneck. Drift is.][post]**
 
-[post]: #
+[post]: https://qinglin89.github.io/blog/2026/context-isnt-the-bottleneck-drift-is/
 
 ---
 
