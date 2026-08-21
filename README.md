@@ -245,7 +245,7 @@ code, or secrets.
 ## Development
 
 ```bash
-scripts/check.sh    # the whole gate: 1297 tests, 31 scheduler scenarios, lints, build
+scripts/check.sh    # full gate: tests, scheduler scenarios, lints, and package build
 ```
 
 That one entrypoint is what developers, agents, the optional Git hook, and CI
