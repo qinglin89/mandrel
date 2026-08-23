@@ -793,6 +793,25 @@ def shadowed_skill_drifts(
     return tuple(drifts)
 
 
+# The complete status vocabulary, in report order. `format_status` prints only
+# the kinds listed here, so a `Drift` kind missing from this tuple would be
+# counted in the header and then never shown; tests/test_docs_getting_started.py
+# asserts the tuple covers every kind deploy.py constructs, and that the
+# operator-facing docs list the same set.
+STATUS_IN_SYNC = "in sync"
+STATUS_DRIFT_KINDS: tuple[str, ...] = (
+    "missing manifest",
+    "target modified",
+    "canonical changed",
+    "stale eager import",
+    "ambiguous memory entrypoint",
+    "shadowed skill",
+    "missing target file",
+    "extra deployed file",
+    "invalid manifest entry",
+)
+
+
 def check_status(
     target: str | Path,
     *,
@@ -893,21 +912,10 @@ def check_status(
 def format_status(result: StatusResult, label: str | None = None) -> str:
     prefix = f"{label}: " if label else ""
     if result.in_sync:
-        return f"{prefix}in sync ({result.total_files} files)"
+        return f"{prefix}{STATUS_IN_SYNC} ({result.total_files} files)"
 
     lines = [f"{prefix}drift detected ({len(result.drifts)} issues)"]
-    order = (
-        "missing manifest",
-        "target modified",
-        "canonical changed",
-        "stale eager import",
-        "ambiguous memory entrypoint",
-        "shadowed skill",
-        "missing target file",
-        "extra deployed file",
-        "invalid manifest entry",
-    )
-    for kind in order:
+    for kind in STATUS_DRIFT_KINDS:
         entries = [drift for drift in result.drifts if drift.kind == kind]
         if not entries:
             continue
