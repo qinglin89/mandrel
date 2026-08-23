@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-19
-verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
+last-updated: 2026-08-23
+verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 ---
 
 # Architecture
@@ -68,6 +68,9 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
   memory dynamically in session-start hooks. Workflow skills deploy under
   target `.claude/skills/`: Claude uses project-native discovery, while
   Cursor, Codex, and the orchestrator use repository-local paths.
+- `jq` failure differs by adapter: Claude/Cursor Stop hooks error and Cursor
+  session-start emits no context; Codex session-start emits no context and Stop
+  fails open silently. Claude's static eager imports remain available.
 
 ## Evolution Flow
 

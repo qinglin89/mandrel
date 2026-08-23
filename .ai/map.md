@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-19
-verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
+last-updated: 2026-08-23
+verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 ---
 
 # Project Map
@@ -31,7 +31,7 @@ verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 
 | Change | Check/update |
 |---|---|
-| Canonical file/path | payload mapping, boundary lint, deploy/status tests, targets |
+| Canonical file/path | payload mapping, init target-surface exclusions, boundary lint, deploy/status tests, targets |
 | Workflow skill | manifest/lock coverage, backend pointers, personal-shadow status, operator deploy-before-cleanup order |
 | Eager memory topic | loader rendering, both hooks, entrypoint drift tests |
 | Persisted receipt/schema | reader compatibility, schema version, recovery tests |

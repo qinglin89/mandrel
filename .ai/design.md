@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-16
-verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
+last-updated: 2026-08-23
+verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 ---
 
 # Design Principles and Decisions
@@ -10,6 +10,9 @@ verified-against: 188de1eca04e4a210f91044de843dd714fe5f4e7
 - `canonical/` is the only deployable source of truth; target edits are drift.
 - Deploy-owned payload and target-owned `.ai/`/`.ai-tasks/` never share write
   ownership.
+- Initialization mode detection/scanning excludes every top-level target entry
+  written by `deploy.PAYLOADS` plus the manifest and lock receipts; payload-map
+  changes must update the init contract/skill and their derivation test.
 - Contracts describe role behavior; callers/workflows own dispatch and
   sequencing.
 - The eager channel carries shared conduct/meta/project invariants, never a

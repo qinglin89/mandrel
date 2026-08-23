@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-19
-verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
+last-updated: 2026-08-23
+verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 ---
 
 # APIs and Interfaces
@@ -9,7 +9,7 @@ verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 
 | Command | Behavior |
 |---|---|
-| `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Preview or deploy canonical payload; optional `.mandrel/orchestrator/.venv` bootstrap |
+| `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Target need only exist; preview or overwrite deploy-owned paths, with optional `.mandrel/orchestrator/.venv` bootstrap. Managed ignores do not untrack pre-existing tracked payload paths; preserve/migrate collisions explicitly. Git `HEAD` is required later by initialization/review, not deploy. |
 | `status <target>` | Compare manifest-recorded content/modes with the target and current canonical source, plus eager entrypoints and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
 | `status --all` | Check every local registry entry |
 | `registry list [--json]` | Read machine-local managed repos |
