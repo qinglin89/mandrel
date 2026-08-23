@@ -170,6 +170,7 @@ python -m mandrel.cli status --all
 Status reads the target `.ai-deploy-manifest.json` and reports:
 
 - `in sync`
+- `missing manifest`
 - `target modified`
 - `canonical changed`
 - `stale eager import`
@@ -177,6 +178,7 @@ Status reads the target `.ai-deploy-manifest.json` and reports:
 - `shadowed skill`
 - `missing target file`
 - `extra deployed file`
+- `invalid manifest entry`
 
 Drift returns a nonzero exit code.
 

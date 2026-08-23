@@ -70,10 +70,13 @@ Upgrading the protocol never touches `.ai/` or `.ai-tasks/`.
 
 ## Quickstart
 
-Requires Python 3.11+, `jq` (the session-end hooks parse their input with it),
-and Claude Code, Cursor, or Codex CLI as the agent. The repo you deploy into
-must be a Git repository with at least one commit — initialization stamps
-`git rev-parse HEAD`, and review reads `git diff` as its only evidence.
+Requires Python 3.11+, `jq` (every hook shells out to it — and without it Codex
+loses hook enforcement *silently*; see
+[the per-tool table](docs/getting-started.md#before-you-start)), and Claude
+Code, Cursor, or Codex CLI as the agent. Deploy itself needs only that the
+target directory exists. By the time you run `/ai-init`, the repository needs a
+`HEAD`: initialization stamps `git rev-parse HEAD`, and review reads `git diff`
+as its only evidence.
 
 ```bash
 git clone https://github.com/qinglin89/mandrel && cd mandrel
@@ -122,9 +125,10 @@ Check for drift at any time:
 ./bin/mandrel status --all                  # every locally registered repo
 ```
 
-`status` reports `in sync`, `target modified`, `canonical changed`,
-`stale eager import`, `ambiguous memory entrypoint`, `shadowed skill`,
-`missing target file`, or `extra deployed file`, and exits nonzero on drift.
+`status` reports `in sync`, `missing manifest`, `target modified`,
+`canonical changed`, `stale eager import`, `ambiguous memory entrypoint`,
+`shadowed skill`, `missing target file`, `extra deployed file`, or
+`invalid manifest entry`, and exits nonzero on drift.
 
 ### Running the loop unattended
 

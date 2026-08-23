@@ -42,18 +42,30 @@ guide and a contract disagree, the contract wins.
 
 - **Python 3.11+** for the `mandrel` CLI. Your project can be in any language —
   Python is only the deployment tool's requirement.
-- **`jq`** on `PATH`. The session-end hook on all three agent tools parses its
-  input with `jq`; without it the hook errors out on every session end, and the
-  clean-tree / session-log discipline stops being enforced.
+- **`jq`** on `PATH`. Every hook shells out to it, and the three tools degrade
+  differently without it:
+
+  | Tool | Without `jq` |
+  |---|---|
+  | **Claude Code** | The stop hook reads its input through an unguarded `jq` under `set -e`, so it exits with an error on every session end and the clean-tree / session-log discipline stops being enforced. Loud, at least. Eager context is unaffected — it arrives through `CLAUDE.md` imports, and the session-start hook falls back to `python3`. |
+  | **Cursor** | Same unguarded stop-hook read, same erroring session end. Session-start injection *is* guarded, so it silently emits no context. |
+  | **Codex CLI** | Silent all the way through, which makes it the worst case: both hooks guard every `jq` call with `\|\| true`, so session start injects no context at all and the stop hook — seeing an empty session id — fails open and allows every session end. Nothing on screen tells you enforcement is gone. |
+
+  Install it first. A missing `jq` is not a failure you will notice in time.
 - **Git**, and one of **Claude Code**, **Cursor**, or **Codex CLI** as the agent.
 
 **In the repository you want managed:**
 
-- It must be a **Git repository with at least one commit**. Three separate parts
-  of the protocol depend on it: initialization stamps every memory document with
-  `git rev-parse HEAD`, a review session's *only* evidence is `git log` and
-  `git diff`, and every session must end with `git status --porcelain` empty.
-  A repository with no `HEAD` yet fails at the first of these.
+- **`mandrel deploy` needs only that the directory exists.** Not a Git
+  repository, not a commit — walkthrough A deploys into a repo that was
+  `git init`-ed seconds earlier and has no `HEAD` at all, then makes its first
+  commit afterwards.
+- **By the time you run `/ai-init`, the repository needs a `HEAD`.** Three
+  separate parts of the protocol depend on one: initialization stamps every
+  memory document with `git rev-parse HEAD`, a review session's *only* evidence
+  is `git log` and `git diff`, and every session must end with
+  `git status --porcelain` empty. So the deploy comes first and the first commit
+  comes right after it — that ordering is deliberate, not incidental.
 - Start every session from a **clean working tree**. Session-end bookkeeping is
   ordered clean-tree-first, and the hook enforces it: a session that wrote its
   session-log entry, or set `completed`, while the tree is still dirty is
@@ -107,9 +119,10 @@ the shape of the report is what matters.
 owns `CLAUDE.md`, `.claude/`, `.cursor/`, `.codex/`, `.ai-protocol/`, and
 `.mandrel/`, and it overwrites what it owns. If you already have a `CLAUDE.md`
 or a `.claude/settings.json`, the dry-run lists them as `update` and the real
-deploy replaces them. Save a copy first. Project rules you want every session to
-follow belong in `.ai/conventions.md`, which is yours and is loaded into every
-session anyway.
+deploy replaces them. [Handling collisions](#if-git-already-tracks-a-deploy-owned-path)
+below is the exact sequence. Project rules you want every session to follow
+belong in `.ai/conventions.md`, which is yours and is loaded into every session
+anyway.
 
 ### Deploy
 
@@ -153,19 +166,73 @@ worth internalizing now:
 - **Your memory is version-controlled.** `.ai/` is *not* ignored: you commit it
   like source, and it travels with the repository.
 
-### Give the repo a first commit
+### Commit the receipt
 
-Initialization needs a `HEAD` to stamp. In a brand-new repository:
+`/ai-init` needs a `HEAD` to stamp, so this is where a brand-new repository gets
+its first commit — and where an existing one records which protocol revision it
+is on:
 
 ```bash
 cd ~/src/your-repo
 git add .gitignore .ai-deploy-lock.json
 git commit -m "chore: deploy mandrel protocol payload"
+
+git status --porcelain      # expect no output
 ```
 
-Everything else the deploy wrote is inside the ignored block, so this commit is
-two files. In an existing repository you already have a `HEAD`; commit the
-`.gitignore` change and the lockfile the same way.
+Everything else the deploy wrote is inside the ignored block, so in a repository
+that never tracked a deploy-owned path this commit is exactly two files and the
+tree is clean afterwards.
+
+#### If Git already tracks a deploy-owned path
+
+The managed ignore rules do not untrack anything: `.gitignore` has no effect on
+a file already in the index. So if your repository was tracking its own
+`CLAUDE.md`, or a `.claude/settings.json`, deploy overwrote it and Git shows it
+as modified — the two-file commit above would leave that modification sitting in
+the tree, and the first session would refuse to end. Handle it explicitly.
+
+**Before deploying**, find out whether you have any collisions at all:
+
+```bash
+cd ~/src/your-repo
+git ls-files -- CLAUDE.md 'ai-coding-*.md' .claude .cursor .codex .ai-protocol .mandrel
+```
+
+No output means there is nothing to reconcile — use the plain sequence above.
+Otherwise, copy anything of your own out of the way first, because deploy will
+replace it:
+
+```bash
+mkdir -p ../your-repo-preserved
+cp CLAUDE.md ../your-repo-preserved/        # …and every other file that listing named
+```
+
+**After deploying**, untrack those paths so the managed ignore rules can take
+effect. `--cached` removes them from the index and leaves the freshly deployed
+files on disk:
+
+```bash
+git rm -r --cached --quiet -- CLAUDE.md .claude    # exactly what the listing named
+git add .gitignore .ai-deploy-lock.json
+git commit -m "chore: deploy mandrel protocol payload"
+
+git status --porcelain      # now empty
+```
+
+That commit records two things at once: the deletions from the index, and the
+receipt. From here on the payload is ignored, and `.ai-deploy-lock.json` is what
+states which protocol revision the repository is on.
+
+The alternative is to keep those paths tracked — `git add` them with the rest
+instead of running `git rm --cached`. It works, and some teams want protocol
+upgrades to show up as a reviewable diff. The cost is that every redeploy lands
+a large mechanical diff in your history, which is the job the lockfile already
+does in one file.
+
+Whichever you choose, salvage the *content*: rules you want every session to
+follow go in `.ai/conventions.md`, which you own and which loads into every
+session anyway.
 
 ### Per-tool setup
 
@@ -241,7 +308,7 @@ to bottom; the first row that matches is the turn:
 
 | Task file says | Next turn |
 |---|---|
-| `status: completed` | nothing — closeout already ran |
+| `status: completed` | **closeout** — `/ai-sync-v2`. Usually the stop hook already ran it in the final-review conversation and the file is in `.ai-tasks/archive/` by now. A task still sitting in `.ai-tasks/` at `completed` means the hook was interrupted, disabled, or unavailable, so closeout has *not* run: it is the turn, in a fresh conversation. `/ctd-tasks` flags this state as `⚠ Completed (unarchived)`. |
 | `status: blocked` | answer the question in `blockers:`, then resume that conversation |
 | frontmatter `fix-set: open` | `/invoke dev <id>` — the fix set is still open, so the re-review waits |
 | a dev entry that no `review of <sid>` entry names | `/invoke review <id>` (the final gate, if the status is `final_review`) |
@@ -260,6 +327,7 @@ to bottom; the first row that matches is the turn:
 | Continuing a remediation that ran out of context (`fix-set: open`) | **new** |
 | Answering a `blocked` task's question | **the same** conversation that blocked, so it keeps its role and its claim |
 | Closeout after a task completes | **the same** conversation as the final review — the hook drives it |
+| Closeout for a task left at `completed` in `.ai-tasks/` | **new** — the hook did not run; invoke `/ai-sync-v2` yourself |
 
 The full scheduling spec is `.ai-protocol/workflow/runbook.md` in your target
 (source: [`canonical/workflow/runbook.md`](../canonical/workflow/runbook.md)).
@@ -304,10 +372,15 @@ Open your agent in `~/src/linkaudit` and send exactly:
 ```
 
 The skill checks that the infrastructure is present, sees that `.ai/index.md`
-does not exist, and classifies the repository. Detection excludes deployed AI
-infrastructure — `.ai-protocol/`, `.claude/`, `.cursor/`, `.codex/`, `.ai/`,
-`.ai-tasks/`, and the deploy receipts — so a repository that holds nothing but a
-mandrel deployment is greenfield, not brownfield.
+does not exist, and classifies the repository. Classification runs over the **target-project surface**, which is your
+repository *minus* everything the deploy owns: `.ai-protocol/`, `CLAUDE.md`,
+`ai-coding-*.md` (the legacy loader), `.claude/`, `.codex/`, `.cursor/`,
+`.mandrel/`, `.ai/`, `.ai-tasks/`, and the deploy receipts `.ai-deploy-*.json`.
+That list covers the whole payload — the orchestrator's Python source and
+requirements under `.mandrel/orchestrator/` included — so a repository holding
+nothing but a mandrel deployment has an empty surface: greenfield, not
+brownfield. The same exclusions are what stop a brownfield scan from reading
+the protocol's own code as if it were yours.
 
 **Greenfield initialization is interactive and blocking.** With nothing to read,
 the agent asks and then stops. It creates no files yet:
@@ -728,12 +801,21 @@ you want to keep; project rules that agents must follow belong in
 `.ai/conventions.md`, which you are about to create and which loads into every
 session.
 
+This repository has never tracked a deploy-owned path, so nothing collides and
+the plain sequence applies. If yours does — a hand-written `CLAUDE.md`, a
+committed `.claude/settings.json` — run
+[the collision sequence](#if-git-already-tracks-a-deploy-owned-path) instead, or
+the tracked overwrite stays in the tree and the first session cannot end.
+
 ```bash
 ./bin/mandrel deploy ~/src/invoicing-api
 
 cd ~/src/invoicing-api
+git ls-files -- CLAUDE.md 'ai-coding-*.md' .claude .cursor .codex .ai-protocol .mandrel
 git add .gitignore .ai-deploy-lock.json
 git commit -m "chore: deploy mandrel protocol payload"
+
+git status --porcelain      # expect no output
 ```
 
 Existing history means `HEAD` is already there. As in walkthrough A, `.ai/` and
@@ -745,9 +827,12 @@ Existing history means `HEAD` is already there. As in walkthrough A, `.ai/` and
 /ai-init
 ```
 
-Detection excludes the deployed payload and still finds `app/`, `tests/`,
-`pyproject.toml`, and a real README — **brownfield**. There is no interview.
-Instead the skill runs a five-pass derivation over your code:
+The same exclusions apply, and the surface that remains still holds `app/`,
+`tests/`, `pyproject.toml`, and a real README — **brownfield**. There is no
+interview. Instead the skill runs a five-pass derivation, and every pass reads
+only that surface: the deployed payload is not an input, so nothing in
+`.ai-protocol/` or `.mandrel/orchestrator/` can end up described in your `.ai/`
+as though it were your service.
 
 | Pass | Reads | Writes |
 |---|---|---|
@@ -757,11 +842,40 @@ Instead the skill runs a five-pass derivation over your code:
 | 4. Conventions sniff | 5–10 representative files — a test, an error path, a typical handler | `conventions.md` |
 | 5. Review | — | your sign-off, then the frontmatter stamps |
 
-Pass 5 is yours: read what it derived and correct it before signing off. Every
-later session starts from these documents, so a wrong conclusion here is one you
-will keep paying for.
+**Pass 5 is a gate, not a formality.** The agent stops there and waits. The
+documents exist on disk, but nothing is stamped and nothing is committed yet:
 
-The result:
+```text
+Passes 1-4 complete. Derived .ai/: index, map, overview, architecture, design,
+modules, apis, features, conventions. Nothing is stamped or committed yet.
+
+Three calls I would especially like checked:
+- overview.md scopes the service as "invoice issuance and delivery", but
+  app/dunning/ looks like a second product area rather than part of that.
+- architecture.md treats app/workers/ as one layer; it has two distinct queues.
+- conventions.md derives the error style from app/api/errors.py. Confirm that is
+  the pattern new code should follow, not just the one this code happens to use.
+```
+
+Read what it wrote and correct it in the same conversation. Every later session
+starts from these documents, so a wrong conclusion here is one you keep paying
+for. Corrections are ordinary conversation:
+
+```text
+Dunning is in scope — same product, same team. Fix overview.md. Split the
+workers layer in architecture.md: invoice-render and delivery-retry have
+different failure semantics. The error style is right.
+```
+
+Then sign off, explicitly:
+
+```text
+Looks right now. Sign off — stamp and commit.
+```
+
+Only on that sign-off does the agent stamp `last-updated:` and
+`verified-against: <40-char HEAD SHA>` onto every document and commit. The
+result:
 
 ```text
 .ai/
@@ -922,7 +1036,65 @@ belongs in the snapshot.
 
 Entering at `final_review` with one unreviewed dev entry, this is the final
 gate: verify dev-completeness, then the whole ledger. It finds one real issue —
-but not a blocking one:
+but not a blocking one.
+
+Before it can record that finding as *carried out*, it has to actually create
+the task, and creating a task means the intake contract. So it drafts and
+stops, exactly as in [B3](#b3-turn-a-request-into-a-task-same-conversation-is-fine):
+
+```text
+The fixed window admits up to 2x the cap across a boundary — 120 requests at
+0:59 and 120 more at 1:00. That is a behaviour change, not a defect in this
+task's delivered scope, so I would carry it rather than fix it here. Draft:
+```
+
+```markdown
+---
+id: 2026-03-09-webhook-burst-smoothing
+status: pending
+session-est: 0/1
+blockers: []
+prefetch: [.ai/apis.md, .ai/design.md]
+claimed-by:
+---
+
+# Smooth webhook rate across window boundaries
+
+## Goal
+
+Replace the fixed-window webhook limiter with a scheme that does not admit up
+to twice the configured cap across a window boundary.
+
+## Scope
+- Sliding window or token bucket over the existing Redis client.
+- Preserve the current settings names and the 429 + `Retry-After` contract.
+
+## Acceptance
+- 120 requests at 0:59 followed by 120 more at 1:00 do not both pass under a cap
+  of 120/60s.
+- The existing limiter tests still pass unchanged.
+
+## Session log
+```
+
+```text
+Index row to append:
+
+| 2026-03-09-webhook-burst-smoothing | Smooth webhook rate across window boundaries | pending | 0/1 | [] |
+
+Create it?
+```
+
+**Nothing is written until you answer.** Same gate as B3 — a review session gets
+no exemption from it.
+
+```text
+Yes, create it.
+```
+
+Two writes land: `.ai-tasks/2026-03-09-webhook-burst-smoothing.md` and its index
+row. Only now, with the carried task genuinely on disk, can the review record
+what it did and pass:
 
 ```markdown
 ### 2026-03-09 / 9c4d15ab-6e72-4f80-b3a1-08d259e7c4b6 / review of 2b9e7f10-4c85-4a63-9d02-7e1f5a8c3046 / (final_review → completed)
@@ -1004,7 +1176,7 @@ They are unrelated, and confusing them is the most common early mistake.
 | | `mandrel status <target>` | the task file's `status:` |
 |---|---|---|
 | Question it answers | is the deployed payload current? | where is this piece of work? |
-| Values | `in sync`, `target modified`, `canonical changed`, `stale eager import`, `ambiguous memory entrypoint`, `shadowed skill`, `missing target file`, `extra deployed file` | `pending`, `in_progress`, `final_review`, `completed`, `blocked` |
+| Values | `in sync`, `missing manifest`, `target modified`, `canonical changed`, `stale eager import`, `ambiguous memory entrypoint`, `shadowed skill`, `missing target file`, `extra deployed file`, `invalid manifest entry` | `pending`, `in_progress`, `final_review`, `completed`, `blocked` |
 | Who changes it | you, by redeploying | the session, per the transition table |
 | Where it lives | `.ai-deploy-manifest.json` vs. the canonical source | `.ai-tasks/<id>.md` frontmatter |
 
