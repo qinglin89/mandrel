@@ -70,7 +70,10 @@ Upgrading the protocol never touches `.ai/` or `.ai-tasks/`.
 
 ## Quickstart
 
-Requires Python 3.11+, and Claude Code, Cursor, or Codex CLI as the agent.
+Requires Python 3.11+, `jq` (the session-end hooks parse their input with it),
+and Claude Code, Cursor, or Codex CLI as the agent. The repo you deploy into
+must be a Git repository with at least one commit — initialization stamps
+`git rev-parse HEAD`, and review reads `git diff` as its only evidence.
 
 ```bash
 git clone https://github.com/qinglin89/mandrel && cd mandrel
@@ -83,11 +86,22 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ./bin/mandrel deploy /path/to/your-repo
 ```
 
-Then, in your repo, with your agent:
+Deploy creates neither `.ai/` nor `.ai-tasks/` — those are yours. Initialization
+does. Then, in your repo, with your agent — branching on what the repo already
+holds:
 
 ```
-/ai-init                  # derive the initial .ai/ snapshot from your codebase
-/intake-task              # describe what you want done; creates .ai-tasks/<id>.md
+/ai-init    # brownfield (existing code): derives .ai/ from your codebase;
+            #   the task list starts empty
+            # greenfield (empty repo): interviews you, then writes .ai/ plus an
+            #   initial pool of pending tasks — pick one and start
+```
+
+Then, one turn per **fresh conversation**:
+
+```
+/intake-task              # brownfield, or when the initial pool doesn't cover it:
+                          #   drafts .ai-tasks/<id>.md and waits for your confirmation
 /invoke dev <task-id>     # work the task under the dev contract
 /invoke review <task-id>  # review the landed work under the review contract
 ```
@@ -95,6 +109,11 @@ Then, in your repo, with your agent:
 Session-end bookkeeping (clean tree, session log, status) is carried by a stop
 hook — you don't invoke it. When a task reaches `completed`, the hook triggers
 closeout: absorption into `.ai/`, archive, index reconcile.
+
+**New here?** [docs/getting-started.md](docs/getting-started.md) runs both modes
+end to end — deploy, initialization, intake, dev, review, a
+`changes-requested → remediation → re-review` branch, final gate, and closeout —
+with the exact commands and the repository state after every step.
 
 Check for drift at any time:
 
@@ -235,6 +254,7 @@ code, or secrets.
 
 | | |
 |---|---|
+| [docs/getting-started.md](docs/getting-started.md) | start here — greenfield and brownfield walkthroughs, deploy through archived task |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | source of truth → deploy → target layout → three IDE surfaces → what reaches the context window |
 | [CHARTER.md](CHARTER.md) | the boundary rules: what protocols / workflow / meta each own, and why |
 | [docs/operations.md](docs/operations.md) | full operational reference — every command, flag, drift state, receipt, and lifecycle verb |
