@@ -17,10 +17,13 @@ Used for first-time setup of project memory. Ordinary `/ai-init` runs only when 
 Mode detection and brownfield scanning operate on the target-project surface, not the whole repository. Before judging greenfield vs brownfield, exclude deployed AI protocol/tooling paths:
 
 - `.ai-protocol/**`
+- `CLAUDE.md` (deployed root loader)
 - `ai-coding-*.md` (legacy layout, kept excluded during the transition)
 - `.claude/**`
 - `.codex/**`
 - `.cursor/**`
+- `.mandrel/**` (deployed orchestrator runtime; its source, requirements, and
+  README are tooling, not target-project code)
 - `.ai/**`
 - `.ai-tasks/**`
 - `.ai-deploy-*.json`

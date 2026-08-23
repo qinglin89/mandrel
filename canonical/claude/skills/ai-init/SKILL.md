@@ -35,7 +35,7 @@ Manual. First-time setup of `.ai/` content for a project. Ordinary re-init is re
    - If `.ai/index.md` exists but `.ai-tasks/index.md` is absent → treat as partial / broken init; stop and ask the user whether to repair the tasks layer or perform an explicit full rebuild.
 
 3. **Detect mode from target-project surface**:
-   - First exclude deployed AI protocol/tooling paths: `.ai-protocol/**`, `ai-coding-*.md` (legacy), `.claude/**`, `.codex/**`, `.cursor/**`, `.ai/**`, `.ai-tasks/**`, `.ai-deploy-*.json`.
+   - First exclude deployed AI protocol/tooling paths: `.ai-protocol/**`, `CLAUDE.md`, `ai-coding-*.md` (legacy), `.claude/**`, `.codex/**`, `.cursor/**`, `.mandrel/**`, `.ai/**`, `.ai-tasks/**`, `.ai-deploy-*.json`.
    - No substantive source, build files, or product documentation remain → **greenfield**. If the repo only contains excluded infrastructure, ask the user for project goals instead of inferring them from that infrastructure.
    - Substantial target-project codebase (working source, build artifacts, product README with content) → **brownfield**.
    - Ambiguous → ask the user.
