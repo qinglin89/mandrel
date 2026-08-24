@@ -58,8 +58,8 @@ Two boundary rules are mechanically enforced by `scripts/boundary-lint.sh`:
    `*.pyc`. These never leave the source repo.
 2. **Renders** templates. Only `codex/config.toml.template` is a template: it
    becomes `.codex/config.toml` with `{{REPO_ROOT}}` replaced by the target's
-   absolute path. Codex CLI does not shell-evaluate hook commands, so the paths
-   must be absolute and baked in at deploy time.
+   absolute path. That ties the rendered hook commands to the checkout path, so
+   moving or re-cloning a target requires a redeploy.
 3. **Resolves** the loader's memory entrypoints against the target's own `.ai/`
    — see [Entrypoint resolution](#entrypoint-resolution) below.
 4. **Writes** the bytes and the file mode. This is an unconditional overwrite:
@@ -69,12 +69,12 @@ Then, once per deploy:
 
 - **`.gitignore`** gets a managed block (`# BEGIN/END mandrel`)
   that ignores the whole deployed payload, so target repos don't commit it.
-- **`.ai-deploy-manifest.json`** — target-local state: rendered file hashes,
-  absolute paths, source commit, timestamp. Gitignored. This is what `status`
-  compares against.
-- **`.ai-deploy-lock.json`** — portable: canonical file hashes and source
-  commit, no machine paths. Deliberately *not* gitignored, so a target repo can
-  commit it and prove which protocol version it is running.
+- **`.ai-deploy-manifest.json`** — target-local state: rendered file hashes and
+  modes, absolute paths, source commit, timestamp. Gitignored. This is what
+  `status` compares against.
+- **`.ai-deploy-lock.json`** — portable: canonical file hashes and modes plus
+  the source commit, with no machine paths. Deliberately *not* gitignored, so a
+  target repo can commit it and prove which protocol version it is running.
 - **`.registry/repos.local.json`** in *this* repo — a machine-local inventory of
   deployed targets, so `mandrel status --all` can sweep them.
 
@@ -154,7 +154,7 @@ Notes that matter in practice:
   to `<target>/.claude/skills/` with everything else, so the manifest and the
   lock cover them and each target's skills match its protocol revision. Claude
   Code finds them by native discovery; Cursor and Codex are pointed at
-  `.claude/skills/<name>/SKILL.md` by their rule/injection text. A leftover
+  `.claude/skills/<name>/SKILL.md` by their rule/injection text. A same-named
   `~/.claude/skills/<name>/` copy overrides the deployed one and no content
   hash can detect it, so `status` checks the personal skills root by name and
   reports `shadowed skill` — the same shape as `ambiguous memory entrypoint`:

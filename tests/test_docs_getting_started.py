@@ -1,7 +1,13 @@
-"""The beginner tutorial restates three sets whose authority lives elsewhere:
+"""The onboarding documents restate three sets whose authority lives elsewhere:
 the initialization exclusion list, the `mandrel status` vocabulary, and the
-runbook's turn-selection order. A tutorial is the surface least likely to be
+runbook's turn-selection order. Tutorial prose is the surface least likely to be
 re-derived when one of those sources moves, so the drift is silent by default.
+
+The restatements live in the reference layer (docs/lifecycle-annotated.md).
+The worked examples that used to sit beside them are now their own documents
+under docs/walkthroughs/, so the classification list has exactly one home and
+both walkthroughs point at it; the short path links to the reference instead of
+repeating it, and that link is what this module holds it to.
 
 The exclusion list has an authority above the contract, too: it exists to hide
 the deployed payload from mode detection, so `deploy.PAYLOADS` — not prose — is
@@ -26,6 +32,7 @@ RUNBOOK = REPO_ROOT / "canonical" / "workflow" / "runbook.md"
 REPO_ROOT_BUCKET = REPO_ROOT / "canonical" / "repo-root"
 
 TUTORIAL = REPO_ROOT / "docs" / "getting-started.md"
+LIFECYCLE = REPO_ROOT / "docs" / "lifecycle-annotated.md"
 OPERATIONS = REPO_ROOT / "docs" / "operations.md"
 README = REPO_ROOT / "README.md"
 
@@ -67,9 +74,9 @@ def _skill_exclusions() -> set[str]:
     raise AssertionError(f"{INIT_SKILL.name} states no exclusion list")
 
 
-def _tutorial_exclusions() -> set[str]:
-    span = re.search(r"deploy owns: (.*?)That list covers", _read(TUTORIAL), re.DOTALL)
-    assert span, f"{TUTORIAL.name} no longer enumerates the excluded payload"
+def _annotated_exclusions() -> set[str]:
+    span = re.search(r"deploy owns: (.*?)That list covers", _read(LIFECYCLE), re.DOTALL)
+    assert span, f"{LIFECYCLE.name} no longer enumerates the excluded payload"
     return {_normalize_exclusion(t) for t in BACKTICKED.findall(span.group(1))}
 
 
@@ -96,17 +103,17 @@ def _is_excluded(entry: str, exclusions: set[str]) -> bool:
     return any(entry == rule or fnmatch(entry, rule) for rule in exclusions)
 
 
-def test_init_exclusions_agree_across_contract_skill_and_tutorial() -> None:
+def test_init_exclusions_agree_across_contract_skill_and_reference() -> None:
     contract = _contract_exclusions()
     assert _skill_exclusions() == contract, (
         "the ai-init skill and the init contract disagree on the "
         "target-project surface; a session following one would classify a "
         "repository differently from a session following the other"
     )
-    assert _tutorial_exclusions() == contract, (
-        "docs/getting-started.md describes a different exclusion list from "
-        f"{INIT_CONTRACT.name}, so its greenfield/brownfield claim is not what "
-        "the binding procedure actually does"
+    assert _annotated_exclusions() == contract, (
+        "docs/lifecycle-annotated.md describes a different exclusion list from "
+        f"{INIT_CONTRACT.name}, so the greenfield/brownfield claim both "
+        "walkthroughs route to is not what the binding procedure actually does"
     )
 
 
@@ -135,18 +142,38 @@ def test_status_drift_kinds_cover_every_kind_deploy_constructs() -> None:
     assert not unused, f"STATUS_DRIFT_KINDS names {unused}, which nothing constructs"
 
 
-def test_operator_docs_list_the_whole_status_vocabulary() -> None:
+def test_operations_lists_the_whole_status_vocabulary() -> None:
+    """The operator reference presents the vocabulary as an exhaustive set;
+    the README links it instead of duplicating that reference material."""
     vocabulary = (deploy.STATUS_IN_SYNC, *deploy.STATUS_DRIFT_KINDS)
-    for doc in (README, OPERATIONS, TUTORIAL):
-        body = _read(doc)
-        missing = [value for value in vocabulary if f"`{value}`" not in body]
-        assert not missing, (
-            f"{doc.relative_to(REPO_ROOT)} presents the status vocabulary but "
-            f"omits {missing}; a reader treats the list as exhaustive"
-        )
+    body = _read(OPERATIONS)
+    missing = [value for value in vocabulary if f"`{value}`" not in body]
+    assert not missing, (
+        f"{OPERATIONS.relative_to(REPO_ROOT)} presents the status vocabulary "
+        f"but omits {missing}; a reader treats the list as exhaustive"
+    )
+    assert "docs/operations.md" in _read(README), (
+        "README removes status reference detail without linking the operator "
+        "reference that owns it"
+    )
 
 
-def test_tutorial_turn_selection_matches_the_runbook_order() -> None:
+def test_tutorial_routes_to_the_full_status_vocabulary() -> None:
+    """The first-task path names one drift state and stops. That is only safe
+    while it sends the reader to the document holding the whole set."""
+    body = _read(TUTORIAL)
+    listed = [
+        value
+        for value in (deploy.STATUS_IN_SYNC, *deploy.STATUS_DRIFT_KINDS)
+        if f"`{value}`" in body
+    ]
+    assert "operations.md#status" in body, (
+        f"{TUTORIAL.name} names {listed} without linking operations.md#status, "
+        "so a beginner has no route to the states it does not name"
+    )
+
+
+def test_annotated_turn_selection_matches_the_runbook_order() -> None:
     runbook = _read(RUNBOOK)
     order = re.search(
         r"^## 2\. Turn selection\n(.*?)^## ", runbook, re.DOTALL | re.MULTILINE
@@ -159,7 +186,7 @@ def test_tutorial_turn_selection_matches_the_runbook_order() -> None:
     rows = re.findall(
         r"^\| (.*?) \| (.*?) \|$",
         re.search(
-            r"^\| Task file says \| Next turn \|\n(.*?)\n\n", _read(TUTORIAL), re.DOTALL | re.MULTILINE
+            r"^\| Task file says \| Next turn \|\n(.*?)\n\n", _read(LIFECYCLE), re.DOTALL | re.MULTILINE
         ).group(1),
         re.MULTILINE,
     )
@@ -172,6 +199,6 @@ def test_tutorial_turn_selection_matches_the_runbook_order() -> None:
         "next turn (runbook §2 rule 1)"
     )
     assert "closeout" in rows[0][1] and "ai-sync-v2" in rows[0][1], (
-        "the tutorial must route a task still sitting at `completed` into "
+        "the walkthrough must route a task still sitting at `completed` into "
         "close-out; it is the close-out trigger, not a finished state"
     )

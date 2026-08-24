@@ -1,7 +1,8 @@
 # Operations reference
 
-Every command, flag, drift state, receipt format, and lifecycle verb. Start at
-the [README](../README.md) if you are new here.
+Operational behavior for deployment, drift checks, receipts, and protocol
+evolution. Use each command's `--help` output for the exhaustive CLI flags.
+Start at the [README](../README.md) if you are new here.
 
 This repository is the canonical, version-controlled home for the AI-native
 coding protocol suite and deployment tooling.
@@ -24,9 +25,7 @@ surfaces → what actually ends up in the context window — see
 - `canonical/codex/` deploys to target `.codex/`.
 - `canonical/claude/` deploys to target `.claude/`, including the workflow
   skills under `canonical/claude/skills/`.
-- `canonical/orchestrator/` deploys to target `.mandrel/orchestrator/`. It
-  used to deploy to `.cursor/orchestrator/`; targets deployed before the move
-  need a [one-time migration](#upgrading-a-target-deployed-before-the-orchestrator-moved).
+- `canonical/orchestrator/` deploys to target `.mandrel/orchestrator/`.
 - `mandrel/` contains deploy, manifest, registry, status, and CLI code.
 - `.registry/repos.local.json` is a gitignored local inventory of managed repos.
 
@@ -95,62 +94,59 @@ Dry-run reports which managed files would be added, updated, left unchanged, or
 blocked by a non-file target path. It does not write payload files, manifests,
 lockfiles, `.gitignore`, registry entries, or orchestrator bootstrap files.
 
-### Upgrading a target deployed before the orchestrator moved
+### If Git already tracks a deploy-owned path
 
-The orchestrator used to deploy to `.cursor/orchestrator/`; it now deploys to
-`.mandrel/orchestrator/`, a sibling of `.ai-protocol/` rather than a tenant of
-another tool's directory. A target deployed before the move needs a one-time
-migration. Until it gets one, `status` reports every orchestrator file twice —
-once as `extra deployed file` at the old path, once as `canonical changed ...
-(new canonical file not deployed)` at the new one.
+Deploy overwrites the paths it owns — `CLAUDE.md`, `.claude/`, `.cursor/`,
+`.codex/`, `.ai-protocol/`, `.mandrel/` — and the managed ignore rules do not
+untrack anything: `.gitignore` has no effect on a file already in the index. So
+if your repository was tracking its own `CLAUDE.md`, or a
+`.claude/settings.json`, deploy overwrote it and Git shows it as modified. The
+ordinary two-file receipt commit
+([getting-started.md](getting-started.md#step-4-commit-the-receipt)) would leave that
+modification sitting in the tree, and the first session would refuse to end.
+Handle it explicitly.
 
-Redeploy with the bootstrap flag. The venv has to be **rebuilt**, not moved: a
-virtualenv hardcodes absolute paths in `bin/*` and `pyvenv.cfg`, so a copied
-`.venv` is a broken interpreter.
-
-```bash
-./bin/mandrel deploy --bootstrap-orchestrator <target>
-```
-
-Then settle the operator-owned state by hand. `.env`, `.venv/`, and `logs/`
-(with its `sessions.json` session map) are excluded from the payload, so deploy
-has never written them and does not move them either:
-
-- **`.env`** — bootstrap writes `.env` from `.env.example` only when none
-  exists. None exists at the new path, so it writes a fresh scaffold and the
-  configured one stays behind. Copy it over before deleting anything.
-- **`logs/`** — leave it where it is. The orchestrator resolves its log dir
-  from its own directory, so a migrated repo starts a fresh one under
-  `.mandrel/orchestrator/logs/` while past run logs and the session map stay at
-  the old path. orch-hub locates a past run's log through the `log_dir` stamped
-  into that run's record, so the old directory *is* the historical access path:
-  moving or deleting those files makes every pre-migration run unreadable in
-  the hub, and copying them forward would make the same run resolvable twice.
-
-Update anything that launches the orchestrator by path in the same pass.
-orch-hub resolves the script and the venv interpreter as fixed paths, so a hub
-still pointing at `.cursor/orchestrator/` reports every migrated repository
-unready.
-
-Then remove the abandoned payload from the old directory, keeping `logs/`:
+**Before deploying**, find out whether you have any collisions at all:
 
 ```bash
-find <target>/.cursor/orchestrator -maxdepth 1 -mindepth 1 \
-  ! -name logs -exec rm -rf {} +
+cd ~/src/your-repo
+git ls-files -- CLAUDE.md .claude .cursor .codex .ai-protocol .mandrel
 ```
 
-**Do that in the same pass as the redeploy**, while `status` can still see it.
-Deploy does not prune a path it no longer writes, and the fresh manifest simply
-stops mentioning the old records — so the `extra deployed file` drift that
-flags the stale tree today disappears at the redeploy, and the target reports
-`in sync` again while still carrying a full copy of the old payload and a venv
-whose interpreter no longer resolves.
+No output means there is nothing to reconcile — the plain receipt commit
+applies. Otherwise, copy anything of your own out of the way first, because
+deploy will replace it:
 
-What is left behind afterwards is `.cursor/orchestrator/logs/` and nothing
-else. That is the intended end state, not an unfinished cleanup.
+```bash
+mkdir -p ../your-repo-preserved
+cp CLAUDE.md ../your-repo-preserved/        # …and every other file that listing named
+```
 
-`.cursor/` itself stays: it still receives `hooks/`, `hooks.json`, and `rules/`,
-which are genuinely per-tool. Only the orchestrator tenant moved out.
+**After deploying**, untrack those paths so the managed ignore rules can take
+effect. `--cached` removes them from the index and leaves the freshly deployed
+files on disk:
+
+```bash
+git rm -r --cached --quiet -- CLAUDE.md .claude    # exactly what the listing named
+git add .gitignore .ai-deploy-lock.json
+git commit -m "chore: deploy mandrel protocol payload"
+
+git status --porcelain      # now empty
+```
+
+That commit records two things at once: the deletions from the index, and the
+receipt. From here on the payload is ignored, and `.ai-deploy-lock.json` is what
+states which protocol revision the repository is on.
+
+The alternative is to keep those paths tracked — `git add` them with the rest
+instead of running `git rm --cached`. It works, and some teams want protocol
+upgrades to show up as a reviewable diff. The cost is that every redeploy lands
+a large mechanical diff in your history, which is the job the lockfile already
+does in one file.
+
+Whichever you choose, salvage the *content*: rules you want every session to
+follow go in the target-owned conventions memory (`.ai/conventions.md`, or its
+directory-form entrypoint), which loads into every initialized session.
 
 ## Status
 
@@ -205,15 +201,15 @@ entrypoint checks are reported separately:
 - `ambiguous memory entrypoint` — both `x.md` and `x/index.md` exist. The
   upgrade renames; it does not duplicate.
 
-Other files and other edits remain exact hash checks.
+Other files remain exact content-and-mode checks.
 
 ### Shadowed skills
 
 The same blind spot in the other direction: every deployed skill file can hash
-correctly and still not be the one that runs. Agent tools resolve same-named
-skills personal-level over project-level, so a leftover
-`~/.claude/skills/<name>/SKILL.md` wins over the deployed copy — silently, and
-no content comparison can see it.
+correctly and still not be the one that runs. Claude Code resolves a
+[same-named personal skill ahead of a project skill](https://code.claude.com/docs/en/skills#where-skills-live),
+so `~/.claude/skills/<name>/SKILL.md` wins over the deployed copy — silently,
+and no content comparison can see it.
 
 - `shadowed skill` — a deployed skill name also exists as a personal-level
   skill. The detail names the file that takes precedence; removing it restores
@@ -221,12 +217,12 @@ no content comparison can see it.
 
 The check reads the personal skills root and writes nothing. It looks under
 `~/.claude/skills`; set `MANDREL_CLAUDE_SKILLS_ROOT` if the agent
-home is relocated. See [One-time operator cleanup](#one-time-operator-cleanup).
+home is relocated.
 
-The manifest is target-local state: it includes rendered file hashes and local
-absolute paths, so it should remain ignored. The lockfile is portable: it
-records canonical file hashes and source commit information without target
-machine paths, so target repos may commit it for auditability.
+The manifest is target-local state: it includes rendered file hashes, modes,
+and local absolute paths, so it should remain ignored. The lockfile is portable:
+it records canonical file hashes, modes, and source commit information without
+target machine paths, so target repos may commit it for auditability.
 
 ## Registry
 
@@ -244,11 +240,10 @@ python -m mandrel.cli registry remove some-target-repo
 only removes local tracking. It does not delete deployed files, manifests,
 hooks, or repo contents.
 
-Future `orch-hub` tooling can consume `.registry/repos.local.json` to discover
-managed repos on this machine, then start each target repo's deployed
-`.mandrel/orchestrator/orchestrator.py` as a subprocess. This repository does
-not implement orch-hub. The deployed orchestrator exposes its effective
-defaults and named model/effort profiles as machine-readable JSON:
+The registry is inventory only; `mandrel` does not launch registered targets.
+A launcher can consume it to discover managed repos and start each target's
+deployed `.mandrel/orchestrator/orchestrator.py`. The orchestrator exposes its
+effective defaults and named model/effort profiles as machine-readable JSON:
 
 ```bash
 .mandrel/orchestrator/.venv/bin/python \
@@ -256,8 +251,7 @@ defaults and named model/effort profiles as machine-readable JSON:
 ```
 
 See `.mandrel/orchestrator/README.md` for the resolution precedence and profile
-contract. A focused orch-hub implementation handoff is deployed as
-`.mandrel/orchestrator/HANDOFF-orch-hub-split-role-profiles.md`.
+contract.
 
 ## Skills
 
@@ -276,56 +270,26 @@ SessionStart injection point at the same repo-relative path.
 Deployed set: `ai-housekeeping`, `ai-init`, `ai-load`, `ai-sync-v2`,
 `ctd-tasks`, `intake-task`, `invoke`.
 
-`ai-sync` and `session-ai-audit` were retired on 2026-08-09. `ai-sync`
-duplicated `ai-sync-v2`'s job against a task layout this protocol no longer
-uses, and its description advertised an auto-trigger for `.ai/` writes that
-the memory contract's closeout-only invariant forbids; `session-ai-audit`
-drove a `scripts/session_ai_audit.py` that this repository has never carried,
-so it could not run in any target. Deploy does not prune, so targets deployed
-before that date keep both copies — see the cleanup below.
+## Hook prerequisites
 
-### One-time operator cleanup
+Context delivery and session-end enforcement run through per-tool hooks, and
+every one of them shells out to `jq`. A missing `jq` is not a failure you will
+notice in time, because the three tools degrade differently:
 
-These skills used to be installed machine-globally under `~/.claude/skills/` by
-an `mandrel skills sync-claude-global` command that no longer exists. **Remove the
-leftover global copies**, because personal-level skills override project-level
-ones ([skill precedence](https://code.claude.com/docs/en/skills)): a stale
-global copy silently wins over the deployed one, and no content hash can see
-it — deploy succeeds, the manifest and lock record the skills as deployed, and
-`status` reports `in sync`.
+| Tool | Without `jq` |
+|---|---|
+| **Claude Code** | The stop hook reads its input through an unguarded `jq` under `set -e`, so it exits with an error on every session end and the clean-tree / session-log discipline stops being enforced. Loud, at least. Eager context is unaffected — it arrives through `CLAUDE.md` imports, and the session-start hook falls back to `python3`. |
+| **Cursor** | Same unguarded stop-hook read, same erroring session end. Session-start injection *is* guarded, so it silently emits no context. |
+| **Codex CLI** | Silent all the way through, which makes it the worst case: both hooks guard every `jq` call with `\|\| true`, so session start injects no context at all and the stop hook — seeing an empty session id — fails open and allows every session end. Nothing on screen tells you enforcement is gone. |
 
-**Redeploy every managed target first.** A target still on a pre-migration
-payload has no project-level copy, so deleting the global one leaves it with
-neither — and the stop hooks on all three backends point at `ai-sync-v2` for
-task closeout. Order matters:
-
-```bash
-./bin/mandrel status --all                      # find targets reporting canonical changed
-./bin/mandrel deploy <each-target>              # project-level copies land first
-
-ls ~/.claude/skills                       # review before deleting
-rm -rf ~/.claude/skills/{ai-housekeeping,ai-init,ai-load,ai-sync,ai-sync-v2}
-rm -rf ~/.claude/skills/{ctd-tasks,intake-task,invoke,session-ai-audit}
-
-# the retired pair also has project-level copies to remove
-rm -rf <each-target>/.claude/skills/{ai-sync,session-ai-audit}
-```
-
-The retired `ai-sync` and `session-ai-audit` stay in the personal-level
-deletion above and get a project-level deletion of their own: they must go
-from **both** roots. Redeploying replaces the other seven project-level
-copies, but writes nothing for a name that has left the payload, and the
-fresh manifest simply stops mentioning it — so `status` reports `in sync`
-over a target that still has the orphan. Claude Code finds skills by scanning
-`.claude/skills/`, not by reading the manifest, so an orphaned copy keeps
-running.
-
-Skills you added yourself that are not in the deployed or retired sets are
-unaffected; delete only the names above.
-
-`status` reports any name still shadowing a deployed skill as `shadowed skill`,
-so a target that has not had this cleanup done says so instead of reporting
-`in sync`.
+Codex has a second prerequisite of its own. It will not run non-managed command
+hooks until they are trusted: run `codex` in the target and use `/hooks` to
+trust the two entries, or pass `codex exec --dangerously-bypass-hook-trust` for
+automation ([official hook trust documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)).
+Trust is recorded against the hook definition's current hash, so re-trust after
+a redeploy that changes it. Mandrel renders `.codex/config.toml` with absolute
+paths to the two hook scripts; move or re-clone the repository and redeploy
+before relying on those hooks.
 
 ## Evolution
 
@@ -343,12 +307,13 @@ gates.
 ./bin/mandrel evolution status                 # lifecycle phase; writes nothing
 ./bin/mandrel evolution list  --feed-dir ...   # inspect candidates; writes nothing
 ./bin/mandrel evolution sync  --feed-dir ...   # import eligible reports into the pool
-./bin/mandrel evolution start --feed-dir ...   # sync, then freeze a batch if policy allows
+./bin/mandrel evolution start --feed-dir ...   # repair/close, sync, then freeze if policy allows
 ```
 
-Those four are the import half. What a frozen cohort then becomes — experiments,
-rounds, replays, a promotion, its reversal, and the next cohort's reading of the
-release — is [the lifecycle console](#the-lifecycle-console) below.
+Those four manage report intake and cohort formation. What a frozen cohort then
+becomes — experiments, rounds, replays, a promotion, its reversal, and the next
+cohort's reading of the release — is
+[the lifecycle console](#the-lifecycle-console) below.
 
 Every subcommand takes `--repo <path>` to work on another checkout, and
 `status` takes `--json` for the same shape a script can read. Exit status is 0
@@ -419,7 +384,7 @@ release is kept — all of it is a human judgement stated here and recorded
 | Verb | What it does |
 |---|---|
 | `replay-start --source-ref <ref> --expectation ...` | request the measurement of the sealed candidate integrated onto that line, and record the run once one is stated |
-| `replay-conclude --outcome ... --detail ...` | record what the harness reported for the run that is going |
+| `replay-conclude --outcome ... --detail ...` | record what the harness reported for the active run |
 | `replay-abandon --reason ...` | record why a run ended when its harness cannot say |
 | `replay-withdraw` | give up a request the harness never answered for |
 | `promote --reason ... [--target <name>]...` | carry the replayed candidate onto the source line and end the batch with it |
@@ -445,17 +410,19 @@ rollback, adopts an inverse already on the line, and finishes one left prepared.
 
 ```bash
 ./bin/mandrel evolution start                      # freeze a cohort when policy allows
-# work the generated analysis task; commit its findings and closure record
+# complete the generated analysis task and commit its findings and drafts
+# create publishes the analysis closure before admitting the named drafts
 ./bin/mandrel evolution create loader-fallback hook-side-loader --reason "one change"
 # work the admitted change tasks; commit the work on the experiment's ref
 ./bin/mandrel evolution seal-round                 # pins the round's candidate revision
 ./bin/mandrel evolution replay-start --source-ref refs/heads/main \
     --expectation "fewer remediation rounds, quality unchanged"
 # ...run that evaluation yourself, then state what is running:
+# export CASE_SET_SHA256 and HARNESS_CONFIG_SHA256 with the hashes from your harness
 ./bin/mandrel evolution replay-start --source-ref refs/heads/main \
     --expectation "fewer remediation rounds, quality unchanged" \
-    --case-set loader-regressions <sha256> 12 \
-    --evaluator claude claude-opus-5 --harness local-replay 0.1.0 <sha256> \
+    --case-set loader-regressions "$CASE_SET_SHA256" 12 \
+    --evaluator claude claude-opus-5 --harness local-replay 0.1.0 "$HARNESS_CONFIG_SHA256" \
     --handle run-7
 ./bin/mandrel evolution replay-conclude --outcome completed --detail "12 of 12 judged" \
     --metric "remediation rounds" rounds 2.0 1.0 lower --handle run-7
@@ -649,8 +616,8 @@ silently import nothing. The offline path is a local report bundle:
 `--feed-dir` stays the way to run a deterministic cohort offline and to replay
 a fixed one afterwards.
 
-The wire contract, as orch-hub publishes it and the client was reconciled
-against on 2026-08-12 (details in `mandrel/evolution/hub.py`):
+The wire contract implemented by the client is detailed in
+`mandrel/evolution/hub.py`:
 
 ```text
 GET <ORCH_HUB_URL><report_feed_path>?limit=<n>[&after=<watermark>]
@@ -663,20 +630,19 @@ GET <ORCH_HUB_URL><report_feed_path>/<report_key>/artifacts/<wire name>
 ```
 
 Both requests carry `Authorization: Bearer $ORCH_HUB_TOKEN`. `has_more` is
-required: its negation is what tells a later `freeze` that the pool is the whole
-eligible set rather than a prefix, so it is read from the feed and never
+required: its negation is what tells a later batch freeze that the pool is the
+whole eligible set rather than a prefix, so it is read from the feed and never
 inferred from a short page. The cursor is an integer watermark on the wire and
 opaque above the client, which converts at that boundary.
 
 A catalog entry is orch-hub's own shape, not this repository's import record:
 the client translates one into the other so the offline feed stays
 interchangeable. Two fields are derived rather than copied — `completed` from
-the entry's `archived` (orch-hub catalogs only reports whose task was archived
-at publication, and this protocol archives only at completion close-out), and
-each artifact's `media_type` from its published filename. orch-hub publishes
-none of this repository's provenance fields, so translated records carry them
-null, and a release assessment reads that as provenance it never got rather
-than inventing a revision.
+the entry's `archived`, and each artifact's `media_type` from its published
+filename. When `provenance.protocol` marks a verified identity available, the
+client copies its `effective_revision` and `deploy_lock_hash` as an atomic pair;
+otherwise both remain null. Other provenance fields that orch-hub does not
+publish also remain null rather than being inferred.
 
 Artifact bytes are served byte for byte and verified here against the digests
 the feed itself published. The route reports a failed integrity check in a
@@ -684,10 +650,8 @@ header instead of hiding the body, and the client deliberately ignores that
 header for decisions: the check belongs to the side that did not publish the
 bytes.
 
-Two bounds are the client's own rather than the feed's, and both refuse with a
-message naming what to change. Both were confirmed against the published feed
-rather than assumed — nothing it serves redirects, and its largest artifact is
-three orders of magnitude under the bound:
+Two transport safeguards are enforced by the client rather than inferred from
+the feed:
 
 - **No redirect is followed.** `urllib` would copy the `Authorization` header
   onto whatever host a `Location` named, so a checked URL would say nothing
@@ -703,32 +667,30 @@ the feed published. It is read-only and credentialed, so it is not in
 `scripts/check.sh` and no CI runner can reach the feed; run it by hand with both
 variables exported after either side changes.
 
-### What lands where
+### Storage and privacy
 
-| Path | Owner | Committed |
+| Path | Contents | Committed |
 |---|---|---|
 | `.ai-evolution/state.json` | controller runtime | no — machine-local |
 | `.ai-evolution/imported-artifacts/` | raw fetched bundles | no — raw evidence |
 | `.ai-evolution/lock` | single-writer guard | no |
-| `evolution/batches/<id>/manifest.json` | frozen membership | yes, immutable |
-| `evolution/batches/<id>/findings.md` | analysis dispositions | yes |
-| `evolution/batches/<id>/analysis-complete.json` | closure record | yes |
-| `evolution/batches/<id>/proposed-tasks/` | change-task drafts | yes, inert |
+| `evolution/batches/<id>/` | frozen membership, analysis, proposals, and batch decisions | yes; the manifest is immutable |
+| `evolution/experiments/<id>/` | change-attempt lineage and replay records | yes |
 | `evolution/ledger.jsonl` | sanitized audit | yes, append-only |
-| `.ai-tasks/<id>-analysis.md` | generated analysis task | no — machine-local |
+| `.ai-tasks/` | task lifecycle state, including generated analysis and admitted change-task working copies | no — machine-local |
 
 Privacy follows that split. Raw report content and any diagnostic quoting a
 feed value stay under ignored `.ai-evolution/`; the ledger carries identities,
 hashes, and a bounded vocabulary of reason codes only. Credentials live in the
 environment and appear in no file, URL, or error message this tool writes.
 
-The closure record and the manifests are written by the controller but
-committed by you, like any other versioned artifact. Until that commit lands, a
-finished analysis reads as finished only on this machine.
+Everything marked committed above is versioned lifecycle state, but the tool
+does not commit it for you. Until the relevant commit lands, another clone
+cannot observe that transition.
 
 ### Recovery
 
-- **Interrupted run.** Re-run the same command. A freeze commits manifest →
+- **Interrupted run.** Re-run the same command. A freeze writes manifest →
   state → task → ledger and each step is redoable, so the next `start` finishes
   whatever remains and reports what it repaired. Repair runs before the feed is
   contacted, so an outage never blocks it.
@@ -754,9 +716,9 @@ finished analysis reads as finished only on this machine.
   while working the task; if the file is damaged, restore them or remove the
   file so the next run can write it again.
 
-## Not Copied
+## Excluded from deployment
 
-Import and deploy intentionally skip local or sensitive files:
+Deploy intentionally skips local or sensitive files:
 
 - `.venv/`
 - `logs/` and `.logs/`
@@ -792,8 +754,7 @@ scripts/check.sh
 
 This is the repository's only verification entrypoint. It runs from any working
 directory, runs every check even after one fails, exits nonzero if any failed,
-and leaves the working tree byte-identical (its last check asserts exactly
-that). It runs:
+and leaves `git status --porcelain` unchanged. It runs:
 
 | Check | What it covers |
 |---|---|
@@ -804,7 +765,7 @@ that). It runs:
 | `pytest` | the `tests/` suite |
 | `orchestrator-mock-loop` | `canonical/orchestrator/test_loop_mock.py` scenarios |
 | `package-build` | wheel build, offline install into a throwaway venv, CLI starts |
-| `tree-unchanged` | the run mutated no tracked file |
+| `tree-unchanged` | the run leaves `git status --porcelain` unchanged |
 
 The interpreter is `.venv/bin/python` when present, otherwise `python3`; set
 `AII_PYTHON` to override.
