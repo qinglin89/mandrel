@@ -537,9 +537,14 @@ one before it ended.
 Creating one *is* the grouped admission of step 2 above. The human selects the
 drafts that belong together, and one operation creates the experiment's ref at
 the batch's base revision, the record, and the admitted tasks. For the first
-experiment of a batch that base is the commit the work starts from — the
-checkout's `HEAD` unless a revision is named explicitly — recorded as its sha,
-because a branch or a tag means a different commit tomorrow.
+experiment of a batch that base is where the **configured source line**
+(`config.toml` `[source_line].ref`) stands, recorded as its sha, because a
+branch or a tag means a different commit tomorrow. The line is named in
+configuration rather than taken from whoever runs the command: a checkout is on
+a topic branch, a review, or a colleague's fetch as often as on the line the
+project releases from, and a base taken from it is an alternative measured
+against a protocol nobody released. `--base` states which commit the operator
+expected there, and a mismatch is refused rather than obeyed.
 
 The **first** experiment created for a batch freezes that batch's base revision
 (invariant 15) — not the batch freeze, which happens before anyone knows a
@@ -562,10 +567,11 @@ same release while owing no reading of its own.
 The base is then held to what that settlement chose. `retain` selects the line
 carrying the release and `rolled-back` the line carrying the inverse commit, so
 a base that does not have the chosen commit in its history is refused however it
-was reached — `HEAD` on a checkout that never followed the source line, an
-explicit revision naming the commit the batch was frozen beside, or a line a
-standalone rollback moved after the gate said the release stays. Later
-experiments of the batch take the frozen commit and ask nothing.
+was reached. Configuration settles which ref a base comes off, not what that ref
+carries: a clone that never fetched the line, a line this promotion never
+reached, and a line a standalone rollback moved after the gate said the release
+stays all resolve perfectly well. Later experiments of the batch take the frozen
+commit and ask nothing.
 
 Work happens on the durable ref `refs/evolution/experiments/<experiment-id>`,
 checked out under whatever local branch name suits the operator. The ref only

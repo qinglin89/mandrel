@@ -32,6 +32,7 @@ from typing import Any
 
 import pytest
 from evolution_fixtures import (
+    RELEASE_REF,
     REPO_ROOT,
     FakeHarness,
     admitted_task,
@@ -70,7 +71,9 @@ EXPERIMENT_ID = f"{BATCH_ID}-exp-02"
 BASE = "a" * 40
 CANDIDATE = "b" * 40
 SECOND_CANDIDATE = "9" * 40
-RELEASE_REF = "refs/heads/release"
+# A line that is not the configured one, for the requests that have to differ
+# from what is outstanding.
+OTHER_REF = "refs/heads/other"
 
 
 @pytest.fixture
@@ -85,13 +88,11 @@ def config(repo: Path) -> evolution.EvolutionConfig:
 
 @pytest.fixture
 def release(repo: Path) -> str:
-    """The source line a candidate is integrated onto — a ref of its own rather
-    than whatever branch happens to be checked out, since the merge input is a
-    property of the release line and not of this working copy."""
+    """Where the source line stands — a ref of its own rather than whatever
+    branch happens to be checked out, since the merge input is a property of the
+    release line and not of this working copy."""
 
-    sha = git_rev(repo, "HEAD")
-    git_update_ref(repo, RELEASE_REF, sha)
-    return sha
+    return git_rev(repo, RELEASE_REF)
 
 
 def sealed_experiment(
@@ -1148,7 +1149,7 @@ def test_a_dot_ending_a_component_before_the_last_is_a_name_git_holds(
 # --- what the evidence currently means ---------------------------------------
 
 
-def current_run(release_revision: str, **kwargs: Any) -> dict:
+def current_run(release_revision: str, *, integration_ref: str = RELEASE_REF, **kwargs: Any) -> dict:
     """A run of round 1 integrated onto the source line where it now stands."""
 
     return replay_entry(
@@ -1157,7 +1158,7 @@ def current_run(release_revision: str, **kwargs: Any) -> dict:
         integration=replay_integration(
             candidate_revision=CANDIDATE,
             merge_input_revision=release_revision,
-            merge_input_ref=RELEASE_REF,
+            merge_input_ref=integration_ref,
         ),
         **kwargs,
     )
@@ -1213,15 +1214,23 @@ def test_a_source_line_this_checkout_does_not_hold_is_unverified_rather_than_fre
 ) -> None:
     """A clone that never fetched the release ref cannot say whether the merge
     input moved. That is not agreement, so the run reads as completed and the
-    gate stays shut."""
+    gate stays shut.
+
+    A ref this repository genuinely has none of, rather than the configured one:
+    every temporary repository holds the source line, since that is where a base
+    is frozen from."""
 
     experiment = sealed_experiment(config)
-    write_replays(config.experiments_root, EXPERIMENT_ID, [current_run("5" * 40)])
+    write_replays(
+        config.experiments_root,
+        EXPERIMENT_ID,
+        [current_run("5" * 40, integration_ref=OTHER_REF)],
+    )
 
     evidence = replay.describe_evidence(config, experiment)
     assert evidence.state == replay.EVIDENCE_COMPLETE
     assert not evidence.promotable
-    assert evidence.unverified and RELEASE_REF in evidence.unverified[0]
+    assert evidence.unverified and OTHER_REF in evidence.unverified[0]
 
 
 def test_a_detached_merge_input_leaves_the_question_unanswerable(
@@ -1318,7 +1327,7 @@ def test_a_request_standing_over_a_recorded_run_is_reported_beside_it(
 @pytest.mark.parametrize(
     ("description", "merge_input_ref"),
     [
-        ("a source line this checkout does not hold", RELEASE_REF),
+        ("a source line this checkout does not hold", OTHER_REF),
         ("a merge input read from a detached revision", None),
     ],
 )
@@ -1656,15 +1665,17 @@ def test_a_run_refuses_a_candidate_that_does_not_merge_onto_the_source_line(
 def test_a_run_refuses_a_source_line_this_checkout_does_not_hold(
     config: evolution.EvolutionConfig, admitted: None
 ) -> None:
-    """No `refs/heads/release` here, so there is nothing to integrate onto — the
-    replay is run where the source line is, rather than against the candidate on
-    its own."""
+    """Nothing here to integrate onto — the replay is run where the source line
+    is, rather than against the candidate on its own.
+
+    A ref no fixture creates, since the configured line is present in every
+    temporary repository: that is where a base was frozen from."""
 
     pinned(config)
     harness = FakeHarness()
 
     with pytest.raises(evolution.BatchError, match="not in this checkout"):
-        run(config, harness)
+        run(config, harness, source_ref=OTHER_REF)
 
     assert harness.requests == []
 
@@ -2355,7 +2366,7 @@ def test_a_resume_answers_the_request_that_stands_or_refuses(
         run(config, harness)
 
     with pytest.raises(evolution.BatchError, match="outstanding"):
-        run(config, harness, source_ref="refs/heads/main", now=ENDED)
+        run(config, harness, source_ref=OTHER_REF, now=ENDED)
     with pytest.raises(evolution.BatchError, match="outstanding"):
         run(config, harness, expectation="something else entirely", now=ENDED)
 

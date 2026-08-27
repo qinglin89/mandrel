@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
+    RELEASE_REF,
     FakeHarness,
     admitted_task,
     completed_report,
@@ -274,16 +275,58 @@ def test_a_base_that_is_not_the_batchs_is_refused_rather_than_reconciled(
         experiments.create(config, ["hook-side-loader"], base="HEAD", now=NOW)
 
 
+def test_the_base_is_the_configured_source_line_and_not_this_checkout(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The commit every alternative in the batch is an attempt against is the
+    line the project releases from, which is a property of the project rather
+    than of whoever ran the command."""
+
+    ahead = git_commit(config.repo_root, "unrelated work on the operator's branch")
+
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert result.base_revision == git_rev(config.repo_root, RELEASE_REF)
+    assert result.base_revision != ahead == git_rev(config.repo_root, "HEAD")
+
+
+def test_a_checkout_without_the_source_line_freezes_nothing(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A clone that never fetched the line is the ordinary state of a fresh
+    checkout, and the answer to it is a fetch — not whatever else this
+    repository happens to hold."""
+
+    git_delete_ref(config.repo_root, RELEASE_REF)
+
+    with pytest.raises(evolution.BatchError, match="does not hold refs/"):
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert not (config.experiments_root / EXP_01).exists()
+
+
 def test_the_base_is_recorded_as_the_commit_not_the_name_that_was_typed(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     """A tag or a branch means a different commit tomorrow; the record has to keep
     naming this one."""
 
-    result = experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
+    result = experiments.create(config, ["loader-fallback"], base=RELEASE_REF, now=NOW)
 
-    assert result.base_revision == git_rev(config.repo_root, "v2.2.0")
-    assert result.base_revision != git_rev(config.repo_root, "HEAD")
+    assert result.base_revision == git_rev(config.repo_root, RELEASE_REF)
+    assert result.base_revision != RELEASE_REF
+
+
+def test_a_named_base_that_is_not_the_source_line_is_refused_rather_than_used(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """`--base` states which commit the operator read, and the freeze is not
+    going to take anything else; silence would leave them believing it had."""
+
+    with pytest.raises(evolution.BatchError, match="is not where refs/"):
+        experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
+
+    assert not (config.experiments_root / EXP_01).exists()
 
 
 def test_a_redo_naming_a_different_base_is_refused_rather_than_ignored(
@@ -292,10 +335,10 @@ def test_a_redo_naming_a_different_base_is_refused_rather_than_ignored(
     """A resumed admission still has a base, and it is not going to change; an
     operator who named a revision expecting it to be used has to be told."""
 
-    experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
+    experiments.create(config, ["loader-fallback"], now=NOW)
 
     with pytest.raises(evolution.BatchError, match="froze its base at"):
-        experiments.create(config, ["loader-fallback"], base="HEAD", now=NOW)
+        experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
 
 def test_a_base_this_repository_does_not_hold_is_refused(
@@ -942,7 +985,7 @@ def test_a_ref_standing_anywhere_else_stops_the_creation(
     git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), other)
 
     with pytest.raises(evolution.BatchError, match="already exists at"):
-        experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
+        experiments.create(config, ["loader-fallback"], now=NOW)
 
 
 def test_the_ref_is_never_moved_by_a_later_operation(
@@ -951,7 +994,7 @@ def test_the_ref_is_never_moved_by_a_later_operation(
     """Work accumulates on the ref while a round is open, and admitting more
     drafts into that round must not reset it to the base."""
 
-    experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
+    experiments.create(config, ["loader-fallback"], now=NOW)
     tip = git_commit(config.repo_root, "round-1 work")
     git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), tip)
 
@@ -2856,7 +2899,6 @@ def test_a_conclusion_nobody_recorded_is_not_read_as_one(
 # leave that proved only against itself.
 
 
-RELEASE_REF = "refs/heads/release"
 PROMOTED = datetime(2026, 8, 8, 9, 0, 0, tzinfo=timezone.utc)
 PROMOTED_AT = "2026-08-08T09:00:00Z"
 EXPECTED = "fewer remediation rounds, with quality and elapsed time unchanged"
@@ -2866,13 +2908,11 @@ TARGETS = ("orch-hub", "mandrel")
 
 @pytest.fixture
 def release(config: evolution.EvolutionConfig) -> str:
-    """The source line a candidate is promoted onto — a ref of its own rather
-    than whichever branch this checkout is on, because that is what the merge
-    input is a property of."""
+    """Where the source line stands — a ref of its own rather than whichever
+    branch this checkout is on, because that is what the merge input is a
+    property of."""
 
-    sha = git_rev(config.repo_root, "HEAD")
-    git_update_ref(config.repo_root, RELEASE_REF, sha)
-    return sha
+    return git_rev(config.repo_root, RELEASE_REF)
 
 
 def prepared(config: evolution.EvolutionConfig, *, report: object | None = None) -> replay.Replay:

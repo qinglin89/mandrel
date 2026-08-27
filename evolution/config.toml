@@ -7,6 +7,9 @@ token_env = "ORCH_HUB_TOKEN"
 report_feed_path = "/api/evaluation/reports"
 completed_l1_l2_only = true
 
+[source_line]
+ref = "refs/heads/main"
+
 [batch]
 target_task_count = 20
 minimum_task_count = 10

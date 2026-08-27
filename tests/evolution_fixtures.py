@@ -17,16 +17,24 @@ from typing import Any
 
 from mandrel.evolution import analysis_task
 from mandrel.evolution import assessment
+from mandrel.evolution import config as config_module
 from mandrel.evolution import experiments
 from mandrel.evolution import feed as feed_module
 from mandrel.evolution import replay
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The source line a candidate is promoted onto: a ref of its own rather than
-# whichever branch a checkout is on, because that is what the merge input is a
-# property of.
-RELEASE_REF = "refs/heads/release"
+# The source line a candidate is promoted onto, read from the policy this
+# repository ships rather than restated here. `make_repo` copies that file into
+# every temporary repository, so a fixture with its own idea of the ref would
+# build a checkout the configured base resolution cannot see — and would prove
+# the resolution works against a line only the tests believe in.
+RELEASE_REF = config_module.load_config(REPO_ROOT).source_line.ref
+# The branch every temporary repository is checked out on: deliberately not the
+# source line, because a promotion refuses to move a ref some working tree is
+# sitting on, and because a base resolved from configuration must be visibly
+# unrelated to wherever the checkout happens to be.
+WORK_BRANCH = "work"
 PROMOTION_REASON = "replay showed fewer remediation rounds with no regression"
 PROMOTION_EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 
@@ -380,7 +388,7 @@ def promotion_of(**overrides: Any) -> dict:
         "round": 1,
         "candidate_revision": "c" * 40,
         "merge_input_revision": "e" * 40,
-        "merge_input_ref": "refs/heads/release",
+        "merge_input_ref": RELEASE_REF,
         "tree": "7" * 40,
         "planned_targets": [],
     }
@@ -398,7 +406,7 @@ def prepared_promotion(**overrides: Any) -> dict:
         "round": 1,
         "candidate_revision": "c" * 40,
         "merge_input_revision": "e" * 40,
-        "merge_input_ref": "refs/heads/release",
+        "merge_input_ref": RELEASE_REF,
         "tree": "7" * 40,
         "revision": "f" * 40,
         "reason": "replay showed fewer remediation rounds with no regression",
@@ -415,7 +423,7 @@ def write_rollback(
     *,
     experiment_id: str,
     promotion_revision: str,
-    source_ref: str = "refs/heads/release",
+    source_ref: str = RELEASE_REF,
     reverted_from: str = "e" * 40,
     revision: str = "a" * 40,
     tree: str = "8" * 40,
@@ -759,7 +767,7 @@ def replay_integration(
     base_revision: str = "a" * 40,
     candidate_revision: str = "b" * 40,
     merge_input_revision: str = "e" * 40,
-    merge_input_ref: str | None = "refs/heads/release",
+    merge_input_ref: str | None = RELEASE_REF,
     tree: str = "f" * 40,
 ) -> dict:
     """The pinned tree one replay exercised: the round's candidate, the source
@@ -1058,10 +1066,17 @@ def git_repo(root: Path, *, tag: str | None) -> Path:
 
     That extra commit is the point of the tag case: it is the candidate
     revision, and it must never be mistaken for the release line (invariant 8).
+
+    The source line is a ref of its own, created here at the tip, and the
+    checkout sits on `WORK_BRANCH` instead. Both are spelled out rather than
+    left to Git: `init.defaultBranch` is a machine setting, and a host whose
+    default happened to be the configured line would put every temporary
+    repository's working tree on the branch a promotion has to move — passing or
+    refusing by accident of whoever runs the suite.
     """
 
     root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(root), "init", "-q", "-b", WORK_BRANCH], check=True)
     # Written into the repository rather than passed per command, because the
     # package makes commits of its own: a promotion's merge unit carries whoever
     # promoted, so a checkout Git has no identity for is one it refuses to
@@ -1078,6 +1093,7 @@ def git_repo(root: Path, *, tag: str | None) -> Path:
         (root / "file.txt").write_text("two\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", "candidate work"], check=True)
+    git_update_ref(root, RELEASE_REF, git_rev(root, "HEAD"))
     return root
 
 
@@ -1094,6 +1110,19 @@ def git_commit(root: Path, message: str) -> str:
     subprocess.run(["git", "-C", str(root), "add", "--", "file.txt"], check=True)
     subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
     return git_rev(root, "HEAD")
+
+
+def git_release_commit(root: Path, message: str) -> str:
+    """One more commit, landed on the source line as well as on the checkout.
+
+    What canonical work between two cohorts actually is: the line the project
+    releases from moves, which is where the next base is frozen from. A commit
+    left on the operator's branch alone moves nothing a freeze reads.
+    """
+
+    revision = git_commit(root, message)
+    git_update_ref(root, RELEASE_REF, revision)
+    return revision
 
 
 def git_unrelated_commit(root: Path, message: str) -> str:

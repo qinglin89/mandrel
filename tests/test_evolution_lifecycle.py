@@ -26,6 +26,7 @@ from evolution_fixtures import (
     complete_task,
     git_checkout,
     git_commit,
+    git_release_commit,
     git_repo,
     git_rev,
     git_update_ref,
@@ -346,7 +347,7 @@ def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
     fill_pool(config, feed_root, prefix="n", sequence=100)
     second = evolution.freeze(config, now=at(5) + timedelta(days=1), runner_revision=REVISION)
     analyze(config, NEXT_BATCH, second.analysis_task_id or "", drafts=("second-loader-fix",))
-    moved = git_commit(config.repo_root, "canonical work between the two cohorts")
+    moved = git_release_commit(config.repo_root, "canonical work between the two cohorts")
     later = experiments.create(config, ["second-loader-fix"], now=at(7))
 
     assert later.experiment_id == f"{NEXT_BATCH}-exp-01"

@@ -50,6 +50,7 @@ def test_config_loads_the_shipped_policy_and_hashes_the_file(config: evolution.E
     assert config.batch.target_task_count == 20
     assert config.batch.minimum_task_count == 10
     assert config.eligibility.deduplicate_by == config_module.SUPPORTED_DEDUPLICATION
+    assert config.source_line.ref.startswith("refs/")
     assert config.sha256 == sha256_bytes((repo / "evolution" / "config.toml").read_bytes())
     assert config.runtime_root == repo / ".ai-evolution"
     assert config.state_path == repo / ".ai-evolution" / "state.json"
@@ -66,6 +67,15 @@ def test_config_loads_the_shipped_policy_and_hashes_the_file(config: evolution.E
         ('deduplicate_by = "source-repo-and-task"', 'deduplicate_by = "source-repo"'),
         ("minimum_task_count = 10", "minimum_task_count = 40"),
         ('runtime_root = ".ai-evolution"', 'runtime_root = "../elsewhere"'),
+        # The source line has to mean one commit in every clone. A bare branch,
+        # a tag, `HEAD`, and a revision expression all resolve somewhere in most
+        # checkouts, which is the failure rather than the fix.
+        ('ref = "refs/heads/main"', 'ref = "main"'),
+        ('ref = "refs/heads/main"', 'ref = "HEAD"'),
+        ('ref = "refs/heads/main"', 'ref = "refs/heads/main@{1}"'),
+        ('ref = "refs/heads/main"', 'ref = "refs/heads"'),
+        ('ref = "refs/heads/main"', 'ref = ""'),
+        ("[source_line]", "[unused_section]"),
     ],
 )
 def test_config_fails_closed_on_policy_it_cannot_honour(repo: Path, old: str, new: str) -> None:

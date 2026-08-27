@@ -164,7 +164,10 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
     create.add_argument("draft", nargs="+", help="draft id, as `status` lists it at the admission gate")
     create.add_argument(
         "--base",
-        help="source revision the first experiment of a batch freezes (default: HEAD); later ones take that commit",
+        help=(
+            "assert the commit being frozen: a batch's first experiment takes the configured source line, later "
+            "ones take that frozen commit, and naming anything else refuses"
+        ),
     )
     create.add_argument("--reason", help="optional note recorded with the admission")
     _add_workspace_argument(create)

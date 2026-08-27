@@ -56,6 +56,14 @@ SUPPORTED_SOURCE_KIND = "orch-hub"
 SUPPORTED_COUNT_UNIT = "unique-completed-task"
 SUPPORTED_DEDUPLICATION = "source-repo-and-task"
 
+# What a fully-qualified ref looks like, mirroring the pattern every versioned
+# record spells the same way (`batch-rollback.schema.json` `source_ref`). The
+# reason is the reason there: a bare branch name, a tag, or a revision
+# expression answers from whichever working copy asks, and the source line is
+# the one thing about this policy that must mean the same commit in every
+# clone.
+_REF = re.compile(r"\Arefs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+\Z", re.ASCII)
+
 # The two storage ownerships of the contract's Data layout. Everything the
 # controller writes belongs to exactly one of them: ignored machine-local
 # runtime state under the runtime root, sanitized versioned records under the
@@ -101,6 +109,26 @@ class SourceConfig:
     token_env: str
     report_feed_path: str
     completed_l1_l2_only: bool
+
+
+@dataclass(frozen=True)
+class SourceLineConfig:
+    """The canonical line this repository's protocol is released on.
+
+    One ref, named here rather than resolved from whoever is running the
+    command. A base taken from a checkout's `HEAD` is the branch an operator
+    happened to be on — a topic branch, a colleague's fetch, a detached
+    review — and every alternative in the batch would then be an attempt
+    against a protocol nobody released (invariant 15). Configuration is where a
+    project states that line once, so every clone freezes the same base.
+
+    Read by the operations that *resolve* a line. The ones that act on a line
+    already measured — a promotion's merge unit, a rollback's inverse commit —
+    take the ref from their own evidence instead, so editing this file can never
+    redirect either onto a line nothing measured.
+    """
+
+    ref: str
 
 
 @dataclass(frozen=True)
@@ -153,6 +181,7 @@ class EvolutionConfig:
     path: Path
     sha256: str
     source: SourceConfig
+    source_line: SourceLineConfig
     batch: BatchConfig
     eligibility: EligibilityConfig
     analysis: AnalysisConfig
@@ -242,6 +271,7 @@ def load_config(repo_root: Path | None = None, *, config_path: Path | None = Non
         report_feed_path=_string(data, "source", "report_feed_path", path),
         completed_l1_l2_only=_bool(data, "source", "completed_l1_l2_only", path),
     )
+    source_line = SourceLineConfig(ref=_ref(data, "source_line", "ref", path))
     batch = BatchConfig(
         target_task_count=_int(data, "batch", "target_task_count", path),
         minimum_task_count=_int(data, "batch", "minimum_task_count", path),
@@ -279,6 +309,7 @@ def load_config(repo_root: Path | None = None, *, config_path: Path | None = Non
         path=path,
         sha256=sha256_bytes(raw_bytes),
         source=source,
+        source_line=source_line,
         batch=batch,
         eligibility=eligibility,
         analysis=analysis,
@@ -433,6 +464,26 @@ def _int(data: dict[str, object], section: str, key: str, path: Path) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ConfigError(f"{path}: [{section}].{key} must be an integer")
     return value
+
+
+def _ref(data: dict[str, object], section: str, key: str, path: Path) -> str:
+    """A Git ref this policy names, refused unless it is fully qualified.
+
+    Refused at load rather than where it is used, because everything downstream
+    of it is a commit: a base is frozen from this ref and an assertion is
+    checked against it, and by then a name that resolved to something else is
+    indistinguishable from a line that moved. `main`, `v2.3.0` and `HEAD` all
+    resolve somewhere in most checkouts — which is the failure, not the fix.
+    """
+
+    value = _string(data, section, key, path)
+    if _REF.match(value):
+        return value
+    raise ConfigError(
+        f"{path}: [{section}].{key} must be a fully-qualified ref such as 'refs/heads/main', got {value!r}; a "
+        "bare name or a revision expression resolves against whichever working copy asks, and this names one "
+        "line for every clone"
+    )
 
 
 def _contained(data: dict[str, object], section: str, key: str, path: Path, root: Path) -> str:

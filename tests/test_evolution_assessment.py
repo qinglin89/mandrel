@@ -3848,8 +3848,13 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     drafts = open_second(config, second)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
 
+    # Naming the line in configuration settles which ref a base comes off, not
+    # what that ref carries: this is the same line, wound back to where it stood
+    # before the promotion.
+    git_update_ref(config.repo_root, RELEASE_REF, promoted.merge_input_revision)
+
     with pytest.raises(evolution.BatchError) as error:
-        experiments.create(config, drafts, base=promoted.merge_input_revision, now=RESOLVED_AT)
+        experiments.create(config, drafts, now=RESOLVED_AT)
 
     assert "does not carry" in str(error.value)
     assert promoted.promotion_revision[:12] in str(error.value)
@@ -3872,11 +3877,17 @@ def test_a_reversed_release_is_not_the_base_it_was_taken_off(
     )
     assert answered.reversal is not None
 
+    # The settlement put the inverse commit on the line; this winds it back to
+    # the promoted revision the batch was frozen beside.
+    reversed_line = git_rev(config.repo_root, RELEASE_REF)
+    git_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision)
+
     with pytest.raises(evolution.BatchError) as error:
-        experiments.create(config, drafts, base=promoted.promotion_revision, now=RESOLVED_AT)
+        experiments.create(config, drafts, now=RESOLVED_AT)
     assert "does not carry" in str(error.value)
     assert answered.reversal.revision[:12] in str(error.value)
 
+    git_update_ref(config.repo_root, RELEASE_REF, reversed_line)
     admitted = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     assert admitted.base_revision == answered.reversal.revision
 

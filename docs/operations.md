@@ -370,7 +370,7 @@ release is kept — all of it is a human judgement stated here and recorded
 
 | Verb | What it does |
 |---|---|
-| `create <draft>... [--base <rev>] [--reason ...]` | admit a group of drafts as a new experiment; a batch's first experiment freezes the base (`HEAD` unless named) |
+| `create <draft>... [--base <rev>] [--reason ...]` | admit a group of drafts as a new experiment; a batch's first experiment freezes the base at the configured source line, and `--base` asserts which commit that was expected to be |
 | `add-tasks <draft>...` | admit further drafts into the open experiment's open round |
 | `reject <draft>... --reason ...` | decline drafts at the admission gate; terminal for those proposals |
 | `seal-round` | observe every admitted task complete and pin the round's candidate revision |
@@ -569,8 +569,8 @@ the two fields a surface acts on:
 `1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
 records under `evolution/batches` and `evolution/experiments`,
 `evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
-records name, and `HEAD` (which is the base a first admission would freeze). Pass
-it back on any mutation:
+records name, and `HEAD` (which is where a freeze still reads
+`runner_protocol_revision` from). Pass it back on any mutation:
 
 ```bash
 ./bin/mandrel evolution seal-round --expect 1-ac1087623f3fa990

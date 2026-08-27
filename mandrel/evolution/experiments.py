@@ -778,10 +778,11 @@ def create(
 
     The first experiment of a batch freezes that batch's base revision — not the
     batch freeze, which happens before anyone knows a change is warranted
-    (invariant 15). `base` defaults to `HEAD`, which is the source commit the
-    operator is starting the work from; every later experiment of the same batch
-    is created from the commit the first one froze, and a `base` naming anything
-    else is refused rather than reconciled.
+    (invariant 15). That base is the configured source line ([source_line].ref)
+    as this checkout holds it; every later experiment of the same batch is
+    created from the commit the first one froze. `base` names the commit the
+    operator expected in either case, and one naming anything else is refused
+    rather than reconciled.
 
     Running it again with the same selection is the resume path, not a second
     admission: it finishes whatever the interrupted run left and reports what it
@@ -3070,6 +3071,14 @@ def _base_revision(
     attempts against different sources are not alternatives to each other. An
     explicit `base` is still checked against it, because an operator who names a
     revision expecting it to be used should be told it was not.
+
+    The freeze itself takes the configured source line ([source_line].ref), not
+    this checkout. A base is what every alternative in the batch is an attempt
+    against, and the branch the operator happens to be on is not that line — a
+    topic branch, a review checkout, or a fetch left behind all resolve
+    perfectly well and freeze a base nothing was released from. `base` is an
+    assertion here for the same reason it is one above: it says which commit the
+    operator expected, and a mismatch is told rather than obeyed.
     """
 
     frozen = current.base_revision
@@ -3082,9 +3091,48 @@ def _base_revision(
             )
         return frozen, current.base_release_ref
 
-    revision = requested if requested is not None else "HEAD"
-    resolved = _resolve(config, revision)
+    resolved = _source_line_revision(config)
+    _require_requested_line(config, resolved, requested)
     return resolved, release_ref(config.repo_root, resolved)
+
+
+def _source_line_revision(config: EvolutionConfig) -> str:
+    """Where the configured source line stands in this checkout.
+
+    Refused rather than substituted when it stands nowhere. A clone that never
+    fetched the line is the ordinary state of a fresh checkout, and the answer
+    to it is a fetch — freezing whatever else this repository holds would put
+    every alternative in the batch on a line the project does not release from.
+    """
+
+    ref = config.source_line.ref
+    revision = ref_tip(config.repo_root, ref)
+    if revision is None:
+        raise BatchError(
+            f"this checkout does not hold {ref}, which {config.path} names as the source line every experiment "
+            "of a batch starts from; fetch that line before freezing a base, since the base is recorded as an "
+            "exact commit and every alternative here is built on it (invariant 15)"
+        )
+    return revision
+
+
+def _require_requested_line(config: EvolutionConfig, resolved: str, requested: str | None) -> None:
+    """A named base is checked against where the configured source line stands.
+
+    The freeze is not going to take anything else, so silence would leave an
+    operator believing a revision they named was used. Compared as commits
+    rather than as strings: naming the ref, the sha, or a tag pointing at it are
+    the same assertion, and all three are the operator saying which commit they
+    read.
+    """
+
+    if requested is None or _resolve(config, requested) == resolved:
+        return
+    raise BatchError(
+        f"{requested!r} is not where {config.source_line.ref} stands ({resolved[:12]}), and the base a first "
+        f"experiment freezes is that line as {config.path} names it; `--base` says which commit was expected "
+        "rather than choosing one, so fetch the line, or take the reading again and name the commit it is on"
+    )
 
 
 def _require_release_settled(
@@ -3150,10 +3198,11 @@ def _require_settled_line(
     after a `rolled-back` — is the freeze deciding for itself what the human was
     asked, which is the accident this gate exists to stop.
 
-    Asked of the resolved base whatever it came from, because `HEAD` and an
-    explicit revision reach the wrong commit the same way: a checkout that never
-    followed the source line, and an operator naming the revision the batch was
-    frozen beside. It is also what keeps a rollback run *after* a recorded
+    Asked of the resolved base however it was reached. Naming the line in
+    configuration settles which ref a base comes off, not what that ref carries:
+    a clone that never fetched it, a line the project releases from that this
+    promotion never reached, and a line moved since the reading all resolve
+    perfectly well. It is also what keeps a rollback run *after* a recorded
     `retain` from quietly realigning the base — the reading says the release
     stays, and a line that no longer carries it is not the line that was decided
     on.

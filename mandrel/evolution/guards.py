@@ -334,15 +334,15 @@ def _no_open_experiment(current: BatchLineage, action: str) -> str:
 STATE_REVISION_VERSION = 1
 _REVISION_DIGITS = 16
 
-# The commit an operation resolves when nothing on record names one. Exactly one
-# does — the grouped admission that freezes a batch's first base takes `HEAD`
-# where the operator names no revision (`experiments._base_revision`) — and it is
-# in play whenever that admission is, which is before any record of this batch
-# exists to name it. A checkout moved between the reading and the write is
-# therefore a different base than the one the reading was taken against, and the
+# The commit an operation resolves when nothing on record names one. Freezing a
+# base no longer does: it takes the configured source line, which is a ref like
+# any other and covered as one (`experiments._source_line_revision`). What is
+# left is the freeze's own `runner_protocol_revision`, which `batches.py` still
+# derives from `git describe HEAD` — so a checkout moved between the reading and
+# the write is a different value than the reading was taken against, and the
 # cost of covering it is a token that stops being current when the operator
-# switches branch: the safe direction, since the alternative is freezing a base
-# nobody read.
+# switches branch. It is the wrong side of that trade for every other verb, and
+# what makes the ref removable is settling where that field comes from.
 _HEAD = "HEAD"
 
 # What a durable record calls a ref. Everything else in these records is a

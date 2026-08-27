@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 from evolution_fixtures import (
+    RELEASE_REF,
     REPO_ROOT,
     admitted_task,
     experiment_decision,
@@ -1857,7 +1858,7 @@ def rolled_back(config: evolution.EvolutionConfig, **overrides: Any) -> Path:
     fields: dict[str, Any] = {
         "experiment_id": EXP_01,
         "promotion_revision": PROMOTION,
-        "source_ref": "refs/heads/release",
+        "source_ref": RELEASE_REF,
         **overrides,
     }
     return write_rollback(config.batches_root, BATCH_ID, **fields)
