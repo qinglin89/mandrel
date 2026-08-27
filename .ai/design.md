@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-23
-verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
+last-updated: 2026-08-27
+verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
 ---
 
 # Design Principles and Decisions
@@ -23,7 +23,9 @@ verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
 - Protocol evolution uses repeated unique-task evidence, immutable cohorts,
-  separate analysis/change tasks, stable runner revisions, and human gates.
+  separate analysis/change tasks, human gates, and one configured source line:
+  its frozen commit is batch runner provenance and the first base/replay input;
+  evidence, never configuration, supplies promotion and rollback lines.
 - Evolution lifecycle status is derived from durable artifacts and Git; no
   mutable flow-state field governs the phase.
 - Evolution reads and writes share one whole-lineage derivation; batch currency

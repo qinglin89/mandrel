@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-23
-verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
+last-updated: 2026-08-27
+verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
 ---
 
 # Architecture
@@ -77,6 +77,10 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 `mandrel evolution` is the authoritative standalone human-triggered controller;
 an optional Web surface consumes its JSON/actions rather than implementing a
 second lifecycle.
+One fully-qualified configured source line supplies the batch runner revision,
+the first experiment base, and replay input. Promotion and rollback instead use
+their persisted evidence, so a policy edit can neither redirect a measured merge
+nor its inverse.
 It consumes a protected orch-hub feed or deterministic local bundles, validates
 and hashes complete L1+L2 reports, deduplicates them by completed source task,
 and persists the cursor, drain proof, pending pool, rejections, and processed
@@ -104,9 +108,11 @@ the current batch, open attempt, gate, round, and revisions from any checkout.
 the audit ledger is not flow state. Per-experiment replay histories and prepared
 promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
 commits are the release-decision state. Schema-v7 status adds a digest of those
-authoritative inputs, per-verb allowed/refused/recovery actions, and a
-machine-local reading of planned targets' validated deploy locks; the deployment
-reading neither enters the digest nor gates lifecycle actions. Versioned `evolution/` holds safe policy, schemas,
+authoritative inputs and their named ref tips, including the configured source
+line but excluding the operator's `HEAD`, plus per-verb
+allowed/refused/recovery actions and a machine-local reading of planned targets'
+validated deploy locks; the deployment reading neither enters the digest nor
+gates lifecycle actions. Versioned `evolution/` holds safe policy, schemas,
 manifests, lineage, sanitized cases, and audit while raw report content and
 credentials stay ignored. Analysis, canonical implementation, replay,
 promotion, deployment, and rollback remain separate reviewed/human-gated steps.

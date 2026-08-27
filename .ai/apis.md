@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-23
-verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
+last-updated: 2026-08-27
+verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
 ---
 
 # APIs and Interfaces
@@ -26,7 +26,10 @@ verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 All evolution operations are human-invoked and make no evaluation model call.
 `list` and `status` are read-only; `start` returning no batch is a normal
 successful outcome when policy is not met. Lifecycle mutations accept optional
-`--expect <state_revision>` and check it first under their writer lock.
+`--expect <state_revision>` and check it first under their writer lock. The
+token hashes authoritative record bytes plus the configured source line and
+every ref those records name; it deliberately excludes `HEAD`, because no
+evolution write resolves the operator's checkout.
 
 ## Evolution Domain Operations
 
@@ -52,7 +55,7 @@ successful outcome when policy is not met. Lifecycle mutations accept optional
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
 | `orchestrator.toml` | Schema-v3 deployed defaults/profiles plus advisory per-backend/agent model catalog; uncatalogued models remain launchable |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
-| `evolution/config.toml` | Versioned evolution admission/storage policy |
+| `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; batch runner provenance, first bases, and replays resolve it, while promotion/rollback take their line from evidence |
 | `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
