@@ -101,7 +101,9 @@ def batch(config: evolution.EvolutionConfig) -> Path:
         BATCH_ID,
         ["r1", "r2"],
         analysis_task_id=ANALYSIS_TASK,
-        runner_protocol_revision="v2.2.0",
+        # A commit, as a freeze records it: where the configured source line
+        # stood, not the release tag reachable from it (invariant 8).
+        runner_protocol_revision="d" * 40,
     )
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
     write_closure(config.batches_root, BATCH_ID, analysis_task_id=ANALYSIS_TASK)
@@ -772,7 +774,7 @@ def test_the_analysis_task_this_controller_generates_would_pass_its_own_gate(
             artifacts_root=".ai-evolution/artifacts",
             task_count=3,
             report_count=4,
-            runner_protocol_revision="v2.2.0",
+            runner_protocol_revision="d" * 40,
             config_sha256="0" * 64,
             forced=False,
             force_justification=None,

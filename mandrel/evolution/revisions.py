@@ -7,12 +7,12 @@ answer. Five things here are not questions: `create_ref` / `move_ref`,
 failure instead of raising, and `held_at`, which writes nothing but takes Git's
 own ref lock and therefore refuses when it cannot.
 
-**The release line** (`release_line_revision`, `release_ref`). Contract
-invariant 8 pins the runner: the stable protocol revision governing an evolution
-task stays fixed for that task, and a candidate revision never governs the run
-that creates it. It is therefore read from the most recent release tag reachable
-from a commit — never from the branch tip, which on a working branch *is* a
-candidate.
+**The release tag** (`release_ref`). The most recent release tag reachable from
+a *commit*, recorded beside a frozen base so the record still names which
+released protocol that candidate builds on after the tag has moved or gone.
+Asked of a commit and never of a checkout: contract invariant 8 pins the runner
+to a revision, and the revision governing a batch is where the configured source
+line stood when it froze (`batches.py`), not a tag some checkout describes as.
 
 **The experiment refs** (`ref_tip`, `contains`, `resolve_commit`, `create_ref`,
 `move_ref`, `held_at`). Where an experiment's durable ref sits, whether one
@@ -33,12 +33,17 @@ package moves a ref anyone could be standing on. Whether a promotion *reached*
 the line, or its inverse did, is `contains` — the recorded commit, on that line
 — rather than a shape or a tip.
 
-What is deliberately *not* here any more is a lifecycle reading built out of
-`HEAD` against that tag. It answered "is this checkout on the release line",
-which names no experiment, changes with a `git checkout`, and reports a
-candidate for any unrelated branch (contract: What is derived). The revisions in
-play are properties of the batch and experiment records, so `lineage.py` derives
-them and `phase.py` reports them; this module only resolves the names.
+What is deliberately *not* here any more is any reading of `HEAD`. Two went:
+a lifecycle reading built out of `HEAD` against the release tag, which answered
+"is this checkout on the release line" — naming no experiment, changing with a
+`git checkout`, and reporting a candidate for any unrelated branch (contract:
+What is derived) — and the freeze's own runner revision, which described `HEAD`
+and named a release the cohort was not run under. The revisions in play are
+properties of the batch and experiment records and of the configured source
+line, so `lineage.py` derives them and `phase.py` reports them; this module only
+resolves the names. Nothing here resolves the checkout, which is what lets
+`guards.state_revision` stop watching it: a token stays current across a
+`git checkout` because no write depends on where that checkout stands.
 """
 
 from __future__ import annotations
@@ -80,18 +85,6 @@ class Revision:
     def describe(self) -> str:
         short = self.sha[:12]
         return f"{self.ref} ({short})" if self.ref else short
-
-
-def release_line_revision(repo_root: Path) -> str | None:
-    """The stable release-line revision of `repo_root`, or None when there is none.
-
-    None is a real answer, not a failure: a checkout with no release tag has no
-    stable protocol revision to name, and the manifest and generated task say so
-    explicitly rather than substituting the candidate they happen to sit on
-    (invariant 4 keeps missing fields explicit).
-    """
-
-    return release_ref(repo_root, "HEAD")
 
 
 def release_ref(repo_root: Path, revision: str) -> str | None:

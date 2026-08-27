@@ -43,7 +43,9 @@ from evolution_fixtures import (
     completed_report,
     experiment_decision,
     experiment_round,
+    git_checkout,
     git_commit,
+    git_file_commit,
     git_repo,
     git_rev,
     git_sibling_commit,
@@ -1423,6 +1425,34 @@ def test_the_state_revision_covers_the_commit_a_first_base_would_freeze(
 
     assert git_rev(config.repo_root, "HEAD") == head, "the line moved under a checkout that did not"
     assert status(config).state_revision != before
+
+
+def test_the_state_revision_is_stable_across_a_checkout_of_another_branch(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """`HEAD` is deliberately not watched, and this is what that buys.
+
+    Nothing this package writes resolves the checkout any more — a first base and
+    the freeze's own `runner_protocol_revision` both take the configured source
+    line — so where the operator happens to be standing is not lifecycle state.
+    Watching it would have made every commit and every branch switch invalidate
+    outstanding tokens, which only the surfaces that always pass one (a script,
+    the Web adapter, orch-hub) would ever have felt.
+    """
+
+    freeze_cohort(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    before = status(config).state_revision
+
+    # A branch of someone else's, off the same line: the tree keeps everything
+    # but `file.txt`, so checking it out moves `HEAD` and touches nothing the
+    # lifecycle is derived from.
+    elsewhere = git_file_commit(config.repo_root, release, "file.txt", "unrelated\n", "work on another branch")
+    git_checkout(config.repo_root, elsewhere)
+
+    assert git_rev(config.repo_root, "HEAD") == elsewhere, "the checkout moved"
+    assert git_rev(config.repo_root, RELEASE_REF) == release, "and the source line did not"
+    assert status(config).state_revision == before
 
 
 def test_a_reading_is_never_published_with_a_token_from_after_it(

@@ -334,18 +334,6 @@ def _no_open_experiment(current: BatchLineage, action: str) -> str:
 STATE_REVISION_VERSION = 1
 _REVISION_DIGITS = 16
 
-# The commit an operation resolves when nothing on record names one. Freezing a
-# base no longer does: it takes the configured source line, which is a ref like
-# any other and watched as one — seeded below rather than learned, since no
-# record's bytes carry it until a freeze has already happened. What is left is
-# the freeze's own `runner_protocol_revision`, which `batches.py` still
-# derives from `git describe HEAD` — so a checkout moved between the reading and
-# the write is a different value than the reading was taken against, and the
-# cost of covering it is a token that stops being current when the operator
-# switches branch. It is the wrong side of that trade for every other verb, and
-# what makes the ref removable is settling where that field comes from.
-_HEAD = "HEAD"
-
 # What a durable record calls a ref. Everything else in these records is a
 # revision — `reverted_from` and the pinned candidates included — and a revision
 # is covered by the bytes that state it.
@@ -417,10 +405,22 @@ def read_inputs(config: EvolutionConfig) -> Inputs:
     told the state still stands and freeze a base nobody read. The policy file's
     own bytes are hashed below, so an edit naming a *different* line is covered
     already; this covers that line moving.
+
+    `HEAD` is deliberately not watched, and that absence is load-bearing. It was
+    here because two writes resolved the checkout — the base a first experiment
+    froze, and the freeze's own `runner_protocol_revision` — and both now take
+    the configured line instead, so nothing this package writes depends on where
+    the checkout stands. Watching it anyway would mean any commit at all, a docs
+    commit included, invalidated every outstanding token: an interactive operator
+    would never notice (`--expect` is optional) while a script, the Web adapter
+    and orch-hub, which always pass one, would be refused for a change that moved
+    no evolution state. A `git checkout` of an unrelated branch is likewise not a
+    state change here. What is still watched is every line a write *does* stand
+    on, which is the set below.
     """
 
     records: list[tuple[str, str]] = []
-    refs = {_HEAD, config.source_line.ref}
+    refs = {config.source_line.ref}
     for path in _authoritative_paths(config):
         try:
             data = path.read_bytes()

@@ -104,6 +104,9 @@ class AnalysisTaskSpec:
     artifacts_root: str
     task_count: int
     report_count: int
+    # Where the configured source line stood when this cohort froze — the
+    # revision governing the task, not a tag some checkout described as
+    # (`batches._runner_revision`). None when that checkout did not hold the line.
     runner_protocol_revision: str | None
     config_sha256: str
     forced: bool
@@ -432,7 +435,7 @@ def render(spec: AnalysisTaskSpec) -> str:
     automation writes it.
     """
 
-    revision = spec.runner_protocol_revision or "unknown — no release tag reachable from HEAD at freeze time"
+    revision = spec.runner_protocol_revision or "unknown — this checkout did not hold the source line at freeze time"
     # Collapsed to one line so a multi-line justification stays one bullet. The
     # manifest keeps the operator's text verbatim.
     justification = " ".join((spec.force_justification or "").split())

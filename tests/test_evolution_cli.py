@@ -161,7 +161,6 @@ def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, count: int):
 
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
     kwargs.setdefault("now", NOW)
-    kwargs.setdefault("runner_revision", "v2.2.0")
     return evolution.freeze(config, **kwargs)
 
 
@@ -1739,6 +1738,34 @@ def test_a_verb_refuses_the_reading_another_writer_moved_under(
     code, out, _ = run(["evolution", "create", "loader-fallback", "--expect", token(config), *where], capsys)
     assert code == 0
     assert "created, round 1" in out
+
+
+def test_a_commit_moving_no_watched_ref_leaves_an_outstanding_token_usable(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The A-to-B false positive that used to exist here.
+
+    `HEAD` was watched, so *any* commit — a docs commit, a test commit, one
+    touching no canonical byte and no evolution record — moved the token and
+    refused the freeze. An interactive operator never met it because `--expect`
+    is optional; a script, the Web adapter and orch-hub always pass one and were
+    always refused. Nothing this tool writes resolves the checkout now, so the
+    commit below is not a state change and the outstanding token still runs.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    write_feed(feed_root, records(TARGET))
+    where = ["--repo", str(lineage_repo), "--feed-dir", str(feed_root)]
+    outstanding = token(config)
+
+    git_commit(lineage_repo, "documentation that deploys nothing")
+
+    assert token(config) == outstanding, "the reading is of the same state it was of"
+    code, out, _ = run(["evolution", "start", "--expect", outstanding, *where], capsys)
+
+    assert code == 0
+    assert "frozen" in out
+    assert len(evolution.load_batches(config)) == 1
 
 
 def test_a_token_from_another_scheme_is_refused_rather_than_compared(

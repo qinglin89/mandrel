@@ -21,12 +21,16 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
+    RELEASE_REF,
     complete_task,
     experiment_decision,
     experiment_round,
+    git_commit,
     git_repo,
+    git_rev,
     make_record,
     make_repo,
+    releasing_from,
     snapshot,
     write_closure,
     write_experiment,
@@ -42,7 +46,7 @@ TARGET = 3
 MINIMUM = 2
 
 NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
-REVISION = "v2.2.0"
+RELEASE_TAG = "v2.2.0"
 
 
 # --- fixtures ----------------------------------------------------------------
@@ -60,12 +64,23 @@ def repo(tmp_path: Path) -> Path:
         assert old in text
         text = text.replace(old, new)
     path.write_text(text, encoding="utf-8")
-    return root
+    # Git-backed, because a freeze records where the configured source line
+    # stands: without the line there is no revision to record, and every
+    # manifest here would state the absence instead of the fact.
+    return git_repo(root, tag=RELEASE_TAG)
 
 
 @pytest.fixture
 def config(repo: Path) -> evolution.EvolutionConfig:
     return evolution.load_config(repo)
+
+
+def runner_revision(config: evolution.EvolutionConfig) -> str:
+    """What a freeze taken now records as this cohort's protocol revision: where
+    the configured source line stands, read the way a test states a fact rather
+    than the way the code derives one."""
+
+    return git_rev(config.repo_root, RELEASE_REF)
 
 
 @pytest.fixture
@@ -97,7 +112,6 @@ def backdate(config: evolution.EvolutionConfig, timestamp: str) -> None:
 
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
     kwargs.setdefault("now", NOW)
-    kwargs.setdefault("runner_revision", REVISION)
     return evolution.freeze(config, **kwargs)
 
 
@@ -261,7 +275,7 @@ def test_the_target_freezes_exactly_one_batch_and_one_analysis_task(
     assert manifest["config_sha256"] == config.sha256
     assert manifest["forced"] is False
     assert manifest["force_justification"] is None
-    assert manifest["runner_protocol_revision"] == REVISION
+    assert manifest["runner_protocol_revision"] == runner_revision(config)
     assert manifest["analysis_task_id"] == result.analysis_task_id
     assert len(manifest["reports"]) == TARGET
 
@@ -695,10 +709,10 @@ def test_a_repeated_start_neither_freezes_again_nor_creates_a_second_task(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
-    first = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    first = evolution.start(config, feed, now=NOW)
     assert first.freeze.frozen
 
-    again = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    again = evolution.start(config, feed, now=NOW)
 
     assert not again.freeze.frozen
     assert again.freeze.decision.reason == batches.REASON_CURRENT_BATCH
@@ -788,7 +802,7 @@ def test_a_restart_keeps_a_report_that_arrived_after_the_manifest_pending(
 
     late = make_record(key="late", sequence=200, task_id="2026-07-01-task", evaluation_id="eval-late")
     write_feed(feed_root, [late])
-    resumed = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    resumed = evolution.start(config, feed, now=NOW)
 
     assert batches.COMPLETED_STATE in resumed.freeze.completed
     persisted = evolution.load_state(config)
@@ -812,7 +826,7 @@ def test_a_bounded_partial_drain_freezes_nothing(
     ]
     feed = write_feed(feed_root, records)
 
-    bounded = evolution.start(config, feed, now=NOW, runner_revision=REVISION, page_size=TARGET, max_pages=1)
+    bounded = evolution.start(config, feed, now=NOW, page_size=TARGET, max_pages=1)
 
     assert not bounded.sync.exhausted
     assert not bounded.freeze.frozen
@@ -821,7 +835,7 @@ def test_a_bounded_partial_drain_freezes_nothing(
     assert not analysis_task.tasks_root(config).exists()
 
     # Nothing was lost: the cursor carries on, and the complete pool freezes.
-    drained = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    drained = evolution.start(config, feed, now=NOW)
 
     assert drained.sync.exhausted
     assert drained.freeze.frozen
@@ -962,14 +976,14 @@ def test_an_open_batch_is_reconciled_before_the_feed_is_contacted(
             raise evolution.FeedError("orch-hub unreachable")
 
     with pytest.raises(evolution.FeedError):
-        evolution.start(config, Unreachable(), now=NOW, runner_revision=REVISION)
+        evolution.start(config, Unreachable(), now=NOW)
 
     assert analysis_task.task_exists(config, batch.analysis_task_id or "")
     assert evolution.load_state(config).pending == []
     assert set(evolution.load_state(config).processed) == set(batch.report_keys)
 
     # And the repair is reported once the feed comes back, not repeated.
-    resumed = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    resumed = evolution.start(config, feed, now=NOW)
     assert resumed.freeze.completed == ()
     assert resumed.freeze.current_batch_id == batch.batch_id
 
@@ -1677,7 +1691,7 @@ def test_the_generated_task_cites_the_contract_batch_revision_and_boundaries(
     assert f"evolution/batches/{result.batch_id}/manifest.json" in body
     assert f"evolution/batches/{result.batch_id}/{analysis_task.PROPOSED_TASKS_DIRNAME}" in body
     assert f"evolution/batches/{result.batch_id}/findings.md" in body
-    assert REVISION in body
+    assert runner_revision(config) in body
     assert config.sha256 in body
     assert "must not edit `canonical/`" in body
     assert ".ai-evolution/imported-artifacts" in body
@@ -1686,14 +1700,15 @@ def test_the_generated_task_cites_the_contract_batch_revision_and_boundaries(
 def test_the_generated_task_states_an_unknown_runner_revision_explicitly(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """A checkout with no release tag has no stable revision to name; the task
-    says so rather than borrowing the candidate it happens to sit on."""
+    """A checkout that does not hold the configured source line has no revision
+    to name; the task says so rather than borrowing whatever else is here."""
     fill_pool(config, feed_root, TARGET)
+    elsewhere = releasing_from(config, "refs/heads/never-fetched")
 
-    result = evolution.freeze(config, now=NOW)
+    result = evolution.freeze(elsewhere, now=NOW)
 
     assert result.analysis_task_path is not None
-    assert "unknown — no release tag" in result.analysis_task_path.read_text(encoding="utf-8")
+    assert "did not hold the source line" in result.analysis_task_path.read_text(encoding="utf-8")
     assert read_manifest(result)["runner_protocol_revision"] is None
 
 
@@ -1822,8 +1837,8 @@ def test_the_freeze_appends_one_bounded_audit_record(
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
 
-    result = evolution.start(config, feed, now=NOW, runner_revision=REVISION)
-    evolution.start(config, feed, now=NOW, runner_revision=REVISION)
+    result = evolution.start(config, feed, now=NOW)
+    evolution.start(config, feed, now=NOW)
 
     frozen = [record for record in ledger.read_records(config) if record["record_type"] == batches.RECORD_BATCH_FROZEN]
     assert len(frozen) == 1
@@ -1833,7 +1848,7 @@ def test_the_freeze_appends_one_bounded_audit_record(
         "recorded_at": "2026-08-01T12:00:00Z",
         "batch_id": result.freeze.batch_id,
         "task_id": result.freeze.analysis_task_id,
-        "revision": REVISION,
+        "revision": runner_revision(config),
         "detail": batches.TRIGGER_TARGET,
     }
 
@@ -1853,30 +1868,53 @@ def test_the_audit_names_the_trigger_that_formed_the_batch(
 # --- runner revision ---------------------------------------------------------
 
 
-def test_the_runner_revision_is_the_release_tag_not_the_branch_tip(tmp_path: Path) -> None:
-    """Invariant 8: a candidate revision never governs the run that creates it,
-    so the commit on top of the release must not become the runner revision."""
-    root = git_repo(tmp_path / "tagged", tag="v2.2.0")
+def test_the_runner_revision_is_the_source_line_not_the_checkout(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Invariant 8: the revision governing the cohort is where the line the
+    project releases from stands, not where whoever ran the freeze was standing.
 
-    assert revisions.release_line_revision(root) == "v2.2.0"
+    The old reading was `git describe --tags HEAD`, which answered with a tag
+    name and moved with the operator; this asserts both halves at once by
+    committing on the checkout alone and requiring the manifest to ignore it.
+    """
+    fill_pool(config, feed_root, TARGET)
+    line = runner_revision(config)
+    moved = git_commit(config.repo_root, "work that reaches no release")
+    assert moved != line
+
+    manifest = read_manifest(freeze(config))
+
+    assert manifest["runner_protocol_revision"] == line
+    assert manifest["runner_protocol_revision"] != moved
 
 
-def test_a_checkout_with_no_release_tag_has_no_runner_revision(tmp_path: Path) -> None:
-    assert revisions.release_line_revision(git_repo(tmp_path / "untagged", tag=None)) is None
+def test_the_freeze_records_a_revision_rather_than_a_release_tag(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """`v2.2.0` is reachable here and is deliberately not the answer: every other
+    entry in the contract's revisions table is a commit, and a tag names a tree
+    that need not be the one the cohort ran under."""
+    fill_pool(config, feed_root, TARGET)
+
+    recorded = read_manifest(freeze(config))["runner_protocol_revision"]
+
+    assert recorded != RELEASE_TAG
+    assert revisions.release_ref(config.repo_root, recorded) == RELEASE_TAG
 
 
 def test_a_directory_inside_another_repository_does_not_borrow_its_revision(tmp_path: Path) -> None:
     """Otherwise a temporary directory under someone's checkout silently
-    acquires that checkout's release line."""
-    outer = git_repo(tmp_path / "outer", tag="v9.9.9")
+    acquires that checkout's source line."""
+    outer = git_repo(make_repo(tmp_path), tag="v9.9.9")
     inner = outer / "nested"
     inner.mkdir()
 
-    assert revisions.release_line_revision(inner) is None
+    assert revisions.ref_tip(inner, RELEASE_REF) is None
 
 
 def test_a_path_that_is_not_a_repository_has_no_runner_revision(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
 
-    assert revisions.release_line_revision(plain) is None
+    assert revisions.ref_tip(plain, RELEASE_REF) is None

@@ -84,7 +84,7 @@ from .lineage import BatchLineage, Experiment, Gate, Lineage, RefState, current_
 from .phase import BatchView, LifecycleStatus
 from .replay import Evidence, Replay, ReplayHarness, ReplayPlan, ReplayReport, ReplayRequest
 from .reports import NormalizedReport, Rejection, normalize
-from .revisions import Revision, release_line_revision
+from .revisions import Revision
 from .rollback import RollbackResult
 from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock
 
@@ -152,7 +152,6 @@ __all__ = [
     "load_state",
     "normalize",
     "read_records",
-    "release_line_revision",
     "save_state",
     "single_writer_lock",
     "start",

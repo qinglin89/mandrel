@@ -410,10 +410,14 @@ Where the source line comes from differs by verb, and `--source-ref` never
 changes it. A base freeze and a replay *resolve* the line, from
 `evolution/config.toml` `[source_line].ref` — one name for the project, so every
 clone measures against the line it releases from rather than the branch someone
-was on. A promotion and a rollback do not resolve one at all: they take it from
-their own evidence, the replay's integration and the promoted outcome's merge
-unit, so no edit to the policy file can put an unmeasured tree or an inverse
-commit on a line nothing was measured against. On replay, promotion, and
+was on. A batch freeze reads the same line without asserting anything, for the
+manifest's `runner_protocol_revision`: where that line stands is the protocol
+revision the cohort's tasks are governed by, and a checkout that does not hold
+the line records the absence rather than stopping the freeze. A promotion and a
+rollback do not resolve one at all: they take it from their own evidence, the
+replay's integration and the promoted outcome's merge unit, so no edit to the
+policy file can put an unmeasured tree or an inverse commit on a line nothing
+was measured against. On replay, promotion, and
 rollback, `--source-ref` states which line the operator read; on the base
 freeze, `--base` states which commit they read at the configured line. Either
 mismatch refuses before anything is written.
@@ -581,9 +585,11 @@ the two fields a surface acts on:
 `1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
 records under `evolution/batches` and `evolution/experiments`,
 `evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
-records name, the configured source line (which no record names until a base has
-been frozen off it), and `HEAD` (which is where a freeze still reads
-`runner_protocol_revision` from). Pass it back on any mutation:
+records name, and the configured source line (which no record names until a base
+has been frozen off it). `HEAD` is deliberately not in it: nothing this tool
+writes resolves the checkout any more, so a `git checkout` of an unrelated
+branch, or a commit touching no evolution record and no watched ref, leaves an
+outstanding token usable. Pass it back on any mutation:
 
 ```bash
 ./bin/mandrel evolution seal-round --expect 1-ac1087623f3fa990

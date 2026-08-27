@@ -44,7 +44,9 @@ complete an evaluation.
    experiment, no promotion, no merge, no deployment, and no revision change.
 8. **Pin the runner.** The stable protocol revision governing an evolution
    task remains fixed for that task. A candidate revision never governs the
-   run that creates it.
+   run that creates it. It is where the configured source line stood when the
+   batch froze — a commit on the line the project releases from, not a release
+   tag and not whichever branch the freezing checkout was on.
 9. **Human gates remain.** Humans trigger batch formation, admit proposed
    canonical changes, and approve canary promotion. Automation may prepare
    evidence and pending tasks, not make these policy decisions.
@@ -131,11 +133,12 @@ and the decision that follows.
 
 ## Revisions in play
 
-Seven different commits, which an evidence trail must not substitute for one
+Eight different commits, which an evidence trail must not substitute for one
 another — a candidate measured against the wrong one measures nothing.
 
 | Term | What it is | Recorded in |
 |---|---|---|
+| Runner protocol revision | where the configured source line stood when the batch froze: the stable protocol revision governing that batch's evolution tasks (invariant 8). A commit rather than a release tag, and never the checkout the freeze happened to run in | `manifest.json.runner_protocol_revision` |
 | Base revision | the exact source commit every experiment of one batch starts from, frozen when that batch's first experiment is created | `experiment.json.base_revision` |
 | Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |

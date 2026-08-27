@@ -76,7 +76,7 @@ from .reports import (
     normalize,
     verify_artifact_bytes,
 )
-from .revisions import release_line_revision
+from .revisions import ref_tip
 from .schema import format_rfc3339, load_schema, parse_rfc3339, validate_or_raise
 from .state import (
     ARTIFACTS_SUBDIR,
@@ -419,19 +419,12 @@ def freeze(
     now: datetime | None = None,
     forced: bool = False,
     justification: str | None = None,
-    runner_revision: str | None = None,
 ) -> FreezeResult:
     """Freeze the pending pool into a batch when policy allows, and create its
     pending analysis task."""
 
     with single_writer_lock(config):
-        return freeze_locked(
-            config,
-            now=now,
-            forced=forced,
-            justification=justification,
-            runner_revision=runner_revision,
-        )
+        return freeze_locked(config, now=now, forced=forced, justification=justification)
 
 
 def start(
@@ -441,7 +434,6 @@ def start(
     now: datetime | None = None,
     forced: bool = False,
     justification: str | None = None,
-    runner_revision: str | None = None,
     expect: str | None = None,
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
@@ -484,13 +476,7 @@ def start(
         closed = record_closures(config, now=moment)
         repaired = _reconcile_locked(config, now=moment, current=running)
         imported = sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
-        admitted = freeze_locked(
-            config,
-            now=moment,
-            forced=forced,
-            justification=justification,
-            runner_revision=runner_revision,
-        )
+        admitted = freeze_locked(config, now=moment, forced=forced, justification=justification)
     if repaired is not None:
         # The freeze above reconciled again and found nothing left; the steps
         # this run actually completed are the ones the first pass did.
@@ -506,7 +492,6 @@ def freeze_locked(
     now: datetime | None = None,
     forced: bool = False,
     justification: str | None = None,
-    runner_revision: str | None = None,
 ) -> FreezeResult:
     """`freeze` without acquiring the lock, for a caller that already holds it."""
 
@@ -548,7 +533,7 @@ def freeze_locked(
             closed_batch_ids=closed,
         )
 
-    revision = runner_revision if runner_revision is not None else release_line_revision(config.repo_root)
+    revision = _runner_revision(config)
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
     if analysis_task.task_exists(config, task_id):
@@ -650,6 +635,40 @@ def _require_aware(moment: datetime) -> datetime:
     if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
         raise BatchError("freeze time must be timezone-aware; a naive datetime makes the age rule guesswork")
     return moment
+
+
+def _runner_revision(config: EvolutionConfig) -> str | None:
+    """The protocol revision governing this cohort's work, or None when this
+    checkout cannot say.
+
+    Where the configured source line stands at freeze time (invariant 8: the
+    stable protocol revision governing an evolution task stays fixed for that
+    task, and a candidate revision never governs the run that creates it). The
+    line satisfies the second half by construction — candidates accumulate on
+    `refs/evolution/experiments/*`, and the only commits this package ever puts
+    on the source line are a promotion's merge and a rollback's inverse, neither
+    of which is a candidate.
+
+    What it replaced was `git describe --tags HEAD`, which was wrong twice over:
+    it answered with a *tag name* where every other revision in play is a commit,
+    and it described whichever branch the operator was standing on. Measured on
+    this repository when it was changed, `HEAD` described as `v2.3.0` while the
+    two `canonical/` trees differed (`3ed93a7a` against `70a0265e`) — so the
+    field named a release the cohort was demonstrably not run under, and stayed
+    wrong until somebody tagged. Taking the line's tip rather than the tag
+    reachable from it is safe here for the reason it was not there: this is the
+    line the project releases from, named once in `evolution/config.toml`, and
+    not the branch whoever ran the freeze was on.
+
+    None rather than a refusal when the checkout does not hold the line. A batch
+    freeze is a decision about the report pool, and refusing one over an
+    unfetched ref would stop a cohort forming for a reason that has nothing to do
+    with the evidence; the manifest and the generated task state the absence
+    explicitly instead (invariant 4). A base freeze does refuse — by then the
+    commit is what everything is built on (`experiments._source_line_revision`).
+    """
+
+    return ref_tip(config.repo_root, config.source_line.ref)
 
 
 def _batched_entries(state: EvolutionState) -> list[PoolEntry]:

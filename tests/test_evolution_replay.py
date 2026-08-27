@@ -1492,7 +1492,7 @@ def admitted(config: evolution.EvolutionConfig) -> None:
         BATCH_ID,
         ["r1", "r2"],
         analysis_task_id=ANALYSIS_TASK,
-        runner_protocol_revision="v2.2.0",
+        runner_protocol_revision="d" * 40,
     )
     # `findings.md` gates the closure: dispositions written beside an
     # unfinished analysis task are not a completed analysis.

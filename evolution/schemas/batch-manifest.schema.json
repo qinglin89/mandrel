@@ -38,6 +38,7 @@
       ]
     },
     "runner_protocol_revision": {
+      "description": "The stable protocol revision governing this cohort's evolution task (contract invariant 8): where the configured source line ([source_line].ref) stood when the batch froze, as a full commit id. Null when the freezing checkout did not hold that line, which is recorded as the absence it is rather than substituted for (invariant 4). Not a release tag and not the per-report `provenance.runner_protocol_revision`, which is the revision a report's own runs were produced under.",
       "type": [
         "string",
         "null"
