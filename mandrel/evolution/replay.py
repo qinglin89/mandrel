@@ -912,24 +912,26 @@ def start(
     config: EvolutionConfig,
     harness: ReplayHarness,
     *,
-    source_ref: str,
+    source_ref: str | None = None,
     expectation: str,
     expect: str | None = None,
     now: datetime | None = None,
 ) -> RunStarted:
-    """Measure the open experiment's pinned candidate, integrated onto `source_ref`.
+    """Measure the open experiment's pinned candidate, integrated onto the source line.
 
     What is pinned here is the whole of what the controller owns about a run: the
     round's already-sealed candidate revision (invariant 16 — this operation
     never seals one, and refuses an open round rather than measuring a tip that
-    is still free to move), the source-line commit read from `source_ref`, and
+    is still free to move), the commit the configured source line stands at, and
     the tree the two produce. The harness owns the rest and answers with it.
 
-    The source line is named rather than assumed. The commit it stands at is what
-    a promotion would merge onto, it moves for reasons this experiment knows
+    The source line comes from configuration (`[source_line].ref`) — the same
+    line the batch's base was frozen off. The commit it stands at is what a
+    promotion would merge onto, it moves for reasons this experiment knows
     nothing about, and a checkout has no way to tell which of its refs is the one
-    a promotion will land on — so it is given, recorded, and afterwards asked
-    about by name.
+    a promotion will land on — so it is named once for the project, recorded with
+    the run, and afterwards asked about by name. `source_ref` states which line
+    the operator read that as; it asserts and never chooses.
 
     `expectation` is recorded before any numbers exist, which is the only time it
     can be: an expectation written beside the result is a reading of it. It is
@@ -945,9 +947,11 @@ def start(
     from the record, the harness is asked for the same run, and the answer lands
     where the request stood. What it is not free to do is pin the integration
     again — the source line may have moved since, and a retry that measured the
-    new one would be recording a tree while the harness runs the old. So the
-    arguments are checked against the request rather than acted on, and a
-    different source line or expectation is refused with what is outstanding.
+    new one would be recording a tree while the harness runs the old. So what
+    this run resolved is checked against the request rather than acted on, and a
+    different source line or expectation is refused with what is outstanding —
+    a policy edit naming another line included, since the request outstanding is
+    for the line it was made on.
 
     The ref check belongs to making a request, not to answering one. A resume
     records a run that already exists, and a ref that moved since is exactly
@@ -962,6 +966,7 @@ def start(
 
     moment = _moment(now)
     predicted = _expectation(expectation)
+    line = _source_line(config, source_ref)
 
     with single_writer_lock(config):
         guards.require_expected(config, expect)
@@ -978,13 +983,13 @@ def start(
                 current,
                 experiment,
                 history,
-                source_ref=source_ref,
+                source_ref=line,
                 expectation=predicted,
                 at=format_rfc3339(moment),
             )
             _write_replays(config, experiment, replace(history, pending=requested))
         else:
-            _require_same_request(experiment, requested, source_ref, predicted)
+            _require_same_request(experiment, requested, line, predicted)
 
         described = _describe_pending(requested)
         here = [replay for replay in replays if replay.round_number == requested.round_number]
@@ -1082,6 +1087,34 @@ def _request(
     )
 
 
+def _source_line(config: EvolutionConfig, requested: str | None) -> str:
+    """The line this run integrates onto: the one configuration names.
+
+    A replay measures the candidate as a promotion would carry it, and what a
+    promotion carries it onto is the line the batch's base was frozen off
+    (invariant 15). One name for the project settles both, so a run cannot be
+    evidence about an integration onto a line no base came off and no promotion
+    will reach.
+
+    `requested` asserts that name and never chooses it. Compared as a name rather
+    than as where the two stand, because which line is exactly what is being
+    asserted: a ref that happens to sit at the same commit today is still one
+    nothing here will move. A mismatch refuses rather than resolving either way —
+    taking the argument would measure the wrong line, and taking the configured
+    one silently would record a run the operator did not ask for.
+    """
+
+    configured = config.source_line.ref
+    if requested is None or requested == configured:
+        return configured
+    raise BatchError(
+        f"{requested!r} is not the source line {config.path} names ({configured}), and a replay measures the "
+        "candidate as a promotion would carry it — onto the line this batch's base was frozen off. "
+        "`--source-ref` says which line was read rather than choosing one, so drop it, or change the configured "
+        "line if this project releases from somewhere else"
+    )
+
+
 def _require_same_request(
     experiment: Experiment,
     requested: PendingRun,
@@ -1090,13 +1123,14 @@ def _require_same_request(
 ) -> None:
     """A resume asks for the run that is outstanding, not for a different one.
 
-    Both arguments are the operator restating what they asked for, and a
-    mismatch is a request they have not made yet: the harness may already be
-    running this one, so answering the new one would start a second run of the
-    same attempt while the first goes on unnamed. The way to ask for something
-    else is to withdraw this request first — which is a decision about a run
-    that may exist, and therefore an operator's to make rather than one taken
-    for them by an argument that happened to differ.
+    The expectation is the operator restating what they asked for and the source
+    line is what configuration names now; either differing is a request nobody
+    has made yet. The harness may already be running this one, so answering the
+    new one would start a second run of the same attempt while the first goes on
+    unnamed. The way to ask for something else is to withdraw this request first
+    — which is a decision about a run that may exist, and therefore an operator's
+    to make rather than one taken for them by an argument that happened to
+    differ or by an edit to the policy file.
     """
 
     described = _describe_pending(requested)
@@ -1449,6 +1483,12 @@ def _require_source_line_name(config: EvolutionConfig, path: Path, described: st
     stand now" from whichever working copy asks it later, and the schema is where
     that requirement is written down. The rest is what a pattern cannot say, and
     is asked the same way the reader asks it.
+
+    Kept where the record is written even though the name now comes from
+    configuration, which refuses `HEAD`, a bare branch and a revision expression
+    at load. A trailing dot is the half that file cannot pre-empt — the ref
+    pattern admits it and Git will not hold it — and the rest is this record's
+    own rule rather than a second reading of the policy loader's.
     """
 
     integration = definition(load_schema(config.schema_path(REPLAYS_SCHEMA_FILENAME)), "integration")

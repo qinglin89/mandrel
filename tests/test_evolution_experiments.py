@@ -46,6 +46,7 @@ from evolution_fixtures import (
     make_repo,
     prepared_promotion,
     rejection,
+    releasing_from,
     snapshot,
     write_closure,
     write_draft,
@@ -2904,6 +2905,9 @@ PROMOTED_AT = "2026-08-08T09:00:00Z"
 EXPECTED = "fewer remediation rounds, with quality and elapsed time unchanged"
 WHY = "replay showed fewer remediation rounds with no regression"
 TARGETS = ("orch-hub", "mandrel")
+# A line nothing here creates: what a promotion must not be redirected onto by
+# configuration, and what an operator asserting the wrong line names.
+ELSEWHERE = "refs/heads/elsewhere"
 
 
 @pytest.fixture
@@ -3129,6 +3133,61 @@ def test_promoting_records_why(config: evolution.EvolutionConfig, batch: Path, r
 
 
 # --- what a promotion is refused on ------------------------------------------
+
+
+def test_a_promotion_moves_the_line_its_evidence_names_and_not_the_configured_one(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """A promotion resolves no line. What it moves is the ref the replay
+    integrated onto, because that is the only line anything here was measured
+    against — so an edit to the policy file after the evidence was produced
+    cannot redirect an irreversible operation onto a line nothing exercised."""
+
+    run = prepared(config)
+    elsewhere = releasing_from(config, ELSEWHERE)
+
+    result = experiments.promote(elsewhere, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert result.merge_input_ref == RELEASE_REF
+    assert result.promotion_revision == git_rev(config.repo_root, RELEASE_REF)
+    assert git_tree(config.repo_root, result.promotion_revision) == run.integration.tree
+    assert revisions.ref_tip(config.repo_root, ELSEWHERE) is None
+
+
+def test_a_promotion_refuses_a_stated_line_its_evidence_does_not_name(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """`--source-ref` says which line the operator read the evidence as naming.
+    It is told rather than followed, and the refusal costs nothing: the line has
+    not moved and the batch is still current, so the same promotion stating the
+    line its run recorded goes through."""
+
+    prepared(config)
+
+    with pytest.raises(evolution.BatchError, match="moves the line its evidence names"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=ELSEWHERE, now=PROMOTED)
+    assert git_rev(config.repo_root, RELEASE_REF) == release
+    assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
+
+    result = experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=RELEASE_REF, now=PROMOTED)
+
+    assert result.merged is True and result.merge_input_ref == RELEASE_REF
+
+
+def test_a_redone_promotion_is_held_to_the_same_stated_line(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """The redo is the same command run again, so the assertion it carries is
+    asked again — of the promotion on record rather than of a line to move."""
+
+    prepared(config)
+    first = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    with pytest.raises(evolution.BatchError, match="moves the line its evidence names"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=ELSEWHERE, now=LATEST)
+
+    again = experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=RELEASE_REF, now=LATEST)
+    assert again.recorded is False and again.promotion_revision == first.promotion_revision
 
 
 def test_a_round_nobody_replayed_cannot_be_promoted(

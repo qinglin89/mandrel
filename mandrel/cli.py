@@ -231,6 +231,13 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
         metavar="NAME",
         help="a target this promotion is intended for, repeatable; a plan, never a deployment",
     )
+    promote.add_argument(
+        "--source-ref",
+        help=(
+            "assert the line this moves: the one the replay integrated onto, read from that evidence rather "
+            "than from configuration"
+        ),
+    )
     _add_workspace_argument(promote)
     _add_expectation_argument(promote)
 
@@ -265,6 +272,10 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
         phase.ACTION_ROLLBACK, help="take the latest promotion back off the line it was put on"
     )
     _add_reason_argument(rollback, "this promotion is being taken back off the source line")
+    rollback.add_argument(
+        "--source-ref",
+        help="assert the line this moves: the one the promotion reached, read from its outcome record",
+    )
     _add_workspace_argument(rollback)
     _add_expectation_argument(rollback)
 
@@ -353,8 +364,10 @@ def _add_harness_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     replay_start.add_argument(
         "--source-ref",
-        required=True,
-        help="the source line this candidate is integrated onto — the ref a promotion would merge it into",
+        help=(
+            "assert the source line this candidate is integrated onto: configuration names it, and naming "
+            "anything else refuses"
+        ),
     )
     _add_expectation_of_a_run(replay_start)
     _add_plan_arguments(replay_start)
@@ -725,7 +738,13 @@ def _lineage(config, args: argparse.Namespace) -> str:
         )
     if command == phase.ACTION_PROMOTE:
         return render.format_promotion(
-            experiments.promote(config, reason=args.reason, targets=args.target, expect=args.expect),
+            experiments.promote(
+                config,
+                reason=args.reason,
+                targets=args.target,
+                source_ref=args.source_ref,
+                expect=args.expect,
+            ),
             config.repo_root,
         )
     # Named above as a lineage verb and not dispatched here, which is a verb
@@ -755,7 +774,8 @@ def _release(config, args: argparse.Namespace) -> str:
         return render.format_request_withdrawn(replay.withdraw(config, expect=args.expect))
     if command == phase.ACTION_ROLLBACK:
         return render.format_rollback(
-            rollback.rollback(config, reason=args.reason, expect=args.expect), config.repo_root
+            rollback.rollback(config, reason=args.reason, source_ref=args.source_ref, expect=args.expect),
+            config.repo_root,
         )
     if command in (phase.ACTION_ASSESS, phase.ACTION_ASSESS_RESOLVE):
         reading = (

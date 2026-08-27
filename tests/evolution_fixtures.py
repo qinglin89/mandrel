@@ -1097,6 +1097,24 @@ def git_repo(root: Path, *, tag: str | None) -> Path:
     return root
 
 
+def releasing_from(config: Any, ref: str) -> Any:
+    """The same repository, releasing from a different line.
+
+    The only route left to a source line other than the shipped one: every verb
+    that resolves a line takes it from `[source_line].ref`, and the arguments
+    that name one assert it rather than choose it. So a test about another line
+    is a project configured to release from another line — and one about a verb
+    that must *ignore* configuration says exactly that by moving it.
+    """
+
+    path = config.repo_root / "evolution" / "config.toml"
+    text = path.read_text(encoding="utf-8")
+    named = f'ref = "{RELEASE_REF}"'
+    assert named in text
+    path.write_text(text.replace(named, f'ref = "{ref}"'), encoding="utf-8")
+    return config_module.load_config(config.repo_root)
+
+
 def git_commit(root: Path, message: str) -> str:
     """One more commit on the current branch, and its sha.
 

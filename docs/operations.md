@@ -383,12 +383,12 @@ release is kept — all of it is a human judgement stated here and recorded
 
 | Verb | What it does |
 |---|---|
-| `replay-start --source-ref <ref> --expectation ...` | request the measurement of the sealed candidate integrated onto that line, and record the run once one is stated |
+| `replay-start --expectation ... [--source-ref <ref>]` | request the measurement of the sealed candidate integrated onto the configured source line, and record the run once one is stated; `--source-ref` asserts which line that was expected to be |
 | `replay-conclude --outcome ... --detail ...` | record what the harness reported for the active run |
 | `replay-abandon --reason ...` | record why a run ended when its harness cannot say |
 | `replay-withdraw` | give up a request the harness never answered for |
-| `promote --reason ... [--target <name>]...` | carry the replayed candidate onto the source line and end the batch with it |
-| `rollback --reason ...` | add and record the inverse commit for the latest promotion |
+| `promote --reason ... [--target <name>]... [--source-ref <ref>]` | carry the replayed candidate onto the line its replay integrated onto, and end the batch with it |
+| `rollback --reason ... [--source-ref <ref>]` | add and record the inverse commit for the latest promotion, on the line that promotion reached |
 
 **The release the next cohort owes a reading of**
 
@@ -406,6 +406,17 @@ release is kept — all of it is a human judgement stated here and recorded
 rollback, adopts an inverse already on the line, and finishes one left prepared.
 `rollback` is for a reversal that answers no gate.
 
+Where the source line comes from differs by verb, and `--source-ref` never
+changes it. A base freeze and a replay *resolve* the line, from
+`evolution/config.toml` `[source_line].ref` — one name for the project, so every
+clone measures against the line it releases from rather than the branch someone
+was on. A promotion and a rollback do not resolve one at all: they take it from
+their own evidence, the replay's integration and the promoted outcome's merge
+unit, so no edit to the policy file can put an unmeasured tree or an inverse
+commit on a line nothing was measured against. On all of them `--source-ref`
+states which line the operator read, and a mismatch refuses before anything is
+written.
+
 #### One cycle, end to end
 
 ```bash
@@ -415,11 +426,11 @@ rollback, adopts an inverse already on the line, and finishes one left prepared.
 ./bin/mandrel evolution create loader-fallback hook-side-loader --reason "one change"
 # work the admitted change tasks; commit the work on the experiment's ref
 ./bin/mandrel evolution seal-round                 # pins the round's candidate revision
-./bin/mandrel evolution replay-start --source-ref refs/heads/main \
+./bin/mandrel evolution replay-start \
     --expectation "fewer remediation rounds, quality unchanged"
 # ...run that evaluation yourself, then state what is running:
 # export CASE_SET_SHA256 and HARNESS_CONFIG_SHA256 with the hashes from your harness
-./bin/mandrel evolution replay-start --source-ref refs/heads/main \
+./bin/mandrel evolution replay-start \
     --expectation "fewer remediation rounds, quality unchanged" \
     --case-set loader-regressions "$CASE_SET_SHA256" 12 \
     --evaluator claude claude-opus-5 --harness local-replay 0.1.0 "$HARNESS_CONFIG_SHA256" \

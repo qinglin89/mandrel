@@ -48,6 +48,7 @@ from evolution_fixtures import (
     git_update_ref,
     make_repo,
     measurement,
+    releasing_from,
     replay_entry,
     replay_integration,
     replay_pending,
@@ -1527,7 +1528,10 @@ def audit(config: evolution.EvolutionConfig) -> list[str]:
 
 
 def run(config: evolution.EvolutionConfig, harness: FakeHarness, **overrides: Any) -> replay.RunStarted:
-    fields: dict[str, Any] = {"source_ref": RELEASE_REF, "expectation": EXPECTED, "now": STARTED}
+    """A start with nothing said about the line: the ordinary way it is run, now
+    that configuration names it."""
+
+    fields: dict[str, Any] = {"expectation": EXPECTED, "now": STARTED}
     fields.update(overrides)
     return replay.start(config, harness, **fields)
 
@@ -1668,40 +1672,61 @@ def test_a_run_refuses_a_source_line_this_checkout_does_not_hold(
     """Nothing here to integrate onto — the replay is run where the source line
     is, rather than against the candidate on its own.
 
-    A ref no fixture creates, since the configured line is present in every
-    temporary repository: that is where a base was frozen from."""
+    Configured to a ref no fixture creates: the line the shipped policy names is
+    present in every temporary repository, because that is where a base was
+    frozen from."""
 
     pinned(config)
+    elsewhere = releasing_from(config, OTHER_REF)
     harness = FakeHarness()
 
     with pytest.raises(evolution.BatchError, match="not in this checkout"):
-        run(config, harness, source_ref=OTHER_REF)
+        run(elsewhere, harness)
 
     assert harness.requests == []
 
 
-@pytest.mark.parametrize(
-    "source_ref, complaint",
-    [
-        ("HEAD", "does not match"),
-        ("release", "does not match"),
-        ("refs/heads/release@{1}", "does not match"),
-        ("refs/heads/release.", "not a name Git can hold"),
-    ],
-)
-def test_a_run_refuses_a_source_line_that_is_not_a_ref_meaning_one_thing_everywhere(
-    config: evolution.EvolutionConfig, admitted: None, release: str, source_ref: str, complaint: str
+def test_a_run_takes_the_configured_line_and_refuses_an_argument_naming_another(
+    config: evolution.EvolutionConfig, admitted: None, release: str
 ) -> None:
-    """The recorded name is what a later reader resolves to ask whether the
-    source line moved. `HEAD`, a bare branch, and a revision expression answer
-    from whichever working copy is asking; a name `git check-ref-format` refuses
-    answers nowhere at all. Both are refused before a run exists to record."""
+    """`--source-ref` states which line the operator read rather than choosing
+    one. Choosing would let one run measure an integration onto a line no base
+    was frozen off and no promotion will reach — so a name that differs is
+    refused before the harness is asked for anything, and the configured line is
+    what a run with nothing said records."""
 
     pinned(config)
     harness = FakeHarness()
 
-    with pytest.raises((evolution.BatchError, evolution.ValidationError), match=complaint):
-        run(config, harness, source_ref=source_ref)
+    with pytest.raises(evolution.BatchError, match="is not the source line"):
+        run(config, harness, source_ref=OTHER_REF)
+    assert harness.requests == []
+
+    stated = run(config, harness, source_ref=RELEASE_REF)
+
+    assert stated.integration.merge_input_ref == RELEASE_REF
+    assert stated.integration.merge_input_revision == release
+
+
+def test_a_run_refuses_a_source_line_that_is_not_a_ref_meaning_one_thing_everywhere(
+    config: evolution.EvolutionConfig, admitted: None
+) -> None:
+    """The recorded name is what a later reader resolves to ask whether the
+    source line moved, so a name `git check-ref-format` refuses answers nowhere
+    at all — and is refused before a run exists to record it.
+
+    What the policy file cannot already have stopped: `HEAD`, a bare branch and
+    a revision expression are refused at load
+    (`test_config_fails_closed_on_policy_it_cannot_honour`), while a trailing
+    dot is a fully-qualified name the ref pattern admits and Git will not hold.
+    """
+
+    pinned(config)
+    impossible = releasing_from(config, "refs/heads/release.")
+    harness = FakeHarness()
+
+    with pytest.raises(evolution.BatchError, match="not a name Git can hold"):
+        run(impossible, harness)
 
     assert harness.requests == []
 
@@ -2356,17 +2381,21 @@ def test_a_failed_run_with_a_request_standing_over_it_reports_both(
 def test_a_resume_answers_the_request_that_stands_or_refuses(
     config: evolution.EvolutionConfig, admitted: None, release: str
 ) -> None:
-    """Both arguments restate what was asked for. A mismatch is a request nobody
-    has made yet, and answering it would start a second run of one position while
-    the first goes on unnamed — so it names what is outstanding instead."""
+    """The expectation restates what was asked for and the line is what the policy
+    file names now. Either differing is a request nobody has made yet, and
+    answering it would start a second run of one position while the first goes on
+    unnamed — so it names what is outstanding instead."""
 
     pinned(config)
     harness = LosesTheAnswer()
     with pytest.raises(RuntimeError):
         run(config, harness)
 
+    # The line is configured rather than argued now, so the way it differs from
+    # what is outstanding is a policy edit — and the request still stands for the
+    # line it was made on.
     with pytest.raises(evolution.BatchError, match="outstanding"):
-        run(config, harness, source_ref=OTHER_REF, now=ENDED)
+        run(releasing_from(config, OTHER_REF), harness, now=ENDED)
     with pytest.raises(evolution.BatchError, match="outstanding"):
         run(config, harness, expectation="something else entirely", now=ENDED)
 

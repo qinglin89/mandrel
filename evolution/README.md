@@ -704,11 +704,15 @@ round's already-sealed candidate, the commit the named source-line ref stands
 at, and the tree merging them produces — and then asks the harness to run it; a
 candidate that does not merge cleanly onto that ref is refused rather than
 measured around, because it is not one a promotion could carry either. The
-source line is named by the operator rather than guessed from the checkout: a
-repository cannot tell which of its refs a promotion will land on, and the ref
-is what a later reader asks about the drift with. Concluding polls the run and
-records what it reports; polling a run still going writes nothing and is the
-ordinary case.
+source line is the **configured** one (`config.toml` `[source_line].ref`) — the
+same line the batch's base was frozen off, so what a run measures is the
+integration a promotion would carry rather than one onto a line no base came off
+and no promotion will reach. A repository cannot tell which of its refs that is,
+which is why it is named for the project rather than guessed from the checkout,
+and the ref is recorded so a later reader asks about the drift by name.
+`--source-ref` states which line the operator read that as; it asserts and never
+chooses. Concluding polls the run and records what it reports; polling a run
+still going writes nothing and is the ordinary case.
 
 The order inside them is fixed by what an interruption may leave. A record
 cannot state a run until the harness answers — the cohort, the evaluator, the
@@ -723,8 +727,9 @@ harness asked twice for one run answers with that run rather than beginning
 another — attempts are allocated once and never reused, so no second request
 legitimately wears one position. The resume may not re-pin the integration, since
 the harness is already measuring the one that was pinned; a source line that has
-moved since is what a further attempt is for, and a resume naming a different one
-is refused with what is outstanding. A pending request is not evidence and never
+moved since is what a further attempt is for, and a resume against a different
+one — configuration edited to name another line included — is refused with what
+is outstanding. A pending request is not evidence and never
 becomes any — while one stands, the round it names has been measured by nothing,
 and the write that records the run it became clears it in the same file. Every
 refusal a start makes is still made before the harness is asked, so a retry — a
@@ -857,6 +862,14 @@ way for a promotion to be unjustified:
   batch and a promotion ends the batch, so a draft left waiting is this batch's
   own analysis with nobody left to answer it. The same condition holds for a
   `no-change` conclusion, for the same reason.
+
+**Which line.** The one the promotable run integrated onto, read off that
+evidence. A promotion resolves no line and reads none from `[source_line].ref`:
+the configured name settles where a base is frozen from and what a replay
+measures, and a promotion carries a measured tree, so taking its line from a file
+that may have been edited since the evidence was produced would put an unmeasured
+tree wherever that file points today. `--source-ref` states which line the
+operator read the evidence as naming, and a mismatch refuses.
 
 A further check belongs to the repository rather than to the evidence: no
 working tree may be sitting on the source line. A promotion moves a ref and
@@ -1013,6 +1026,12 @@ nothing and picks nothing. Reaching further back is not offered: everything this
 repository did afterwards was decided on the line as that promotion left it, and
 an operator who means to reverse something older is reversing a base rather than
 a release. That is ordinary Git and a record of its own, not this operation.
+
+**Which line.** The one that promotion reached, stated by the outcome record
+being reversed — the same rule promotion follows and for the same reason: an
+inverse commit belongs on the line the change it takes back was put on, not
+wherever configuration points now. `--source-ref` asserts it and never selects
+it.
 
 **Who runs it.** An operator, or the release-assessment gate: a settlement of
 `rolled-back` is this operation followed by the decision that names its commit

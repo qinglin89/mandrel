@@ -39,6 +39,7 @@ from evolution_fixtures import (
     make_manifest_report,
     make_repo,
     promote_candidate,
+    releasing_from,
     settle_release,
     write_closure,
     write_draft,
@@ -60,6 +61,9 @@ REVERSED_AT = "2026-08-09T09:00:00Z"
 LATER = datetime(2026, 8, 10, 9, 0, 0, tzinfo=timezone.utc)
 LATER_AT = "2026-08-10T09:00:00Z"
 WHY = "the next cohort showed no improvement and two new regressions"
+# A line nothing here creates: what a rollback must not be redirected onto by
+# configuration, and what an operator asserting the wrong line names.
+ELSEWHERE = "refs/heads/elsewhere"
 
 
 @pytest.fixture
@@ -122,6 +126,55 @@ def test_rolling_back_puts_an_inverse_commit_on_the_source_line(
     assert result.tree == git_tree(config.repo_root, release)
     assert result.promotion_revision == promoted.promotion_revision
     assert result.source_ref == RELEASE_REF
+
+
+def test_a_rollback_moves_the_line_the_promotion_reached_and_not_the_configured_one(
+    config: evolution.EvolutionConfig, release: str, promoted: experiments.PromotionResult
+) -> None:
+    """A rollback resolves no line either. The inverse belongs on the line the
+    change it takes back reached, which the promotion's outcome states — so a
+    policy file edited since cannot put a revert on a line the promotion never
+    touched."""
+
+    elsewhere = releasing_from(config, ELSEWHERE)
+
+    result = rollback.rollback(elsewhere, reason=WHY, now=REVERSED)
+
+    assert result.source_ref == RELEASE_REF
+    assert result.revision == git_rev(config.repo_root, RELEASE_REF)
+    assert revisions.ref_tip(config.repo_root, ELSEWHERE) is None
+
+
+def test_a_rollback_refuses_a_stated_line_the_promotion_did_not_reach(
+    config: evolution.EvolutionConfig, release: str, promoted: experiments.PromotionResult
+) -> None:
+    """`--source-ref` states which line the operator read the promotion as
+    having reached, and is told rather than followed. Nothing is written, so the
+    same reversal naming the line the outcome records goes through."""
+
+    with pytest.raises(evolution.BatchError, match="puts its inverse on the line"):
+        rollback.rollback(config, reason=WHY, source_ref=ELSEWHERE, now=REVERSED)
+    assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
+    assert not (config.batches_root / BATCH_ID / "rollback.json").exists()
+
+    result = rollback.rollback(config, reason=WHY, source_ref=RELEASE_REF, now=REVERSED)
+
+    assert result.reverted is True and result.source_ref == RELEASE_REF
+
+
+def test_a_redone_rollback_is_held_to_the_same_stated_line(
+    config: evolution.EvolutionConfig, release: str, promoted: experiments.PromotionResult
+) -> None:
+    """The redo reports the reversal on record, and the assertion the same
+    command carries is asked of it too."""
+
+    first = rollback.rollback(config, reason=WHY, now=REVERSED)
+
+    with pytest.raises(evolution.BatchError, match="puts its inverse on the line"):
+        rollback.rollback(config, reason=WHY, source_ref=ELSEWHERE, now=LATER)
+
+    again = rollback.rollback(config, reason=WHY, source_ref=RELEASE_REF, now=LATER)
+    assert again.recorded is False and again.revision == first.revision
 
 
 def test_the_promotion_it_reverses_is_left_exactly_where_it_was(

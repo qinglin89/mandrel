@@ -1956,7 +1956,9 @@ def measured(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.
 
     batch_id = sealed(config, feed_root, capsys)
     where = ["--repo", str(config.repo_root)]
-    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+    # Nothing said about the line: configuration names it, and this is the
+    # ordinary way the verb is run.
+    asked = ["--expectation", "fewer remediation rounds"]
     run(["evolution", "replay-start", *asked, *running("run-0101"), *where], capsys)
     run(["evolution", "replay-conclude", *reported(), *where], capsys)
     return batch_id
@@ -1975,7 +1977,18 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     where = ["--repo", str(lineage_repo)]
 
     code, out, _ = run(
-        ["evolution", "promote", "--reason", "the replay showed fewer rounds", "--target", "orch-hub", *where], capsys
+        [
+            "evolution",
+            "promote",
+            "--reason",
+            "the replay showed fewer rounds",
+            "--target",
+            "orch-hub",
+            "--source-ref",
+            RELEASE_REF,
+            *where,
+        ],
+        capsys,
     )
 
     assert code == 0
@@ -1986,7 +1999,10 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     assert git_rev(lineage_repo, RELEASE_REF) == promoted.revision
     assert lineage.describe(config).current is None
 
-    code, out, _ = run(["evolution", "rollback", "--reason", "the next cohort measured worse", *where], capsys)
+    code, out, _ = run(
+        ["evolution", "rollback", "--reason", "the next cohort measured worse", "--source-ref", RELEASE_REF, *where],
+        capsys,
+    )
 
     assert code == 0
     assert f"is off {RELEASE_REF}" in out
@@ -2000,6 +2016,37 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     assert code == 0
     assert "this run wrote nothing: the rollback above is the one on record" in out
     assert git_rev(lineage_repo, RELEASE_REF) == line
+
+
+def test_the_stated_line_reaches_the_operations_that_take_theirs_from_evidence(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--source-ref` is an assertion on both of these, and it is wired to the
+    line their evidence names rather than to the configured one. A mismatch
+    refuses at the surface and writes nothing, which is what makes stating it
+    worth doing."""
+
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    reason = ["--reason", "the replay showed fewer rounds"]
+
+    code, _, err = run(["evolution", "promote", *reason, "--source-ref", "refs/heads/elsewhere", *where], capsys)
+
+    assert code == 2
+    assert "moves the line its evidence names" in err
+    assert git_rev(lineage_repo, RELEASE_REF) == release
+
+    run(["evolution", "promote", *reason, *where], capsys)
+    promoted = git_rev(lineage_repo, RELEASE_REF)
+
+    code, _, err = run(
+        ["evolution", "rollback", "--reason", "worse", "--source-ref", "refs/heads/elsewhere", *where], capsys
+    )
+
+    assert code == 2
+    assert "puts its inverse on the line" in err
+    assert git_rev(lineage_repo, RELEASE_REF) == promoted
 
 
 def test_the_console_reads_what_a_planned_target_holds_beside_the_plan(
@@ -2895,13 +2942,13 @@ def _minimal(verb: str) -> list[str]:
         else []
     )
     settlement = ["--settlement", assessment.SETTLEMENT_RETAIN] if verb == "settle" else []
-    # What the harness verbs need before they can run at all: where a run is
-    # integrated and what it is expected to show, or what one answered.
-    line = ["--source-ref", RELEASE_REF] if verb == "replay-start" else []
+    # What the harness verbs need before they can run at all: what a run is
+    # expected to show, or what one answered. The line is not among them —
+    # configuration names it, and `--source-ref` only asserts.
     expectation = ["--expectation", "what this run should show"] if verb in ("replay-start", "assess-measure") else []
     report = (
         ["--outcome", replay.RESULT_COMPLETED, "--detail", "what the harness said"]
         if verb in ("replay-conclude", "assess-conclude")
         else []
     )
-    return drafts + reason + reading + settlement + line + expectation + report
+    return drafts + reason + reading + settlement + expectation + report

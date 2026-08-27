@@ -139,6 +139,7 @@ def rollback(
     config: EvolutionConfig,
     *,
     reason: str,
+    source_ref: str | None = None,
     expect: str | None = None,
     now: datetime | None = None,
 ) -> RollbackResult:
@@ -171,6 +172,11 @@ def rollback(
     A replay measures a tree; whether the promotion argued from it should stand
     is a later judgement against a later cohort, and what this records of it is
     the operator's reason (contract: Promotion evidence).
+
+    `source_ref` asserts the line this moves and never selects it
+    (`_require_stated_line`). The line comes from the promotion being reversed,
+    because an inverse commit belongs on the line the change it takes back was
+    put on.
     """
 
     with single_writer_lock(config):
@@ -178,13 +184,14 @@ def rollback(
         # settlement composes that entry point under a hold of its own, having
         # already checked the token at the top of it (`assessment.settle`).
         require_expected(config, expect)
-        return reverse(config, reason=reason, now=now)
+        return reverse(config, reason=reason, source_ref=source_ref, now=now)
 
 
 def reverse(
     config: EvolutionConfig,
     *,
     reason: str,
+    source_ref: str | None = None,
     now: datetime | None = None,
 ) -> RollbackResult:
     """`rollback` for a caller already holding the single-writer lock.
@@ -214,6 +221,12 @@ def reverse(
     if promoted is None:
         raise BatchError(nothing_promoted_refusal())
     outcome = promoted.outcome or {}
+    merge = outcome["promotion"]
+    line = merge["merge_input_ref"]
+    # Before the redo path below as well as before the writes: the same command
+    # run again asserts the same thing, and an operator whose statement was wrong
+    # is told so rather than handed back the rollback it did not describe.
+    _require_stated_line(promoted, line, source_ref)
     recorded = promoted.rollback
     # The lineage's own reading of whether that promotion is still what the line
     # carries, rather than a second interpretation of the same record: a
@@ -230,12 +243,10 @@ def reverse(
         _require_same_rollback(promoted, recorded, text)
 
     stamp = format_rfc3339(moment)
-    merge = outcome["promotion"]
-    source_ref = merge["merge_input_ref"]
-    tip = ref_tip(config.repo_root, source_ref)
+    tip = ref_tip(config.repo_root, line)
     if tip is None:
         raise BatchError(
-            f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {source_ref}, and this "
+            f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {line}, and this "
             "checkout does not hold that ref; a rollback moves the source line, so it is run from a checkout "
             "that has the line"
         )
@@ -251,7 +262,7 @@ def reverse(
         _require_confirmed_inverse(config, promoted, outcome, prepared)
     if reverted:
         _require_nothing_built_on(config, lineage, promoted)
-        require_line_not_checked_out(config, source_ref, _ACTION)
+        require_line_not_checked_out(config, line, _ACTION)
         if standing == _STALE:
             prepared = _prepare(config, promoted, outcome, tip, text, at=stamp)
         _land(config, promoted, prepared)
@@ -260,9 +271,32 @@ def reverse(
     # record the line as carrying: the tip the inverse was already on when this
     # run read it, or the tip the move just made.
     carrying = tip if standing == _CARRIED else prepared["revision"]
-    path = _completed(config, promoted, prepared, source_ref, carrying, at=stamp)
+    path = _completed(config, promoted, prepared, line, carrying, at=stamp)
 
     return _result(promoted, prepared, reverted_at=stamp, path=path, reverted=reverted)
+
+
+def _require_stated_line(promoted: BatchLineage, ref: str, requested: str | None) -> None:
+    """The line this rollback moves is the one the promotion was put on.
+
+    An assertion, never a resolution. An inverse commit belongs on the line the
+    change it takes back reached, and that line is stated by the outcome record
+    of the promotion being reversed — so it is read from there rather than
+    resolved afresh. Taking it from configuration instead would let an edit to
+    the policy file put a revert on a line the promotion never touched, which is
+    a commit against work nobody here measured.
+
+    `source_ref` therefore says which line the operator read the promotion as
+    having reached, and a mismatch is told rather than followed.
+    """
+
+    if requested is None or requested == ref:
+        return
+    raise BatchError(
+        f"{promoted.batch_id} promoted onto {ref}, and a rollback puts its inverse on the line the promotion "
+        f"reached — not {requested!r}. `--source-ref` states which line that was read as rather than choosing "
+        "one, so reverse the promotion where it landed"
+    )
 
 
 def _standing(

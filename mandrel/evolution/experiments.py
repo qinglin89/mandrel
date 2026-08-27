@@ -1748,6 +1748,7 @@ def promote(
     *,
     reason: str,
     targets: Iterable[str],
+    source_ref: str | None = None,
     expect: str | None = None,
     now: datetime | None = None,
 ) -> PromotionResult:
@@ -1798,6 +1799,11 @@ def promote(
     It promises nothing about deployment. `planned_targets` is what the operator
     intends to redeploy, recorded as the plan it is; what any target actually
     holds is read from that target's own receipt and never from here.
+
+    `source_ref` asserts the line this moves and never selects it
+    (`_require_promotion_line`). The line comes from the evidence — the ref the
+    replay integrated onto — because that is the only line anything here was
+    measured against.
     """
 
     moment = _moment(now)
@@ -1814,7 +1820,7 @@ def promote(
         lineage = settled(config, now=moment)
         current = lineage.current
         if current is None:
-            return _redo_promotion(lineage, text, planned)
+            return _redo_promotion(lineage, text, planned, source_ref)
         require_stage_ended(config, current)
         require_no_pending_successor(current)
         # The preamble is assembled here rather than inherited from
@@ -1826,16 +1832,18 @@ def promote(
         stamp = format_rfc3339(moment)
         experiment = current.open_experiment
         if experiment is None:
-            return _finish_promotion(config, current, text, planned)
+            return _finish_promotion(config, current, text, planned, source_ref)
         require_consistent_ref(current)
         _require_gate_settled(current, "promoting")
 
         outstanding = experiment.promotion
         if outstanding is None:
             integration = _promotable_integration(config, experiment, read_replays(config, experiment))
+            _require_promotion_line(experiment.experiment_id, integration.merge_input_ref, source_ref)
             experiment, prepared = _prepare_promotion(config, current, experiment, integration, text, planned, at=stamp)
         else:
             _require_same_promotion(experiment, outstanding, text, planned)
+            _require_promotion_line(experiment.experiment_id, outstanding.merge_input_ref, source_ref)
             prepared = outstanding
         standing = _standing(config, experiment, prepared)
         if standing == _LOST:
@@ -2263,6 +2271,7 @@ def _finish_promotion(
     current: BatchLineage,
     reason: str,
     planned: tuple[str, ...],
+    source_ref: str | None = None,
 ) -> PromotionResult:
     """A promotion whose decision landed and whose outcome did not, finished.
 
@@ -2303,6 +2312,7 @@ def _finish_promotion(
             "batch it ends is concluded by the same reason it was promoted for"
         )
     _require_same_promotion(last, prepared, reason, planned)
+    _require_promotion_line(last.experiment_id, prepared.merge_input_ref, source_ref)
     # The moment the decision was made, not the moment this finished it: one
     # promotion, and its two records state when it happened rather than when each
     # of them was written.
@@ -2310,7 +2320,38 @@ def _finish_promotion(
     return _promoted(current, last, prepared, decided_at=decision.decided_at, path=path, merged=False)
 
 
-def _redo_promotion(lineage: Lineage, reason: str, planned: tuple[str, ...]) -> PromotionResult:
+def _require_promotion_line(experiment_id: str, ref: str | None, requested: str | None) -> None:
+    """The line this promotion moves is the one its evidence names.
+
+    An assertion, never a resolution. What a promotion carries the measured tree
+    onto is the ref the replay integrated it onto, and that is the only line
+    anything here was measured against — so it is read off the evidence rather
+    than resolved afresh. A promotion that took its line from configuration
+    instead would put an unmeasured tree wherever the policy file points today,
+    including at a name edited after the evidence was produced, which is the one
+    thing an irreversible operation must not let a file decide.
+
+    So `source_ref` says which line the operator read the evidence as naming, and
+    a mismatch is told rather than followed. By name, because which line is what
+    is being asserted; a ref standing at the same commit today is still not the
+    one this moves.
+    """
+
+    if requested is None or requested == ref:
+        return
+    raise BatchError(
+        f"{experiment_id} was measured integrating onto {ref}, and a promotion moves the line its evidence "
+        f"names — not {requested!r}. `--source-ref` states which line that was read as rather than choosing "
+        "one; promote what was replayed, or replay the candidate onto the line this is meant for"
+    )
+
+
+def _redo_promotion(
+    lineage: Lineage,
+    reason: str,
+    planned: tuple[str, ...],
+    source_ref: str | None = None,
+) -> PromotionResult:
     """The same promotion run again after it finished, or the refusal that
     nothing is current.
 
@@ -2342,6 +2383,7 @@ def _redo_promotion(lineage: Lineage, reason: str, planned: tuple[str, ...]) -> 
             f"for {outcome['reason']!r} planning {merge['planned_targets']}, which is not this request "
             f"({reason!r} planning {list(planned)}) redone — freezing the next cohort is `mandrel evolution start`"
         )
+    _require_promotion_line(outcome["experiment_id"], merge["merge_input_ref"], source_ref)
     return PromotionResult(
         batch_id=latest.batch_id,
         experiment_id=outcome["experiment_id"],
