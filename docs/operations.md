@@ -163,20 +163,62 @@ Check every locally registered repo:
 python -m mandrel.cli status --all
 ```
 
-Status reads the target `.ai-deploy-manifest.json` and reports:
+Status asks two questions, of the target's two receipts. *Integrity* is the
+target against its own `.ai-deploy-manifest.json`: the bytes and modes the
+deploy left behind, still there. *Currency* is `.ai-deploy-lock.json` against
+the lines this repository is releasing — the commit at the configured source
+line, plus the latest sealed round of an open experiment when there is one. A
+target standing on either line is current.
+
+It reads no canonical files. Editing `canonical/` does not move any target's
+readiness, and neither does switching this checkout to another branch. "What
+would change if I deployed right now" is a different question, and
+`deploy --dry-run` is what answers it.
 
 - `in sync`
 - `missing manifest`
 - `target modified`
-- `canonical changed`
+- `unplaceable deployment`
+- `off the release line`
+- `unresolved release line`
 - `stale eager import`
 - `ambiguous memory entrypoint`
 - `shadowed skill`
 - `missing target file`
-- `extra deployed file`
 - `invalid manifest entry`
 
 Drift returns a nonzero exit code.
+
+### Placement against the release lines
+
+A lock states a source commit only where the deployment's own files, bytes and
+modes matched that commit's canonical tree exactly. The receipt therefore
+already carries the fact placement asks for, proved once with both sides in
+hand; re-comparing trees later asks a weaker question, at more cost, against
+whatever the source checkout happens to be holding at the time.
+
+- `off the release line` — the payload came from a commit that is neither the
+  current release nor the sealed candidate. The detail names the revision the
+  target holds and the ones being released; redeploy. The comparison is between
+  commits, not between trees, so a release commit that changed nothing under
+  `canonical/` still moves every target off the line until it is redeployed.
+- `unplaceable deployment` — the target carries no lock, one this build cannot
+  read, or one tying its payload to no commit. Nothing places what that target
+  holds, so no evaluation of it can be attributed to a protocol revision.
+  Redeploy from a committed canonical tree.
+- `unresolved release line` — this repository could not name a line to place
+  anything against: the configured ref does not resolve in this checkout, or the
+  evolution policy does not read. Nothing is wrong with the target; the source
+  checkout is what needs attention.
+
+A target deployed at a sealed candidate is current, and is meant to be: it is
+running the change under measurement, and redeploying it would destroy the
+measurement. An experiment whose latest round is still taking work contributes
+no candidate, because a moving ref tip is a revision no report can be placed
+against afterwards.
+
+`status` needs no evolution workspace. A checkout with none releases on
+`refs/heads/main` and has no candidate.
 
 ### Memory entrypoints in `CLAUDE.md`
 

@@ -82,15 +82,19 @@ Then, once per deploy:
 
 ### What `status` reports
 
-`mandrel status <target>` reads the manifest and reports drift, nonzero exit on
-any finding:
+`mandrel status <target>` reads the target's two receipts — the manifest for
+what the deploy left behind, the lock for which commit it came from — and
+reports drift, nonzero exit on any finding. It reads no canonical files:
+readiness is a placement against the lines this repository releases, not a
+comparison with whatever this checkout currently holds.
 
 | kind | meaning |
 |---|---|
 | `target modified` | a deployed file's bytes or mode no longer match what the deploy left |
-| `canonical changed` | this repo moved ahead, in content or in mode; target needs a re-deploy |
 | `missing target file` | a deployed file was deleted |
-| `extra deployed file` | tracked in the manifest but gone from `canonical/` |
+| `off the release line` | the lock names a commit that is neither the current release nor the sealed candidate; re-deploy |
+| `unplaceable deployment` | no lock, one this build cannot read, or one tying the payload to no commit |
+| `unresolved release line` | this checkout could not name a line to place the target against; the source, not the target, is what needs attention |
 | `stale eager import` | the loader points at a memory doc that is no longer the current entrypoint, or routing points somewhere illegal |
 | `ambiguous memory entrypoint` | both `x.md` and `x/index.md` exist for one topic |
 | `shadowed skill` | a deployed skill name also exists personal-level, where it takes precedence |
@@ -242,9 +246,10 @@ scripts/boundary-lint.sh                 # charter + reference invariants
 python -m pytest tests/ -q               # deploy, hook-consistency, orchestrator
 ```
 
-**After changing anything in `canonical/`**, every deployed target reports
-`canonical changed` until it is re-deployed. That is the intended signal, not a
-problem to suppress.
+**After canonical work reaches the release line**, every deployed target reports
+`off the release line` until it is re-deployed. That is the intended signal, not
+a problem to suppress. Uncommitted canonical work reports nothing: a target's
+readiness is where its payload came from, which no edit here can change.
 
 **After a housekeeping split in a target**, re-deploy that target. Cursor and
 Codex sessions pick up the new entrypoint immediately; Claude sessions need the

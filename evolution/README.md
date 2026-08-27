@@ -1279,13 +1279,14 @@ checkable from here:
    and condition 1 vouched for both — a hook chmod'd back to non-executable holds
    every byte the receipt hashes and does not run, so content alone would call
    that target a match while it runs less of the protocol than the revision
-   names. The mode compared against is the one the deployment recorded, not the
-   one the canonical tree carries now — a canonical mode that moved since is that
-   source line's drift and not this target's, and the two are reported as the
-   different findings they are. A manifest written before deployments recorded
-   modes states none; `status` reports that receipt as unable to answer rather
-   than passing a mode nothing compared, and a redeploy is what makes such a
-   target readable again.
+   names. The mode compared against is the one the deployment recorded, and the
+   canonical tree is not read at all: a mode that moved there since belongs to
+   the source line rather than to this target, and comparing against it would
+   report the target as edited by somebody. Which line the target is standing on
+   is placed from its lock, and reported as the separate finding it is. A
+   manifest written before deployments recorded modes states none; `status`
+   reports that receipt as unable to answer rather than passing a mode nothing
+   compared, and a redeploy is what makes such a target readable again.
 
 When either fails, publish the field absent. An excluded report costs a
 denominator; one placed by an unverified revision manufactures the direction

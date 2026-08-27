@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import deploy, lockfile, manifest, registry
+from . import deploy, lockfile, manifest, placement, registry
 from .evolution import errors as evolution_errors
 
 
@@ -1028,7 +1028,24 @@ def _evolution_feed(config, feed_dir: str | None):
     return hub.feed_from_config(config, environ=os.environ)
 
 
-def _status_all() -> int:
+def _source_lines() -> placement.SourceLines:
+    """The canonical identities a deployed target may be standing on.
+
+    Asked of the evolution layer because that is where both halves are known —
+    the configured source line and the sealed candidate of an open experiment —
+    and asked there even in a checkout that runs no experiments, which is the
+    case it degrades to base alone for. Read once per run rather than inside
+    `check_status`, so a sweep asks this repository once instead of once per
+    target and cannot report two targets against two different readings.
+    """
+
+    from .evolution import deployment as evolution_deployment
+    from .paths import source_root
+
+    return evolution_deployment.source_lines(source_root())
+
+
+def _status_all(lines: placement.SourceLines) -> int:
     entries = registry.load_registry()
     if not entries:
         print("No registered repos.")
@@ -1036,7 +1053,7 @@ def _status_all() -> int:
 
     has_drift = False
     for index, entry in enumerate(entries):
-        result = deploy.check_status(entry["path"])
+        result = deploy.check_status(entry["path"], lines=lines)
         has_drift = has_drift or not result.in_sync
         if index:
             print()
@@ -1077,10 +1094,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.all:
                 if args.target:
                     parser.error("status accepts either a target path or --all, not both")
-                return _status_all()
+                return _status_all(_source_lines())
             if not args.target:
                 parser.error("status requires a target path unless --all is set")
-            result = deploy.check_status(args.target)
+            result = deploy.check_status(args.target, lines=_source_lines())
             print(deploy.format_status(result, label=str(Path(args.target).expanduser().resolve())))
             return 0 if result.in_sync else 1
 

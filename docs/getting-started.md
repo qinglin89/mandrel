@@ -375,12 +375,13 @@ Confusing them is the most common early mistake.
 | | `mandrel status <target>` | the task file's `status:` |
 |---|---|---|
 | Answers | is the deployed payload current? | where is this piece of work? |
-| Values | `in sync` plus nine drift states | `pending`, `in_progress`, `final_review`, `completed`, `blocked` |
+| Values | `in sync` plus ten drift states | `pending`, `in_progress`, `final_review`, `completed`, `blocked` |
 | Changed by | you, by redeploying | the session, per the transition table |
 
-`canonical changed` after you pull a newer mandrel is the intended signal, not a
-problem: redeploy when you want the new protocol revision — it touches neither
-your tasks nor your memory. Full drift vocabulary and both receipts:
+`off the release line` after you pull a newer mandrel is the intended signal,
+not a problem: your target is still on the protocol revision it was deployed at.
+Redeploy when you want the new one — it touches neither your tasks nor your
+memory. Full drift vocabulary and both receipts:
 [operations.md](operations.md#status).
 
 ## Running the loop unattended

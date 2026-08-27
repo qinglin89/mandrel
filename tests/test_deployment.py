@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from mandrel import cli, deploy, hashing, lockfile, manifest, paths
+from mandrel import cli, deploy, hashing, lockfile, manifest, paths, placement
 
 
 def write(path: Path, content: str = "content\n") -> Path:
@@ -141,17 +141,36 @@ def make_source(tmp_path: Path) -> Path:
 
 
 def make_loader_source(tmp_path: Path) -> Path:
+    """A committed source whose loader carries the eager memory imports."""
+
     source = make_source(tmp_path)
     write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
+    commit_source(source)
     return source
 
 
 def deploy_to_tmp(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+    """A deployed target whose receipt places it on this source's release line.
+
+    Committed before the deploy, because that is the only state in which a lock
+    states a source commit at all — and a receipt stating none is a target
+    `status` cannot place, whatever else is true of its files.
+    """
+
     source = make_source(tmp_path)
+    commit_source(source)
     target = tmp_path / "target"
     target.mkdir()
     deployed = deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
     return source, target, deployed
+
+
+# The line every temporary source releases on. Spelled here rather than taken
+# from `placement.DEFAULT_SOURCE_LINE`: what these tests assert is that `status`
+# judges against the line it was handed, and a suite that borrowed the fallback
+# would still pass if the parameter were ignored.
+SOURCE_BRANCH = "main"
+SOURCE_LINE = f"refs/heads/{SOURCE_BRANCH}"
 
 
 GIT_IDENTITY = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
@@ -169,9 +188,13 @@ def git(source: Path, *arguments: str) -> str:
 
 def commit_source(source: Path) -> str:
     """The source checkout as a repository whose canonical payload is committed,
-    and the commit it is at — the only state in which a deploy may state one."""
+    and the commit it is at — the only state in which a deploy may state one.
 
-    git(source, "init", "-q")
+    The branch is named rather than left to Git: `init.defaultBranch` is a
+    machine setting, and the line a target is judged against has to be the same
+    one on every host that runs this suite."""
+
+    git(source, "init", "-q", "-b", SOURCE_BRANCH)
     git(source, "add", "-A")
     git(source, "commit", "-q", "-m", "canonical payload")
     return git(source, "rev-parse", "HEAD")
@@ -186,6 +209,19 @@ def deploy_from(source: Path, tmp_path: Path) -> Path:
 
 def drift_kinds(result: deploy.StatusResult) -> set[str]:
     return {drift.kind for drift in result.drifts}
+
+
+def lines_of(source: Path, *, candidate: str | None = None) -> placement.SourceLines:
+    """The identities a target deployed from this source may be standing on."""
+
+    return placement.source_lines(source, ref=SOURCE_LINE, candidate=candidate)
+
+
+def status_of(target: Path, source: Path, **kwargs: object) -> deploy.StatusResult:
+    """Status as the CLI asks it: against the lines this source releases on,
+    resolved once and handed in, never re-derived from the working tree."""
+
+    return deploy.check_status(target, lines=lines_of(source), **kwargs)
 
 
 def test_file_hashing(tmp_path: Path) -> None:
@@ -605,22 +641,27 @@ def test_two_canonical_files_carried_to_one_target_path_stop_the_deploy(tmp_path
 
 
 def test_a_colliding_payload_is_refused_by_every_surface_that_reads_the_mapping(tmp_path: Path) -> None:
-    """Status and dry-run answer from the same mapping and would otherwise answer
-    as though the dropped file never existed: both key by target path, so the
-    collision collapses into one entry and a target short a canonical file's
-    bytes reads as in sync. The deployment, both receipts and the reading agree
-    because the mapping never hands any of them a payload it cannot resolve."""
+    """A dry-run would otherwise answer as though the dropped file never existed:
+    it keys by target path, so the collision collapses into one entry and the
+    preview describes a payload the deploy cannot carry. The deployment, both
+    receipts and the preview agree because the mapping never hands any of them a
+    payload it cannot resolve.
+
+    `status` is deliberately not on this list any more. It reads the target's own
+    receipts and the lines this repository releases, never the canonical tree, so
+    a payload that cannot currently be resolved is not something it can be asked
+    about — and a target deployed before the collision appeared is exactly as
+    ready as it was."""
 
     source = make_source(tmp_path)
     target = deploy_from(source, tmp_path)
-    assert deploy.check_status(target, root=source).in_sync
 
     write(source / "canonical" / "repo-root" / ".codex" / "config.toml", "a second claim on the codex config\n")
 
     with pytest.raises(deploy.PayloadError):
-        deploy.check_status(target, root=source)
-    with pytest.raises(deploy.PayloadError):
         deploy.preview_deploy(target, root=source)
+    with pytest.raises(deploy.PayloadError):
+        deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
 
 def test_deploy_cli_reports_a_payload_it_cannot_resolve(
@@ -831,7 +872,7 @@ def test_deploy_preview_after_deploy_and_target_edit(tmp_path: Path) -> None:
 def test_status_in_sync(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert result.in_sync
     assert not result.drifts
@@ -841,7 +882,7 @@ def test_status_target_modified(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
     write(target / "CLAUDE.md", "local edit\n")
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert "target modified" in drift_kinds(result)
     assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
@@ -858,7 +899,7 @@ def test_status_sees_a_deployed_file_stripped_of_its_executable_bit(tmp_path: Pa
     script = ".claude/skills/demo-skill/scan.sh"
     (target / script).chmod(0o644)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     drifts = [drift for drift in result.drifts if drift.target_relative_path == script]
     assert [(drift.kind, drift.detail) for drift in drifts] == [("target modified", "mode differs")]
@@ -874,7 +915,7 @@ def test_status_and_preview_read_one_target_state_the_same_way(tmp_path: Path) -
     (target / script).chmod(0o644)
     write(target / "CLAUDE.md", "local edit\n")
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
     preview = deploy.preview_deploy(target, root=source)
 
     assert not result.in_sync
@@ -895,26 +936,28 @@ def test_status_reports_a_deployed_file_that_lost_both_its_bytes_and_its_mode(tm
     script = ".claude/skills/demo-skill/scan.sh"
     write(target / script, "#!/bin/sh\nlocal edit\n").chmod(0o644)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     drifts = [drift for drift in result.drifts if drift.target_relative_path == script]
     assert [(drift.kind, drift.detail) for drift in drifts] == [("target modified", "content and mode differ")]
 
 
-def test_status_blames_the_canonical_side_when_only_the_canonical_mode_moved(tmp_path: Path) -> None:
-    """Why the expected mode comes from the receipt and not from the canonical
-    item `check_status` already has in hand: with the source as the expectation,
-    a canonical file made executable after a deploy reads as a target somebody
-    edited, and the operator is sent to look at the wrong side."""
+def test_a_canonical_mode_that_moved_after_the_deploy_is_not_this_target_drift(tmp_path: Path) -> None:
+    """Why the expected mode is the receipt's: with the canonical tree as the
+    expectation, a file made executable after a deploy reads as a target somebody
+    edited, and the operator is sent to look at the wrong side. The target holds
+    exactly what its receipt describes, so it holds the revision that receipt
+    names — an uncommitted chmod in the maintainer's checkout is that checkout's
+    state and reaches no target."""
 
     source, target, _deployed = deploy_to_tmp(tmp_path)
     runbook = ".ai-protocol/workflow/runbook.md"
     (source / "canonical" / "workflow" / "runbook.md").chmod(0o755)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
-    drifts = [drift for drift in result.drifts if drift.target_relative_path == runbook]
-    assert [(drift.kind, drift.detail) for drift in drifts] == [("canonical changed", "mode differs")]
+    assert not [drift for drift in result.drifts if drift.target_relative_path == runbook]
+    assert result.in_sync
 
 
 def test_status_reports_a_receipt_that_states_no_mode_and_still_checks_content(tmp_path: Path) -> None:
@@ -932,7 +975,7 @@ def test_status_reports_a_receipt_that_states_no_mode_and_still_checks_content(t
     (target / script).chmod(0o644)
     write(target / "CLAUDE.md", "local edit\n")
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     receipt = [drift for drift in result.drifts if drift.target_relative_path == paths.MANIFEST_FILENAME]
     assert len(receipt) == 1
@@ -955,7 +998,7 @@ def test_status_treats_an_unreadable_recorded_mode_as_no_mode(tmp_path: Path, mo
     saved["files"][script][deploy.MODE_FIELD] = mode
     manifest.write_manifest(target, saved)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert not [drift for drift in result.drifts if drift.target_relative_path == script]
     assert [drift.detail for drift in result.drifts if drift.target_relative_path == paths.MANIFEST_FILENAME] == [
@@ -977,8 +1020,7 @@ def test_manifest_records_the_mode_the_deploy_applied(tmp_path: Path) -> None:
 
 
 def test_status_allows_claude_md_target_memory_import_index_variants(tmp_path: Path) -> None:
-    source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
+    source = make_loader_source(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
@@ -988,31 +1030,14 @@ def test_status_allows_claude_md_target_memory_import_index_variants(tmp_path: P
     target_text = target_text.replace("@.ai/conventions.md", "@.ai/conventions/index.md")
     write(target / "CLAUDE.md", target_text)
 
-    result = deploy.check_status(target, root=source)
-
-    assert result.in_sync
-    assert not result.drifts
-
-
-def test_status_allows_claude_md_canonical_memory_import_index_variants(tmp_path: Path) -> None:
-    source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
-    target = tmp_path / "target"
-    target.mkdir()
-    deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
-
-    canonical_text = CLAUDE_MD_WITH_MEMORY_IMPORTS.replace("@.ai/design.md", "@.ai/design/index.md")
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", canonical_text)
-
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert result.in_sync
     assert not result.drifts
 
 
 def test_status_allows_claude_md_memory_import_variants_with_legacy_manifest(tmp_path: Path) -> None:
-    source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
+    source = make_loader_source(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
@@ -1024,15 +1049,14 @@ def test_status_allows_claude_md_memory_import_variants_with_legacy_manifest(tmp
     target_text = target_text.replace("@.ai/overview.md", "@.ai/overview/index.md")
     write(target / "CLAUDE.md", target_text)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert result.in_sync
     assert not result.drifts
 
 
 def test_status_rejects_claude_md_non_topic_memory_import_variant(tmp_path: Path) -> None:
-    source = make_source(tmp_path)
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", CLAUDE_MD_WITH_MEMORY_IMPORTS)
+    source = make_loader_source(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
@@ -1041,7 +1065,7 @@ def test_status_rejects_claude_md_non_topic_memory_import_variant(tmp_path: Path
     target_text = target_text.replace("@.ai/map.md", "@.ai/map/index.md")
     write(target / "CLAUDE.md", target_text)
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert "target modified" in drift_kinds(result)
     assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
@@ -1082,7 +1106,7 @@ def test_deploy_does_not_revert_directory_form_upgrade(tmp_path: Path) -> None:
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
     assert loader_import(target, "design") == ".ai/design/index.md"
-    assert deploy.check_status(target, root=source).in_sync
+    assert status_of(target, source).in_sync
 
 
 def test_deploy_repairs_loader_left_on_pre_upgrade_path(tmp_path: Path) -> None:
@@ -1093,13 +1117,13 @@ def test_deploy_repairs_loader_left_on_pre_upgrade_path(tmp_path: Path) -> None:
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
     upgrade_to_directory_form(target, "architecture")
 
-    stale = deploy.check_status(target, root=source)
+    stale = status_of(target, source)
     assert "stale eager import" in drift_kinds(stale)
 
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
     assert loader_import(target, "architecture") == ".ai/architecture/index.md"
-    assert deploy.check_status(target, root=source).in_sync
+    assert status_of(target, source).in_sync
 
 
 def test_deploy_entrypoint_resolution_is_idempotent(tmp_path: Path) -> None:
@@ -1149,7 +1173,7 @@ def test_status_flags_stale_eager_import(tmp_path: Path) -> None:
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
     upgrade_to_directory_form(target, "design")
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert not result.in_sync
     assert "stale eager import" in drift_kinds(result)
@@ -1169,7 +1193,7 @@ def test_status_flags_ambiguous_entrypoint(tmp_path: Path) -> None:
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
     write(target / ".ai" / "design" / "index.md", "design index\n")
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert "ambiguous memory entrypoint" in drift_kinds(result)
     assert "ambiguous memory entrypoint" in deploy.format_status(result)
@@ -1202,7 +1226,7 @@ def test_status_flags_shadowed_skill(tmp_path: Path) -> None:
     user_skills = tmp_path / "home-skills"
     personal_skill(user_skills, "demo-skill")
 
-    result = deploy.check_status(target, root=source, user_skills_root=user_skills)
+    result = status_of(target, source, user_skills_root=user_skills)
 
     assert not result.in_sync
     assert "shadowed skill" in drift_kinds(result)
@@ -1220,13 +1244,13 @@ def test_status_silent_when_personal_skills_do_not_collide(tmp_path: Path) -> No
     user_skills = tmp_path / "home-skills"
     personal_skill(user_skills, "something-else")
 
-    assert deploy.check_status(target, root=source, user_skills_root=user_skills).in_sync
+    assert status_of(target, source, user_skills_root=user_skills).in_sync
 
 
 def test_status_silent_without_a_personal_skills_root(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
 
-    result = deploy.check_status(target, root=source, user_skills_root=tmp_path / "absent")
+    result = status_of(target, source, user_skills_root=tmp_path / "absent")
 
     assert result.in_sync
     assert deploy.shadowed_skill_drifts(["demo-skill"], user_skills_root=tmp_path / "absent") == ()
@@ -1239,7 +1263,7 @@ def test_status_silent_for_personal_directory_that_is_not_a_skill(tmp_path: Path
     user_skills = tmp_path / "home-skills"
     (user_skills / "demo-skill").mkdir(parents=True)
 
-    assert deploy.check_status(target, root=source, user_skills_root=user_skills).in_sync
+    assert status_of(target, source, user_skills_root=user_skills).in_sync
 
 
 def test_status_cli_exits_nonzero_for_shadowed_skill(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1263,7 +1287,7 @@ def test_status_flags_router_entry_outside_legal_forms(tmp_path: Path) -> None:
     write(target / ".ai" / "design" / "principles.md", "principles\n")
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert "stale eager import" in drift_kinds(result)
     assert any(
@@ -1279,7 +1303,7 @@ def test_status_flags_router_entry_pointing_at_missing_file(tmp_path: Path) -> N
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
     (target / ".ai" / "design.md").unlink()
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert any(
         drift.kind == "stale eager import" and "does not exist" in drift.detail for drift in result.drifts
@@ -1292,7 +1316,7 @@ def test_status_clean_for_target_without_snapshot(tmp_path: Path) -> None:
     target.mkdir()
     deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
 
-    assert deploy.check_status(target, root=source).in_sync
+    assert status_of(target, source).in_sync
     assert deploy.eager_import_drifts(target) == ()
 
 
@@ -1306,34 +1330,237 @@ def test_resolve_memory_entrypoint_matches_hook_fallback_order(tmp_path: Path) -
     assert deploy.resolve_memory_entrypoint(tmp_path / "empty", "design") == ".ai/design.md"
 
 
-def test_status_canonical_changed(tmp_path: Path) -> None:
-    source, target, _deployed = deploy_to_tmp(tmp_path)
-    write(source / "canonical" / "repo-root" / "CLAUDE.md", "canonical edit\n")
-
-    result = deploy.check_status(target, root=source)
-
-    assert "canonical changed" in drift_kinds(result)
-    assert any(drift.target_relative_path == "CLAUDE.md" for drift in result.drifts)
-
-
 def test_status_missing_target_file(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
     (target / ".ai-protocol" / "protocols" / "dev.md").unlink()
 
-    result = deploy.check_status(target, root=source)
+    result = status_of(target, source)
 
     assert "missing target file" in drift_kinds(result)
     assert any(drift.target_relative_path == ".ai-protocol/protocols/dev.md" for drift in result.drifts)
 
 
-def test_status_extra_deployed_file_when_canonical_removed(tmp_path: Path) -> None:
+# --- which line the target is standing on ------------------------------------
+#
+# The half of `status` that used to compare the target's receipt against the
+# bytes in the maintainer's checkout. That referent was unattainable by
+# construction — an uncommitted tree is exactly the state a deploy refuses to
+# state a commit for — and it moved under an ordinary `git checkout`. What these
+# assert is that the answer is now a placement against named lines, and that it
+# holds still while the source checkout does whatever it likes.
+
+
+def branch_commit(source: Path, branch: str, message: str) -> str:
+    """One more canonical commit, landed on a branch of its own.
+
+    The release line is left where it was, which is what a sealed candidate
+    actually is: a revision this repository is measuring and not the one it is
+    releasing."""
+
+    git(source, "checkout", "-q", "-b", branch)
+    write(source / "canonical" / "protocols" / "dev.md", f"dev contract, {message}\n")
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", message)
+    return git(source, "rev-parse", "HEAD")
+
+
+def test_a_target_deployed_at_the_base_is_ready(tmp_path: Path) -> None:
+    """The ordinary case, asserted on the receipt rather than on a comparison:
+    the lock states the commit the deploy read the canonical tree at, and that
+    commit is the one the source line names."""
+
     source, target, _deployed = deploy_to_tmp(tmp_path)
+
+    lines = lines_of(source)
+    assert lockfile.read_lock(target)["source_git_commit"] == lines.base
+    assert status_of(target, source).in_sync
+
+
+def test_a_target_deployed_at_a_sealed_candidate_is_ready(tmp_path: Path) -> None:
+    """Two accepted identities, not one. A target running the change being
+    measured is a target the evaluation layer can attribute a report to, so
+    calling it drift would name a redeploy that would destroy the measurement."""
+
+    source = make_source(tmp_path)
+    base = commit_source(source)
+    candidate = branch_commit(source, "candidate", "the change under measurement")
+    target = deploy_from(source, tmp_path)
+    assert candidate != base
+    assert lockfile.read_lock(target)["source_git_commit"] == candidate
+
+    assert deploy.check_status(target, lines=lines_of(source, candidate=candidate)).in_sync
+
+    # And the same target, with nothing sealed, is somewhere this repository is
+    # not currently releasing from.
+    assert "off the release line" in drift_kinds(status_of(target, source))
+
+
+def test_a_target_on_neither_line_is_not_ready_and_the_placement_is_stated(tmp_path: Path) -> None:
+    """The finding has to carry both identities. "Not current" alone leaves an
+    operator unable to tell a target one release behind from one deployed off
+    somebody's branch, and those are different next steps."""
+
+    source = make_source(tmp_path)
+    base = commit_source(source)
+    stranded = branch_commit(source, "elsewhere", "work that was never released")
+    target = deploy_from(source, tmp_path)
+    sealed = "e" * 40
+
+    result = deploy.check_status(target, lines=lines_of(source, candidate=sealed))
+
+    assert not result.in_sync
+    drifts = [drift for drift in result.drifts if drift.kind == "off the release line"]
+    assert [drift.target_relative_path for drift in drifts] == [paths.LOCK_FILENAME]
+    assert stranded in drifts[0].detail
+    assert base in drifts[0].detail and sealed in drifts[0].detail
+    # Printable, or the drift is counted in the header and then never named.
+    assert "off the release line" in deploy.format_status(result)
+
+
+def test_uncommitted_canonical_work_changes_no_target_readiness(tmp_path: Path) -> None:
+    """The property the whole change exists for. Every managed target used to go
+    not-ready together the moment anything under `canonical/` was edited here —
+    and stayed that way until it was committed, since a dirty tree is precisely
+    what a deploy will not state a commit for."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    before = status_of(target, source)
+
+    write(source / "canonical" / "repo-root" / "CLAUDE.md", "canonical edit, uncommitted\n")
     (source / "canonical" / "protocols" / "dev.md").unlink()
+    write(source / "canonical" / "protocols" / "review.md", "a contract that was never deployed\n")
 
-    result = deploy.check_status(target, root=source)
+    assert before.in_sync
+    assert status_of(target, source).in_sync
 
-    assert "extra deployed file" in drift_kinds(result)
-    assert any(drift.target_relative_path == ".ai-protocol/protocols/dev.md" for drift in result.drifts)
+
+def test_moving_the_checkout_to_another_branch_changes_no_target_readiness(tmp_path: Path) -> None:
+    """A ref resolves to the same commit whichever branch this checkout sits on.
+    Reading the canonical tree instead made a maintainer's `git checkout` an
+    unannounced verdict on every repository they manage."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+
+    branch_commit(source, "somewhere-else", "work on another branch")
+
+    assert git(source, "rev-parse", "--abbrev-ref", "HEAD") == "somewhere-else"
+    assert status_of(target, source).in_sync
+
+
+def test_a_target_with_no_receipt_to_place_is_not_ready(tmp_path: Path) -> None:
+    """Readiness used to be answered from the manifest alone, so a target with a
+    hash-correct manifest and no placeable lock passed — and then produced
+    evaluation reports the assessment layer had to throw away."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    (target / paths.LOCK_FILENAME).unlink()
+
+    result = status_of(target, source)
+
+    assert not result.in_sync
+    drifts = [drift for drift in result.drifts if drift.kind == "unplaceable deployment"]
+    assert [drift.target_relative_path for drift in drifts] == [paths.LOCK_FILENAME]
+    assert paths.LOCK_FILENAME in drifts[0].detail
+    assert "unplaceable deployment" in deploy.format_status(result)
+
+
+def test_a_receipt_that_ties_its_payload_to_no_commit_is_not_ready(tmp_path: Path) -> None:
+    """The receipt is present, well-formed, and states null — the deploy's own
+    answer for a payload it could not match to any commit. Nothing places what
+    that target holds, and the line being resolvable does not change it."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    write(source / "canonical" / "protocols" / "dev.md", "dev contract, edited and never committed\n")
+    target = deploy_from(source, tmp_path)
+    assert lockfile.read_lock(target)["source_git_commit"] is None
+
+    result = status_of(target, source)
+
+    assert lines_of(source).known
+    assert [drift.kind for drift in result.drifts] == ["unplaceable deployment"]
+    assert "no source commit" in result.drifts[0].detail
+
+
+def test_a_checkout_that_names_no_line_does_not_blame_the_target(tmp_path: Path) -> None:
+    """A line this repository cannot resolve is this repository's state. Reported
+    — a reading that cleared every target it could not judge would be the silent
+    false clearance the whole placement exists to refuse — but reported against
+    the line, so nobody is sent to inspect a target that is fine."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+
+    result = deploy.check_status(target, lines=placement.source_lines(source, ref="refs/heads/nowhere"))
+
+    assert [drift.kind for drift in result.drifts] == ["unresolved release line"]
+    assert result.drifts[0].target_relative_path == "refs/heads/nowhere"
+    assert "refs/heads/nowhere" in result.drifts[0].detail
+    assert "unresolved release line" in deploy.format_status(result)
+
+
+def test_a_line_that_could_not_be_named_is_dropped_where_it_could_not_have_mattered(tmp_path: Path) -> None:
+    """A dropped candidate can only ever have added an acceptance, so it cannot
+    have produced a verdict against a target already standing on the base.
+    Reporting it there would take a target out of service over a reading that is
+    not about it; on a target that is placed nowhere, the same reason is part of
+    the finding."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    unread = placement.source_lines(source, ref=SOURCE_LINE, unresolved=("the lineage does not read",))
+
+    assert deploy.check_status(target, lines=unread).in_sync
+
+    moved_on = replace(unread, base="d" * 40)
+    detail = deploy.check_status(target, lines=moved_on).drifts[0].detail
+    assert "the lineage does not read" in detail
+
+
+def test_status_asks_the_source_repository_once_for_a_whole_sweep(tmp_path: Path, monkeypatch, capsys) -> None:
+    """One reading for the run. Resolving per target costs a Git call each and,
+    worse, lets a sweep report two targets against two different answers if the
+    source line moves underneath it."""
+
+    source, _first, _deployed = deploy_to_tmp(tmp_path)
+    second = tmp_path / "second-target"
+    second.mkdir()
+    registry_file = tmp_path / "registry.json"
+    deploy.deploy_canonical(second, root=source, registry_file=registry_file)
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(registry_file))
+
+    readings = []
+    resolve = cli._source_lines
+
+    def record() -> placement.SourceLines:
+        readings.append(resolve())
+        return readings[-1]
+
+    monkeypatch.setattr(cli, "_source_lines", record)
+
+    assert cli.main(["status", "--all"]) == 0
+
+    assert len(readings) == 1
+    assert capsys.readouterr().out.count(deploy.STATUS_IN_SYNC) == 2
+
+
+def test_status_answers_in_a_checkout_that_runs_no_evolution_workspace(tmp_path: Path, monkeypatch, capsys) -> None:
+    """`status` is a deploy-layer question and may not require an evolution
+    policy to answer it. A checkout with no workspace releases on the deploy
+    layer's own line, and a target deployed from it is ready."""
+
+    source = make_source(tmp_path)
+    # On the branch the deploy layer's own line names, since with no policy to
+    # read that fallback is the only thing saying which line this checkout is on.
+    git(source, "init", "-q", "-b", placement.DEFAULT_SOURCE_LINE.rpartition("/")[2])
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "canonical payload")
+    target = deploy_from(source, tmp_path)
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(tmp_path / "registry.json"))
+
+    assert not (source / "evolution").exists()
+    assert cli.main(["status", str(target)]) == 0
+    assert deploy.STATUS_IN_SYNC in capsys.readouterr().out
 
 
 def test_deploy_excludes_forbidden_files(tmp_path: Path) -> None:

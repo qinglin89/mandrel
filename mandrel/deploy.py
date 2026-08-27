@@ -11,11 +11,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import hashing, lockfile, manifest, registry
+from . import hashing, lockfile, manifest, placement, registry
 from .paths import (
     CANONICAL_DIRNAME,
     GITIGNORE_BEGIN,
     GITIGNORE_END,
+    LOCK_FILENAME,
     MANIFEST_FILENAME,
     canonical_root,
     claude_user_skills_root,
@@ -317,14 +318,21 @@ def _resolve_claude_md_memory_imports(data: bytes, target_root: Path) -> bytes:
     return _rewrite_claude_md_lines(data, to_current_entrypoint)
 
 
-def _status_bytes(item: DeploymentItem, data: bytes) -> bytes:
-    if item.target_relative_path == CLAUDE_MD_TARGET:
+def _status_bytes(target_relative_path: str, data: bytes) -> bytes:
+    """The bytes a status comparison is made over.
+
+    Keyed on the target path rather than on the canonical item it was rendered
+    from, because both sides of that comparison are the target's now: the hash a
+    deploy recorded, and the bytes sitting in the target today.
+    """
+
+    if target_relative_path == CLAUDE_MD_TARGET:
         return _normalize_claude_md_memory_imports(data)
     return data
 
 
-def _status_sha256(item: DeploymentItem, data: bytes) -> str:
-    return hashing.sha256_bytes(_status_bytes(item, data))
+def _status_sha256(target_relative_path: str, data: bytes) -> str:
+    return hashing.sha256_bytes(_status_bytes(target_relative_path, data))
 
 
 def _manifest_status_hash(record: dict[object, object], manifest_hash: str) -> str:
@@ -337,14 +345,11 @@ def _manifest_status_hash(record: dict[object, object], manifest_hash: str) -> s
 def _manifest_mode(record: dict[object, object]) -> int | None:
     """The mode this record vouches for, or None where it vouches for none.
 
-    The expected mode comes from the receipt and never from a fresh reading of
-    the canonical item, even though `check_status` has that item in hand. The
-    receipt is what the deploy left behind, and the two questions `status`
-    answers are both asked against it: a target that no longer carries the
-    deployed mode is `target modified`, and a canonical file whose mode has
-    moved since is `canonical changed`. Substituting the current source for the
-    receipt collapses them into one — the target would be blamed for a mode the
-    canonical tree changed under it.
+    The expected mode is the receipt's and never a fresh reading of the canonical
+    tree. The receipt is what the deploy left behind, so a target that no longer
+    carries the deployed mode is `target modified`; a canonical mode that moved
+    afterwards is that source line's business, and comparing against it would
+    blame the target for a change made somewhere else entirely.
 
     `bool` is excluded because it is an `int` in Python and a receipt reading
     `"mode": true` states nothing about permission bits."""
@@ -605,7 +610,7 @@ def deploy_canonical(
             MODE_FIELD: item.mode,
         }
         if item.target_relative_path == CLAUDE_MD_TARGET:
-            manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item, rendered_bytes)
+            manifest_record[NORMALIZED_SHA256_FIELD] = _status_sha256(item.target_relative_path, rendered_bytes)
         manifest_records.append(manifest_record)
         deployed_files.append(
             lockfile.DeployedFile(
@@ -802,23 +807,51 @@ STATUS_IN_SYNC = "in sync"
 STATUS_DRIFT_KINDS: tuple[str, ...] = (
     "missing manifest",
     "target modified",
-    "canonical changed",
+    "unplaceable deployment",
+    "off the release line",
+    "unresolved release line",
     "stale eager import",
     "ambiguous memory entrypoint",
     "shadowed skill",
     "missing target file",
-    "extra deployed file",
     "invalid manifest entry",
 )
+# What an unresolved-line finding is reported against when this checkout would
+# name no line at all. The other findings are reported against a file in the
+# target; this one is the only one whose subject is not the target.
+UNNAMED_SOURCE_LINE = "source line"
 
 
 def check_status(
     target: str | Path,
     *,
-    root: Path | None = None,
+    lines: placement.SourceLines,
     user_skills_root: Path | None = None,
 ) -> StatusResult:
-    root = (root or source_root()).resolve()
+    """Whether a target still is the deployment its receipts describe, and
+    whether that deployment is one this repository is currently releasing.
+
+    Two halves, asked of two documents. *Integrity* is the manifest against the
+    target: the bytes and modes this deploy left behind, still there. *Currency*
+    is the lock against `lines`: the commit the payload came from, and whether it
+    is one of the identities a target may be standing on.
+
+    Nothing here reads the canonical tree, and that absence is the point. The
+    comparison this used to make named whatever the maintainer's checkout held at
+    the moment of asking — a referent no target can match while anything is
+    uncommitted, since an uncommitted tree is exactly the state in which a deploy
+    refuses to state a commit, and one that moves under an ordinary
+    `git checkout`. "What would change if I deployed right now" is a real
+    question and a different one; `preview_deploy` answers it.
+
+    `lines` is stated and has no default. Which line this repository releases on
+    is a policy fact and the sealed candidate is a lineage fact
+    (`evolution.deployment.source_lines`), neither of them knowable from here; a
+    default would judge every target against a line the caller never named, and
+    would do it silently. The caller resolves them once per run, so a sweep asks
+    this repository once rather than once per target.
+    """
+
     target_root = Path(target).expanduser().resolve()
     try:
         deployed_manifest = manifest.read_manifest(target_root)
@@ -827,7 +860,6 @@ def check_status(
 
     manifest_files = deployed_manifest["files"]
     assert isinstance(manifest_files, dict)
-    current_items = {item.target_relative_path: item for item in iter_deployment_items(root)}
     drifts: list[Drift] = []
     modeless_records = 0
 
@@ -845,40 +877,18 @@ def check_status(
         if manifest_mode is None:
             modeless_records += 1
 
-        item = current_items.get(target_rel)
-        if item is None:
-            canonical_rel = raw_record.get("canonical_relative_path", "unknown canonical path")
-            drifts.append(Drift("extra deployed file", target_rel, f"tracked from {canonical_rel} but absent from canonical payload"))
-            continue
-
         target_path = target_root / target_rel
-        canonical_bytes = item.bytes_for_target(target_root)
-        canonical_hash = hashing.sha256_bytes(canonical_bytes)
         if not target_path.is_file():
             drifts.append(Drift("missing target file", target_rel))
-        else:
-            target_bytes = target_path.read_bytes()
-            target_hash = hashing.sha256_bytes(target_bytes)
-            target_status_hash = _status_sha256(item, target_bytes)
-            content_changed = target_hash != manifest_hash and target_status_hash != manifest_status_hash
-            mode_changed = manifest_mode is not None and stat.S_IMODE(target_path.stat().st_mode) != manifest_mode
-            if content_changed or mode_changed:
-                drifts.append(Drift("target modified", target_rel, _divergence_detail(content_changed, mode_changed)))
+            continue
 
-        canonical_status_hash = _status_sha256(item, canonical_bytes)
-        canonical_content_changed = canonical_hash != manifest_hash and canonical_status_hash != manifest_status_hash
-        canonical_mode_changed = manifest_mode is not None and item.mode != manifest_mode
-        if canonical_content_changed or canonical_mode_changed:
-            drifts.append(
-                Drift(
-                    "canonical changed",
-                    target_rel,
-                    _divergence_detail(canonical_content_changed, canonical_mode_changed),
-                )
-            )
-
-    for target_rel in sorted(set(current_items) - {str(key) for key in manifest_files}):
-        drifts.append(Drift("canonical changed", target_rel, "new canonical file not deployed"))
+        target_bytes = target_path.read_bytes()
+        target_hash = hashing.sha256_bytes(target_bytes)
+        target_status_hash = _status_sha256(target_rel, target_bytes)
+        content_changed = target_hash != manifest_hash and target_status_hash != manifest_status_hash
+        mode_changed = manifest_mode is not None and stat.S_IMODE(target_path.stat().st_mode) != manifest_mode
+        if content_changed or mode_changed:
+            drifts.append(Drift("target modified", target_rel, _divergence_detail(content_changed, mode_changed)))
 
     if modeless_records:
         # A receipt written before modes were recorded, or one hand-edited since.
@@ -898,6 +908,7 @@ def check_status(
             )
         )
 
+    drifts.extend(_placement_drifts(target_root, lines))
     drifts.extend(eager_import_drifts(target_root))
     drifts.extend(
         shadowed_skill_drifts(
@@ -907,6 +918,67 @@ def check_status(
     )
 
     return StatusResult(target_root=target_root, total_files=len(manifest_files), drifts=tuple(drifts))
+
+
+def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[Drift, ...]:
+    """Where this target's payload stands among the lines being released.
+
+    Identity against the receipt, never a comparison of files: a lock states a
+    commit only where the deployment's own captured paths, bytes and modes
+    matched that commit's canonical tree (`lockfile.payload_source_commit`), so
+    the receipt already carries the fact this asks for, proved once with both
+    sides in hand.
+
+    Three findings, because each is a different next step. A receipt that places
+    nothing is a target no evaluation of it can be attributed to, whatever this
+    checkout knows. A revision that is neither line is an ordinary redeploy. A
+    checkout that could name no line at all is this repository's state and not
+    the target's — saying so is what stops an unreadable policy from quietly
+    clearing every target it should have refused to judge, and stops a target
+    being blamed for a reading nobody could make.
+    """
+
+    reading = placement.stated_revision(target_root)
+    if reading.revision is None:
+        # Never both and never neither (`placement.TargetRevision`), so the
+        # reading's own word for this receipt is the whole finding.
+        assert reading.state is not None
+        return (Drift("unplaceable deployment", LOCK_FILENAME, reading.detail or reading.state),)
+    if lines.accepts(reading.revision):
+        # Any complaint `lines` carries is dropped here deliberately: a line this
+        # checkout could not name can only ever have added an acceptance, so it
+        # cannot have produced this verdict, and reporting it would take a target
+        # out of service over a reading that is not about it.
+        return ()
+    if not lines.known:
+        return (
+            Drift(
+                "unresolved release line",
+                lines.ref or UNNAMED_SOURCE_LINE,
+                "; ".join(lines.unresolved) or "this checkout names no line to place a deployment against",
+            ),
+        )
+    return (Drift("off the release line", LOCK_FILENAME, _placement_detail(reading.revision, lines)),)
+
+
+def _placement_detail(revision: str, lines: placement.SourceLines) -> str:
+    """What the target holds and what it could have held, both named in full.
+
+    Abbreviating either would print an identity that has to be resolved against
+    some repository to mean anything, which is the dependence on a reader's
+    checkout this whole comparison exists to drop.
+    """
+
+    named = [f"{placement.LINE_BASE} {lines.base}"] if lines.base is not None else []
+    if lines.candidate is not None:
+        named.append(f"{placement.LINE_CANDIDATE} {lines.candidate}")
+    detail = f"holds {revision}; the lines being released are {', '.join(named)}"
+    if lines.unresolved:
+        # A line that was dropped rather than absent belongs in the finding: it
+        # is a reason this target may be standing somewhere legitimate that this
+        # checkout could not confirm.
+        detail = f"{detail} ({'; '.join(lines.unresolved)})"
+    return detail
 
 
 def format_status(result: StatusResult, label: str | None = None) -> str:
