@@ -324,13 +324,15 @@ def frozen(config: config_module.EvolutionConfig) -> None:
     )
 
 
-def test_a_checkout_with_no_evolution_policy_still_answers_against_its_base(tmp_path: Path) -> None:
+def test_a_checkout_with_no_evolution_workspace_still_answers_against_its_base(tmp_path: Path) -> None:
     """`status` is a deploy-layer verb and the evolution workspace gates none of
     it, so a checkout that runs no experiments is not a checkout that cannot say
     where its targets stand. It has one line, which is the answer."""
 
     root = git_repo(tmp_path / "source", tag=None)
-    assert not (root / "evolution" / "config.toml").exists()
+    # The workspace itself, because that is what the fallback is decided on: a
+    # repository keeping one and unable to produce its policy is the case below.
+    assert not (root / "evolution").exists()
 
     lines = deployment.source_lines(root)
     assert lines.base == git_rev(root, RELEASE_REF) and lines.candidate is None
@@ -348,6 +350,35 @@ def test_a_policy_that_will_not_read_names_no_line_at_all(config: config_module.
     lines = deployment.source_lines(config.repo_root)
     assert (lines.ref, lines.base, lines.candidate) == (None, None, None)
     assert not lines.known and len(lines.unresolved) == 1
+
+
+@pytest.mark.parametrize("damage", ("deleted", "directory", "dangling-link"))
+def test_a_workspace_that_keeps_a_policy_it_cannot_produce_names_no_line(
+    config: config_module.EvolutionConfig, damage: str
+) -> None:
+    """The absence the default line answers is the absence of a *workspace*, and
+    these are not it. A workspace whose policy file was deleted, replaced by a
+    directory, or left as a dangling link says nothing about which line it
+    configured — so taking the default would clear every target standing on
+    `refs/heads/main` against a line this operator may never have released from.
+    That is the same silent guess the unreadable-policy case refuses, arriving by
+    the path where the policy fails to be a readable file rather than failing to
+    parse as one."""
+
+    policy = config.repo_root / "evolution" / "config.toml"
+    policy.unlink()
+    if damage == "directory":
+        policy.mkdir()
+    elif damage == "dangling-link":
+        policy.symlink_to("gone.toml")
+    assert (config.repo_root / "evolution").is_dir()
+
+    lines = deployment.source_lines(config.repo_root)
+    assert (lines.ref, lines.base, lines.candidate) == (None, None, None)
+    assert not lines.known and len(lines.unresolved) == 1
+    # Named, since a reading that says a line could not be found without saying
+    # which file failed leaves an operator nothing to repair.
+    assert str(policy) in lines.unresolved[0]
 
 
 def test_with_no_experiment_open_the_base_is_the_whole_answer(config: config_module.EvolutionConfig) -> None:

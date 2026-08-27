@@ -74,7 +74,7 @@ from typing import Iterable
 from .. import placement
 from ..placement import SourceLines, TargetRevision
 from . import lineage
-from .config import CONFIG_RELATIVE_PATH, EvolutionConfig, load_config
+from .config import VERSIONED_ROOT, EvolutionConfig, load_config
 from .errors import EvolutionError
 from .revisions import contains, resolve_commit
 
@@ -175,18 +175,25 @@ def source_lines(repo_root: Path) -> SourceLines:
     nothing, which is base alone rather than an error.
 
     Three degradations, and they are deliberately not one. A repository with no
-    policy file runs no experiments, so the deploy layer's own default line is
-    the whole answer and base alone is correct. A policy file that will not read
-    names *no* line — this is the one place a guess would silently judge every
-    target against a line the operator did not configure, so nothing is named and
-    the reason is stated. A lineage that will not read leaves the configured base
-    standing and drops the candidate with its reason: a damaged experiment record
-    cannot make a target at base anything other than current, and the
-    conservative direction for a candidate-deployed target is to report it as
-    somewhere else, which costs a redeploy and never a false clearance.
+    evolution workspace runs no experiments, so the deploy layer's own default
+    line is the whole answer and base alone is correct. A policy this workspace
+    has and cannot produce names *no* line — this is the one place a guess would
+    silently judge every target against a line the operator did not configure, so
+    nothing is named and the reason is stated. A lineage that will not read
+    leaves the configured base standing and drops the candidate with its reason:
+    a damaged experiment record cannot make a target at base anything other than
+    current, and the conservative direction for a candidate-deployed target is to
+    report it as somewhere else, which costs a redeploy and never a false
+    clearance.
+
+    The first two are told apart by the workspace and never by the policy file,
+    because every way a workspace *has* a policy and cannot hand it over — the
+    file deleted, a directory or a dangling link in its place, a name this
+    process cannot stat — leaves the line it configured unknown rather than
+    absent, and unknown is precisely the case the default may not answer.
     """
 
-    if not (repo_root / CONFIG_RELATIVE_PATH).is_file():
+    if _no_workspace(repo_root):
         return placement.source_lines(repo_root)
     try:
         config = load_config(repo_root)
@@ -212,6 +219,30 @@ def source_lines(repo_root: Path) -> SourceLines:
         ref=ref,
         candidate=current.candidate_revision if current is not None else None,
     )
+
+
+def _no_workspace(repo_root: Path) -> bool:
+    """Whether this repository keeps no evolution workspace at all.
+
+    The only question the default line may be decided on. It is asked of the
+    workspace root rather than of the policy file inside it, and asked by name:
+    `lstat`, so a link is the presence of a workspace rather than the presence of
+    whatever it resolves to, and so a name that is there in any form at all
+    counts as there. Absence is the filesystem saying the name does not exist —
+    a root this process cannot stat is a workspace it cannot see, which is not
+    the same fact and gets the same refusal as a policy it cannot read.
+    """
+
+    try:
+        (repo_root / VERSIONED_ROOT).lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        # Every other way the name will not answer: a permission that stops the
+        # walk, a component that is not a directory, a path the platform refuses.
+        # None of them says nothing is there.
+        return False
+    return False
 
 
 def _holding(
