@@ -413,9 +413,10 @@ clone measures against the line it releases from rather than the branch someone
 was on. A promotion and a rollback do not resolve one at all: they take it from
 their own evidence, the replay's integration and the promoted outcome's merge
 unit, so no edit to the policy file can put an unmeasured tree or an inverse
-commit on a line nothing was measured against. On all of them `--source-ref`
-states which line the operator read, and a mismatch refuses before anything is
-written.
+commit on a line nothing was measured against. On replay, promotion, and
+rollback, `--source-ref` states which line the operator read; on the base
+freeze, `--base` states which commit they read at the configured line. Either
+mismatch refuses before anything is written.
 
 #### One cycle, end to end
 
