@@ -569,7 +569,8 @@ the two fields a surface acts on:
 `1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
 records under `evolution/batches` and `evolution/experiments`,
 `evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
-records name, and `HEAD` (which is where a freeze still reads
+records name, the configured source line (which no record names until a base has
+been frozen off it), and `HEAD` (which is where a freeze still reads
 `runner_protocol_revision` from). Pass it back on any mutation:
 
 ```bash

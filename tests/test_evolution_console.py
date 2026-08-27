@@ -46,6 +46,7 @@ from evolution_fixtures import (
     git_commit,
     git_repo,
     git_rev,
+    git_sibling_commit,
     git_update_ref,
     make_manifest_report,
     make_repo,
@@ -1400,17 +1401,27 @@ def test_the_state_revision_covers_the_commit_a_first_base_would_freeze(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
     """The one revision an operation resolves that no record names yet. A batch
-    with no experiment has no base, no candidate and no promotion to stand on, and
-    the grouped admission that opens its first attempt freezes `HEAD` — so a
-    checkout that moved between the reading and the write would freeze a base
-    nobody read, on a token that never noticed."""
+    with no experiment has no base, no candidate and no promotion to stand on,
+    and the grouped admission that opens its first attempt freezes the configured
+    source line — a ref named in TOML, which no record's bytes carry until that
+    freeze has already happened. So the line moving between the reading and the
+    write is exactly the state change a token has to notice, and it moves without
+    this checkout moving at all: another clone pushing to the line is what it
+    ordinarily looks like."""
 
     freeze_cohort(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     assert status(config).revisions.base is None
 
     before = status(config).state_revision
-    git_commit(config.repo_root, "work an operator committed after reading the status")
+    head = git_rev(config.repo_root, "HEAD")
+    git_update_ref(
+        config.repo_root,
+        RELEASE_REF,
+        git_sibling_commit(config.repo_root, release, "released\n", "canonical work pushed to the line"),
+    )
+
+    assert git_rev(config.repo_root, "HEAD") == head, "the line moved under a checkout that did not"
     assert status(config).state_revision != before
 
 

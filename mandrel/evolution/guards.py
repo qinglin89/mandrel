@@ -336,8 +336,9 @@ _REVISION_DIGITS = 16
 
 # The commit an operation resolves when nothing on record names one. Freezing a
 # base no longer does: it takes the configured source line, which is a ref like
-# any other and covered as one (`experiments._source_line_revision`). What is
-# left is the freeze's own `runner_protocol_revision`, which `batches.py` still
+# any other and watched as one — seeded below rather than learned, since no
+# record's bytes carry it until a freeze has already happened. What is left is
+# the freeze's own `runner_protocol_revision`, which `batches.py` still
 # derives from `git describe HEAD` — so a checkout moved between the reading and
 # the write is a different value than the reading was taken against, and the
 # cost of covering it is a token that stops being current when the operator
@@ -406,10 +407,20 @@ def read_inputs(config: EvolutionConfig) -> Inputs:
     records — every ref a durable record names is a line this lifecycle stands
     on — rather than from what a reading made of them, which also covers the ones
     no reading mentions.
+
+    One line is seeded rather than learned that way. The configured source line
+    is named in TOML, so no record's bytes carry it, and the first freeze of a
+    batch resolves it *before* any record names it — which is the one window
+    where what it stands on is being decided. Learned from the records it would
+    join the watch set only once an experiment had already been frozen off it,
+    and until then a caller holding a token from before the line moved would be
+    told the state still stands and freeze a base nobody read. The policy file's
+    own bytes are hashed below, so an edit naming a *different* line is covered
+    already; this covers that line moving.
     """
 
     records: list[tuple[str, str]] = []
-    refs = {_HEAD}
+    refs = {_HEAD, config.source_line.ref}
     for path in _authoritative_paths(config):
         try:
             data = path.read_bytes()
