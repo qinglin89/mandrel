@@ -1006,6 +1006,103 @@ def test_status_treats_an_unreadable_recorded_mode_as_no_mode(tmp_path: Path, mo
     ]
 
 
+@pytest.mark.parametrize("spelling", ("relative", "absolute"))
+def test_a_manifest_record_naming_a_file_outside_the_target_is_refused_before_it_is_read(
+    tmp_path: Path, spelling: str
+) -> None:
+    """Integrity is the receipt against the target and nothing else now, so the
+    containment the payload mapping used to imply has to be stated.
+
+    `target_root / "../x"` reads a file above the target and an absolute path
+    discards the target root outright. The record here carries the correct hash
+    for what it points at, which is what makes it dangerous rather than merely
+    wrong: unrefused, `status` counts a file the target does not contain as the
+    target's own and clears the deployment on the strength of its bytes."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    outside = write(tmp_path / "outside.txt", "not this target's\n")
+    escaping = f"../{outside.name}" if spelling == "relative" else str(outside)
+
+    saved = manifest.read_manifest(target)
+    saved["files"] = {
+        escaping: {
+            "canonical_relative_path": "canonical/protocols/dev.md",
+            "target_relative_path": escaping,
+            "sha256": hashing.sha256_file(outside),
+            "size_bytes": outside.stat().st_size,
+            deploy.MODE_FIELD: stat.S_IMODE(outside.stat().st_mode),
+        }
+    }
+    manifest.write_manifest(target, saved)
+
+    result = status_of(target, source, user_skills_root=tmp_path / "no-skills")
+
+    assert not result.in_sync
+    assert [(drift.kind, drift.target_relative_path) for drift in result.drifts] == [
+        ("invalid manifest entry", escaping)
+    ]
+
+
+def test_a_manifest_record_that_respells_a_contained_path_is_refused_with_them(tmp_path: Path) -> None:
+    """Inside the target, and still not a path a deploy wrote.
+
+    The spelling is an identity elsewhere in `status` — which record gets the
+    loader's normalized comparison, which records name deployed skills — so a
+    receipt free to write one file under two spellings is a receipt whose paths
+    no longer name one file. Refused rather than quietly normalized: a reader
+    that tidied the path into shape would be that second spelling."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    saved = manifest.read_manifest(target)
+    record = saved["files"].pop("CLAUDE.md")
+    record["target_relative_path"] = "./CLAUDE.md"
+    saved["files"]["./CLAUDE.md"] = record
+    manifest.write_manifest(target, saved)
+
+    result = status_of(target, source, user_skills_root=tmp_path / "no-skills")
+
+    assert [(drift.kind, drift.target_relative_path, drift.detail) for drift in result.drifts] == [
+        ("invalid manifest entry", "./CLAUDE.md", "the path is not normalized; a deploy writes 'CLAUDE.md'")
+    ]
+
+
+@pytest.mark.parametrize("interrupted", ("lock", "manifest"))
+def test_a_deploy_interrupted_between_its_receipts_leaves_a_target_that_reads_as_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted: str
+) -> None:
+    """The two halves of `status` read two documents, and neither document says
+    which deploy wrote it — so a pair left over from two deployments would read
+    as an intact target placed at a revision it is no longer running, and every
+    evaluation that target then produced would be attributed to the wrong side
+    of a release.
+
+    What decides that is the order the receipts are published in. The lock lands
+    first, so whichever write is interrupted, the stale document left behind is
+    a manifest whose hashes the payload on disk no longer matches."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    lines = lines_of(source)
+    contract = ".ai-protocol/protocols/dev.md"
+
+    git(source, "checkout", "-q", "-b", "off-the-line")
+    write(source / "canonical" / "protocols" / "dev.md", "revised dev contract\n")
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "revised payload")
+
+    def interrupt(*arguments: object, **keywords: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(*((lockfile, "write_lock") if interrupted == "lock" else (manifest, "write_manifest")), interrupt)
+    with pytest.raises(OSError):
+        deploy.deploy_canonical(target, root=source, registry_file=tmp_path / "registry.json")
+    monkeypatch.undo()
+
+    assert (target / contract).read_text(encoding="utf-8") == "revised dev contract\n"
+    result = deploy.check_status(target, lines=lines, user_skills_root=tmp_path / "no-skills")
+    assert not result.in_sync
+    assert [drift.target_relative_path for drift in result.drifts if drift.kind == "target modified"] == [contract]
+
+
 def test_manifest_records_the_mode_the_deploy_applied(tmp_path: Path) -> None:
     source, target, _deployed = deploy_to_tmp(tmp_path)
     saved = manifest.read_manifest(target)

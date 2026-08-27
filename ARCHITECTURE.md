@@ -98,7 +98,7 @@ comparison with whatever this checkout currently holds.
 | `stale eager import` | the loader points at a memory doc that is no longer the current entrypoint, or routing points somewhere illegal |
 | `ambiguous memory entrypoint` | both `x.md` and `x/index.md` exist for one topic |
 | `shadowed skill` | a deployed skill name also exists personal-level, where it takes precedence |
-| `invalid manifest entry` | a malformed manifest record, or a receipt that records no deployed mode (written before modes were recorded) |
+| `invalid manifest entry` | a malformed manifest record, one naming a path the target does not contain, or a receipt that records no deployed mode (written before modes were recorded) |
 
 ---
 

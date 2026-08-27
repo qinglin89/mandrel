@@ -623,14 +623,35 @@ def deploy_canonical(
         )
 
     append_gitignore_block(target_root)
-    deployed_manifest = manifest.build_manifest(source_root=root, target_root=target_root, files=manifest_records)
-    manifest.write_manifest(target_root, deployed_manifest)
+    # The lock before the manifest, and the order is the only thing keeping the
+    # two receipts describing one deployment.
+    #
+    # `status` reads them independently — the manifest for whether the target
+    # still holds the bytes this deploy wrote, the lock for which commit those
+    # bytes came from — and neither document states which deploy wrote it, so
+    # nothing downstream can notice a pair left over from two. What decides that
+    # is which of them survives an interruption here. Publishing the manifest
+    # first leaves the new payload described by a receipt that matches it beside
+    # the *previous* deploy's lock: an intact target placed at a revision it is
+    # no longer running, which reads `in sync` and puts every evaluation it then
+    # produces on the wrong side of a release.
+    #
+    # This way round, the stale document is the manifest, and a stale manifest
+    # is one whose hashes the new payload does not match — `target modified`,
+    # said per file. The two receipts disagree only where the payload changed,
+    # which is exactly where the disagreement is a fact worth reporting: an
+    # interruption that leaves the target byte-identical leaves the old manifest
+    # a true account of it, and the new lock a true account of the same bytes.
+    # A torn write of either lands in the same direction, since neither a
+    # truncated manifest nor a truncated lock reads as a receipt at all.
     deploy_lock = lockfile.build_lock(
         source_root=root,
         files=deployed_files,
         deploys=deploys_canonical_path,
     )
     lockfile.write_lock(target_root, deploy_lock)
+    deployed_manifest = manifest.build_manifest(source_root=root, target_root=target_root, files=manifest_records)
+    manifest.write_manifest(target_root, deployed_manifest)
     registry.add_repo(
         target_root,
         registry_file=registry_file or registry_path(root),
@@ -822,6 +843,48 @@ STATUS_DRIFT_KINDS: tuple[str, ...] = (
 UNNAMED_SOURCE_LINE = "source line"
 
 
+def _uncontained_record(target_rel: str) -> str | None:
+    """Why a manifest record does not name a file inside the target it
+    describes, or None when it does.
+
+    Asked before the target is touched, because the join is what makes the
+    answer matter: `target_root / "../x"` reads a file the target does not
+    contain and an absolute path discards `target_root` altogether, so a receipt
+    could name any file on the machine and `status` would then vouch for the
+    target on the strength of that file's bytes. What kept such a record out
+    before was that every path had to be found in the current payload mapping;
+    integrity is now the manifest against the target alone, so the containment
+    the mapping used to imply has to be stated.
+
+    Deploy writes normalized target-relative posix paths and nothing else
+    (`target_relative_path_for`), so anything else in a receipt came from
+    somewhere other than a deploy. A different spelling of a contained path is
+    refused with the escaping ones rather than tidied into shape: the string is
+    an identity elsewhere in this file — which record gets the loader's
+    normalized comparison (`_status_bytes`), which records name deployed skills
+    (`deployed_skill_names`) — and a record compared under one spelling while
+    named under another is a receipt whose own paths cannot be trusted to mean
+    one file.
+
+    Lexical, and deliberately not a `resolve()`: what is refused is a document
+    whose own text leaves the target, which is a judgement about the receipt and
+    the same on every host. Whether a contained path crosses a symlink on the
+    way is a fact about the operator's filesystem, and one no deploy receipt
+    claims anything about.
+    """
+
+    path = PurePosixPath(target_rel)
+    if path.is_absolute():
+        return "an absolute path names a file this target does not contain"
+    if ".." in path.parts:
+        return "the path leaves the target"
+    if not path.parts:
+        return "the record names no file"
+    if path.as_posix() != target_rel:
+        return f"the path is not normalized; a deploy writes {path.as_posix()!r}"
+    return None
+
+
 def check_status(
     target: str | Path,
     *,
@@ -835,6 +898,13 @@ def check_status(
     target: the bytes and modes this deploy left behind, still there. *Currency*
     is the lock against `lines`: the commit the payload came from, and whether it
     is one of the identities a target may be standing on.
+
+    Neither document says which deploy wrote it, so the two halves are believed
+    together on the strength of the order they are published in
+    (`deploy_canonical`): the lock lands first, and an interruption between them
+    therefore shows up here as the stale manifest it leaves — reported per file
+    as `target modified` — rather than as an intact target placed at a revision
+    it is no longer running.
 
     Nothing here reads the canonical tree, and that absence is the point. The
     comparison this used to make named whatever the maintainer's checkout held at
@@ -868,6 +938,13 @@ def check_status(
             drifts.append(Drift("invalid manifest entry", str(target_rel), "record is not an object"))
             continue
         target_rel = str(raw_record.get("target_relative_path") or target_rel)
+        # Before the record is believed about anything, including its own hash:
+        # every check below is a statement about a file in this target, and a
+        # record naming a path outside it has nothing here to be checked against.
+        uncontained = _uncontained_record(target_rel)
+        if uncontained is not None:
+            drifts.append(Drift("invalid manifest entry", target_rel, uncontained))
+            continue
         manifest_hash = raw_record.get("sha256")
         if not isinstance(manifest_hash, str):
             drifts.append(Drift("invalid manifest entry", target_rel, "missing sha256"))
