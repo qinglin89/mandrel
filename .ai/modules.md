@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-27
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Modules
@@ -10,8 +10,9 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 | Module | Location | Responsibility |
 |---|---|---|
 | CLI | `mandrel/cli.py`, `mandrel` | Parse/dispatch deploy, status, registry, and evolution commands |
-| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; bootstrap; content/mode, entrypoint, and skill-precedence drift checks; removed-file orphan detection/pruning pending |
+| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; preview/bootstrap; target-receipt content/mode, entrypoint, skill-precedence, and release-line drift checks; removed-file orphan detection/pruning pending |
 | Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, hashes, and validated supported-schema/full-object-id reading |
+| Deployment placement | `mandrel/placement.py`, `mandrel/evolution/deployment.py` | One target/registry-to-lock revision vocabulary; exact configured base plus latest sealed candidate resolution with fail-closed degradation; Git ancestry remains evolution-owned |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |
 | Workflow skills | `canonical/claude/skills/` | Versioned per-target skills; Claude native discovery and repo-local paths for other backends |
 | Protocol contracts | `canonical/protocols/` | Conduct and role-specific behavioral contracts |
@@ -26,13 +27,13 @@ verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
 | Evolution replay/releases | `mandrel/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback and Git/ref recovery |
 | Evolution release assessment | `mandrel/evolution/assessment.py`, `experiments.py` | Derived cross-batch cohort frame; assessment formation/read validation; pinned counterfactual request/run recovery; retain/rollback settlement; first-base sequencing |
 | Evolution stated harness | `mandrel/evolution/harness.py` | Operator-stated replay/counterfactual starts and polls; completed-attempt reproduction guard |
-| Evolution deployment reading | `mandrel/evolution/deployment.py`, `lockfile.py`, `registry.py` | Place planned targets from validated machine-local deploy receipts; preserve unregistered/unreadable/unplaceable states without gating the lifecycle |
+| Evolution deployment reading | `mandrel/evolution/deployment.py`, `placement.py` | Add promotion/rollback ancestry to deploy-layer target revisions; preserve unregistered/unreadable/unplaceable states without gating the lifecycle |
 
 ## Boundary Rules
 
 - Deployment never creates or mutates target `.ai/` or `.ai-tasks/`.
 - Registry discovery does not imply deployment readiness.
-- Status reads the manifest and target; it does not repair drift.
+- Status reads target integrity from the manifest and release placement from the lock; it does not repair drift or compare the working canonical tree.
 - Canonical protocol contracts contain no caller/orchestrator dispatch details.
 - Agent hooks adapt delivery mechanics without redefining semantic contracts.
 - Orchestrator config comes from deployed TOML/env/CLI with explicit

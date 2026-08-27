@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-27
-verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # APIs and Interfaces
@@ -10,8 +10,8 @@ verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
 | Command | Behavior |
 |---|---|
 | `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Target need only exist; preview or overwrite deploy-owned paths, with optional `.mandrel/orchestrator/.venv` bootstrap. Managed ignores do not untrack pre-existing tracked payload paths; preserve/migrate collisions explicitly. Git `HEAD` is required later by initialization/review, not deploy. |
-| `status <target>` | Compare manifest-recorded content/modes with the target and current canonical source, plus eager entrypoints and personal skill shadows; files dropped from canonical are not detected as target orphans yet |
-| `status --all` | Check every local registry entry |
+| `status <target>` | Compare manifest-recorded content/modes with the target and place the deploy lock's exact commit at configured base or latest sealed candidate, plus eager entrypoints and personal skill shadows; no working-tree canonical comparison; files dropped from canonical are not detected as target orphans |
+| `status --all` | Check every local registry entry against one shared source-line reading |
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
 | `registry remove <name-or-path>` | Remove local tracking only |
@@ -50,8 +50,8 @@ evolution write resolves the operator's checkout.
 
 | Interface | Ownership / semantics |
 |---|---|
-| `.ai-deploy-manifest.json` | Ignored target-local receipt of rendered hashes and deployed modes used by status |
-| `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt; readers validate schema and require `source_git_commit` to be present as null or a full object id |
+| `.ai-deploy-manifest.json` | Ignored target-local receipt of rendered hashes and deployed modes used for status integrity; target paths must be normalized and contained |
+| `.ai-deploy-lock.json` | Portable canonical hash/source revision receipt used for status placement; readers validate schema and require `source_git_commit` to be present as null or a full object id |
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
 | `orchestrator.toml` | Schema-v3 deployed defaults/profiles plus advisory per-backend/agent model catalog; uncatalogued models remain launchable |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |

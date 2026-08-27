@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-19
-verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
+last-updated: 2026-08-27
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Features
@@ -8,7 +8,7 @@ verified-against: 7d072312ccbea56fa84856aa1fbf71f178afee2d
 | Feature | Status | Key modules/interfaces |
 |---|---|---|
 | Canonical payload deployment | implemented | deploy, manifest, lock, canonical buckets |
-| Dry-run and drift status | implemented; removed-file orphan detection pending | preview/status content+mode checks; eager-entrypoint and personal-skill-precedence checks |
+| Dry-run and drift status | implemented; removed-file orphan detection pending | preview compares current canonical payload; status checks target receipt integrity plus exact base/latest-sealed-candidate lock placement, eager entrypoints, and personal-skill precedence |
 | Managed repo registry | implemented | registry CLI and local JSON |
 | Orchestrator bootstrap | implemented | `.mandrel/orchestrator/`; Python 3.14 venv, requirements, non-overwriting env |
 | Split role launch profiles | implemented | dev/review profiles, legacy profile compatibility, print-config |

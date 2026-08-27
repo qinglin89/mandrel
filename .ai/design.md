@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-27
-verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Design Principles and Decisions
@@ -19,6 +19,9 @@ verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
   role contract.
 - Machine-local inventory, credentials, raw evidence, and runtime state stay
   outside Git; portable hashes/receipts and sanitized decisions may enter Git.
+- Deployment readiness is target integrity plus exact lock identity at the
+  configured base or latest sealed candidate; the maintainer's checkout and
+  uncommitted canonical bytes are not readiness inputs.
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
@@ -64,11 +67,15 @@ verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
 ### Local manifest versus portable lock
 
 - Chose two receipts: manifest contains rendered hashes, deployed modes, and
-  machine paths for status; lock contains canonical hashes/source commit for
-  version control.
+  machine paths for target-integrity status; lock contains canonical hashes and
+  the exact source commit used for release-line placement.
 - The lock's source commit is nullable and stated only when the exact canonical
   paths, bytes, and executable modes captured during deployment match that
   commit's deployable tree; target-file aliases are refused before writes.
+- Publish the lock before the manifest. If receipt publication is interrupted,
+  the surviving old manifest is visibly stale against the new payload; the
+  reverse order can leave matching target bytes beside an old lock and silently
+  place them at the wrong revision.
 
 ### Repository-local skills versus personal-level compatibility
 

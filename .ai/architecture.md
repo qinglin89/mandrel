@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-27
-verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Architecture
@@ -45,8 +45,11 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
    identity; payload validity is portable rather than host-dependent.
 2. Target-specific templates and `CLAUDE.md` eager-memory entrypoints resolve.
 3. Deployment overwrites the deploy-owned files in the current canonical
-   mapping and writes a target-local manifest of rendered hashes and applied
-   modes, portable lock, managed gitignore block, and registry entry. The lock
+   mapping and writes a managed gitignore block, portable lock, then target-local
+   manifest of rendered hashes and applied modes, followed by the registry entry.
+   Lock-before-manifest publication makes an interrupted pair leave a stale
+   manifest that reports target drift rather than a stale lock that silently
+   misplaces the new payload. The lock
    states a source revision only when the deployment's own captured input
    paths, bytes, and executable modes exactly match that commit's deployable
    canonical tree. It does not prune files
@@ -54,9 +57,15 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
    see the target orphans.
 4. Optional bootstrap builds `.mandrel/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
-5. `status` compares manifest-recorded content/modes with the target and current
-   canonical source, plus eager-memory entrypoints and personal-over-project
-   skill precedence. A legacy receipt with no modes cannot report in sync.
+5. `status` compares manifest-recorded content/modes with the target, then places
+   the lock's exact source commit at the configured base or latest sealed
+   candidate. It does not read the working canonical tree. Missing, null, or
+   unreadable locks are unplaceable; eager-memory entrypoints and
+   personal-over-project skill precedence remain separate checks. A legacy
+   manifest with no modes cannot report in sync. A sweep resolves the lines
+   once: no evolution workspace means default `refs/heads/main` base only; an
+   unreadable present policy names no line; unreadable lineage keeps base and
+   drops candidate.
 
 ## Session Context Flow
 
@@ -128,7 +137,9 @@ promotion, deployment, and rollback remain separate reviewed/human-gated steps.
 ## Deployment
 
 This repository can deploy/bootstrap itself for orchestration. Canonical edits
-make deployed targets report `canonical changed` until explicitly redeployed.
+alone do not change readiness; `deploy --dry-run` previews their target effect.
+When the configured base advances, a target at the prior commit is off the
+release line until explicitly redeployed.
 Current orchestrator runtime lives under `.mandrel/orchestrator/`. A target
 migrated from the former layout intentionally retains only
 `.cursor/orchestrator/logs/`: historical orch-hub run records keep their

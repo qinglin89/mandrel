@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-11
-verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
+last-updated: 2026-08-27
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Conventions
@@ -56,7 +56,8 @@ verified-against: 6af4fd1d487bb0ad1873c6825df5fe5d31d13139
 - Keep commits scoped and describe the affected ownership layer.
 - Commit portable `.ai-deploy-lock.json` when the target wants protocol-version
   audit; never commit `.ai-deploy-manifest.json`.
-- After canonical changes, redeploy explicitly; `canonical changed` is the
-  intended drift signal.
+- After canonical changes, use `deploy --dry-run` to preview target effects;
+  redeploy targets when their lock identity falls off base/latest sealed
+  candidate.
 - `.ai/` changes occur at initialization, task close-out absorption, or
   housekeeping—not during ordinary implementation sessions.

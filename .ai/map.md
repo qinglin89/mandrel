@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-23
-verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
+last-updated: 2026-08-27
+verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 ---
 
 # Project Map
@@ -10,7 +10,7 @@ verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 | Feature | Modules | Interfaces |
 |---|---|---|
 | Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `mandrel deploy`, manifest, lock |
-| Drift/readiness | deploy, manifest, registry | `mandrel status [--all]` |
+| Drift/readiness | deploy, placement, manifest, lockfile, registry, evolution/deployment | `mandrel status [--all]`; target integrity plus exact base/sealed-candidate placement |
 | Registry | registry, paths, cli | `mandrel registry ...`, local registry JSON |
 | Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, `.mandrel/orchestrator/` venv/env |
 | Role launch policy | canonical orchestrator config/resolver | profile flags, `--print-config` |
@@ -32,6 +32,7 @@ verified-against: f60c9e36716d8493e117340b12b846ae5d6673c3
 | Change | Check/update |
 |---|---|
 | Canonical file/path | payload mapping, init target-surface exclusions, boundary lint, deploy/status tests, targets |
+| Deploy receipt/readiness | lock-before-manifest publication boundary, placement base/sealed candidate, status/docs tests |
 | Workflow skill | manifest/lock coverage, backend pointers, personal-shadow status, operator deploy-before-cleanup order |
 | Eager memory topic | loader rendering, both hooks, entrypoint drift tests |
 | Persisted receipt/schema | reader compatibility, schema version, recovery tests |
