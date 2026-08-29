@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 93d66c27b1990be14ad79ea6b85483e675d21c31
 ---
 
 # Design Principles and Decisions
@@ -29,6 +29,10 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
   separate analysis/change tasks, human gates, and one configured source line:
   its frozen commit is batch runner provenance and the first base/replay input;
   evidence, never configuration, supplies promotion and rollback lines.
+- The shipped evolution source line is the exclusive receiving branch
+  `refs/heads/dev`; `refs/heads/main` is human-maintained and canonical work
+  stays on feature branches. Rollback's current-tip three-way inverse depends
+  on that exclusivity to restore measured release state.
 - Evolution lifecycle status is derived from durable artifacts and Git; no
   mutable flow-state field governs the phase.
 - Evolution reads and writes share one whole-lineage derivation; batch currency
