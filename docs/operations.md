@@ -273,6 +273,120 @@ and local absolute paths, so it should remain ignored. The lockfile is portable:
 it records canonical file hashes, modes, and source commit information without
 target machine paths, so target repos may commit it for auditability.
 
+### The machine shape
+
+`status` takes `--json` for the same findings a script can read, on both forms:
+
+```bash
+python -m mandrel.cli status --json ../some-target-repo
+python -m mandrel.cli status --all --json
+```
+
+One envelope either way. A single target is a sweep of one, so a consumer parses
+the same document whichever flag was typed; `name` is the machine-local registry
+name a sweep walked the target under, and null for a target named by path.
+
+```json
+{
+  "schema_version": 1,
+  "source_lines": {
+    "ref": "refs/heads/main",
+    "base": "<full commit>",
+    "candidate": null,
+    "unresolved": []
+  },
+  "targets": [
+    {
+      "name": "some-target-repo",
+      "target_root": "/abs/path",
+      "in_sync": false,
+      "total_files": 42,
+      "drifts": [
+        {
+          "kind": "off the source line",
+          "origin": "placement",
+          "subject": ".ai-deploy-lock.json",
+          "detail": "holds <full commit>; the lines being released are base <full commit>",
+          "placement": {
+            "reason": null,
+            "holds": "<full commit>",
+            "base": "<full commit>",
+            "candidate": null
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The example is ordered for reading; the command prints keys sorted, so the same
+findings produce byte-identical output.
+
+`source_lines` is stated once above the targets because that is how it is read:
+this repository's lines are resolved once per run and handed to every target, so
+a sweep cannot report two targets against two different readings.
+
+Findings come out in the order the prose prints them and carry everything it
+prints. `subject` is a target-relative path for every origin but `source`, where
+it names the line this checkout could not resolve. `placement` is null on every
+kind but the two placement ones. Exit codes are unchanged: 0 in sync, 1 drift,
+2 error — the flag changes what is printed and nothing about what was found.
+Failures still print prose on stderr.
+
+#### Origin — what diverged
+
+Each kind says what was found; `origin` says whose fault it is, which is the
+part a consumer acts on.
+
+| Origin | Meaning | Kinds |
+|---|---|---|
+| `target` | the target's files against what its deployment established | `target modified`, `missing target file`, `stale eager import`, `ambiguous memory entrypoint` |
+| `receipt` | the deploy receipt itself, before it can be believed about anything | `missing manifest`, `invalid manifest entry` |
+| `placement` | that receipt's revision against the lines being released | `unplaceable deployment`, `off the source line` |
+| `source` | this repository's own reading; the subject is not the target | `unresolved source line` |
+| `precedence` | a file outside the deployment winning over it | `shadowed skill` |
+
+Two of these are counter-intuitive and are the reason the label exists.
+
+`off the source line` is not "the target is broken". A target at a sealed
+candidate is at neither base nor drift and produces no finding at all; a target
+at the release before last is a plain redeploy. Which one it is depends on what
+the receipt holds against what is being released, so `placement` carries both
+rather than leaving the sentence to be parsed back apart. A release commit that
+changed nothing a target receives produces this finding on nobody.
+
+`unresolved source line` is this repository, not the target. Filed under the
+target's faults it sends somebody to redeploy a repository nothing was found
+wrong with.
+
+#### `placement.reason` — why a deployment places nothing
+
+`unplaceable deployment` is one kind and four next steps. A consumer folding
+them sends an operator to overwrite a target nothing was established about.
+
+| Reason | The receipt | Next step |
+|---|---|---|
+| `no-receipt` | absent | redeploy from committed canonical work |
+| `unreadable` | present, and this build cannot read it | look at the file |
+| `unstated` | present, and ties its payload to no commit | redeploy from committed canonical work |
+| `unreadable-protocol` | names a revision whose canonical tree this checkout does not hold | fetch, or repair a receipt naming an object that is no commit |
+
+`holds` is null for the first three and carries the stated revision for
+`unreadable-protocol` — the commit to go and fetch. Two ways reach that reason:
+the objects are absent here, or the id names no commit at all, since a tree or a
+blob passes the receipt's lexical shape check and is refused only when Git is
+asked. Neither is a redeploy.
+
+#### Versioning
+
+`schema_version` versions this payload and only this payload. It is deliberately
+not the `mandrel evolution status` schema version and is not tied to it in
+either direction: those version persisted lifecycle records under
+`evolution/schemas/`, this versions one CLI reading of two receipts and persists
+nothing. A shared counter would make every lifecycle change announce a breaking
+change to a deployment surface that did not move.
+
 ## Registry
 
 The registry is local machine inventory, not GitHub truth:

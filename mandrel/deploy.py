@@ -124,10 +124,42 @@ class DeploymentItem:
 
 
 @dataclass(frozen=True)
+class DriftPlacement:
+    """The revisions a placement finding is about, as fields rather than as the
+    sentence it also prints.
+
+    The finding's `detail` names both revisions because an operator redeploys
+    from a commit and has to read one; a consumer acting on the same finding
+    would have to parse that sentence back apart to get them. So the lines being
+    released and the one the receipt states are carried here too, spelled in
+    full for the reason the sentence spells them in full — an abbreviation is an
+    identity only some repository can resolve.
+
+    `reason` discriminates the four ways a deployment places nothing, which are
+    one kind and four next steps (`_placement_drifts`). None on `off the source
+    line`, where the revision placed perfectly well and simply carries neither
+    line's protocol.
+    """
+
+    reason: str | None
+    # What the receipt states. Present wherever a revision was read at all,
+    # which includes the one unplaceable cause that read one
+    # (`UNPLACEABLE_UNREADABLE_PROTOCOL`): that target is a fetch away from an
+    # answer, and this is the commit to fetch.
+    holds: str | None
+    base: str | None
+    candidate: str | None
+
+
+@dataclass(frozen=True)
 class Drift:
     kind: str
     target_relative_path: str
     detail: str = ""
+    # The placement kinds' structured facts, and None for every other kind.
+    # Carried on the finding rather than beside it so that "what diverged" and
+    # "the revisions it diverged between" cannot be joined to the wrong finding.
+    placement: DriftPlacement | None = None
 
 
 @dataclass(frozen=True)
@@ -842,6 +874,76 @@ STATUS_DRIFT_KINDS: tuple[str, ...] = (
 # target; this one is the only one whose subject is not the target.
 UNNAMED_SOURCE_LINE = "source line"
 
+# What diverged, for each kind. The vocabulary above says what was found; this
+# says whose fault it is, which is the part a consumer acts on and the part the
+# kind names only by implication.
+#
+# Five origins, because each sends somebody somewhere different. `target` and
+# `receipt` both end in a redeploy but not for the same reason — one is the
+# target drifting from what its receipt describes, the other a receipt that
+# cannot be believed about anything, including a target that may be perfectly
+# intact. `placement` is that receipt held against the lines being released,
+# which is a comparison and not a fault at all until you read which side moved.
+# `source` is the reading itself, and is the one origin whose subject is this
+# repository: a consumer filing it under the target's faults sends an operator
+# to overwrite a target nothing was found wrong with. `precedence` is a file
+# outside the deployment winning over it, where every deployed byte is correct
+# and the fix is on the operator's machine rather than in either repository.
+ORIGIN_TARGET = "target"
+ORIGIN_RECEIPT = "receipt"
+ORIGIN_PLACEMENT = "placement"
+ORIGIN_SOURCE = "source"
+ORIGIN_PRECEDENCE = "precedence"
+DRIFT_ORIGINS: dict[str, str] = {
+    "missing manifest": ORIGIN_RECEIPT,
+    "target modified": ORIGIN_TARGET,
+    "unplaceable deployment": ORIGIN_PLACEMENT,
+    "off the source line": ORIGIN_PLACEMENT,
+    "unresolved source line": ORIGIN_SOURCE,
+    "stale eager import": ORIGIN_TARGET,
+    "ambiguous memory entrypoint": ORIGIN_TARGET,
+    "shadowed skill": ORIGIN_PRECEDENCE,
+    "missing target file": ORIGIN_TARGET,
+    "invalid manifest entry": ORIGIN_RECEIPT,
+}
+
+# Why a target places nothing. One kind and four next steps, so the machine
+# surface names which: no receipt at all and a receipt tying its payload to no
+# commit both want a redeploy from committed canonical work, a receipt this
+# build cannot read wants the file looked at, and a receipt naming a revision
+# whose canonical tree this checkout does not hold wants a fetch — nothing was
+# established about that target, and redeploying it on the strength of this
+# finding overwrites a deployment that may well be current.
+#
+# Three of the four are the deploy layer's existing reasons for a target that
+# states no revision, published under the strings `placement` already uses for
+# them: one spelling, so a reason cannot come to mean one thing here and another
+# on the evolution console. The fourth is this surface's own, because it is not a
+# receipt that stated nothing — it stated a revision, and the reading is what
+# could not go on.
+UNPLACEABLE_NO_RECEIPT = placement.UNPLACED_NO_RECEIPT
+UNPLACEABLE_UNREADABLE_RECEIPT = placement.UNPLACED_UNREADABLE
+UNPLACEABLE_UNSTATED = placement.UNPLACED_UNSTATED
+UNPLACEABLE_UNREADABLE_PROTOCOL = "unreadable-protocol"
+UNPLACEABLE_REASONS: tuple[str, ...] = (
+    UNPLACEABLE_NO_RECEIPT,
+    UNPLACEABLE_UNREADABLE_RECEIPT,
+    UNPLACEABLE_UNSTATED,
+    UNPLACEABLE_UNREADABLE_PROTOCOL,
+)
+
+# The version of the `status --json` payload, and only of that payload.
+#
+# Deliberately not the evolution status schema version (`evolution.phase`), and
+# not tied to it in either direction: they version different documents written
+# by different layers, and a shared counter would make every evolution lifecycle
+# change announce a breaking change to a deployment surface that did not move —
+# or, worse, hold the deployment surface still because the lifecycle had not
+# moved. `evolution/schemas/` versions persisted lifecycle records; this versions
+# one CLI reading of two receipts and holds no schema file, because nothing
+# persists it.
+STATUS_SCHEMA_VERSION = 1
+
 
 def _uncontained_record(target_rel: str) -> str | None:
     """Why a manifest record does not name a file inside the target it
@@ -1031,7 +1133,14 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
         # Never both and never neither (`placement.TargetRevision`), so the
         # reading's own word for this receipt is the whole finding.
         assert reading.state is not None
-        return (Drift("unplaceable deployment", LOCK_FILENAME, reading.detail or reading.state),)
+        return (
+            Drift(
+                "unplaceable deployment",
+                LOCK_FILENAME,
+                reading.detail or reading.state,
+                placement=_placement_facts(lines, reason=reading.state, holds=None),
+            ),
+        )
     standing = lines.place(reading.revision)
     if standing.placed:
         # Any complaint `lines` carries is dropped here deliberately: a line this
@@ -1043,8 +1152,20 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
         # A revision this clone holds no tree for. Reported against the receipt
         # like the other unanswered questions and never as "off the line": the
         # target may well be standing on one, and nothing here established
-        # otherwise.
-        return (Drift("unplaceable deployment", LOCK_FILENAME, standing.unreadable),)
+        # otherwise. The revision is kept on the finding — it is the one
+        # unplaceable cause that read one, and the thing to go and fetch.
+        return (
+            Drift(
+                "unplaceable deployment",
+                LOCK_FILENAME,
+                standing.unreadable,
+                placement=_placement_facts(
+                    lines,
+                    reason=UNPLACEABLE_UNREADABLE_PROTOCOL,
+                    holds=reading.revision,
+                ),
+            ),
+        )
     if not lines.known:
         return (
             Drift(
@@ -1053,7 +1174,27 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
                 "; ".join(lines.unresolved) or "this checkout names no line to place a deployment against",
             ),
         )
-    return (Drift("off the source line", LOCK_FILENAME, _placement_detail(reading.revision, lines)),)
+    return (
+        Drift(
+            "off the source line",
+            LOCK_FILENAME,
+            _placement_detail(reading.revision, lines),
+            placement=_placement_facts(lines, reason=None, holds=reading.revision),
+        ),
+    )
+
+
+def _placement_facts(lines: placement.SourceLines, *, reason: str | None, holds: str | None) -> DriftPlacement:
+    """The same comparison the detail sentence states, as fields.
+
+    Both sides every time, including where one of them explains nothing — a
+    target with no receipt is not unplaceable *because* of what is being
+    released. Uniform anyway, because a machine surface whose fields appear and
+    vanish by case is one every consumer has to branch on before it can read
+    anything, and the cost of the constant shape is two nulls.
+    """
+
+    return DriftPlacement(reason=reason, holds=holds, base=lines.base, candidate=lines.candidate)
 
 
 def _placement_detail(revision: str, lines: placement.SourceLines) -> str:
@@ -1074,6 +1215,107 @@ def _placement_detail(revision: str, lines: placement.SourceLines) -> str:
         # checkout could not confirm.
         detail = f"{detail} ({'; '.join(lines.unresolved)})"
     return detail
+
+
+def status_payload(
+    targets: Iterable[tuple[str | None, StatusResult]],
+    *,
+    lines: placement.SourceLines,
+) -> dict[str, object]:
+    """Everything `status` found, in the shape a consumer reads instead of the
+    first line of the prose.
+
+    One envelope for both invocations. `status <target>` is a sweep of one, so a
+    consumer parses the same document either way rather than branching on which
+    flag the operator typed — which is what the text form makes it do, since a
+    single target is one block and `--all` is blocks separated by blank lines
+    with nothing around them.
+
+    `source_lines` is stated once, above the targets, because that is how it was
+    read: the caller resolves this repository's lines once per run and hands the
+    same value to every target (`cli._source_lines`), so a sweep cannot report
+    two targets against two different readings and the payload should not look
+    as though it could. It is also the whole context for two of the findings
+    below — what a target is off, and what could not be named at all.
+
+    Deterministic by construction: findings come out in `STATUS_DRIFT_KINDS`
+    order, exactly as the text form prints them, and targets in the order the
+    caller listed them — the registry's own order for a sweep, which is the
+    order the text form walks too.
+    """
+
+    return {
+        "schema_version": STATUS_SCHEMA_VERSION,
+        "source_lines": {
+            "ref": lines.ref,
+            "base": lines.base,
+            "candidate": lines.candidate,
+            "unresolved": list(lines.unresolved),
+        },
+        "targets": [_target_json(name, result) for name, result in targets],
+    }
+
+
+def _target_json(name: str | None, result: StatusResult) -> dict[str, object]:
+    """One target's reading.
+
+    `name` is the machine-local registry name a sweep walked this target under,
+    and null for a target the operator named by path — the path is what was
+    read either way, so the name is the extra fact and not the identity.
+    """
+
+    return {
+        "name": name,
+        "target_root": str(result.target_root),
+        "in_sync": result.in_sync,
+        "total_files": result.total_files,
+        "drifts": [_drift_json(drift) for drift in _ordered_drifts(result)],
+    }
+
+
+def _ordered_drifts(result: StatusResult) -> list[Drift]:
+    """The findings in report order, which is the order `format_status` prints.
+
+    Kinds unknown to `STATUS_DRIFT_KINDS` would be dropped by the text form and
+    are kept here rather than silently lost — a machine surface that omitted a
+    finding would be read as its absence. The tuple is held to cover every kind
+    constructed (tests/test_docs_getting_started.py), so this tail is empty in
+    practice and exists so that the two surfaces fail differently: the text one
+    by not printing, this one by printing something a consumer does not know.
+    """
+
+    order = {kind: index for index, kind in enumerate(STATUS_DRIFT_KINDS)}
+    listed = [drift for drift in result.drifts if drift.kind in order]
+    listed.sort(key=lambda drift: order[drift.kind])
+    return listed + [drift for drift in result.drifts if drift.kind not in order]
+
+
+def _drift_json(drift: Drift) -> dict[str, object]:
+    """One finding: what was found, what diverged, and what it is about.
+
+    `subject` rather than a path, because one kind's is not one. Every other
+    finding names a file in the target; `unresolved source line` names the line
+    this checkout could not resolve, which is a fact about this repository. A
+    key promising a target-relative path would make a consumer file that finding
+    under the target's own and send somebody to redeploy a repository nothing
+    was found wrong with.
+    """
+
+    payload: dict[str, object] = {
+        "kind": drift.kind,
+        "origin": DRIFT_ORIGINS.get(drift.kind),
+        "subject": drift.target_relative_path,
+        "detail": drift.detail,
+        "placement": None,
+    }
+    if drift.placement is not None:
+        payload["placement"] = {
+            "reason": drift.placement.reason,
+            "holds": drift.placement.holds,
+            "base": drift.placement.base,
+            "candidate": drift.placement.candidate,
+        }
+    return payload
 
 
 def format_status(result: StatusResult, label: str | None = None) -> str:

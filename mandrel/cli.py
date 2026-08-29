@@ -90,6 +90,11 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="check a target repo for drift")
     status_parser.add_argument("target", nargs="?", help="target repo path")
     status_parser.add_argument("--all", action="store_true", help="check every repo in the local registry")
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the same findings as a machine payload, each labelled by what diverged",
+    )
 
     registry_parser = subparsers.add_parser("registry", help="manage local repo registry")
     registry_subparsers = registry_parser.add_subparsers(dest="registry_command", required=True)
@@ -1045,8 +1050,29 @@ def _source_lines() -> placement.SourceLines:
     return evolution_deployment.source_lines(source_root())
 
 
-def _status_all(lines: placement.SourceLines) -> int:
+def _status_json(targets: list[tuple[str | None, deploy.StatusResult]], lines: placement.SourceLines) -> int:
+    """Print the machine payload and answer with the same code the prose does.
+
+    Exit status is the flag's one invariant: `--json` changes what is printed and
+    nothing about what was found, so a caller that reads the code today keeps
+    reading the code after it starts reading the payload.
+    """
+
+    print(json.dumps(deploy.status_payload(targets, lines=lines), indent=2, sort_keys=True))
+    return 1 if any(not result.in_sync for _name, result in targets) else 0
+
+
+def _status_all(lines: placement.SourceLines, *, machine: bool) -> int:
     entries = registry.load_registry()
+    if machine:
+        # An empty registry is an empty target list rather than a sentence: the
+        # payload's shape is what a consumer branches on, and "nothing is
+        # registered on this machine" is already what no targets says.
+        return _status_json(
+            [(str(entry["name"]), deploy.check_status(entry["path"], lines=lines)) for entry in entries],
+            lines,
+        )
+
     if not entries:
         print("No registered repos.")
         return 0
@@ -1094,10 +1120,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.all:
                 if args.target:
                     parser.error("status accepts either a target path or --all, not both")
-                return _status_all(_source_lines())
+                return _status_all(_source_lines(), machine=args.json)
             if not args.target:
                 parser.error("status requires a target path unless --all is set")
-            result = deploy.check_status(args.target, lines=_source_lines())
+            lines = _source_lines()
+            result = deploy.check_status(args.target, lines=lines)
+            if args.json:
+                # Named by path, so there is no registry name to state.
+                return _status_json([(None, result)], lines)
             print(deploy.format_status(result, label=str(Path(args.target).expanduser().resolve())))
             return 0 if result.in_sync else 1
 

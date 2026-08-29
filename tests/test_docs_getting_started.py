@@ -158,6 +158,47 @@ def test_operations_lists_the_whole_status_vocabulary() -> None:
     )
 
 
+def _operations_section(heading: str) -> str:
+    """One `docs/operations.md` subsection, up to the next heading of any depth."""
+
+    body = _read(OPERATIONS)
+    assert heading in body, f"{OPERATIONS.name} has no {heading!r} section"
+    rest = body[body.index(heading) + len(heading) :]
+    following = re.search(r"^#{2,6} ", rest, re.MULTILINE)
+    return rest[: following.start()] if following else rest
+
+
+def test_operations_labels_every_status_kind_with_the_origin_the_payload_publishes() -> None:
+    """`origin` is what a consumer routes on, and the document is where a
+    consumer learns what each value means. A kind labelled one way in the payload
+    and another in the reference is worse than an unlabelled one: the reader acts
+    on the reference and the scheduler acts on the payload."""
+
+    documented: dict[str, str] = {}
+    for origin, _meaning, kinds in re.findall(
+        r"^\| `(\w+)` \| (.*?) \| (.*?) \|$", _operations_section("#### Origin"), re.MULTILINE
+    ):
+        for kind in BACKTICKED.findall(kinds):
+            documented[kind] = origin
+    assert documented == deploy.DRIFT_ORIGINS, (
+        f"{OPERATIONS.relative_to(REPO_ROOT)} and deploy.DRIFT_ORIGINS disagree "
+        "about which origin a status kind carries"
+    )
+
+
+def test_operations_lists_every_reason_a_deployment_places_nothing() -> None:
+    """One kind and four next steps. A reason the payload emits and the document
+    does not name is one a consumer has no route to act on."""
+
+    documented = set(
+        re.findall(r"^\| `([\w-]+)` \|", _operations_section("#### `placement.reason`"), re.MULTILINE)
+    )
+    assert documented == set(deploy.UNPLACEABLE_REASONS), (
+        f"{OPERATIONS.relative_to(REPO_ROOT)} presents the unplaceable reasons "
+        "as an exhaustive set and disagrees with deploy.UNPLACEABLE_REASONS"
+    )
+
+
 def test_tutorial_routes_to_the_full_status_vocabulary() -> None:
     """The first-task path names one drift state and stops. That is only safe
     while it sends the reader to the document holding the whole set."""

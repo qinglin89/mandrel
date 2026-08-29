@@ -2076,3 +2076,340 @@ def test_deploy_cli_parser_has_orchestrator_bootstrap_flags() -> None:
     assert args.bootstrap_orchestrator is True
     assert args.orchestrator_python == "python3.13"
     assert args.target == "../target"
+
+
+# The machine surface. `status` used to speak prose and an exit code, so a
+# consumer read `ok` and scraped the first line for a reason — which conflates
+# every finding into one, including the one whose subject is this repository
+# rather than the target. What these assert is that the payload carries the
+# whole reading, that each finding says what diverged, and that the prose and
+# the exit code are untouched by any of it.
+
+
+def payload_of(target: Path, source: Path, **kwargs: object) -> dict[str, object]:
+    """The machine reading of one target, built as the CLI builds it."""
+
+    lines = lines_of(source)
+    result = deploy.check_status(target, lines=lines, **kwargs)
+    return deploy.status_payload([(None, result)], lines=lines)
+
+
+def sole_target(payload: dict[str, object]) -> dict[str, object]:
+    targets = payload["targets"]
+    assert isinstance(targets, list) and len(targets) == 1
+    return targets[0]
+
+
+def finding(payload: dict[str, object], kind: str) -> dict[str, object]:
+    found = [drift for drift in sole_target(payload)["drifts"] if drift["kind"] == kind]
+    assert len(found) == 1, f"expected one {kind!r} finding, got {found}"
+    return found[0]
+
+
+def test_every_drift_kind_carries_an_origin() -> None:
+    """An unlabelled kind is worse than an unlisted one: it reaches a consumer
+    as `null` and gets filed under whatever that consumer's default is, which is
+    the target — the one answer that is wrong for two of the kinds."""
+
+    unlabelled = sorted(set(deploy.STATUS_DRIFT_KINDS) - set(deploy.DRIFT_ORIGINS))
+    assert not unlabelled, f"{unlabelled} reach the payload with no origin"
+    stray = sorted(set(deploy.DRIFT_ORIGINS) - set(deploy.STATUS_DRIFT_KINDS))
+    assert not stray, f"DRIFT_ORIGINS labels {stray}, which is not a status kind"
+    origins = {
+        deploy.ORIGIN_TARGET,
+        deploy.ORIGIN_RECEIPT,
+        deploy.ORIGIN_PLACEMENT,
+        deploy.ORIGIN_SOURCE,
+        deploy.ORIGIN_PRECEDENCE,
+    }
+    assert set(deploy.DRIFT_ORIGINS.values()) <= origins
+
+
+def test_the_payload_carries_every_finding_the_prose_prints(tmp_path: Path) -> None:
+    """Both surfaces read one `StatusResult`, so the payload is held to the text
+    form's own list — same kinds, same count, same order. A finding printed to an
+    operator and missing from the payload is a drift a scheduled consumer reports
+    as absent."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    user_skills = tmp_path / "home-skills"
+    personal_skill(user_skills, "demo-skill")
+    write(target / ".claude" / "settings.json", '{"edited": true}\n')
+    (target / ".ai-protocol" / "protocols" / "dev.md").unlink()
+    (target / paths.LOCK_FILENAME).unlink()
+
+    result = deploy.check_status(target, lines=lines_of(source), user_skills_root=user_skills)
+    payload = payload_of(target, source, user_skills_root=user_skills)
+    printed = deploy.format_status(result)
+
+    reported = [str(drift["kind"]) for drift in sole_target(payload)["drifts"]]
+    assert len(reported) == len(result.drifts)
+    assert set(reported) == drift_kinds(result)
+    assert {"target modified", "missing target file", "unplaceable deployment", "shadowed skill"} <= set(reported)
+    # Report order, which is the order the operator reads them in.
+    assert reported == sorted(reported, key=deploy.STATUS_DRIFT_KINDS.index)
+    for drift in sole_target(payload)["drifts"]:
+        assert str(drift["subject"]) in printed
+    assert sole_target(payload)["in_sync"] is False
+    assert sole_target(payload)["total_files"] == result.total_files
+
+
+def test_a_target_off_the_line_carries_both_revisions_as_fields(tmp_path: Path) -> None:
+    """The counter-intuitive kind, and the one whose detail a consumer would
+    otherwise have to parse back apart. It is not "the target is broken": a
+    redeploy is owed, and which redeploy depends on what it holds against what
+    is being released — so both are fields."""
+
+    source = make_source(tmp_path)
+    base = commit_source(source)
+    sealed = branch_commit(source, "candidate", "the change under measurement")
+    stranded = branch_commit(source, "elsewhere", "work that was never released")
+    target = deploy_from(source, tmp_path)
+    lines = lines_of(source, candidate=sealed)
+
+    result = deploy.check_status(target, lines=lines)
+    payload = deploy.status_payload([(None, result)], lines=lines)
+    drift = [item for item in sole_target(payload)["drifts"] if item["kind"] == "off the source line"][0]
+
+    assert drift["origin"] == deploy.ORIGIN_PLACEMENT
+    assert drift["subject"] == paths.LOCK_FILENAME
+    assert drift["placement"] == {
+        "reason": None,
+        "holds": stranded,
+        "base": base,
+        "candidate": sealed,
+    }
+    # The same two facts the envelope states, and stated once for the run.
+    assert payload["source_lines"] == {
+        "ref": SOURCE_LINE,
+        "base": base,
+        "candidate": sealed,
+        "unresolved": [],
+    }
+
+
+def test_a_target_at_a_sealed_candidate_is_no_finding_at_all(tmp_path: Path) -> None:
+    """The other half of the counter-intuitive kind. A target running the change
+    under measurement is at neither base nor drift, and a payload that reported
+    it would name the one redeploy that destroys the measurement."""
+
+    source = make_source(tmp_path)
+    commit_source(source)
+    candidate = branch_commit(source, "candidate", "the change under measurement")
+    target = deploy_from(source, tmp_path)
+    lines = lines_of(source, candidate=candidate)
+
+    payload = deploy.status_payload([(None, deploy.check_status(target, lines=lines))], lines=lines)
+
+    assert sole_target(payload)["drifts"] == []
+    assert sole_target(payload)["in_sync"] is True
+
+
+def test_an_unresolved_line_is_this_repository_and_never_the_target(tmp_path: Path) -> None:
+    """The one kind whose subject is not the target. Filed under the target's
+    faults it sends somebody to redeploy a repository nothing was found wrong
+    with — so the origin says `source`, and the subject names the line rather
+    than pretending to be a path inside the target."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    lines = placement.source_lines(source, ref="refs/heads/nowhere", deploys=deploy.deploys_canonical_path)
+
+    payload = deploy.status_payload([(None, deploy.check_status(target, lines=lines))], lines=lines)
+    drift = sole_target(payload)["drifts"][0]
+
+    assert drift["kind"] == "unresolved source line"
+    assert drift["origin"] == deploy.ORIGIN_SOURCE
+    assert drift["subject"] == "refs/heads/nowhere"
+    assert drift["placement"] is None
+    assert payload["source_lines"]["base"] is None
+    assert payload["source_lines"]["unresolved"] == list(lines.unresolved)
+
+
+def test_a_receipt_naming_a_revision_this_clone_cannot_read_keeps_the_revision(tmp_path: Path) -> None:
+    """The fourth cause, and the one a folded label misroutes. Nothing was
+    established about this target — the objects are simply absent here — so the
+    next step is a fetch, and the payload states which commit to fetch."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    unheld = "f" * 40
+    lockfile.write_lock(target, {**lockfile.read_lock(target), "source_git_commit": unheld})
+
+    drift = finding(payload_of(target, source), "unplaceable deployment")
+
+    assert drift["origin"] == deploy.ORIGIN_PLACEMENT
+    assert drift["placement"]["reason"] == deploy.UNPLACEABLE_UNREADABLE_PROTOCOL
+    assert drift["placement"]["holds"] == unheld
+
+
+def test_an_object_id_that_is_not_a_commit_reads_as_the_same_unread_protocol(tmp_path: Path) -> None:
+    """Two ways into that cause and one reason: a tree passes the receipt's
+    lexical shape check and is refused only when Git is asked. Both leave the
+    protocol unread, which is why one reason covers them — and both are a
+    corrupt receipt or an absent object rather than the redeploy the other
+    unplaceable reasons name."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    tree = git(source, "rev-parse", f"{lockfile.read_lock(target)['source_git_commit']}^{{tree}}")
+    lockfile.write_lock(target, {**lockfile.read_lock(target), "source_git_commit": tree})
+
+    drift = finding(payload_of(target, source), "unplaceable deployment")
+
+    assert drift["placement"]["reason"] == deploy.UNPLACEABLE_UNREADABLE_PROTOCOL
+    assert drift["placement"]["holds"] == tree
+
+
+def test_a_target_with_no_receipt_places_nothing_and_holds_nothing(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    (target / paths.LOCK_FILENAME).unlink()
+
+    drift = finding(payload_of(target, source), "unplaceable deployment")
+
+    assert drift["placement"]["reason"] == deploy.UNPLACEABLE_NO_RECEIPT
+    assert drift["placement"]["holds"] is None
+
+
+def test_a_receipt_this_build_cannot_read_is_its_own_reason(tmp_path: Path) -> None:
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    (target / paths.LOCK_FILENAME).write_text("not a receipt\n", encoding="utf-8")
+
+    drift = finding(payload_of(target, source), "unplaceable deployment")
+
+    assert drift["placement"]["reason"] == deploy.UNPLACEABLE_UNREADABLE_RECEIPT
+    assert drift["placement"]["holds"] is None
+
+
+def test_a_receipt_tying_its_payload_to_no_commit_is_its_own_reason(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    commit_source(source)
+    write(source / "canonical" / "protocols" / "dev.md", "dev contract, edited and never committed\n")
+    target = deploy_from(source, tmp_path)
+
+    drift = finding(payload_of(target, source), "unplaceable deployment")
+
+    assert drift["placement"]["reason"] == deploy.UNPLACEABLE_UNSTATED
+    assert drift["placement"]["holds"] is None
+
+
+def test_the_four_unplaceable_reasons_are_the_four_the_surface_publishes() -> None:
+    """One kind, four next steps. A consumer folding them sends an operator to
+    overwrite a target nothing was established about."""
+
+    assert set(deploy.UNPLACEABLE_REASONS) == {
+        deploy.UNPLACEABLE_NO_RECEIPT,
+        deploy.UNPLACEABLE_UNREADABLE_RECEIPT,
+        deploy.UNPLACEABLE_UNSTATED,
+        deploy.UNPLACEABLE_UNREADABLE_PROTOCOL,
+    }
+    # Three of them are the deploy layer's existing strings; one spelling only,
+    # or a reason means one thing here and another on the evolution console.
+    assert deploy.UNPLACEABLE_NO_RECEIPT == placement.UNPLACED_NO_RECEIPT
+    assert deploy.UNPLACEABLE_UNREADABLE_RECEIPT == placement.UNPLACED_UNREADABLE
+    assert deploy.UNPLACEABLE_UNSTATED == placement.UNPLACED_UNSTATED
+    assert deploy.UNPLACEABLE_UNREADABLE_PROTOCOL not in (
+        placement.UNPLACED_NO_RECEIPT,
+        placement.UNPLACED_UNREADABLE,
+        placement.UNPLACED_UNSTATED,
+    )
+
+
+def test_the_payload_version_is_not_the_evolution_lifecycle_version(monkeypatch) -> None:
+    """Two documents, two counters. A shared one makes every lifecycle change
+    announce a breaking change to a deployment surface that did not move."""
+
+    from mandrel.evolution import phase
+
+    payload = deploy.status_payload([], lines=placement.SourceLines(ref=None, base=None, candidate=None))
+    monkeypatch.setattr(phase, "SCHEMA_VERSION", phase.SCHEMA_VERSION + 100)
+
+    assert payload["schema_version"] == deploy.STATUS_SCHEMA_VERSION
+    assert deploy.status_payload([], lines=placement.SourceLines(ref=None, base=None, candidate=None)) == payload
+
+
+def test_status_json_prints_a_deterministic_payload_and_the_same_exit_code(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The flag changes what is printed and nothing about what was found."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    write(target / ".claude" / "settings.json", '{"edited": true}\n')
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_CLAUDE_SKILLS_ROOT", str(tmp_path / "no-skills"))
+
+    assert cli.main(["status", "--json", str(target)]) == 1
+    first = capsys.readouterr().out
+    assert cli.main(["status", "--json", str(target)]) == 1
+    assert capsys.readouterr().out == first
+
+    payload = json.loads(first)
+    assert payload["schema_version"] == deploy.STATUS_SCHEMA_VERSION
+    assert [item["name"] for item in payload["targets"]] == [None]
+    assert payload["targets"][0]["target_root"] == str(target.resolve())
+    assert [drift["kind"] for drift in payload["targets"][0]["drifts"]] == ["target modified"]
+    assert payload["targets"][0]["drifts"][0]["origin"] == deploy.ORIGIN_TARGET
+
+
+def test_status_prose_and_exit_code_are_unchanged_without_the_flag(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The prose is the surface an operator already reads, so it is held to the
+    formatter byte for byte rather than to a substring."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    write(target / ".claude" / "settings.json", '{"edited": true}\n')
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_CLAUDE_SKILLS_ROOT", str(tmp_path / "no-skills"))
+
+    exit_code = cli.main(["status", str(target)])
+
+    expected = deploy.format_status(
+        deploy.check_status(target, lines=lines_of(source), user_skills_root=tmp_path / "no-skills"),
+        label=str(target.resolve()),
+    )
+    assert exit_code == 1
+    assert capsys.readouterr().out == expected + "\n"
+
+
+def test_the_sweep_and_one_target_share_one_envelope(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The text form gives `--all` no envelope — blocks separated by blank lines
+    — so a consumer parses one shape for one target and another for many. Here a
+    single target is a sweep of one, and the registry name is the only field
+    that moves."""
+
+    source, first, _deployed = deploy_to_tmp(tmp_path)
+    second = tmp_path / "second-target"
+    second.mkdir()
+    registry_file = tmp_path / "registry.json"
+    deploy.deploy_canonical(second, root=source, registry_file=registry_file)
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(registry_file))
+    monkeypatch.setenv("MANDREL_CLAUDE_SKILLS_ROOT", str(tmp_path / "no-skills"))
+
+    assert cli.main(["status", "--all", "--json"]) == 0
+    swept = json.loads(capsys.readouterr().out)
+    assert cli.main(["status", "--json", str(first)]) == 0
+    single = json.loads(capsys.readouterr().out)
+
+    assert swept.keys() == single.keys()
+    assert swept["source_lines"] == single["source_lines"]
+    # The registry's own order, which is the order the prose walks too.
+    assert [item["name"] for item in swept["targets"]] == ["second-target", "target"]
+    assert [item["target_root"] for item in swept["targets"]] == [str(second.resolve()), str(first.resolve())]
+    assert swept["targets"][1] == {**single["targets"][0], "name": "target"}
+
+
+def test_a_machine_sweep_of_nothing_is_no_targets_rather_than_a_sentence(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """`No registered repos.` is prose a consumer would have to recognise. The
+    payload says it in the shape it already parses."""
+
+    source, _target, _deployed = deploy_to_tmp(tmp_path)
+    monkeypatch.setenv("MANDREL_SOURCE_ROOT", str(source))
+    monkeypatch.setenv("MANDREL_REGISTRY", str(tmp_path / "empty-registry.json"))
+
+    assert cli.main(["status", "--all", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["targets"] == []
+    assert payload["schema_version"] == deploy.STATUS_SCHEMA_VERSION
+
+    assert cli.main(["status", "--all"]) == 0
+    assert capsys.readouterr().out == "No registered repos.\n"
