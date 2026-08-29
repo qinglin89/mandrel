@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-29
-verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
+verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 ---
 
 # Design Principles and Decisions
@@ -87,6 +87,17 @@ verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
   the surviving old manifest is visibly stale against the new payload; the
   reverse order can leave matching target bytes beside an old lock and silently
   place them at the wrong revision.
+
+### Deployment status JSON versus evolution schemas
+
+- Chose one schema-versioned envelope for single-target and registry-sweep
+  status; the shared source-line reading sits above `targets`, and every drift
+  carries an origin while placement drifts carry structured reasons/revisions.
+- The payload version is independent of evolution lifecycle schema versions:
+  this is one read-only deployment observation, while evolution schemas version
+  persisted lifecycle records.
+- Consequence: every status kind needs a `DRIFT_ORIGINS` label; every new
+  unplaceable cause needs a documented `UNPLACEABLE_REASONS` value.
 
 ### Repository-local skills versus personal-level compatibility
 

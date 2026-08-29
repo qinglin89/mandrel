@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-29
-verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
+verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 ---
 
 # APIs and Interfaces
@@ -10,8 +10,8 @@ verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 | Command | Behavior |
 |---|---|
 | `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Target need only exist; preview or overwrite deploy-owned paths, with optional `.mandrel/orchestrator/.venv` bootstrap. Managed ignores do not untrack pre-existing tracked payload paths; preserve/migrate collisions explicitly. Git `HEAD` is required later by initialization/review, not deploy. |
-| `status <target>` | Compare manifest-recorded content/modes with the target and place the deploy lock revision by canonical identity at configured base or latest sealed candidate, plus eager entrypoints and personal skill shadows; unreadable receipt revisions are unplaceable, no working-tree canonical comparison; files dropped from canonical are not detected as target orphans |
-| `status --all` | Check every local registry entry against one shared source-line reading |
+| `status [--json] <target>` | Compare manifest-recorded content/modes with the target and place the deploy lock revision by canonical identity at configured base or latest sealed candidate, plus eager entrypoints and personal skill shadows; optional schema-v1 JSON labels every drift by origin and structures placement facts; unreadable receipt revisions are unplaceable, no working-tree canonical comparison; files dropped from canonical are not detected as target orphans |
+| `status --all [--json]` | Check every local registry entry against one shared source-line reading; JSON uses the single-target envelope with a `targets` array |
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
 | `registry remove <name-or-path>` | Remove local tracking only |

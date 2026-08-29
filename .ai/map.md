@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-29
-verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
+verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 ---
 
 # Project Map
@@ -10,7 +10,7 @@ verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 | Feature | Modules | Interfaces |
 |---|---|---|
 | Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `mandrel deploy`, manifest, lock |
-| Drift/readiness | deploy, placement, manifest, lockfile, registry, evolution/deployment | `mandrel status [--all]`; target integrity plus canonical-identity placement at base/sealed candidate |
+| Drift/readiness | deploy, placement, manifest, lockfile, registry, evolution/deployment | `mandrel status [--all] [--json]`; target integrity plus canonical-identity placement at base/sealed candidate; versioned machine findings labelled by origin |
 | Registry | registry, paths, cli | `mandrel registry ...`, local registry JSON |
 | Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, `.mandrel/orchestrator/` venv/env |
 | Role launch policy | canonical orchestrator config/resolver | profile flags, `--print-config` |
