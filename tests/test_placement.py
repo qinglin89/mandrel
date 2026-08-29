@@ -20,15 +20,18 @@ deployed from twice.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
+    GIT_IDENTITY,
     REPO_ROOT,
     RELEASE_REF,
     admitted_task,
     experiment_decision,
     experiment_round,
+    git_canonical_commit,
     git_commit,
     git_repo,
     git_rev,
@@ -39,7 +42,7 @@ from evolution_fixtures import (
     write_manifest,
 )
 
-from mandrel import lockfile, placement
+from mandrel import deploy, lockfile, placement
 from mandrel.evolution import config as config_module
 from mandrel.evolution import deployment
 
@@ -84,6 +87,51 @@ def registry(path: Path, entries: dict[str, list[Path]]) -> Path:
 def read(names: list[str], *, root: Path, registry_file: Path) -> dict[str, placement.TargetRevision]:
     readings = placement.registered_revisions(names, root=root, registry_file=registry_file)
     return dict(zip(names, readings))
+
+
+def canonical_symlink(root: Path, message: str) -> str:
+    """A commit whose deployable canonical tree holds something that is not a
+    file, and its sha.
+
+    Committed here rather than in the shared fixtures because it is the one shape
+    this suite needs and no other does: a deploy reads bytes *through* a symlink
+    and copies whatever it resolved to, so a tree naming one says nothing about
+    what a payload could have come from — which is a commit whose protocol no
+    checkout can name.
+    """
+
+    link = root / "canonical" / "protocols" / "dev.md"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.unlink(missing_ok=True)
+    link.symlink_to("elsewhere.md")
+    subprocess.run(["git", "-C", str(root), "add", "--", "canonical/protocols/dev.md"], check=True)
+    subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
+    return git_rev(root, "HEAD")
+
+
+def git_tree(root: Path, revision: str) -> str:
+    """The whole tree a commit holds — what a commit identity actually is, and
+    what a protocol identity deliberately is not."""
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", f"{revision}^{{tree}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def lines_of(root: Path, **stated: object) -> placement.SourceLines:
+    """The lines a target deployed from `root` may be standing on.
+
+    Through the payload mapping's own predicate, never a second one this suite
+    believes in: which canonical files reach a target is what a protocol identity
+    is keyed on, and a fixture with its own idea of that would agree with the
+    production reading even where both are wrong about the payload.
+    """
+
+    return placement.source_lines(root, deploys=deploy.deploys_canonical_path, **stated)
 
 
 # --- what a target holds -----------------------------------------------------
@@ -216,48 +264,99 @@ def test_the_base_is_the_configured_line_and_not_the_checkout(tmp_path: Path) ->
     `git checkout`. A ref resolves to the same commit either way."""
 
     root = git_repo(tmp_path / "source", tag=None)
-    released = git_rev(root, "HEAD")
+    released = git_canonical_commit(root, "the contract this project releases")
+    git_update_ref(root, RELEASE_REF, released)
 
-    # The checkout moves on, twice over: a commit on the working branch, then an
-    # uncommitted edit on top of it. Neither is the line this project releases.
-    moved = git_commit(root, "work in progress")
-    (root / "file.txt").write_text("uncommitted\n", encoding="utf-8")
+    # The checkout moves on, twice over: a commit carrying a different contract,
+    # then an uncommitted edit on top of it. Neither is the line this project
+    # releases.
+    moved = git_canonical_commit(root, "work in progress")
+    (root / "canonical" / "protocols" / "dev.md").write_text("uncommitted\n", encoding="utf-8")
     assert moved != released
 
-    lines = placement.source_lines(root, ref=RELEASE_REF)
+    lines = lines_of(root, ref=RELEASE_REF)
     assert lines.base == released and lines.unresolved == ()
-    assert lines.place(released) == placement.LINE_BASE and lines.accepts(released)
-    assert lines.place(moved) is None and not lines.accepts(moved)
+    assert lines.place(released).line == placement.LINE_BASE
+    assert lines.place(moved) == placement.Placement(line=None)
 
 
-def test_a_target_at_an_ancestor_of_the_base_is_not_at_the_base(tmp_path: Path) -> None:
-    """Identity, never ancestry. A target deployed before the line moved is
-    running the protocol that commit carried, which is the entire fact its
-    receipt exists to state; reading "contained in" as "current" would clear
+def test_a_commit_carrying_the_same_payload_is_the_same_deployment(tmp_path: Path) -> None:
+    """The live defect, in the shape it was measured in. A target's receipt named
+    a commit the source line had since built on top of, and the two carried
+    byte-identical deployable canonical trees: everything between them was work
+    under `mandrel/`, `tests/`, `docs/` and `.ai/` that no target ever receives,
+    plus a canonical file the mapping carries nowhere. Comparing commit strings
+    called that a redeploy owed; comparing what a target actually receives calls
+    it what it is.
+
+    Pinned for its blast radius rather than for the one target. Base moves on
+    every commit to the source line, so under string equality the first ordinary
+    commit after a redeploy wave takes every target on the fleet off the line at
+    once — and readiness is what consumes that answer."""
+
+    root = git_repo(tmp_path / "source", tag=None)
+    deployed_from = git_canonical_commit(root, "the contract every target holds")
+
+    # Work no payload carries: a file outside `canonical/` altogether, and a
+    # canonical file the mapping deploys nowhere. Both committed, since a file
+    # left in the working tree would make this pass for the wrong reason.
+    local = root / "canonical" / "codex" / "config.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text('model = "local"\n', encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "--", "canonical/codex/config.toml"], check=True)
+    base = git_commit(root, "a doc and a local config no target receives")
+    git_update_ref(root, RELEASE_REF, base)
+    assert git_tree(root, base) != git_tree(root, deployed_from), "the commits differ"
+
+    lines = lines_of(root, ref=RELEASE_REF)
+    assert lines.base == base and base != deployed_from
+    assert lines.place(deployed_from).line == placement.LINE_BASE
+
+
+def test_a_target_a_release_behind_is_not_on_the_base(tmp_path: Path) -> None:
+    """Identity, and never ancestry. A target deployed before the *protocol*
+    moved is running the contract that commit carried, which is the entire fact
+    its receipt exists to state; reading "contained in" as "current" would clear
     every target that ever ran any ancestor of today's release."""
 
     root = git_repo(tmp_path / "source", tag=None)
-    older = git_rev(root, "HEAD")
-    git_update_ref(root, RELEASE_REF, git_commit(root, "canonical work"))
+    older = git_canonical_commit(root, "the contract of the previous release")
+    git_update_ref(root, RELEASE_REF, git_canonical_commit(root, "the contract being released"))
 
-    lines = placement.source_lines(root, ref=RELEASE_REF)
+    lines = lines_of(root, ref=RELEASE_REF)
     assert lines.base != older
-    assert lines.place(older) is None
+    assert lines.place(older) == placement.Placement(line=None)
 
 
 def test_a_sealed_candidate_is_a_line_a_target_may_stand_on(tmp_path: Path) -> None:
-    """Two accepted identities and no more: a target on the release, and a target
+    """Two accepted protocols and no more: a target on the release, and a target
     running the change being measured. Anything else is a placement stated rather
     than a comparison made."""
 
     root = git_repo(tmp_path / "source", tag=None)
-    candidate = git_commit(root, "candidate work")
+    git_update_ref(root, RELEASE_REF, git_canonical_commit(root, "the released contract"))
+    candidate = git_canonical_commit(root, "the change under measurement")
 
-    lines = placement.source_lines(root, ref=RELEASE_REF, candidate=candidate)
+    lines = lines_of(root, ref=RELEASE_REF, candidate=candidate)
     assert lines.base is not None and lines.base != candidate
-    assert lines.place(lines.base) == placement.LINE_BASE
-    assert lines.place(candidate) == placement.LINE_CANDIDATE
-    assert lines.place("f" * 40) is None
+    assert lines.place(lines.base).line == placement.LINE_BASE
+    assert lines.place(candidate).line == placement.LINE_CANDIDATE
+
+
+def test_a_revision_this_checkout_cannot_read_is_a_question_left_open(tmp_path: Path) -> None:
+    """A receipt naming a commit this clone holds no tree for is not a target
+    found somewhere else — nothing was compared at all. It is carried as the
+    unanswered question it is, because the next step is a fetch and the other
+    answer would send an operator to overwrite a target that may well be standing
+    on the line."""
+
+    root = git_repo(tmp_path / "source", tag=None)
+    git_update_ref(root, RELEASE_REF, git_canonical_commit(root, "the released contract"))
+
+    standing = lines_of(root, ref=RELEASE_REF).place("f" * 40)
+
+    assert not standing.placed and standing.line is None
+    assert standing.unreadable is not None and "f" * 40 in standing.unreadable
 
 
 def test_a_line_this_checkout_cannot_resolve_is_stated_rather_than_guessed(tmp_path: Path) -> None:
@@ -268,10 +367,42 @@ def test_a_line_this_checkout_cannot_resolve_is_stated_rather_than_guessed(tmp_p
 
     root = git_repo(tmp_path / "source", tag=None)
 
-    lines = placement.source_lines(root, ref="refs/heads/nowhere")
+    lines = lines_of(root, ref="refs/heads/nowhere")
     assert lines.base is None and not lines.known
-    assert lines.place(git_rev(root, "HEAD")) is None
+    # No question asked of Git about the target either: a checkout that can name
+    # no line has already said the whole of what it can say, and a lookup here
+    # would turn its own silence into a finding about the target.
+    assert lines.place(git_rev(root, "HEAD")) == placement.Placement(line=None)
     assert len(lines.unresolved) == 1 and "refs/heads/nowhere" in lines.unresolved[0]
+
+
+def test_a_line_whose_payload_this_checkout_cannot_read_is_dropped_with_its_reason(
+    tmp_path: Path,
+) -> None:
+    """The other way a line goes unnamed, and the same answer for it. A ref can
+    resolve perfectly to a commit whose deployable tree says nothing a payload
+    could have come from — here an entry a deploy would read *through* rather
+    than copy — and a line whose protocol is unknown is one nothing may be placed
+    against. Dropped with the reason stated, exactly as an unresolvable ref is,
+    because both are the reading repository's state and neither is any target's:
+    the alternative places every target against a protocol nobody read."""
+
+    root = git_repo(tmp_path / "source", tag=None)
+    released = git_canonical_commit(root, "the released contract")
+    git_update_ref(root, RELEASE_REF, released)
+    unreadable = canonical_symlink(root, "a canonical entry that is not a file")
+
+    # As a candidate: the base stands, and the second accepted protocol is the
+    # only thing lost.
+    lines = lines_of(root, ref=RELEASE_REF, candidate=unreadable)
+    assert lines.base == released and lines.candidate is None
+    assert len(lines.unresolved) == 1 and unreadable in lines.unresolved[0]
+
+    # As the base itself: this checkout names no line at all, and says why.
+    git_update_ref(root, RELEASE_REF, unreadable)
+    lines = lines_of(root, ref=RELEASE_REF)
+    assert lines.base is None and not lines.known
+    assert len(lines.unresolved) == 1 and RELEASE_REF in lines.unresolved[0]
 
 
 def test_a_source_root_inside_another_repository_borrows_no_line(tmp_path: Path) -> None:
@@ -284,8 +415,8 @@ def test_a_source_root_inside_another_repository_borrows_no_line(tmp_path: Path)
     inside = root / "vendored"
     inside.mkdir()
 
-    assert placement.source_lines(inside, ref=RELEASE_REF).base is None
-    assert placement.source_lines(root, ref=RELEASE_REF).base is not None
+    assert lines_of(inside, ref=RELEASE_REF).base is None
+    assert lines_of(root, ref=RELEASE_REF).base is not None
 
 
 def test_the_default_line_is_stated_here_and_is_a_ref_that_means_one_commit() -> None:

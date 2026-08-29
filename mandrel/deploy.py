@@ -906,13 +906,20 @@ def check_status(
     as `target modified` — rather than as an intact target placed at a revision
     it is no longer running.
 
-    Nothing here reads the canonical tree, and that absence is the point. The
-    comparison this used to make named whatever the maintainer's checkout held at
-    the moment of asking — a referent no target can match while anything is
-    uncommitted, since an uncommitted tree is exactly the state in which a deploy
-    refuses to state a commit, and one that moves under an ordinary
-    `git checkout`. "What would change if I deployed right now" is a real
-    question and a different one; `preview_deploy` answers it.
+    Nothing here reads the *working* canonical tree, and that absence is the
+    point. The comparison this used to make named whatever the maintainer's
+    checkout held at the moment of asking — a referent no target can match while
+    anything is uncommitted, since an uncommitted tree is exactly the state in
+    which a deploy refuses to state a commit, and one that moves under an
+    ordinary `git checkout`. "What would change if I deployed right now" is a
+    real question and a different one; `preview_deploy` answers it.
+
+    Committed trees are read, and only through `lines`: a receipt's commit and
+    the lines' commits become the protocols they carry
+    (`lockfile.canonical_identity`), because a commit is a whole-repository
+    identity and a target only ever receives part of one. That is a lookup by
+    object id, so it says the same thing in every clone holding the objects and
+    nothing about where this checkout is standing.
 
     `lines` is stated and has no default. Which line this repository releases on
     is a policy fact and the sealed candidate is a lineage fact
@@ -1000,19 +1007,23 @@ def check_status(
 def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[Drift, ...]:
     """Where this target's payload stands among the lines being released.
 
-    Identity against the receipt, never a comparison of files: a lock states a
-    commit only where the deployment's own captured paths, bytes and modes
-    matched that commit's canonical tree (`lockfile.payload_source_commit`), so
-    the receipt already carries the fact this asks for, proved once with both
-    sides in hand.
+    The receipt is read, never the target's files: a lock states a commit only
+    where the deployment's own captured paths, bytes and modes matched that
+    commit's canonical tree (`lockfile.payload_source_commit`), so the receipt
+    already carries what the payload was, proved once with both sides in hand.
+    What that commit *is* — the protocol it carries rather than the string — is
+    asked of `lines` (`placement.SourceLines.place`).
 
-    Three findings, because each is a different next step. A receipt that places
+    Four findings, because each is a different next step. A receipt that places
     nothing is a target no evaluation of it can be attributed to, whatever this
-    checkout knows. A revision that is neither line is an ordinary redeploy. A
-    checkout that could name no line at all is this repository's state and not
-    the target's — saying so is what stops an unreadable policy from quietly
-    clearing every target it should have refused to judge, and stops a target
-    being blamed for a reading nobody could make.
+    checkout knows. A receipt naming a commit whose canonical tree this checkout
+    cannot read leaves the same question open from the other end, and is reported
+    as the same unanswered question rather than as a target found elsewhere — the
+    next step there is a fetch, not a redeploy. A revision carrying neither line's
+    protocol is an ordinary redeploy. A checkout that could name no line at all is
+    this repository's state and not the target's — saying so is what stops an
+    unreadable policy from quietly clearing every target it should have refused to
+    judge, and stops a target being blamed for a reading nobody could make.
     """
 
     reading = placement.stated_revision(target_root)
@@ -1021,12 +1032,19 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
         # reading's own word for this receipt is the whole finding.
         assert reading.state is not None
         return (Drift("unplaceable deployment", LOCK_FILENAME, reading.detail or reading.state),)
-    if lines.accepts(reading.revision):
+    standing = lines.place(reading.revision)
+    if standing.placed:
         # Any complaint `lines` carries is dropped here deliberately: a line this
         # checkout could not name can only ever have added an acceptance, so it
         # cannot have produced this verdict, and reporting it would take a target
         # out of service over a reading that is not about it.
         return ()
+    if standing.unreadable is not None:
+        # A revision this clone holds no tree for. Reported against the receipt
+        # like the other unanswered questions and never as "off the line": the
+        # target may well be standing on one, and nothing here established
+        # otherwise.
+        return (Drift("unplaceable deployment", LOCK_FILENAME, standing.unreadable),)
     if not lines.known:
         return (
             Drift(

@@ -212,9 +212,20 @@ def drift_kinds(result: deploy.StatusResult) -> set[str]:
 
 
 def lines_of(source: Path, *, candidate: str | None = None) -> placement.SourceLines:
-    """The identities a target deployed from this source may be standing on."""
+    """The identities a target deployed from this source may be standing on.
 
-    return placement.source_lines(source, ref=SOURCE_LINE, candidate=candidate)
+    Through the payload mapping's own predicate, as the CLI hands it down: which
+    canonical files reach a target is what a protocol identity is keyed on, and a
+    suite with its own idea of that would agree with the production reading even
+    where both are wrong about the payload.
+    """
+
+    return placement.source_lines(
+        source,
+        ref=SOURCE_LINE,
+        candidate=candidate,
+        deploys=deploy.deploys_canonical_path,
+    )
 
 
 def status_of(target: Path, source: Path, **kwargs: object) -> deploy.StatusResult:
@@ -751,6 +762,114 @@ def test_normalization_variant_target_paths_are_one_target_file(tmp_path: Path) 
 
     assert "one file on a case- or normalization-insensitive volume" in str(refused.value)
     assert list(target.iterdir()) == []
+
+
+def identity_of(source: Path, revision: str) -> dict[str, tuple[str, bool]] | None:
+    """What protocol a commit carries, asked through the payload mapping's own
+    predicate — the one derivation every reader shares."""
+
+    return lockfile.canonical_identity(source, revision, deploys=deploy.deploys_canonical_path)
+
+
+def test_a_protocol_identity_is_keyed_on_canonical_paths_and_not_target_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where a bucket lands is not what it is. The exact case is on record: the
+    orchestrator payload moved from `.cursor/orchestrator/` to
+    `.mandrel/orchestrator/` and changed no canonical byte, so every target
+    running it before was running the same protocol after. Keying identity on
+    target paths would have called that a fleet-wide protocol change and sent
+    every managed repository through a redeploy to arrive at the same files.
+
+    The mapping is a filter here and nothing more, which the second half asserts
+    from the other side: a canonical file no target receives is not in the key
+    either, so editing it is not a protocol change."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    before = identity_of(source, head)
+    assert before and all(path.startswith(f"{paths.CANONICAL_DIRNAME}/") for path in before)
+
+    monkeypatch.setitem(deploy.BUCKET_TARGET_PREFIXES, "orchestrator", ".elsewhere/orchestrator")
+    assert deploy.target_relative_path_for("canonical/orchestrator/orchestrator.py") != (
+        ".mandrel/orchestrator/orchestrator.py"
+    )
+    assert identity_of(source, head) == before
+
+    # And the filter's other edge: `canonical/codex/config.toml` is a local file
+    # the mapping carries nowhere, so no commit of it is a protocol change.
+    write(source / "canonical" / "codex" / "config.toml", 'model = "local"\n')
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "a canonical file no target receives")
+    assert identity_of(source, git(source, "rev-parse", "HEAD")) == before
+
+
+def test_a_protocol_identity_carries_the_executable_bit(tmp_path: Path) -> None:
+    """A hook that arrives without its executable bit is a hook that cannot run,
+    and deployment copies the mode along with the bytes. Mode-blind identity
+    would call the broken protocol and the working one the same and leave the
+    target holding a contract nothing executes."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    (source / "canonical" / "claude" / "skills" / "demo-skill" / "scan.sh").chmod(0o644)
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "a hook that lost its bit")
+    stripped = git(source, "rev-parse", "HEAD")
+
+    before, after = identity_of(source, head), identity_of(source, stripped)
+    scan = "canonical/claude/skills/demo-skill/scan.sh"
+    assert before != after
+    # The bytes are the same object; the bit is the whole of the difference.
+    assert before[scan][0] == after[scan][0] and before[scan][1] and not after[scan][1]
+
+
+def test_a_protocol_this_checkout_cannot_read_is_never_equal_to_another(tmp_path: Path) -> None:
+    """`None` is "this checkout cannot say" and never an identity. Two revisions
+    nobody here can read are not thereby the same protocol, and a comparison that
+    let them be would place a target on a line by way of its own ignorance —
+    which is the one direction a readiness check may never fail in.
+
+    The shape is refused before Git is asked at all, for the reason every reader
+    of a revision refuses it: `ls-tree` resolves `HEAD` or a branch as readily as
+    an object id, and would answer about wherever this checkout is standing."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    identities = lockfile.CanonicalIdentities(source, deploys=deploy.deploys_canonical_path)
+
+    assert identities.of(head) == identity_of(source, head)
+    assert identities.of("f" * 40) is None
+    assert identities.of("HEAD") is None and identities.of(head[:12]) is None
+    assert not identities.same("f" * 40, "e" * 40)
+    assert not identities.same(head, "f" * 40) and not identities.same("f" * 40, head)
+    assert identities.same(head, head)
+
+
+def test_a_protocol_is_read_once_per_revision_for_a_whole_sweep(tmp_path: Path) -> None:
+    """`status --all` walks many targets deployed from a handful of distinct
+    revisions, and a release assessment walks many reports the same way. Asking
+    Git per row costs a subprocess each and, worse, lets one sweep answer two
+    rows at the same revision differently because Git answered once and not
+    twice."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    asked: list[str] = []
+    identities = lockfile.CanonicalIdentities(source, deploys=deploy.deploys_canonical_path)
+    original = lockfile.canonical_identity
+
+    def counted(root: Path, revision: str, **kwargs: object) -> object:
+        asked.append(revision)
+        return original(root, revision, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(lockfile, "canonical_identity", counted)
+        for _ in range(3):
+            assert identities.of(head) is not None
+            assert identities.of("f" * 40) is None
+
+    assert asked == [head, "f" * 40]
 
 
 def deployed_records(source: Path) -> list[lockfile.DeployedFile]:
@@ -1514,6 +1633,50 @@ def test_a_target_on_neither_line_is_not_ready_and_the_placement_is_stated(tmp_p
     assert "off the release line" in deploy.format_status(result)
 
 
+def test_a_commit_carrying_no_deployable_change_leaves_every_target_ready(tmp_path: Path) -> None:
+    """The live defect, at the surface that consumed it. Base moves on every
+    commit to the source line — a test, a document, a snapshot entry, a canonical
+    file the mapping carries nowhere — and under commit-string equality the first
+    such commit after a redeploy wave took the whole fleet off the line at once
+    while every target ran byte-identical protocol.
+
+    Readiness is what reads this, so the false positive is not cosmetic: it is a
+    redeploy wave nobody owes, and an operator who learns to ignore it is an
+    operator who will ignore the true one."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    deployed_from = lockfile.read_lock(target)["source_git_commit"]
+
+    write(source / "docs" / "operations.md", "an operator document no target receives\n")
+    write(source / "canonical" / "codex" / "config.toml", 'model = "local"\n')
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "work outside every payload")
+    moved = git(source, "rev-parse", "HEAD")
+
+    assert lines_of(source).base == moved and moved != deployed_from
+    assert status_of(target, source).in_sync
+
+
+def test_a_receipt_this_checkout_cannot_read_the_tree_of_is_a_question_not_a_verdict(
+    tmp_path: Path,
+) -> None:
+    """A commit whose objects this clone does not hold places nothing, and
+    "places nothing" is not "somewhere else". Reported as the unanswered question
+    it is — the same finding as a receipt that states no commit at all — because
+    the next step is a fetch, and the other answer would send an operator to
+    overwrite a target nothing was established about."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    unheld = "f" * 40
+    lockfile.write_lock(target, {**lockfile.read_lock(target), "source_git_commit": unheld})
+
+    result = status_of(target, source)
+
+    assert [drift.kind for drift in result.drifts] == ["unplaceable deployment"]
+    assert result.drifts[0].target_relative_path == paths.LOCK_FILENAME
+    assert unheld in result.drifts[0].detail
+
+
 def test_uncommitted_canonical_work_changes_no_target_readiness(tmp_path: Path) -> None:
     """The property the whole change exists for. Every managed target used to go
     not-ready together the moment anything under `canonical/` was edited here —
@@ -1587,7 +1750,10 @@ def test_a_checkout_that_names_no_line_does_not_blame_the_target(tmp_path: Path)
 
     source, target, _deployed = deploy_to_tmp(tmp_path)
 
-    result = deploy.check_status(target, lines=placement.source_lines(source, ref="refs/heads/nowhere"))
+    result = deploy.check_status(
+        target,
+        lines=placement.source_lines(source, ref="refs/heads/nowhere", deploys=deploy.deploys_canonical_path),
+    )
 
     assert [drift.kind for drift in result.drifts] == ["unresolved release line"]
     assert result.drifts[0].target_relative_path == "refs/heads/nowhere"
@@ -1603,7 +1769,12 @@ def test_a_line_that_could_not_be_named_is_dropped_where_it_could_not_have_matte
     the finding."""
 
     source, target, _deployed = deploy_to_tmp(tmp_path)
-    unread = placement.source_lines(source, ref=SOURCE_LINE, unresolved=("the lineage does not read",))
+    unread = placement.source_lines(
+        source,
+        ref=SOURCE_LINE,
+        unresolved=("the lineage does not read",),
+        deploys=deploy.deploys_canonical_path,
+    )
 
     assert deploy.check_status(target, lines=unread).in_sync
 

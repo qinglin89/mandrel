@@ -1,4 +1,13 @@
-"""Portable deploy lockfile creation."""
+"""Portable deploy lockfile creation, and the canonical identity it proves against.
+
+Two things live here because they are one derivation. A deploy receipt states a
+source commit only where the payload it copied matched that commit's deployable
+canonical tree exactly (`payload_source_commit`), and reading that tree —
+`canonical_identity` — is also the answer to the separate question every reader
+downstream asks: *are these two commits the same protocol*. Spelling it twice
+would let a receipt vouch for a correspondence a reader then judges by another
+rule.
+"""
 
 from __future__ import annotations
 
@@ -139,7 +148,7 @@ def payload_source_commit(
     commit = source_git_commit(source_root)
     if commit is None:
         return None
-    committed = _committed_canonical_blobs(source_root, commit, deploys)
+    committed = canonical_identity(source_root, commit, deploys=deploys)
     if committed is None:
         return None
 
@@ -173,20 +182,72 @@ def payload_source_commit(
     return commit
 
 
-def _committed_canonical_blobs(
+def canonical_identity(
     source_root: Path,
     commit: str,
+    *,
     deploys: Callable[[str], bool],
 ) -> dict[str, tuple[str, bool]] | None:
-    """Every canonical file `commit` holds that the mapping deploys, as
-    `path -> (object id, executable)`.
+    """Which protocol `commit` carries: every canonical file it holds that the
+    mapping deploys, as `path -> (object id, executable)`.
 
-    Read from the commit's own tree — the side of the comparison a working tree
-    cannot influence and an index cannot suppress. Entries the mapping carries
-    nowhere are left out rather than compared: they are not the payload's bytes,
-    so nothing about them can make the payload this commit's or stop it being.
+    This repository's one answer to *are these two commits the same protocol*,
+    and equality of two of these mappings is the whole of that comparison. It is
+    asked here by every reader that needs it — a target's placement among the
+    lines being released (`placement.SourceLines`), a cohort's membership, a
+    report's side of a release assessment — because a second derivation would let
+    one of them call two commits the same protocol while another calls them
+    different, over the same two trees.
+
+    A commit is not that answer. A commit is a whole-repository identity and
+    moves for work under `mandrel/`, `tests/`, `docs/` and `.ai/` that no target
+    ever receives, so comparing commit strings reports every ordinary commit on
+    the source line as a protocol change on every deployed target at once.
+
+    What the key is, and why each part of it:
+
+    - **The commit's own tree.** Read through `ls-tree`, which no working tree
+      can influence and no index can suppress. Asking the checkout instead would
+      answer about wherever the reader happens to be sitting.
+    - **Canonical paths.** The mapping is a *filter* here (`deploys`) and never
+      part of the key, so relabelling which target directory a bucket lands in is
+      not a protocol change — the payload's bytes did not move.
+    - **The executable bit.** A hook that arrives without it is a hook that
+      cannot run, which is a difference a target feels.
+    - **Content, not rendering.** Canonical bytes as committed; which target they
+      were later rendered for is that target's identity, not the protocol's.
+    - **Object ids, not digests of bytes.** Within one repository two blobs hold
+      the same content exactly when their ids are equal, so identity costs one
+      `ls-tree` and no `cat-file`. Identities are therefore comparable only
+      against others read from this same `source_root`, which is the only
+      comparison anyone here makes.
+
+    Derived at the moment it is asked, never stored. A digest written into a
+    receipt would be a claim in a document that carries no version of the formula
+    that produced it, so a reader could not tell a different protocol from a
+    different mandrel build or a different generation of the mapping.
+
+    Entries the mapping carries nowhere are left out rather than compared: they
+    are not the payload's bytes, so nothing about them can make the payload this
+    commit's or stop it being.
+
+    `None` is "this checkout cannot say" — a commit it does not hold, a tree
+    entry that is not a plain file, a Git that would not answer — and it is never
+    an identity. Two revisions nobody here can read are not thereby the same
+    protocol, and a caller comparing the two `None`s would place a target on a
+    line by way of its own ignorance. An empty mapping is a different thing
+    entirely: it is an answer, about a commit whose tree deploys nothing.
+
+    The revision's shape is asked before Git is (`is_object_id`), because
+    `ls-tree` resolves `HEAD`, a branch, or an abbreviation as readily as an
+    object id — so a caller that let a symbolic name through would be told about
+    wherever this checkout is currently sitting, under the name of somewhere
+    else. Refused here rather than at each caller for the reason the derivation
+    itself is: one rule, or one of them places what the others refuse.
     """
 
+    if not is_object_id(commit):
+        return None
     output = _git_output(source_root, ["ls-tree", "-r", "-z", commit, "--", CANONICAL_DIRNAME])
     if output is None:
         return None
@@ -210,6 +271,50 @@ def _committed_canonical_blobs(
             return None
         blobs[path] = (object_id, mode == EXECUTABLE_BLOB_MODE)
     return blobs
+
+
+class CanonicalIdentities:
+    """`canonical_identity` for one repository, asked once per revision.
+
+    A cache and nothing else: the derivation, the mapping filter, and the
+    repository being read are fixed when this is built, so every reader sharing
+    one of these is asking the same question of the same tree. `status --all`
+    walks many targets that were deployed from a handful of distinct revisions,
+    and a release assessment walks many reports the same way; without this each
+    row would spawn its own `ls-tree` for an answer the previous row already had.
+
+    Failures are remembered with the answers. A revision this checkout could not
+    read is one it cannot read for the whole of the run, and re-asking would only
+    let one sweep report two targets at the same revision differently because Git
+    answered once and not twice.
+    """
+
+    def __init__(self, source_root: Path, *, deploys: Callable[[str], bool]) -> None:
+        self._source_root = source_root
+        self._deploys = deploys
+        self._answers: dict[str, dict[str, tuple[str, bool]] | None] = {}
+
+    def of(self, revision: str) -> dict[str, tuple[str, bool]] | None:
+        """Which protocol `revision` carries, or None where this checkout cannot
+        say — `canonical_identity`'s own answer, remembered."""
+
+        if revision not in self._answers:
+            self._answers[revision] = canonical_identity(self._source_root, revision, deploys=self._deploys)
+        return self._answers[revision]
+
+    def same(self, left: str, right: str) -> bool:
+        """Whether two revisions carry the same protocol.
+
+        False whenever either side is unreadable, and that is the point of asking
+        it here: `None == None` is True, so a caller comparing the raw answers
+        would read two revisions this checkout knows nothing about as the same
+        protocol and place a target on a line by way of its own ignorance.
+        """
+
+        first = self.of(left)
+        if first is None:
+            return False
+        return first == self.of(right)
 
 
 def _committed_content_digests(source_root: Path, object_ids: set[str]) -> dict[str, str] | None:

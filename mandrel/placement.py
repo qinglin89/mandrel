@@ -4,10 +4,18 @@ Two readings, and both of them are about *identity* rather than about files. A
 deployed target's `.ai-deploy-lock.json` states the commit its payload came
 from, and states one only where the deployment's own captured paths, bytes and
 modes matched that commit's deployable canonical tree exactly
-(`lockfile.payload_source_commit`). So the receipt already carries the fact a
-placement is after, proved once at the moment both sides were in hand; comparing
-trees again later asks a weaker question at more cost, and asks it of whatever
-the source checkout happens to be holding at the time.
+(`lockfile.payload_source_commit`). So the receipt is trusted for what it says
+the target holds; nothing here re-reads a target's files to check it.
+
+**What the comparison is over.** The protocol that commit carries
+(`lockfile.canonical_identity`), never the commit string. A commit is a
+whole-repository identity: it moves for work under `mandrel/`, `tests/`, `docs/`
+and `.ai/` that no target ever receives, so comparing strings would report every
+ordinary commit on the source line as a protocol change on every deployed target
+at once — a fleet-wide redeploy notice with a one-commit fuse, and readiness is
+what consumes it. Two commits carrying the same deployable canonical tree are the
+same deployment, and the receipt still names the commit an operator would
+redeploy from.
 
 **What a name resolves to.** A target is a name in the machine-local registry, a
 directory that name is registered for, a receipt in that directory, and the
@@ -31,11 +39,13 @@ all. So an unreadable one is reported as the state of that one target — and th
 inventory, when it is the thing that will not read, as the state of every name at
 once, since without it this machine cannot say which repository any name is.
 
-**What it does not do.** It places nothing against Git. Whether a stated revision
-descends from some commit is a question about a repository's history and belongs
-to whoever is asking it (`evolution.deployment`); what is asked *here* is the
-narrower question `status` needs, which is whether the target is standing on one
-of the two lines this repository is currently deploying from.
+**What it does not do.** It asks Git for the tree a commit holds and for nothing
+else — never for history. Whether a stated revision *descends from* some commit
+belongs to whoever is asking that (`evolution.deployment`); ancestry here would
+clear a target a release behind, which is the one thing a receipt exists to
+prevent. What is asked *here* is the narrower question `status` needs: whether
+the target is running the protocol one of the two lines this repository is
+currently deploying from carries.
 
 **The lines.** At any moment there is exactly one **base** — the commit at the
 configured source line — and at most one **candidate**, the latest sealed round
@@ -51,11 +61,12 @@ runs no experiments.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .lockfile import LockError, read_lock, stated_source_commit
+from .lockfile import CanonicalIdentities, LockError, read_lock, stated_source_commit
 from .paths import lock_path, registry_path, source_root
 from .registry import RegistryError, load_registry
 
@@ -122,12 +133,38 @@ class TargetRevision:
 
 
 @dataclass(frozen=True)
+class Placement:
+    """Where one stated revision stands among the lines being released.
+
+    Three answers in two fields, and they are one answer read from either end.
+    `line` names the line whose protocol the revision carries. Both fields None is
+    an answer too: the revision was read and carries neither. `unreadable` is the
+    third and is a fact about the reading checkout rather than about the target —
+    a revision whose canonical tree this clone does not hold, which is a question
+    left open rather than a target found to be elsewhere.
+
+    Kept apart because they are different next steps. "Neither line" is a
+    redeploy; "cannot say" is a fetch, and reporting it as a redeploy would send
+    an operator to overwrite a target nobody established anything about.
+    """
+
+    line: str | None
+    unreadable: str | None = None
+
+    @property
+    def placed(self) -> bool:
+        return self.line is not None
+
+
+@dataclass(frozen=True)
 class SourceLines:
-    """The canonical identities a deployed target may be standing on.
+    """The lines a deployed target may be standing on, and what each deploys.
 
     `base` is the commit at `ref` right now; `candidate` is the sealed candidate
     a target may also legitimately be carrying, and None whenever there is none —
-    no experiment open, or its latest round still taking work.
+    no experiment open, or its latest round still taking work. Each is named as
+    the commit an operator redeploys from and compared as the protocol it carries
+    (`place`), which are two different facts about one string.
 
     A sealed round is the only candidate that may appear here. An open round's ref
     tip moves, so a target deployed from it produces evaluation reports naming a
@@ -147,33 +184,62 @@ class SourceLines:
     base: str | None
     candidate: str | None
     unresolved: tuple[str, ...] = ()
+    # How a revision becomes the protocol it carries, bound to the repository
+    # these lines were resolved in and shared across every target a sweep places
+    # (`lockfile.CanonicalIdentities`). None only where there is no line to place
+    # against anyway: `source_lines` always builds one, and the caller that
+    # constructs this directly does so precisely to say it can name no line
+    # (`evolution.deployment.source_lines`).
+    identities: CanonicalIdentities | None = None
 
     @property
     def known(self) -> bool:
-        """Whether any identity was resolved at all. False is not "nothing is
-        current" — it is a reading that could not name a line, and a caller
-        reporting it as a target's drift would blame the target for it."""
+        """Whether any line was resolved at all — to a commit and to the protocol
+        that commit carries, since a line whose payload this checkout cannot read
+        is one nothing may be placed against and is dropped with the rest.
+
+        False is not "nothing is current" — it is a reading that could not name a
+        line, and a caller reporting it as a target's drift would blame the
+        target for it."""
 
         return self.base is not None or self.candidate is not None
 
-    def place(self, revision: str) -> str | None:
-        """Which line `revision` is, or None for a revision that is neither.
+    def place(self, revision: str) -> Placement:
+        """Which line's protocol `revision` carries, or why it carries neither.
 
-        Exact identity, never ancestry. A target deployed from a commit that base
-        has since built on top of is not deployed at base: it is running the
-        protocol that commit carried, which is the whole fact a receipt exists to
-        state. Base first, so a candidate ref left sitting at base after a
-        promotion reads as the line it now is.
+        Canonical identity, never ancestry and never the commit string. A target
+        deployed from a commit base has since built on top of is not at base
+        *unless base built nothing a target receives*: what a receipt exists to
+        state is the protocol that target is running, and two commits with the
+        same deployable canonical tree are running the same one. Ancestry would
+        clear a target a genuine release behind; string equality condemns every
+        target on the fleet the next time anyone commits a test.
+
+        Base first, so a candidate ref left sitting at base after a promotion —
+        and any other case where the two lines carry one protocol — reads as the
+        line it now is.
+
+        Nothing is asked of Git where there is no line to place against: a
+        checkout that could name none has already said the whole of what it can
+        say, and running a lookup for it would turn its own silence into a
+        finding about the target.
         """
 
-        if self.base is not None and revision == self.base:
-            return LINE_BASE
-        if self.candidate is not None and revision == self.candidate:
-            return LINE_CANDIDATE
-        return None
-
-    def accepts(self, revision: str) -> bool:
-        return self.place(revision) is not None
+        if self.identities is None or not self.known:
+            return Placement(line=None)
+        if self.identities.of(revision) is None:
+            return Placement(
+                line=None,
+                unreadable=(
+                    f"this checkout does not read the canonical tree of {revision}, "
+                    "so it cannot say which protocol that payload carries"
+                ),
+            )
+        if self.base is not None and self.identities.same(revision, self.base):
+            return Placement(line=LINE_BASE)
+        if self.candidate is not None and self.identities.same(revision, self.candidate):
+            return Placement(line=LINE_CANDIDATE)
+        return Placement(line=None)
 
 
 def stated_revision(target_root: Path) -> TargetRevision:
@@ -231,25 +297,61 @@ def source_lines(
     ref: str | None = DEFAULT_SOURCE_LINE,
     candidate: str | None = None,
     unresolved: tuple[str, ...] = (),
+    deploys: Callable[[str], bool],
 ) -> SourceLines:
-    """The lines a target may be standing on, with `ref` resolved here.
+    """The lines a target may be standing on, with `ref` and both protocols
+    resolved here.
 
     Resolution is the whole of what this adds: the caller states which line it
-    releases on and which candidate is sealed, and this turns the ref into the
-    commit it names today. A ref this checkout cannot resolve leaves `base` None
-    with the reason stated — a fact about the reading repository, never about any
-    target, and reporting it as a target's drift would name a redeploy that is
-    not owed.
+    releases on and which candidate is sealed, and this turns each into the
+    commit it names today and the protocol that commit carries. A line this
+    checkout cannot resolve — the ref names nothing, or its canonical tree is not
+    readable here — is dropped with the reason stated. That is a fact about the
+    reading repository, never about any target, and reporting it as a target's
+    drift would name a redeploy that is not owed.
+
+    Both failures are the line's rather than a target's, which is why they are
+    settled here and not at the moment a target is placed: a line whose protocol
+    this checkout cannot read is one nothing can be placed against, and the
+    caller already has one vocabulary for that (`unresolved`, `known`). A target
+    whose *own* revision will not read is a different finding and is the target's
+    (`place`).
+
+    `deploys` is the payload mapping's own predicate, injected rather than
+    imported: the mapping lives in the deploy layer and the deploy layer already
+    reads this module, so a second copy of "which canonical files reach a target"
+    is the only other way to have it — and two copies is exactly how one reader
+    comes to call two commits the same protocol while another calls them
+    different.
     """
 
     root = (root or source_root()).resolve()
+    identities = CanonicalIdentities(root, deploys=deploys)
     base: str | None = None
     complaints = list(unresolved)
     if ref is not None:
         base = _ref_commit(root, ref)
         if base is None:
             complaints.append(f"{root} does not resolve {ref}, so this checkout cannot name the current release")
-    return SourceLines(ref=ref, base=base, candidate=candidate, unresolved=tuple(complaints))
+        elif identities.of(base) is None:
+            complaints.append(
+                f"{root} does not read the canonical tree of {ref} at {base}, "
+                "so this checkout cannot say what the current release deploys"
+            )
+            base = None
+    if candidate is not None and identities.of(candidate) is None:
+        complaints.append(
+            f"{root} does not read the canonical tree of the sealed candidate {candidate}, "
+            "so this checkout cannot say what it deploys"
+        )
+        candidate = None
+    return SourceLines(
+        ref=ref,
+        base=base,
+        candidate=candidate,
+        unresolved=tuple(complaints),
+        identities=identities,
+    )
 
 
 def _named(name: str, paths: list[str]) -> TargetRevision:

@@ -92,8 +92,8 @@ comparison with whatever this checkout currently holds.
 |---|---|
 | `target modified` | a deployed file's bytes or mode no longer match what the deploy left |
 | `missing target file` | a deployed file was deleted |
-| `off the release line` | the lock names a commit that is neither the current release nor the sealed candidate; re-deploy |
-| `unplaceable deployment` | no lock, one this build cannot read, or one tying the payload to no commit |
+| `off the release line` | the lock names a commit carrying neither the current release's deployable canonical tree nor the sealed candidate's; re-deploy |
+| `unplaceable deployment` | no lock, one this build cannot read, one tying the payload to no commit, or one naming a commit whose canonical tree this checkout does not hold |
 | `unresolved release line` | this checkout could not name a line to place the target against; the source, not the target, is what needs attention |
 | `stale eager import` | the loader points at a memory doc that is no longer the current entrypoint, or routing points somewhere illegal |
 | `ambiguous memory entrypoint` | both `x.md` and `x/index.md` exist for one topic |
@@ -246,10 +246,14 @@ scripts/boundary-lint.sh                 # charter + reference invariants
 python -m pytest tests/ -q               # deploy, hook-consistency, orchestrator
 ```
 
-**After canonical work reaches the release line**, every deployed target reports
-`off the release line` until it is re-deployed. That is the intended signal, not
-a problem to suppress. Uncommitted canonical work reports nothing: a target's
-readiness is where its payload came from, which no edit here can change.
+**After canonical work that changes the deployed payload reaches the release
+line**, every deployed target reports `off the release line` until it is
+re-deployed. That is the intended signal, not a problem to suppress. Work that
+changes nothing a target receives — tests, docs, `.ai/`, a canonical file the
+mapping carries nowhere — moves no target, because placement compares the
+protocol a commit carries and not the commit. Uncommitted canonical work reports
+nothing either: a target's readiness is where its payload came from, which no
+edit here can change.
 
 **After a housekeeping split in a target**, re-deploy that target. Cursor and
 Codex sessions pick up the new entrypoint immediately; Claude sessions need the

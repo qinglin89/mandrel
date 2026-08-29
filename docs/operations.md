@@ -193,19 +193,26 @@ Drift returns a nonzero exit code.
 
 A lock states a source commit only where the deployment's own files, bytes and
 modes matched that commit's canonical tree exactly. The receipt therefore
-already carries the fact placement asks for, proved once with both sides in
-hand; re-comparing trees later asks a weaker question, at more cost, against
-whatever the source checkout happens to be holding at the time.
+already says which commit the payload came from, proved once with both sides in
+hand, and nothing re-reads the target's files to check it.
 
-- `off the release line` — the payload came from a commit that is neither the
-  current release nor the sealed candidate. The detail names the revision the
-  target holds and the ones being released; redeploy. The comparison is between
-  commits, not between trees, so a release commit that changed nothing under
-  `canonical/` still moves every target off the line until it is redeployed.
+What that commit is compared *as* is the protocol it carries: the deployable
+canonical tree, read from the commit itself. A commit is a whole-repository
+identity and moves for work under `mandrel/`, `tests/`, `docs/` and `.ai/` that
+no target ever receives, so comparing commit strings would take every deployed
+target off the line the first time anyone committed a test.
+
+- `off the release line` — the payload came from a commit carrying neither the
+  current release's protocol nor the sealed candidate's. The detail names the
+  revision the target holds and the ones being released, because a commit is
+  what you redeploy from; redeploy. A release commit that changed nothing a
+  target receives moves no target.
 - `unplaceable deployment` — the target carries no lock, one this build cannot
-  read, or one tying its payload to no commit. Nothing places what that target
-  holds, so no evaluation of it can be attributed to a protocol revision.
-  Redeploy from a committed canonical tree.
+  read, one tying its payload to no commit, or one naming a commit whose
+  canonical tree this checkout does not hold. Nothing places what that target
+  holds, so no evaluation of it can be attributed to a protocol revision. The
+  last case is a fetch away from an answer; the rest want a redeploy from a
+  committed canonical tree.
 - `unresolved release line` — this repository could not name a line to place
   anything against: the configured ref does not resolve in this checkout, or the
   evolution policy does not read. Nothing is wrong with the target; the source

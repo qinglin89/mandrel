@@ -1130,6 +1130,29 @@ def git_commit(root: Path, message: str) -> str:
     return git_rev(root, "HEAD")
 
 
+def git_canonical_commit(root: Path, message: str) -> str:
+    """One more commit that changes what a target would receive, and its sha.
+
+    The counterpart to `git_commit`, and the distinction is the whole subject of
+    a placement. A protocol's identity is the deployable canonical tree a commit
+    holds (`lockfile.canonical_identity`), so a commit touching `file.txt` moves
+    the sha and nothing a target ever sees, while this one moves both. A test
+    about two different protocols has to use this; a test about the same protocol
+    at two commits must not.
+
+    Stages only the file it wrote, for the same reason `git_commit` does: the
+    evolution records a test writes are the untracked state under examination,
+    and committing them would make a later `git checkout` delete them.
+    """
+
+    path = root / "canonical" / "protocols" / "dev.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"dev contract, {message}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "--", "canonical/protocols/dev.md"], check=True)
+    subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
+    return git_rev(root, "HEAD")
+
+
 def git_release_commit(root: Path, message: str) -> str:
     """One more commit, landed on the source line as well as on the checkout.
 

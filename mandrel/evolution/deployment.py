@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .. import placement
+from ..deploy import deploys_canonical_path
 from ..placement import SourceLines, TargetRevision
 from . import lineage
 from .config import VERSIONED_ROOT, EvolutionConfig, load_config
@@ -191,10 +192,18 @@ def source_lines(repo_root: Path) -> SourceLines:
     file deleted, a directory or a dangling link in its place, a name this
     process cannot stat — leaves the line it configured unknown rather than
     absent, and unknown is precisely the case the default may not answer.
+
+    Each named line is resolved to the protocol it carries as well as to the
+    commit it names (`lockfile.canonical_identity`), and the payload mapping's own
+    predicate is handed down for it. The deploy layer owns which canonical files
+    reach a target and already reads `placement`, so the predicate travels from
+    here rather than the other way; a second copy of that mapping is the only
+    other way to have it, and two copies is how one reader comes to call two
+    commits the same protocol while another calls them different.
     """
 
     if _no_workspace(repo_root):
-        return placement.source_lines(repo_root)
+        return placement.source_lines(repo_root, deploys=deploys_canonical_path)
     try:
         config = load_config(repo_root)
     except (EvolutionError, OSError, ValueError) as error:
@@ -213,11 +222,13 @@ def source_lines(repo_root: Path) -> SourceLines:
             repo_root,
             ref=ref,
             unresolved=(f"this checkout cannot read the experiment lineage, so it names no candidate: {error}",),
+            deploys=deploys_canonical_path,
         )
     return placement.source_lines(
         repo_root,
         ref=ref,
         candidate=current.candidate_revision if current is not None else None,
+        deploys=deploys_canonical_path,
     )
 
 
