@@ -378,7 +378,7 @@ Confusing them is the most common early mistake.
 | Values | `in sync` plus ten drift states | `pending`, `in_progress`, `final_review`, `completed`, `blocked` |
 | Changed by | you, by redeploying | the session, per the transition table |
 
-`off the release line` after you pull a mandrel carrying protocol changes is the
+`off the source line` after you pull a mandrel carrying protocol changes is the
 intended signal, not a problem: your target is still on the protocol revision it
 was deployed at.
 Redeploy when you want the new one — it touches neither your tasks nor your

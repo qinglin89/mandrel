@@ -829,8 +829,8 @@ STATUS_DRIFT_KINDS: tuple[str, ...] = (
     "missing manifest",
     "target modified",
     "unplaceable deployment",
-    "off the release line",
-    "unresolved release line",
+    "off the source line",
+    "unresolved source line",
     "stale eager import",
     "ambiguous memory entrypoint",
     "shadowed skill",
@@ -1048,12 +1048,12 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
     if not lines.known:
         return (
             Drift(
-                "unresolved release line",
+                "unresolved source line",
                 lines.ref or UNNAMED_SOURCE_LINE,
                 "; ".join(lines.unresolved) or "this checkout names no line to place a deployment against",
             ),
         )
-    return (Drift("off the release line", LOCK_FILENAME, _placement_detail(reading.revision, lines)),)
+    return (Drift("off the source line", LOCK_FILENAME, _placement_detail(reading.revision, lines)),)
 
 
 def _placement_detail(revision: str, lines: placement.SourceLines) -> str:

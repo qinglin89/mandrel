@@ -151,7 +151,7 @@ def make_loader_source(tmp_path: Path) -> Path:
 
 
 def deploy_to_tmp(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
-    """A deployed target whose receipt places it on this source's release line.
+    """A deployed target whose receipt places it on this source's source line.
 
     Committed before the deploy, because that is the only state in which a lock
     states a source commit at all — and a receipt stating none is a target
@@ -1618,7 +1618,7 @@ def test_status_missing_target_file(tmp_path: Path) -> None:
 def branch_commit(source: Path, branch: str, message: str) -> str:
     """One more canonical commit, landed on a branch of its own.
 
-    The release line is left where it was, which is what a sealed candidate
+    The source line is left where it was, which is what a sealed candidate
     actually is: a revision this repository is measuring and not the one it is
     releasing."""
 
@@ -1657,7 +1657,7 @@ def test_a_target_deployed_at_a_sealed_candidate_is_ready(tmp_path: Path) -> Non
 
     # And the same target, with nothing sealed, is somewhere this repository is
     # not currently releasing from.
-    assert "off the release line" in drift_kinds(status_of(target, source))
+    assert "off the source line" in drift_kinds(status_of(target, source))
 
 
 def test_a_target_on_neither_line_is_not_ready_and_the_placement_is_stated(tmp_path: Path) -> None:
@@ -1674,12 +1674,12 @@ def test_a_target_on_neither_line_is_not_ready_and_the_placement_is_stated(tmp_p
     result = deploy.check_status(target, lines=lines_of(source, candidate=sealed))
 
     assert not result.in_sync
-    drifts = [drift for drift in result.drifts if drift.kind == "off the release line"]
+    drifts = [drift for drift in result.drifts if drift.kind == "off the source line"]
     assert [drift.target_relative_path for drift in drifts] == [paths.LOCK_FILENAME]
     assert stranded in drifts[0].detail
     assert base in drifts[0].detail and sealed in drifts[0].detail
     # Printable, or the drift is counted in the header and then never named.
-    assert "off the release line" in deploy.format_status(result)
+    assert "off the source line" in deploy.format_status(result)
 
 
 def test_a_commit_carrying_no_deployable_change_leaves_every_target_ready(tmp_path: Path) -> None:
@@ -1831,10 +1831,10 @@ def test_a_checkout_that_names_no_line_does_not_blame_the_target(tmp_path: Path)
         lines=placement.source_lines(source, ref="refs/heads/nowhere", deploys=deploy.deploys_canonical_path),
     )
 
-    assert [drift.kind for drift in result.drifts] == ["unresolved release line"]
+    assert [drift.kind for drift in result.drifts] == ["unresolved source line"]
     assert result.drifts[0].target_relative_path == "refs/heads/nowhere"
     assert "refs/heads/nowhere" in result.drifts[0].detail
-    assert "unresolved release line" in deploy.format_status(result)
+    assert "unresolved source line" in deploy.format_status(result)
 
 
 def test_a_line_that_could_not_be_named_is_dropped_where_it_could_not_have_mattered(tmp_path: Path) -> None:

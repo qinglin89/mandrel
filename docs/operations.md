@@ -179,8 +179,8 @@ would change if I deployed right now" is a different question, and
 - `missing manifest`
 - `target modified`
 - `unplaceable deployment`
-- `off the release line`
-- `unresolved release line`
+- `off the source line`
+- `unresolved source line`
 - `stale eager import`
 - `ambiguous memory entrypoint`
 - `shadowed skill`
@@ -189,7 +189,7 @@ would change if I deployed right now" is a different question, and
 
 Drift returns a nonzero exit code.
 
-### Placement against the release lines
+### Placement against the source line
 
 A lock states a source commit only where the deployment's own files, bytes and
 modes matched that commit's canonical tree exactly. The receipt therefore
@@ -202,7 +202,7 @@ identity and moves for work under `mandrel/`, `tests/`, `docs/` and `.ai/` that
 no target ever receives, so comparing commit strings would take every deployed
 target off the line the first time anyone committed a test.
 
-- `off the release line` — the payload came from a commit carrying neither the
+- `off the source line` — the payload came from a commit carrying neither the
   current release's protocol nor the sealed candidate's. The detail names the
   revision the target holds and the ones being released, because a commit is
   what you redeploy from; redeploy. A release commit that changed nothing a
@@ -213,7 +213,7 @@ target off the line the first time anyone committed a test.
   holds, so no evaluation of it can be attributed to a protocol revision. The
   last case is a fetch away from an answer; the rest want a redeploy from a
   committed canonical tree.
-- `unresolved release line` — this repository could not name a line to place
+- `unresolved source line` — this repository could not name a line to place
   anything against: the configured ref does not resolve in this checkout, or the
   evolution policy does not read. Nothing is wrong with the target; the source
   checkout is what needs attention.

@@ -485,7 +485,7 @@ def test_a_checkout_with_no_evolution_workspace_still_answers_against_its_base(t
     # The default line, created here rather than by the shared fixture: what a
     # repository with no policy holds is its own business, and `git_repo` builds
     # the line the *policy* names for the suites that read one. Widening it to
-    # build both would put a second release-line ref in every temporary
+    # build both would put a second source-line ref in every temporary
     # repository, which those suites would then be asserting against by accident.
     #
     # Deliberately at a different commit from the one the fixture built, so that

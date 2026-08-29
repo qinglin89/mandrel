@@ -434,7 +434,7 @@ def _ref_commit(root: Path, ref: str) -> str | None:
     Asked of `root` only when `root` is itself the top of a work tree. A path
     merely *inside* another repository would otherwise be answered by that
     repository's branches — which is how a temporary directory under someone's
-    checkout silently acquires a release line, and how every target deployed from
+    checkout silently acquires a source line, and how every target deployed from
     it would then be judged against a line it has nothing to do with.
     """
 
