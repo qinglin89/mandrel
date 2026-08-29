@@ -80,6 +80,16 @@ LINE_CANDIDATE = "candidate"
 # with no policy to consult, and it is deliberately a fully-qualified ref for the
 # reason the policy pattern requires one — a bare branch name or a revision
 # expression is resolved against whatever the reading repository is sitting on.
+#
+# It is independent of this repository's own `[source_line].ref` by design, and
+# the two currently differ: evolution here promotes onto `refs/heads/dev`, and
+# this stays `refs/heads/main`. They answer different questions. This one is the
+# convention a repository with no evolution workspace is judged by, so it has to
+# be the branch such a repository most likely releases from; the policy setting
+# is one project's decision about where its own promotions land. Tracking that
+# decision here would ship a project-specific default to every repository that
+# has no project — and would move it whenever one project moved, quietly, since
+# both values are valid refs and only one of them is the reader's release.
 DEFAULT_SOURCE_LINE = "refs/heads/main"
 
 

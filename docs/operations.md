@@ -464,6 +464,24 @@ rollback, `--source-ref` states which line the operator read; on the base
 freeze, `--base` states which commit they read at the configured line. Either
 mismatch refuses before anything is written.
 
+**`refs/heads/dev` is evolution's receiving line, and `refs/heads/main` is
+human-maintained.** Evolution moves `dev` and its own `refs/evolution/...`
+namespace, and nothing else — no operation here writes `main`. So do not work on
+`dev`: canonical work happens on a feature branch, and a promotion lands it on
+`dev` for you. Pushing `dev` afterwards needs no checkout of it
+(`git push origin dev` from wherever you are).
+
+That is a working rule, not a slack the code takes. A promotion and a rollback
+both refuse while any working tree of this repository sits on the line they are
+about to move, linked worktrees included, because moving a branch some tree is on
+leaves that tree describing the commit before — and the obvious repair takes
+whatever else was uncommitted there with it. The refusal is not relaxed for
+`dev`: the cost is identical for any branch, and the reason has nothing to do
+with the name. It is also the one refusal an operator answers without deciding
+anything — run it from a checkout that is not on the source line. Trading it for
+a class of silently lost uncommitted work would be the worse bargain, so the
+habit `dev` invites is the thing to correct, not the guard.
+
 #### One cycle, end to end
 
 ```bash
@@ -547,7 +565,7 @@ target holds.
 
 ```text
   promoted     6f1c0a5b2e33 from evolution-batch-0001-exp-01 round 1 (evolution-batch-0001)
-               41ab99c0f7de onto refs/heads/main at 9d2e8c17b40a, tree 5b1f0e93aa72
+               41ab99c0f7de onto refs/heads/dev at 9d2e8c17b40a, tree 5b1f0e93aa72
                planned targets: api-service, web-app — the plan this promotion recorded, not what they hold
   deployed     what each planned target holds now, from its own .ai-deploy-lock.json:
                api-service at 6f1c0a5b2e33 — carries this promotion
@@ -858,15 +876,41 @@ writes. To adopt the managed hook, move the existing one aside first.
 
 ### CI
 
-`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual
-dispatch. It installs the `dev` extra and calls `scripts/check.sh` on Python
-3.11 (the `requires-python` floor) and 3.14 (the orchestrator runtime). It
-needs no repository secrets and requests only `contents: read`.
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main` and `dev`,
+and manual dispatch. It installs the `dev` extra and calls `scripts/check.sh` on
+Python 3.11 (the `requires-python` floor) and 3.14 (the orchestrator runtime).
+It needs no repository secrets and requests only `contents: read`.
+
+Both branches are on the push trigger because both receive commits no pull
+request ever gated: `main` is human-maintained, and `dev` is the line evolution
+promotes onto.
+
+**No CI check can run before a promotion moves the ref.** A promotion is a local
+`git commit-tree` followed by `git update-ref` (`mandrel/evolution/revisions.py`)
+— there is no `push` anywhere under `mandrel/`, so it is neither a push nor a
+pull request and GitHub does not see it at all until a human pushes `dev`
+afterwards. The push trigger runs the gate at that point, on a line the
+promotion is already on. That is worth having and it is not a gate on promotion.
+If a hard gate on promotion is wanted, the place for it is a preflight inside
+`promote` itself, where the merge is computed and the ref is moved. What already
+stands in for one is `experiments._require_measured_tree`: promotion recomputes
+the merge and refuses unless the result equals the replay's `integration.tree`,
+so what lands is the tree a replay actually exercised.
+
+A promotion also moves the state every outstanding `--expect <state_revision>`
+token was minted against — twice over, since the token hashes both the
+configured source line's tip and `evolution/config.toml` itself. Changing
+`[source_line].ref` therefore invalidates every outstanding token at once. That
+is the token working: it refuses a mutation planned against a state that has
+since moved, and the line the whole lifecycle stands on moving is exactly the
+case it exists for. Re-read `mandrel evolution status` and use the new token.
 
 **Branch protection is a repository setting, not a file in this repo.** Until
 the `gate (Python 3.11)` and `gate (Python 3.14)` checks are marked required
-for `main` under Settings → Branches, a red run can still be merged. Adding the
-workflow does not enable the gate; marking the checks required does.
+for `main` and `dev` under Settings → Branches, a red run can still be merged.
+Adding the workflow does not enable the gate; marking the checks required does.
+Required checks on `dev` bind a human pushing it, not the promotion that moved
+it locally — see above.
 
 `.github/workflows/smoke.yml` is the non-default counterpart: a manual
 `workflow_dispatch` run of `canonical/orchestrator/smoke_hooks.py`, which drives

@@ -8,7 +8,7 @@ report_feed_path = "/api/evaluation/reports"
 completed_l1_l2_only = true
 
 [source_line]
-ref = "refs/heads/main"
+ref = "refs/heads/dev"
 
 [batch]
 target_task_count = 20

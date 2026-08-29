@@ -10,8 +10,13 @@ name: verify
 
 on:
   pull_request:
+  # `dev` is the line evolution promotes onto and `main` is human-maintained, so
+  # both receive work no pull request ever gated. Neither is a gate on promotion:
+  # a promotion is a local commit-tree plus update-ref (mandrel/evolution/
+  # revisions.py) with no push anywhere, so nothing server-side can run before
+  # the ref moves. This runs when a human pushes the line afterwards.
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:

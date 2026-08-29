@@ -288,14 +288,32 @@ def test_a_source_root_inside_another_repository_borrows_no_line(tmp_path: Path)
     assert placement.source_lines(root, ref=RELEASE_REF).base is not None
 
 
-def test_the_default_line_is_the_line_this_repository_releases_on() -> None:
-    """The deploy layer names a line for a checkout with no policy to consult,
-    and that fallback has one job: to be the same line this repository's policy
-    configures. A default left behind after the policy moved would judge every
-    target against a line nobody releases on — silently, since both are valid
-    refs and only one of them is anybody's release."""
+def test_the_default_line_is_stated_here_and_is_a_ref_that_means_one_commit() -> None:
+    """Asserted as the literal it is, because it is a value no caller passes and
+    no test would otherwise notice being edited — a deploy-layer constant that
+    decides how every unconfigured repository's targets are judged. Fully
+    qualified for the reason the policy pattern requires: a bare branch or a
+    revision expression resolves against whatever the reading checkout sits on."""
 
-    assert placement.DEFAULT_SOURCE_LINE == config_module.load_config(REPO_ROOT).source_line.ref
+    assert placement.DEFAULT_SOURCE_LINE == "refs/heads/main"
+    assert placement.DEFAULT_SOURCE_LINE.startswith("refs/heads/")
+
+
+def test_the_default_line_and_the_configured_one_are_independent(tmp_path: Path) -> None:
+    """They answer different questions and are allowed to differ, which is this
+    repository's own case: its policy promotes onto a line that is not the
+    default, and both readings are correct. A repository that configures a line
+    is judged by that line; one that configures none is judged by the constant.
+    Tying them would ship one project's release branch to every project without
+    one — and would move it whenever that project moved."""
+
+    configured = config_module.load_config(REPO_ROOT).source_line.ref
+    assert configured != placement.DEFAULT_SOURCE_LINE
+
+    # Carrying the shipped policy: the line it names, never the default.
+    assert deployment.source_lines(git_repo(make_repo(tmp_path), tag=None)).ref == configured
+    # Carrying no policy at all: the default, and no reading of the shipped one.
+    assert deployment.source_lines(git_repo(tmp_path / "unconfigured", tag=None)).ref == placement.DEFAULT_SOURCE_LINE
 
 
 # --- what this repository states the lines are -------------------------------
@@ -333,9 +351,22 @@ def test_a_checkout_with_no_evolution_workspace_still_answers_against_its_base(t
     # The workspace itself, because that is what the fallback is decided on: a
     # repository keeping one and unable to produce its policy is the case below.
     assert not (root / "evolution").exists()
+    # The default line, created here rather than by the shared fixture: what a
+    # repository with no policy holds is its own business, and `git_repo` builds
+    # the line the *policy* names for the suites that read one. Widening it to
+    # build both would put a second release-line ref in every temporary
+    # repository, which those suites would then be asserting against by accident.
+    #
+    # Deliberately at a different commit from the one the fixture built, so that
+    # reading the shipped policy here would be a visibly wrong answer rather than
+    # the same answer by coincidence.
+    default = git_commit(root, "work the default line carries")
+    git_update_ref(root, placement.DEFAULT_SOURCE_LINE, default)
+    assert git_rev(root, RELEASE_REF) != default
 
     lines = deployment.source_lines(root)
-    assert lines.base == git_rev(root, RELEASE_REF) and lines.candidate is None
+    assert lines.ref == placement.DEFAULT_SOURCE_LINE
+    assert lines.base == default and lines.candidate is None
     assert lines.unresolved == ()
 
 

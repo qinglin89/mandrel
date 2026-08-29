@@ -67,14 +67,6 @@ def test_config_loads_the_shipped_policy_and_hashes_the_file(config: evolution.E
         ('deduplicate_by = "source-repo-and-task"', 'deduplicate_by = "source-repo"'),
         ("minimum_task_count = 10", "minimum_task_count = 40"),
         ('runtime_root = ".ai-evolution"', 'runtime_root = "../elsewhere"'),
-        # The source line has to mean one commit in every clone. A bare branch,
-        # a tag, `HEAD`, and a revision expression all resolve somewhere in most
-        # checkouts, which is the failure rather than the fix.
-        ('ref = "refs/heads/main"', 'ref = "main"'),
-        ('ref = "refs/heads/main"', 'ref = "HEAD"'),
-        ('ref = "refs/heads/main"', 'ref = "refs/heads/main@{1}"'),
-        ('ref = "refs/heads/main"', 'ref = "refs/heads"'),
-        ('ref = "refs/heads/main"', 'ref = ""'),
         ("[source_line]", "[unused_section]"),
     ],
 )
@@ -82,8 +74,79 @@ def test_config_fails_closed_on_policy_it_cannot_honour(repo: Path, old: str, ne
     """Each of these would otherwise run a controller that quietly does
     something other than what the contract says."""
     path = repo / "evolution" / "config.toml"
-    path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    # A substitution that matches nothing leaves the shipped policy standing, and
+    # a shipped policy loads — so the case would report the config failing to
+    # fail closed when what actually happened is that the case stopped editing it.
+    assert old in text
+    path.write_text(text.replace(old, new), encoding="utf-8")
 
+    with pytest.raises(evolution.ConfigError):
+        evolution.load_config(repo)
+
+
+def set_source_line_ref(repo: Path, value: str) -> None:
+    """Rewrite `[source_line].ref` to `value`, whatever the file currently holds.
+
+    Keyed on the setting rather than on the ref this repository releases from
+    today, because the substitution has to survive that ref moving: a key spelled
+    as the current value stops matching the day the policy names another line,
+    and stops matching silently, since the config it leaves behind is the valid
+    one. Scoped to the section as well as the key, so a `ref` setting added to
+    some other section later is not what gets rewritten.
+    """
+
+    path = repo / "evolution" / "config.toml"
+    section: str | None = None
+    rewritten = 0
+    out: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+        if section == "[source_line]" and stripped.startswith("ref ="):
+            line = f'ref = "{value}"\n'
+            rewritten += 1
+        out.append(line)
+    assert rewritten == 1, f"rewrote [source_line].ref {rewritten} times, not once"
+    path.write_text("".join(out), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        # The source line has to mean one commit in every clone. A bare branch, a
+        # tag, `HEAD`, and a revision expression all resolve somewhere in most
+        # checkouts, which is the failure rather than the fix. Each of these is
+        # refused for its *form*; which branch a case happens to name is not what
+        # is under test, and none of them is the line this repository configures.
+        "main",
+        "HEAD",
+        "refs/heads/main@{1}",
+        "refs/heads",
+        "",
+    ],
+)
+def test_config_fails_closed_on_a_source_line_that_does_not_name_one_commit(repo: Path, ref: str) -> None:
+    """The same refusal as above for the one setting whose value moves. Stated
+    against the field so that a policy naming a third line changes which ref is
+    overwritten and nothing else about what these cases prove."""
+
+    set_source_line_ref(repo, ref)
+
+    with pytest.raises(evolution.ConfigError):
+        evolution.load_config(repo)
+
+
+def test_the_source_line_cases_hold_for_a_policy_naming_another_line(repo: Path) -> None:
+    """The property the rewrite exists for, asserted rather than assumed: point
+    the shipped policy at a line it has never named, and the refusals above are
+    still refusals of that line rather than no-ops against a valid config."""
+
+    set_source_line_ref(repo, "refs/heads/some-other-line")
+    assert evolution.load_config(repo).source_line.ref == "refs/heads/some-other-line"
+
+    set_source_line_ref(repo, "some-other-line")
     with pytest.raises(evolution.ConfigError):
         evolution.load_config(repo)
 

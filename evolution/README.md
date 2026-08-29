@@ -102,6 +102,40 @@ complete an evaluation.
     analysis is still being written, and drafts, rejections and the closure are
     unaffected. A batch with no promotion anywhere before it owes nothing and
     waits for nothing.
+18. **`main` is human-maintained; the source line is evolution's alone.**
+    Evolution's line is `refs/heads/dev` (`evolution/config.toml`
+    `[source_line].ref`). Evolution moves that line and its own
+    `refs/evolution/...` namespace, and nothing else: no operation here writes
+    `refs/heads/main`, which is a human's branch and stays one. (The deploy
+    layer's `DEFAULT_SOURCE_LINE` also names `refs/heads/main`, but that is the
+    line a repository running *no* evolution policy is judged by — a separate
+    constant answering a separate question, not this project's line.)
+
+    Two consequences, both stated per-operation elsewhere in this contract and
+    worth having once.
+
+    **Configuration names the line to measure against; evidence names the line
+    to move.** `[source_line].ref` supplies the line a base is frozen from, the
+    line a replay integrates onto, and the line a batch's runner protocol
+    revision is read at. Evidence supplies the rest: a promotion takes its line
+    from the promotable run's integration, and a rollback from the merge unit of
+    the outcome it reverses. So editing the policy redirects what the *next*
+    batch is measured against, and can never redirect a promotion or its
+    inverse — including the edit that moved this project from `main` to `dev`,
+    which left every measured merge already on record pointing where it was
+    measured.
+
+    **Rollback rests on the exclusivity.** A rollback applies the promotion's
+    change backwards *to the line as it now stands*, not as a rewind to the base
+    before it (Rollback), so anything landing after the promotion is carried
+    through. While nothing but evolution lands here, the only thing that can have
+    landed after is another promotion — and a rollback with later evolution
+    lineage standing on the one it reverses refuses. So the inverse either lands
+    on a line still holding exactly what the promotion left, or it does not land
+    at all. A commit made on `dev` by hand defeats that quietly: it is carried
+    through like any other, and what the line holds afterwards is neither the
+    state before the release nor a state anything measured. Canonical work
+    belongs on a feature branch, and a promotion is what puts it here.
 
 An exceptional fast path for a severe safety or correctness failure requires a
 human-recorded justification. It does not silently weaken the normal batch

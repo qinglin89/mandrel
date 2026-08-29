@@ -161,8 +161,13 @@ def test_ci_needs_no_secret_and_asks_for_no_extra_permission() -> None:
 
     assert "secrets." not in text
     assert "permissions:\n  contents: read\n" in text
-    for trigger in ("pull_request:", "workflow_dispatch:", "branches: [main]"):
+    for trigger in ("pull_request:", "workflow_dispatch:", "branches: [main, dev]"):
         assert trigger in text, f"CI does not trigger on {trigger}"
+    # Both lines receive commits no pull request gated: `main` is the
+    # human-maintained branch and `dev` is the line evolution promotes onto. A
+    # push trigger naming only one of them leaves the other's arrivals unverified.
+    for branch in ("main", "dev"):
+        assert branch in text.split("branches: [")[1].split("]")[0], f"CI does not trigger on pushes to {branch}"
     for version in ('"3.11"', '"3.14"'):
         assert version in text, f"CI does not cover Python {version}"
 
