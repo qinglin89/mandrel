@@ -34,28 +34,28 @@ is the only comparison in which the release is the only difference.
 **The placing field is reported, never derived here.** A report's
 `provenance.effective_revision` is the evaluated target's deploy-lock
 `source_git_commit` as of that evaluation, which only the side holding that
-worktree could state; a lock read from a target now says what it holds now, and
-placement is an ancestry test, so filling the gap from one would move
-pre-release reports onto the `after` side of a promotion the target was
-redeployed onto later. The feed publishes it as half of an atomic pair with the
-lock's payload digest, and the import client copies both or neither, so a report
-here states the identity its runs were verified under or states nothing at all.
-Reports imported before that publication carry no revision and never gain one —
-a frozen manifest copies the record as staged — so a cohort built from them
-excludes whole and the counterfactual below is what carries a direction
-(contract: Release assessment).
+worktree could state; a lock read from a target now says what it holds now, so
+filling the gap from one would place a pre-release report by the protocol that
+target was redeployed onto afterwards, which is the `after` side of the very
+promotion the report came before. The feed publishes it as half of an atomic
+pair with the lock's payload digest, and the import client copies both or
+neither, so a report here states the identity its runs were verified under or
+states nothing at all. Reports imported before that publication carry no
+revision and never gain one — a frozen manifest copies the record as staged —
+so a cohort built from them excludes whole and the counterfactual below is what
+carries a direction (contract: Release assessment).
 
-Reported also means unchecked, with one exception: `_place` asks Git whether a
-stated revision carries the promotion, and Git answers about that commit, not
-about what the target ran. Whether the commit describes the payload at all is
-settled where the receipt is written — the deploy states no revision when the
-canonical tree it copied was not exactly that commit's — and whether the target
-still matched that receipt while the evaluated work ran is settled by whoever
-held it, at the boundaries of the runs that did the work. Both conditions sit in
-the contract as what a publisher must establish before stating the field, because
-a revision this side cannot verify is one it cannot refuse either: it would place
-the report, and a misplaced report is a direction invented rather than a
-denominator lost.
+Reported also means unchecked, with one exception: `_place` asks Git which
+deployable canonical tree the stated revision holds, and Git answers about that
+commit, not about what the target ran. Whether the commit describes the payload
+at all is settled where the receipt is written — the deploy states no revision
+when the canonical tree it copied was not exactly that commit's — and whether
+the target still matched that receipt while the evaluated work ran is settled
+by whoever held it, at the boundaries of the runs that did the work. Both
+conditions sit in the contract as what a publisher must establish before
+stating the field, because a revision this side cannot verify is one it cannot
+refuse either: it would place the report, and a misplaced report is a direction
+invented rather than a denominator lost.
 
 The exception is the field's *shape*, which is checkable here and is the one way
 an unverifiable revision would be placed by something other than itself. The
@@ -132,7 +132,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ..lockfile import is_object_id
+from ..deploy import deploys_canonical_path
+from ..lockfile import CanonicalIdentities, is_object_id
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
 from .errors import BatchError, ValidationError
 from .guards import reason as require_reason
@@ -157,13 +158,13 @@ from .replay import (
     ReplayReport,
     ReplayRequest,
 )
-from .revisions import contains, resolve_commit
+from .revisions import resolve_commit
 from .rollback import RollbackResult
 from .rollback import reverse as reverse_promotion
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
-ASSESSMENT_SCHEMA_VERSION = 1
+ASSESSMENT_SCHEMA_VERSION = 2
 
 RECORD_RELEASE_ASSESSED = "release-assessed"
 RECORD_COUNTERFACTUAL_COMPLETED = "release-counterfactual-completed"
@@ -201,7 +202,12 @@ SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 EXCLUDED_REVISION_ABSENT = "effective-revision-absent"
 EXCLUDED_REVISION_MALFORMED = "effective-revision-malformed"
 EXCLUDED_REVISION_UNRESOLVABLE = "effective-revision-unresolvable"
-EXCLUDED_POST_ROLLBACK = "post-rollback-effective-revision"
+# The price of placing by canonical identity rather than by ancestry: identity
+# answers same-or-different and never before-or-after, so a target that held a
+# third protocol — neither the release nor the line it was merged into — belongs
+# to no cohort here and says so. Ancestry had a total order and no such answer,
+# which is exactly how it bought a side for revisions that deserve none.
+EXCLUDED_OTHER_PROTOCOL = "effective-revision-other-protocol"
 # The two a frozen manifest settles by itself: whether it states an effective
 # revision, and whether what it states is a commit id, are both read off the
 # committed bytes before Git is asked anything, so every clone reaches the same
@@ -591,9 +597,10 @@ class Frame:
 
     @property
     def unverified(self) -> tuple[str, ...]:
-        """Reports this checkout could not place, because it cannot resolve what
-        the target held. A fact about the clone rather than about the release —
-        reported, never read as agreement."""
+        """Reports this checkout could not place, because it cannot read the
+        protocol one of the revisions in question carries — the one the target
+        held, or a side of the release itself. A fact about the clone rather than
+        about the release — reported, never read as agreement."""
 
         return tuple(
             item.report_key for item in self.excluded if item.reason == EXCLUDED_REVISION_UNRESOLVABLE
@@ -939,12 +946,13 @@ def describe(
     before: list[Member] = []
     after: list[Member] = []
     excluded: list[Excluded] = []
-    # Several reports ordinarily name one effective revision, and each answer
-    # costs a Git process. Cached per revision string, which is what a report
-    # actually states — resolving it is half the question.
-    answers: dict[str, tuple[str | None, str | None]] = {}
+    # Several reports ordinarily name one effective revision, and deriving the
+    # protocol one carries costs a Git process. `_Sides` holds the cache
+    # (`lockfile.CanonicalIdentities`) as well as the pair being compared
+    # against, so a cohort walk asks about each distinct revision once.
+    sides = _sides(config, assessed)
     for member in members:
-        side, exclusion = _place(config, member, assessed, answers)
+        side, exclusion = _place(member, sides)
         if exclusion is not None:
             excluded.append(exclusion)
         elif side == SIDE_BEFORE:
@@ -1326,10 +1334,12 @@ def _as_assessed(subject: Subject) -> Subject:
 
     `assessed.rollback_revision` is for a reversal that had *already* taken the
     promotion off the line when the reading was formed. The derived subject also
-    carries an inverse commit that is only prepared — it needs one, since a report
-    produced at a line that took that commit belongs to neither cohort — and
-    writing it here would state that the release was reversed while `standing`
-    says it was not, which is the contradiction the reader refuses.
+    carries an inverse commit that is only prepared — the surfaces that describe a
+    release in flight need one — and writing it here would state that the release
+    was reversed while `standing` says it was not, which is the contradiction the
+    reader refuses. Placement asks it nothing either way: a line that took the
+    reversal is placed by the protocol it thereby went back to carrying, not by
+    the commit that took it there (`_place`).
     """
 
     return subject if subject.reversed_promotion else replace(subject, rollback_revision=None)
@@ -2719,27 +2729,100 @@ def _members(batch: Batch) -> list[Member]:
     return members
 
 
-def _place(
-    config: EvolutionConfig,
-    member: Member,
-    assessed: Subject,
-    answers: dict[str, tuple[str | None, str | None]],
-) -> tuple[str | None, Excluded | None]:
+@dataclass(frozen=True)
+class _Sides:
+    """The two protocols this release moved between, as this checkout reads them.
+
+    Derived once per frame and not per report: the pair is fixed by the outcome
+    record, and a cohort walk that re-derived it would ask Git the same two
+    questions for every row.
+
+    Either half is None where this checkout cannot read that revision's canonical
+    tree. That is not "no protocol" and must never compare equal to anything: a
+    reader comparing two unreadable sides would place every report on both of
+    them (`CanonicalIdentities.same` refuses the same trap for the deploy layer).
+    """
+
+    identities: CanonicalIdentities
+    before_revision: str
+    after_revision: str
+    before: dict[str, tuple[str, bool]] | None
+    after: dict[str, tuple[str, bool]] | None
+
+    @property
+    def unreadable(self) -> str | None:
+        """The side revision this checkout cannot read, when there is one.
+
+        Named rather than counted, because it is what an exclusion has to say: a
+        report this reading cannot place because the *release* is missing from
+        this clone is a fact about the clone, and reporting it as a fact about
+        the report would say the target ran some third protocol on evidence
+        nobody here has.
+        """
+
+        if self.before is None:
+            return self.before_revision
+        if self.after is None:
+            return self.after_revision
+        return None
+
+
+def _sides(config: EvolutionConfig, assessed: Subject) -> _Sides:
+    """The before/after pair, read off the record and resolved to protocols.
+
+    Both revisions are stated by the promoted batch's own outcome and need no
+    reconstruction: the release is `revision`, and the line it was merged into is
+    `merge_input_revision`, which is that merge's first parent.
+    """
+
+    identities = CanonicalIdentities(config.repo_root, deploys=deploys_canonical_path)
+    return _Sides(
+        identities=identities,
+        before_revision=assessed.merge_input_revision,
+        after_revision=assessed.revision,
+        before=identities.of(assessed.merge_input_revision),
+        after=identities.of(assessed.revision),
+    )
+
+
+def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
     """Which side one report belongs on, or why it belongs on neither.
 
-    The question is about the revision that target actually held, and it is asked
-    of Git: a revision carrying the promotion in its history was produced with
-    the change, whether it is the promotion itself or something later built on
-    it. Equality would place only the targets redeployed at exactly that commit,
-    and read every later one as pre-release evidence.
+    The question is which protocol that target was running, and it is answered by
+    the deployable canonical tree the stated revision holds
+    (`lockfile.canonical_identity`) — the one derivation this repository has for
+    "are these two commits the same protocol", shared with `status` placement so
+    that a report and a target are never judged by two different rules.
 
-    The rollback is asked first when there is one, because an inverse commit
-    descends from the promotion: a line that took the reversal contains the
-    promotion too, and reading it as `after` would count a target that gave the
-    change back as a target that had it. It is neither cohort — not the release,
-    and not the state before it — and it is asked of an inverse still in flight as
-    well, since what matters is whether that commit reached the line the report
-    was produced at, not whether this controller has finished recording it.
+    **Identity, not ancestry, and the difference is the point.** An ancestry test
+    reads "carries the promotion in its history", which the promotion's own merge
+    makes true of the candidate's descendants and false of the candidate itself:
+    `_prepare_promotion` commits with the merge input and the candidate as
+    parents, so `contains(promotion, candidate)` is False and a report produced at
+    the sealed candidate — a target that *held the change* — was placed on the
+    before side, silently, inflating the baseline of the reading that decides
+    retain or rollback. Under identity that report carries the promoted canonical
+    tree and places `after`, by construction rather than by a special case. The
+    same construction retires the post-rollback exclusion: an inverse commit
+    restores the pre-release canonical tree, so a line that took the reversal
+    reads as what it is — true before-side evidence — instead of needing a fourth
+    reason to keep ancestry from reading it as the release.
+
+    **Identity is not orderable**, and this is the price. It answers same or
+    different and never before or after, so a target that held some third
+    protocol matches neither side and is excluded with that stated
+    (`EXCLUDED_OTHER_PROTOCOL`) rather than sorted into the nearer one. Ancestry's
+    total order always produced a side, including for revisions that deserved
+    none.
+
+    **Before is asked first**, which decides the one case both sides answer: a
+    promotion whose integration tree deploys exactly what the line already
+    deployed. There the release changed nothing any target receives, and reading
+    its cohort as post-release evidence would manufacture an `after` side out of a
+    release with no change in it — the direction this module refuses everywhere
+    else. Answered `before` instead, the `after` cohort comes out empty, which
+    carries no direction, which is the honest reading of a release that moved no
+    deployable byte.
 
     Before Git is asked anything, the stated revision is held to the shape the
     field is defined to have: the evaluated target's deploy-lock
@@ -2776,55 +2859,43 @@ def _place(
                 "name would place it by where this checkout stands rather than by what that target held"
             ),
         )
-    if stated not in answers:
-        answers[stated] = _resolve(config, stated, assessed)
-    resolved, side = answers[stated]
-    if resolved is None:
+
+    held = sides.identities.of(stated)
+    if held is None:
         return None, Excluded(
             report_key=member.report_key,
             batch_id=member.batch_id,
             reason=EXCLUDED_REVISION_UNRESOLVABLE,
-            detail=f"this checkout cannot resolve the effective revision {stated!r} to a commit",
+            detail=(
+                f"this checkout does not read the canonical tree of the effective revision {stated!r}, so it "
+                "cannot say which protocol that target was running"
+            ),
         )
-    if side is None:
+    if sides.before is not None and held == sides.before:
+        return SIDE_BEFORE, None
+    if sides.after is not None and held == sides.after:
+        return SIDE_AFTER, None
+
+    unreadable = sides.unreadable
+    if unreadable is not None:
         return None, Excluded(
             report_key=member.report_key,
             batch_id=member.batch_id,
-            reason=EXCLUDED_POST_ROLLBACK,
+            reason=EXCLUDED_REVISION_UNRESOLVABLE,
             detail=(
-                f"effective revision {stated!r} carries the inverse commit that took this promotion back off "
-                "the line, so that target held neither the release nor the state before it"
+                f"this checkout does not read the canonical tree of {unreadable!r}, one side of this release, "
+                f"so it cannot say whether the effective revision {stated!r} carried that protocol"
             ),
         )
-    return side, None
-
-
-def _resolve(
-    config: EvolutionConfig,
-    stated: str,
-    assessed: Subject,
-) -> tuple[str | None, str | None]:
-    """One effective revision, resolved and placed: `(commit, side)`.
-
-    A commit with no side is a post-rollback line. No commit at all is a
-    question this clone cannot answer — an unresolvable revision, or an ancestry
-    check Git could not make because the objects are not here. Both are the same
-    answer for a reader: not placed, and reported as such rather than guessed.
-    """
-
-    commit = resolve_commit(config.repo_root, stated)
-    if commit is None:
-        return None, None
-    if assessed.rollback_revision is not None:
-        reversed_here = contains(config.repo_root, assessed.rollback_revision, commit)
-        if reversed_here is None:
-            return None, None
-        if reversed_here:
-            return commit, None
-    promoted = contains(config.repo_root, assessed.revision, commit)
-    if promoted is None:
-        return None, None
-    return commit, SIDE_AFTER if promoted else SIDE_BEFORE
+    return None, Excluded(
+        report_key=member.report_key,
+        batch_id=member.batch_id,
+        reason=EXCLUDED_OTHER_PROTOCOL,
+        detail=(
+            f"effective revision {stated!r} deploys neither the promoted protocol nor the one it replaced, so "
+            "that target ran neither the release nor the state before it"
+        ),
+    )
 
 
 def _comparability(before: Cohort, after: Cohort) -> Comparability:
@@ -3544,19 +3615,20 @@ def _require_placement(
 ) -> None:
     """Placements must agree with what this checkout can establish.
 
-    Asked only where there is an answer. A clone that cannot resolve what a
+    Asked only where there is an answer. A clone that cannot read the protocol a
     target held has no opinion about that report, and refusing there would make a
     valid record unreadable everywhere the objects were never fetched — the same
-    reason an unanswerable ancestry check is reported rather than raised
-    throughout this package.
+    reason an unanswerable Git question is reported rather than raised throughout
+    this package.
 
     The exclusions are checked as far as each reason is anyone's to check. Two of
     them a frozen manifest settles by itself — it states no effective revision, or
     states one that is not a commit id at all — and both are read off committed
     bytes before Git is asked anything, so every clone reaches the same answer
-    (`MANIFEST_SETTLED_EXCLUSIONS`). Post-rollback is answerable wherever Git can
-    answer at all. Only an unresolvable revision is nobody's to check: a clone
-    that resolves what the forming machine could not has learned something about
+    (`MANIFEST_SETTLED_EXCLUSIONS`). A third protocol is answerable wherever Git
+    can answer at all: a clone holding the three canonical trees derives it from
+    them. Only an unresolvable revision is nobody's to check: a clone that reads a
+    canonical tree the forming machine could not has learned something about
     itself rather than about the record.
 
     So `unresolvable` is taken on trust in both directions — stated where this

@@ -545,6 +545,7 @@ def promote_candidate(
     targets: tuple[str, ...] = ("orch-hub",),
     base: str | None = None,
     reports: list[dict] | None = None,
+    canonical: bool = False,
     at: datetime,
 ) -> Any:
     """A whole change cycle, from a frozen cohort to a commit on the source line.
@@ -564,6 +565,17 @@ def promote_candidate(
     `reports` replaces the frozen membership when a caller needs particular
     provenance in it — the release-assessment suite needs the cohort this batch
     was analyzed from to state the revision its targets actually held.
+
+    `canonical` is what the candidate commit touches, and a caller has to choose
+    it. Off, the candidate moves `file.txt` and nothing a target receives — which
+    is all the suites about commits, refs and records need, and what lets one
+    rewrite `file.txt` to make a conflict or restore it to undo the promotion by
+    hand. On, it moves a file under `canonical/`, which is the only thing that
+    makes the promotion a different *protocol* from the line it went onto: a
+    protocol's identity is the deployable canonical tree a commit holds
+    (`lockfile.canonical_identity`), so with it off every revision in the
+    repository carries the same empty protocol and any test placing a target or a
+    report against these commits proves nothing at all.
 
     A cycle following an earlier promotion answers that release's gate first
     (`settle_release`), because no base is frozen until somebody does — and it
@@ -590,7 +602,8 @@ def promote_candidate(
     admission = experiments.create(config, list(drafts), base=base, now=at)
     for item in admission.admitted:
         complete_task(config, item.task_id)
-    git_update_ref(config.repo_root, admission.ref, git_commit(config.repo_root, f"{batch_id} candidate work"))
+    work = git_canonical_commit if canonical else git_commit
+    git_update_ref(config.repo_root, admission.ref, work(config.repo_root, f"{batch_id} candidate work"))
     experiments.seal_round(config, now=at)
 
     harness = FakeHarness(report=completed_report())

@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "batch_id": {
       "description": "The batch whose frozen reports produced this reading — the directory this record sits in, and never the batch being assessed.",
@@ -226,12 +226,12 @@
           "pattern": "^evolution-batch-[0-9]{4,}$"
         },
         "reason": {
-          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-malformed`: it states something that is not a commit id — a branch, a tag, `HEAD`, an abbreviation — which every reader would resolve against its own checkout's position rather than against what that target held, so no repository may place it. `effective-revision-unresolvable`: it states a commit id this checkout cannot resolve, which is a fact about the clone. `post-rollback-effective-revision`: the target held a line that had already taken the promotion back out, which is neither the release nor the state before it.",
+          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-malformed`: it states something that is not a commit id — a branch, a tag, `HEAD`, an abbreviation — which every reader would resolve against its own checkout's position rather than against what that target held, so no repository may place it. `effective-revision-unresolvable`: this checkout cannot read the deployable canonical tree of a revision the placement turns on — the one stated, or a side of the release — which is a fact about the clone. `effective-revision-other-protocol`: the revision it states deploys neither the promoted protocol nor the one it replaced, so that target ran neither the release nor the state before it. A side is what a target held, which is a same-or-different question about protocols and never a before-or-after one, so a third protocol is excluded rather than sorted into the nearer side.",
           "enum": [
             "effective-revision-absent",
             "effective-revision-malformed",
             "effective-revision-unresolvable",
-            "post-rollback-effective-revision"
+            "effective-revision-other-protocol"
           ]
         },
         "detail": {

@@ -108,12 +108,19 @@ def release(config: evolution.EvolutionConfig) -> str:
 @pytest.fixture
 def promoted(config: evolution.EvolutionConfig, release: str) -> experiments.PromotionResult:
     """One whole change cycle ending in a merge on the source line, with its own
-    reports standing as the cohort produced before it."""
+    reports standing as the cohort produced before it.
+
+    Canonical work in the candidate, because this suite renders where reports
+    land: a report is placed by the protocol its revision deploys, so a promotion
+    that moved nothing under `canonical/` would put both cohorts on one side and
+    the surface would be rendering a distinction that was not there.
+    """
 
     return promote_candidate(
         config,
         batch_id=FIRST,
         at=PROMOTED_AT,
+        canonical=True,
         reports=[
             make_manifest_report(
                 key=f"b{index}",

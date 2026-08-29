@@ -97,8 +97,8 @@ def payload_source_commit(
     out of the working tree, so a canonical tree carrying uncommitted work
     produces bytes no commit holds. Downstream the field is read as a fact about
     those bytes rather than about the moment — a release assessment places every
-    report a target produced by the revision that target held, as an ancestry
-    test (`evolution/README.md`, Release assessment) — and a commit naming
+    report a target produced by the protocol the revision that target held
+    carries (`evolution/README.md`, Release assessment) — and a commit naming
     content the target never ran places reports on a side they did not belong
     to. The comparison is made here because this is where both sides are in
     hand: afterwards the receipt holds a digest of what was deployed and a

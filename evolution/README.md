@@ -1217,23 +1217,37 @@ release was already off the line is held to a reversal this repository recorded
 and landed, and that exception costs nothing, because a promotion a completed
 rollback reversed is never effective again. A reversal still in flight is not one
 of those, and a reading formed beside one records the release as standing — which
-is what it was. The inverse commit exists and the line has not taken it, so it
-places the reports produced on a line that did take it and states no reversal at
-all.
+is what it was. The inverse commit exists and the line has not taken it, so the
+record states no reversal at all — and placement needs none from it either: a
+line that took the reversal deploys the protocol the release replaced, and is
+placed by that.
 
 **Which reports contribute.** Membership comes from the two frozen manifests and
 nothing else (invariant 3). Each report is placed by its own
-`provenance.effective_revision` — the revision that target actually held — asked
-of Git as an ancestry question, so a target redeployed at later work that
-includes the promotion is post-release evidence too. The targets a promotion was
-*planned* for are not that reading and never stand in for it. A report that
-cannot be placed is excluded with a reason and stays in view: no effective
-revision recorded, one recorded as something that is not a commit id, a commit id
-this checkout cannot resolve, or a line that had already taken the change back
-out. Exclusions are for what provenance cannot say
+`provenance.effective_revision` — the revision that target actually held — and by
+the protocol that revision carries: the deployable canonical tree, which is this
+repository's one answer to "are these two commits the same protocol" and the same
+one a target's own readiness is judged by. So a target redeployed at later work
+that deploys exactly the promoted payload is post-release evidence too, and a
+report produced at the sealed candidate is post-release evidence rather than the
+baseline an ancestry test made of it. The targets a promotion was *planned* for
+are not that reading and never stand in for it.
+
+Identity answers same-or-different and never before-or-after, which is what it
+costs: a target that held some third protocol matches neither side, and is
+excluded rather than sorted into the nearer one. So a report that cannot be
+placed is excluded with a reason and stays in view: no effective revision
+recorded, one recorded as something that is not a commit id, one whose canonical
+tree this checkout cannot read, or one deploying neither the release nor the
+protocol it replaced. Exclusions are for what provenance cannot say
 and never for what the numbers came to — a cohort narrowed to the reports that
 agreed with the change is the base rate invariants 1 and 2 exist to keep
 knowable.
+
+Where both sides carry one protocol — a promotion whose integration tree deploys
+exactly what the line already deployed — the before side is the answer. That
+release moved no byte any target receives, and reading its cohort as post-release
+evidence would manufacture an `after` side out of a release with no change in it.
 
 **Where that revision comes from.** It is the evaluated target's
 `.ai-deploy-lock.json` `source_git_commit` — the canonical commit its deployed
@@ -1248,9 +1262,9 @@ digest its runs verified names a tree the report cannot show its sessions read.
 This side copies both or neither, and completes neither from the other.
 
 A target's lock read *now* answers what that target holds today, which is a
-different question: placement is an ancestry test, so a target redeployed after
-the promotion would put its pre-release reports on the `after` side and
-manufacture exactly the directional claim this reading exists to refuse.
+different question: a target redeployed after the promotion would put its
+pre-release reports on the `after` side and manufacture exactly the directional
+claim this reading exists to refuse.
 Recovering the lock from the target's own history is closer, and still an
 inference on a repository this system does not own, over a path a feed supplied,
 for the one reading that costs somebody a promoted change. A report that arrived

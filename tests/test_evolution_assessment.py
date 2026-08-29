@@ -36,6 +36,7 @@ from evolution_fixtures import (
     completed_report,
     experiment_decision,
     experiment_round,
+    git_canonical_commit,
     git_file_commit,
     git_repo,
     git_rev,
@@ -52,7 +53,7 @@ from evolution_fixtures import (
     write_outcome,
 )
 
-from mandrel import evolution
+from mandrel import deploy, evolution, lockfile
 from mandrel.evolution import assessment, batches, experiments, lineage, replay, rollback
 
 FIRST = "evolution-batch-0001"
@@ -117,17 +118,27 @@ def promoted(config: evolution.EvolutionConfig, release: str) -> experiments.Pro
     Its own three reports are the pre-release cohort: they were produced at the
     revision the line stood at before the promotion, which is what makes them the
     baseline the next cohort is compared against.
+
+    The candidate does canonical work, and this whole suite rests on that: a
+    report is placed by the protocol its revision deploys, so a promotion that
+    moved nothing under `canonical/` would leave both sides carrying one protocol
+    and every placement below would be reading a distinction that was not there.
+    Asserted rather than assumed, because the failure is silent.
     """
 
-    return promote_candidate(
+    promotion = promote_candidate(
         config,
         batch_id=FIRST,
         at=PROMOTED_AT,
+        canonical=True,
         reports=[
             make_manifest_report(key=f"b{index}", sequence=index, task_id=f"2026-07-0{index}-task", effective_revision=release)
             for index in (1, 2, 3)
         ],
     )
+    identities = lockfile.CanonicalIdentities(config.repo_root, deploys=deploy.deploys_canonical_path)
+    assert not identities.same(promotion.promotion_revision, promotion.merge_input_revision)
+    return promotion
 
 
 def freeze_second(
@@ -339,8 +350,9 @@ def test_a_later_revision_still_carries_the_release(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """A target redeployed after further work on the line still carries the
-    change: ancestry is the question, never equality with the promotion."""
+    """A target redeployed after further work the payload never sees still
+    carries the change: what a report is placed by is the protocol its revision
+    deploys, never equality with the promotion's commit id."""
 
     later = git_file_commit(
         config.repo_root,
@@ -355,6 +367,238 @@ def test_a_later_revision_still_carries_the_release(
     assert frame is not None
     assert frame.after.report_keys == ("a1", "a2", "a3")
     assert frame.placement("a1") == assessment.SIDE_AFTER
+
+
+def test_a_report_from_the_sealed_candidate_is_post_release_evidence(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The case ancestry got backwards, and the reason this reading was moved
+    onto canonical identity.
+
+    A promotion is committed with the merge input and the candidate as its
+    parents, so the promotion descends from the candidate and `contains(
+    promotion, candidate)` is False. An ancestry test therefore placed a target
+    that was running the change onto the *baseline* — silently, with no exclusion
+    — and inflated the before side of the reading that decides retain or
+    rollback. The candidate deploys the promoted payload, so identity places it
+    where it belongs.
+    """
+
+    second = freeze_second(config, promoted, effective=promoted.candidate_revision)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.after.report_keys == ("a1", "a2", "a3")
+    assert frame.before.report_keys == ("b1", "b2", "b3")
+    assert frame.excluded == ()
+
+
+def test_a_target_at_a_third_protocol_is_excluded_rather_than_sorted(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The price of identity, paid out in the open.
+
+    Identity answers same-or-different and never before-or-after, so a target
+    running a protocol that is neither the release nor the one it replaced gets
+    no side at all. Ancestry's total order always produced one — it would have
+    called this `after`, on the strength of a commit relationship rather than of
+    anything the target deployed — and that is precisely the placement it was
+    buying for revisions that deserve none.
+    """
+
+    later = git_canonical_commit(config.repo_root, "protocol work after the release")
+    second = freeze_second(config, promoted, effective=later)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.after.report_keys == ()
+    assert frame.before.report_keys == ("b1", "b2", "b3")
+    assert [(item.report_key, item.reason) for item in frame.excluded] == [
+        ("a1", assessment.EXCLUDED_OTHER_PROTOCOL),
+        ("a2", assessment.EXCLUDED_OTHER_PROTOCOL),
+        ("a3", assessment.EXCLUDED_OTHER_PROTOCOL),
+    ]
+    # The denominator stays visible: the exclusion says what was found, naming
+    # the revision the report stated (invariant 2).
+    assert later in frame.excluded[0].detail
+    assert frame.cohorts_support_direction is False
+
+
+def test_a_release_that_deploys_what_the_line_already_did_is_read_as_no_release(
+    config: evolution.EvolutionConfig,
+    release: str,
+) -> None:
+    """Both sides carrying one protocol, which identity alone cannot take apart.
+
+    A promotion whose integration tree deploys exactly what the line already
+    deployed moved no byte any target receives. Answered `before`, because
+    reading such a cohort as post-release evidence would manufacture an `after`
+    side out of a release with no change in it — and an empty `after` side
+    carries no direction, which is the honest reading of that release.
+    """
+
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        at=PROMOTED_AT,
+        canonical=False,
+        reports=[
+            make_manifest_report(key=f"b{index}", sequence=index, task_id=f"2026-07-0{index}-task", effective_revision=release)
+            for index in (1, 2, 3)
+        ],
+    )
+    second = freeze_second(config, promotion)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.subject.revision == promotion.promotion_revision
+    assert frame.after.report_keys == ()
+    assert frame.before.report_keys == ("b1", "b2", "b3", "a1", "a2", "a3")
+    assert frame.excluded == ()
+    assert frame.cohorts_support_direction is False
+
+
+def test_a_side_this_checkout_cannot_read_places_nothing_and_blames_no_report(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """A clone that holds the evolution records and not the release line.
+
+    The report's own revision is right here and perfectly readable; what is
+    missing is the release. So the exclusion is the one that says this checkout
+    could not answer — never the third-protocol reading, which would state as a
+    fact about that target something nobody here has the objects to know.
+    """
+
+    build_absent_release(config)
+    here = git_rev(config.repo_root, "HEAD")
+    write_manifest(
+        config.batches_root,
+        SECOND,
+        [],
+        analysis_task_id="2026-08-10-second",
+        reports=[make_manifest_report(key="a1", sequence=1, task_id="2026-08-01-task", effective_revision=here)],
+    )
+    second = next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.unverified == ("a1",)
+    excluded = frame.exclusion("a1")
+    assert excluded is not None
+    assert excluded.reason == assessment.EXCLUDED_REVISION_UNRESOLVABLE
+    # The detail blames the release, which is what is missing: the side revision
+    # is what this checkout could not read, and the report's own revision is
+    # named only as the question that went unanswered because of it.
+    assert "one side of this release" in excluded.detail
+    assert frame.subject.merge_input_revision in excluded.detail
+
+
+def test_a_third_protocol_is_a_reading_of_this_repository_not_of_the_manifest() -> None:
+    """Which exclusions a durable record is held to exactly, and which it is
+    trusted about.
+
+    A frozen manifest settles two of them by itself — whether it states an
+    effective revision, and whether what it states is a commit id — before Git is
+    asked anything, so every clone reaches the same answer and a record naming
+    one is checked against the derivation. The third protocol is not one of
+    those: reaching it means holding three canonical trees, and a clone that
+    lacks one has an opinion about the clone rather than about the record.
+    """
+
+    assert assessment.EXCLUDED_OTHER_PROTOCOL not in assessment.MANIFEST_SETTLED_EXCLUSIONS
+    assert assessment.MANIFEST_SETTLED_EXCLUSIONS == {
+        assessment.EXCLUDED_REVISION_ABSENT,
+        assessment.EXCLUDED_REVISION_MALFORMED,
+    }
+
+
+def test_a_record_calling_a_third_protocol_unresolvable_stays_readable(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The trust runs in both directions between the two Git-dependent reasons.
+
+    A machine that could not read one of the three canonical trees excluded the
+    report as unresolvable; a clone that holds all three derives the third
+    protocol instead. Neither has caught the other out — each learned something
+    about itself — so the record stays readable, exactly as it does when the
+    disagreement runs the other way.
+    """
+
+    later = git_canonical_commit(config.repo_root, "protocol work after the release")
+    second = freeze_second(config, promoted, effective=later)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_OTHER_PROTOCOL}
+
+    publish(
+        second,
+        build(
+            frame,
+            after=(),
+            after_task_count=0,
+            metrics=(),
+            comparability=assessment._stated_comparability(frame, frame.before.report_keys, ()),
+            excluded=tuple(
+                assessment.Excluded(
+                    report_key=key,
+                    batch_id=SECOND,
+                    reason=assessment.EXCLUDED_REVISION_UNRESOLVABLE,
+                    detail=f"the machine that formed this could not read {key}'s effective revision",
+                )
+                for key in ("a1", "a2", "a3")
+            ),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            rationale="the forming checkout could place none of this cohort's reports",
+        ),
+    )
+
+    read = assessment.read(config, second)
+    assert read is not None
+    assert {item.reason for item in read.excluded} == {assessment.EXCLUDED_REVISION_UNRESOLVABLE}
+
+
+def test_a_record_excluding_a_report_this_checkout_places_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The trust has a floor. A record calling a report a third protocol where
+    this checkout places it squarely in a cohort is not a machine reporting its
+    own limits: the two disagree about what a target deployed, and that is a
+    record-level defect."""
+
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+    assert frame is not None
+    assert frame.after.report_keys == ("a1", "a2", "a3")
+
+    publish(
+        second,
+        build(
+            frame,
+            after=("a2", "a3"),
+            after_task_count=2,
+            comparability=assessment._stated_comparability(frame, frame.before.report_keys, ("a2", "a3")),
+            excluded=(
+                assessment.Excluded(
+                    report_key="a1",
+                    batch_id=SECOND,
+                    reason=assessment.EXCLUDED_OTHER_PROTOCOL,
+                    detail="a1 deployed neither the release nor the protocol it replaced",
+                ),
+            ),
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            rationale="the cohorts cannot carry a direction",
+        ),
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    message = str(error.value)
+    assert f"excluded as {assessment.EXCLUDED_OTHER_PROTOCOL!r}" in message
+    assert "places it in the after cohort" in message
 
 
 def test_reports_without_an_effective_revision_are_excluded(
@@ -607,7 +851,14 @@ def test_a_reversed_promotion_is_a_different_question(
     promoted: experiments.PromotionResult,
 ) -> None:
     """Reports produced at a line that had already taken the change back out are
-    neither cohort, and the subject says the promotion no longer stands."""
+    pre-release evidence, and the subject says the promotion no longer stands.
+
+    The inverse commit restores the canonical tree the release replaced, so what
+    those targets deployed *is* the protocol before the release — which is what a
+    reader placing by identity sees, with no rollback question asked. Ancestry
+    could not see it: the inverse commit descends from the promotion, so it
+    needed a fourth exclusion reason to keep from reading that line as `after`,
+    and the reason threw away true before-side evidence to do it."""
 
     reversal = rollback.rollback(config, reason="the release looked wrong on the first cohort", now=REVERSED_AT)
     second = freeze_second(config, promoted, effective=reversal.revision)
@@ -618,7 +869,8 @@ def test_a_reversed_promotion_is_a_different_question(
     assert frame.subject.reversed_promotion is True
     assert frame.subject.rollback_revision == reversal.revision
     assert frame.after.report_keys == ()
-    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_POST_ROLLBACK}
+    assert frame.excluded == ()
+    assert frame.before.report_keys == ("b1", "b2", "b3", "a1", "a2", "a3")
     assert frame.cohorts_support_direction is False
 
 
