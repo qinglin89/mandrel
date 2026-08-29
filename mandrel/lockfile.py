@@ -244,11 +244,28 @@ def canonical_identity(
     wherever this checkout is currently sitting, under the name of somewhere
     else. Refused here rather than at each caller for the reason the derivation
     itself is: one rule, or one of them places what the others refuse.
+
+    The shape is not the whole of that rule, and Git is asked for the rest of it.
+    `ls-tree` takes a *tree-ish*, so a full object id naming a tree is one it
+    answers for — and a commit's own root tree answers with that commit's
+    canonical entries exactly, which would place a receipt corrupted into naming
+    a tree as squarely on the line as the commit it came from. The peel
+    (`^{commit}`) is what makes the argument a revision rather than any object:
+    a tree and a blob dereference to no commit and Git refuses the question,
+    which is the `None` every other unanswerable revision gets.
+
+    The peel is also what keeps this reader and the other one agreeing about the
+    same field. Ancestry asks `merge-base --is-ancestor`
+    (`evolution.revisions.contains`), which refuses a tree and a blob outright
+    and dereferences an annotated tag to the commit it names; `^{commit}` admits
+    exactly that set. Demanding a literal commit object here instead would refuse
+    a tag this repository's other reader places — the divergence between two
+    spellings that this derivation exists to end, reintroduced inside it.
     """
 
     if not is_object_id(commit):
         return None
-    output = _git_output(source_root, ["ls-tree", "-r", "-z", commit, "--", CANONICAL_DIRNAME])
+    output = _git_output(source_root, ["ls-tree", "-r", "-z", f"{commit}^{{commit}}", "--", CANONICAL_DIRNAME])
     if output is None:
         return None
     try:

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from mandrel import cli, deploy, hashing, lockfile, manifest, paths, placement
+from mandrel.evolution import revisions
 
 
 def write(path: Path, content: str = "content\n") -> Path:
@@ -846,6 +847,54 @@ def test_a_protocol_this_checkout_cannot_read_is_never_equal_to_another(tmp_path
     assert identities.same(head, head)
 
 
+def test_an_object_id_that_names_no_commit_carries_no_protocol(tmp_path: Path) -> None:
+    """The shape rule is lexical and a tree id passes it. `ls-tree` takes a
+    *tree-ish*, so a commit's own root tree answers with that commit's canonical
+    entries exactly — meaning a receipt corrupted into naming a tree would have
+    been placed on the line as squarely as the commit it was cut from, and a
+    target nobody established anything about would read ready.
+
+    The peel is what makes the argument a revision. A tree and a blob dereference
+    to no commit, so Git refuses the question and the answer is the `None` every
+    other unanswerable revision gets — reported as `unplaceable deployment`,
+    which is the finding for a receipt this checkout could not place."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    tree = git(source, "rev-parse", "HEAD^{tree}")
+    blob = git(source, "rev-parse", "HEAD:canonical/protocols/dev.md")
+
+    # Both are the same shape as a commit, and the tree is the one that matters:
+    # it answers `ls-tree` with the identity of the commit that holds it.
+    assert lockfile.is_object_id(tree) and lockfile.is_object_id(blob)
+    assert git(source, "ls-tree", "-r", tree, "--", "canonical") != ""
+    assert identity_of(source, tree) is None and identity_of(source, blob) is None
+    assert identity_of(source, head) is not None
+
+
+def test_an_annotated_tag_is_the_commit_it_names_here_as_it_is_to_ancestry(tmp_path: Path) -> None:
+    """Where the line is drawn, and why it is not drawn tighter. Ancestry asks
+    `merge-base --is-ancestor` of the same receipts (`evolution.revisions`),
+    which refuses a tree and a blob outright and dereferences an annotated tag to
+    the commit it names. `^{commit}` admits exactly that set, so the two readers
+    of one field answer for the same objects.
+
+    Demanding a literal commit object here would refuse a tag the other reader
+    places — one derivation calling a revision unreadable while another places
+    it, which is the divergence this whole function exists to end."""
+
+    source = make_source(tmp_path)
+    head = commit_source(source)
+    git(source, "tag", "-a", "v1", "-m", "a release tag")
+    tag = git(source, "rev-parse", "v1")
+
+    assert git(source, "cat-file", "-t", tag) == "tag" and tag != head
+    assert identity_of(source, tag) == identity_of(source, head)
+    # The reader this agrees with, asked the same way it asks in production.
+    assert revisions.contains(source, tag, head) is True
+    assert revisions.contains(source, git(source, "rev-parse", "HEAD^{tree}"), head) is None
+
+
 def test_a_protocol_is_read_once_per_revision_for_a_whole_sweep(tmp_path: Path) -> None:
     """`status --all` walks many targets deployed from a handful of distinct
     revisions, and a release assessment walks many reports the same way. Asking
@@ -1675,6 +1724,33 @@ def test_a_receipt_this_checkout_cannot_read_the_tree_of_is_a_question_not_a_ver
     assert [drift.kind for drift in result.drifts] == ["unplaceable deployment"]
     assert result.drifts[0].target_relative_path == paths.LOCK_FILENAME
     assert unheld in result.drifts[0].detail
+
+
+def test_a_receipt_naming_an_object_that_is_not_a_commit_is_a_question_not_a_clearance(
+    tmp_path: Path,
+) -> None:
+    """The same finding for the receipt that would otherwise have been cleared.
+    A commit's root tree is an object this clone holds, has the shape a receipt's
+    commit must have, and answers `ls-tree` with that commit's canonical entries
+    — so before the peel this target read as standing squarely on the base it was
+    deployed from, over a receipt no deploy could have written.
+
+    It is the dangerous direction of the two: an unheld commit at least fails
+    loudly, while this one produced a clearance. Held to `unplaceable deployment`
+    rather than to "off the line" for the reason every unanswered question is —
+    nothing was compared, so nothing about this target was established."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    deployed_from = lockfile.read_lock(target)["source_git_commit"]
+    tree = git(source, "rev-parse", f"{deployed_from}^{{tree}}")
+
+    assert status_of(target, source).in_sync, "the receipt places this target before it is corrupted"
+    lockfile.write_lock(target, {**lockfile.read_lock(target), "source_git_commit": tree})
+    result = status_of(target, source)
+
+    assert [drift.kind for drift in result.drifts] == ["unplaceable deployment"]
+    assert result.drifts[0].target_relative_path == paths.LOCK_FILENAME
+    assert tree in result.drifts[0].detail
 
 
 def test_uncommitted_canonical_work_changes_no_target_readiness(tmp_path: Path) -> None:
