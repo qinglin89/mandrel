@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # Features
@@ -8,7 +8,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Feature | Status | Key modules/interfaces |
 |---|---|---|
 | Canonical payload deployment | implemented | deploy, manifest, lock, canonical buckets |
-| Dry-run and drift status | implemented; removed-file orphan detection pending | preview compares current canonical payload; status checks target receipt integrity plus exact base/latest-sealed-candidate lock placement, eager entrypoints, and personal-skill precedence |
+| Dry-run and drift status | implemented; removed-file orphan detection pending | preview compares current canonical payload; status checks target receipt integrity plus canonical-identity base/latest-sealed-candidate placement, eager entrypoints, and personal-skill precedence |
 | Managed repo registry | implemented | registry CLI and local JSON |
 | Orchestrator bootstrap | implemented | `.mandrel/orchestrator/`; Python 3.14 venv, requirements, non-overwriting env |
 | Split role launch profiles | implemented | dev/review profiles, legacy profile compatibility, print-config |
@@ -23,7 +23,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v7 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes; public shared refusals align operations with the console gate, and a promotion decision awaiting its batch outcome blocks every other lineage write while its evidence-readable `promote` redo remains available |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
-| Cross-batch release assessment | implemented | derived provenance cohorts/exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |
+| Cross-batch release assessment | implemented | canonical-identity before/after cohorts and clone-dependent exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |
 | Evolution deployment visibility | implemented | planned target names kept separate from validated machine-local deploy-lock placement states; observation gates no lifecycle verb |
 
 ## Evolution Behavior Chain

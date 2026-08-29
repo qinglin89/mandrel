@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # Modules
@@ -10,9 +10,9 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Module | Location | Responsibility |
 |---|---|---|
 | CLI | `mandrel/cli.py`, `mandrel` | Parse/dispatch deploy, status, registry, and evolution commands |
-| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; preview/bootstrap; target-receipt content/mode, entrypoint, skill-precedence, and release-line drift checks; removed-file orphan detection/pruning pending |
+| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; preview/bootstrap; target-receipt content/mode, entrypoint, skill-precedence, and source-line drift checks; removed-file orphan detection/pruning pending |
 | Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, hashes, and validated supported-schema/full-object-id reading |
-| Deployment placement | `mandrel/placement.py`, `mandrel/evolution/deployment.py` | One target/registry-to-lock revision vocabulary; exact configured base plus latest sealed candidate resolution with fail-closed degradation; Git ancestry remains evolution-owned |
+| Deployment placement | `mandrel/lockfile.py`, `mandrel/placement.py`, `mandrel/evolution/deployment.py` | One mode-aware canonical-tree identity and cached resolver; status compares lock/base/candidate identities with fail-closed degradation, while evolution's machine-local per-target observation keeps promotion/rollback ancestry |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |
 | Workflow skills | `canonical/claude/skills/` | Versioned per-target skills; Claude native discovery and repo-local paths for other backends |
 | Protocol contracts | `canonical/protocols/` | Conduct and role-specific behavioral contracts |
@@ -25,7 +25,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Evolution controller | `mandrel/evolution/phase.py`, `render.py`; `mandrel/cli.py` | Schema-v7 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, and standalone CLI routing |
 | Evolution lineage | `mandrel/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `mandrel/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback and Git/ref recovery |
-| Evolution release assessment | `mandrel/evolution/assessment.py`, `experiments.py` | Derived cross-batch cohort frame; assessment formation/read validation; pinned counterfactual request/run recovery; retain/rollback settlement; first-base sequencing |
+| Evolution release assessment | `mandrel/evolution/assessment.py`, `lockfile.py`, `experiments.py` | Canonical-identity before/after cohorts and visible exclusions; assessment formation/read validation; pinned counterfactual recovery; retain/rollback settlement; first-base sequencing |
 | Evolution stated harness | `mandrel/evolution/harness.py` | Operator-stated replay/counterfactual starts and polls; completed-attempt reproduction guard |
 | Evolution deployment reading | `mandrel/evolution/deployment.py`, `placement.py` | Add promotion/rollback ancestry to deploy-layer target revisions; preserve unregistered/unreadable/unplaceable states without gating the lifecycle |
 

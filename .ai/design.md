@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-29
-verified-against: 93d66c27b1990be14ad79ea6b85483e675d21c31
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # Design Principles and Decisions
@@ -19,9 +19,10 @@ verified-against: 93d66c27b1990be14ad79ea6b85483e675d21c31
   role contract.
 - Machine-local inventory, credentials, raw evidence, and runtime state stay
   outside Git; portable hashes/receipts and sanitized decisions may enter Git.
-- Deployment readiness is target integrity plus exact lock identity at the
-  configured base or latest sealed candidate; the maintainer's checkout and
-  uncommitted canonical bytes are not readiness inputs.
+- Deployment readiness is target integrity plus equality between the lock
+  revision's deployable canonical identity and the configured base or latest
+  sealed candidate; whole-commit equality, stored digests, the maintainer's
+  checkout, and uncommitted canonical bytes are not readiness inputs.
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
@@ -50,6 +51,10 @@ verified-against: 93d66c27b1990be14ad79ea6b85483e675d21c31
   provenance is inconclusive, never negative evidence. Because manifests carry
   no task-shape provenance, directional claims rest on a completed pinned
   counterfactual whose goal metrics agree.
+- Release-assessment sides use the deployment layer's canonical identity, not
+  ancestry. `before` wins equal identities; an unreadable `before` fails closed
+  before any `after` match, while a readable `before` remains usable when only
+  `after` is unreadable.
 - Frozen manifest bytes settle absent and malformed effective-revision
   exclusions identically in every clone; durable assessment validation requires
   exact agreement for those reasons. Only Git-dependent placement outcomes may
@@ -72,10 +77,12 @@ verified-against: 93d66c27b1990be14ad79ea6b85483e675d21c31
 
 - Chose two receipts: manifest contains rendered hashes, deployed modes, and
   machine paths for target-integrity status; lock contains canonical hashes and
-  the exact source commit used for release-line placement.
+  the source commit used to derive canonical identity for source-line placement.
 - The lock's source commit is nullable and stated only when the exact canonical
   paths, bytes, and executable modes captured during deployment match that
-  commit's deployable tree; target-file aliases are refused before writes.
+  commit's deployable tree; readers derive canonical identity from that commit,
+  never from the lock's stored payload digest. Target-file aliases are refused
+  before writes.
 - Publish the lock before the manifest. If receipt publication is interrupted,
   the surviving old manifest is visibly stale against the new payload; the
   reverse order can leave matching target bytes beside an old lock and silently

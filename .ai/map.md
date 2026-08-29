@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # Project Map
@@ -10,7 +10,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Feature | Modules | Interfaces |
 |---|---|---|
 | Deploy/upgrade | cli, deploy, manifest, lockfile, hashing, paths | `mandrel deploy`, manifest, lock |
-| Drift/readiness | deploy, placement, manifest, lockfile, registry, evolution/deployment | `mandrel status [--all]`; target integrity plus exact base/sealed-candidate placement |
+| Drift/readiness | deploy, placement, manifest, lockfile, registry, evolution/deployment | `mandrel status [--all]`; target integrity plus canonical-identity placement at base/sealed candidate |
 | Registry | registry, paths, cli | `mandrel registry ...`, local registry JSON |
 | Orchestrator bootstrap | deploy, cli, canonical/orchestrator | deploy bootstrap flags, `.mandrel/orchestrator/` venv/env |
 | Role launch policy | canonical orchestrator config/resolver | profile flags, `--print-config` |
@@ -23,7 +23,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts, schema-v7 status, state revision and allowed/refused/recovery actions |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v7 |
-| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, evolution policy | CLI-visible release-assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
+| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity cohorts/exclusions, CLI-visible assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
 | Evolution deployment visibility | deployment/lockfile/registry/revision services | planned target names beside validated machine-local deploy-lock placement states; observation is outside lifecycle state |
 | Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |
 
@@ -32,7 +32,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Change | Check/update |
 |---|---|
 | Canonical file/path | payload mapping, init target-surface exclusions, boundary lint, deploy/status tests, targets |
-| Deploy receipt/readiness | lock-before-manifest publication boundary, placement base/sealed candidate, status/docs tests |
+| Deploy receipt/readiness | lock-before-manifest publication boundary, canonical identity at base/sealed candidate, status/docs tests |
 | Workflow skill | manifest/lock coverage, backend pointers, personal-shadow status, operator deploy-before-cleanup order |
 | Eager memory topic | loader rendering, both hooks, entrypoint drift tests |
 | Persisted receipt/schema | reader compatibility, schema version, recovery tests |

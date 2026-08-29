@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # Architecture
@@ -58,9 +58,11 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 4. Optional bootstrap builds `.mandrel/orchestrator/.venv`, installs
    requirements, and creates but never overwrites `.env`.
 5. `status` compares manifest-recorded content/modes with the target, then places
-   the lock's exact source commit at the configured base or latest sealed
-   candidate. It does not read the working canonical tree. Missing, null, or
-   unreadable locks are unplaceable; eager-memory entrypoints and
+   the lock's source commit where its deployable canonical identity equals the
+   configured base or latest sealed candidate. Identity is derived from each
+   commit's deployed canonical paths, blob ids, and executable bits; it never
+   reads the working tree or a stored digest. Missing, null, or unreadable locks
+   are unplaceable; eager-memory entrypoints and
    personal-over-project skill precedence remain separate checks. A legacy
    manifest with no modes cannot report in sync. A sweep resolves the lines
    once: no evolution workspace means default `refs/heads/main` base only; an
@@ -113,6 +115,9 @@ request/run exchanges; promotion remains separate from deployment.
 One whole-lineage derivation governs both status and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
 the current batch, open attempt, gate, round, and revisions from any checkout.
+Release-assessment cohorts use the same canonical identity as deploy status:
+`before` is checked first, an unreadable `before` prevents an `after` placement,
+and a revision matching neither side is excluded rather than ancestry-sorted.
 `.ai-tasks/` supplies local completion observations, never historical identity;
 the audit ledger is not flow state. Per-experiment replay histories and prepared
 promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
@@ -138,8 +143,10 @@ promotion, deployment, and rollback remain separate reviewed/human-gated steps.
 
 This repository can deploy/bootstrap itself for orchestration. Canonical edits
 alone do not change readiness; `deploy --dry-run` previews their target effect.
-When the configured base advances, a target at the prior commit is off the
-release line until explicitly redeployed.
+When the configured base advances to a different deployable canonical identity,
+a target on the prior protocol is off the source line until explicitly
+redeployed; an intervening commit that changes no deployed canonical content
+does not move it off-line.
 Current orchestrator runtime lives under `.mandrel/orchestrator/`. A target
 migrated from the former layout intentionally retains only
 `.cursor/orchestrator/logs/`: historical orch-hub run records keep their

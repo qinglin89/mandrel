@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # APIs and Interfaces
@@ -10,7 +10,7 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 | Command | Behavior |
 |---|---|
 | `deploy [--dry-run] [--bootstrap-orchestrator] <target>` | Target need only exist; preview or overwrite deploy-owned paths, with optional `.mandrel/orchestrator/.venv` bootstrap. Managed ignores do not untrack pre-existing tracked payload paths; preserve/migrate collisions explicitly. Git `HEAD` is required later by initialization/review, not deploy. |
-| `status <target>` | Compare manifest-recorded content/modes with the target and place the deploy lock's exact commit at configured base or latest sealed candidate, plus eager entrypoints and personal skill shadows; no working-tree canonical comparison; files dropped from canonical are not detected as target orphans |
+| `status <target>` | Compare manifest-recorded content/modes with the target and place the deploy lock revision by canonical identity at configured base or latest sealed candidate, plus eager entrypoints and personal skill shadows; unreadable receipt revisions are unplaceable, no working-tree canonical comparison; files dropped from canonical are not detected as target orphans |
 | `status --all` | Check every local registry entry against one shared source-line reading |
 | `registry list [--json]` | Read machine-local managed repos |
 | `registry add <target>` | Register a target with a readable manifest |
@@ -36,7 +36,7 @@ evolution write resolves the operator's checkout.
 | Operation | Behavior |
 |---|---|
 | `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` / `abandon` / `supersede` / `conclude_no_change` | Recoverable grouped admission, rounds, terminal experiment decisions, and batch no-change conclusion |
-| `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion cohort's provenance frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
+| `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion cohort's canonical-identity before/after frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
 | `assessment.measure` / `conclude` / `abandon` / `withdraw` / `resolve` | Allocate an experiment-disjoint replay position, persist/recover the pinned before/after counterfactual, and hold a directional verdict to its goal metrics |
 | `assessment.settle` | Idempotently retain the release or compose its audited rollback under one writer lock; the decision gates and constrains the next first experiment base |
 | `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |
@@ -44,6 +44,7 @@ evolution write resolves the operator's checkout.
 | `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
 | `harness.StatedHarness` | Operator-stated implementation of replay/counterfactual start and poll; enforces completed-attempt reproduction while permitting a new handle |
 | `deployment.describe` | Read each planned target through the machine-local registry and its validated deploy lock; return placement/absence/error states without gating lifecycle status |
+| `lockfile.canonical_identity` / `CanonicalIdentities` | Derive the mode-aware deployed-canonical path/blob identity from a commit with an injected deployment filter; cache per revision and never equate unreadable revisions |
 | `lockfile.is_object_id` / `stated_source_commit` | Share the full-object-id predicate with release-assessment placement; accept only supported deploy-lock schemas with a present, null-or-full-object-id `source_git_commit`, distinguishing explicit null from a malformed absent field |
 
 ## Persisted Interfaces
@@ -87,7 +88,8 @@ boundary. The client copies orch-hub's nested `provenance.protocol`
 true and both halves are stated; absent, unavailable, legacy, malformed, or
 half-identity sections become two nulls. Imported and frozen records retain that
 pair verbatim; release assessment alone judges the revision half, excluding
-symbolic or abbreviated values as malformed before asking Git for ancestry.
+symbolic or abbreviated values as malformed before asking Git for canonical
+identity.
 Durable readers require manifest-settled absent or malformed reasons to agree
 exactly, while clone-dependent unresolvable outcomes remain portable across
 readers. The complete-pair path is live-proven; reports imported before the

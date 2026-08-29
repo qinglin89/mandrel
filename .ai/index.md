@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: 49fb9246dc2de35c87127b2f8bacbacc7223893f
+last-updated: 2026-08-29
+verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
 ---
 
 # AI Knowledge Router
@@ -39,6 +39,7 @@ Load only what the current task needs.
 | Term | Meaning |
 |---|---|
 | Canonical payload | Versioned files under `canonical/` copied into targets |
+| Canonical identity | Commit-derived map of deployed canonical path to Git blob id plus executable bit; shared equality key for status and release-assessment placement |
 | Target repo | Managed project receiving the deployed protocol/runtime payload |
 | Snapshot | Target-owned, version-controlled `.ai/` project memory |
 | Taskfile | Local `.ai-tasks/<id>.md` lifecycle and cross-session handoff record |
