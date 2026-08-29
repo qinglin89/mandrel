@@ -1248,6 +1248,12 @@ Where both sides carry one protocol — a promotion whose integration tree deplo
 exactly what the line already deployed — the before side is the answer. That
 release moved no byte any target receives, and reading its cohort as post-release
 evidence would manufacture an `after` side out of a release with no change in it.
+Asking the before side first is also what settles a side this checkout cannot
+read, and it leaves the two unalike: where the missing side is the before one, a
+report matching the readable `after` is excluded as unresolvable rather than
+placed, because the answer asked first is the one nobody here has — while a
+report matching a readable `before` places whatever the unreadable side would
+have turned out to be.
 
 **Where that revision comes from.** It is the evaluated target's
 `.ai-deploy-lock.json` `source_git_commit` — the canonical commit its deployed

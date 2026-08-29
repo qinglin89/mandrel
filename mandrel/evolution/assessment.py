@@ -2824,6 +2824,16 @@ def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
     carries no direction, which is the honest reading of a release that moved no
     deployable byte.
 
+    That order is also what a side this checkout cannot read has to be settled
+    against, and it makes the two sides asymmetric. An unreadable `before` stops
+    the reading even where the report matches `after` exactly: the question the
+    missing object leaves unanswered is the one asked first, and its answer is
+    `before` for precisely the case above — so a clone taking the `after` match
+    would form a direction out of an object it does not hold, one the clone
+    holding both sides refuses. An unreadable `after` stops nothing, because a
+    report carrying the readable `before` protocol is `before` in every clone
+    whatever the side nobody here can read turns out to be.
+
     Before Git is asked anything, the stated revision is held to the shape the
     field is defined to have: the evaluated target's deploy-lock
     `source_git_commit`, which is a full object id and nothing else
@@ -2873,9 +2883,10 @@ def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
         )
     if sides.before is not None and held == sides.before:
         return SIDE_BEFORE, None
-    if sides.after is not None and held == sides.after:
-        return SIDE_AFTER, None
 
+    # Between the two matches rather than after them: an `after` match is only
+    # an answer once the side asked first has actually been asked. Past here
+    # both sides read, so what follows compares two identities.
     unreadable = sides.unreadable
     if unreadable is not None:
         return None, Excluded(
@@ -2887,6 +2898,9 @@ def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
                 f"so it cannot say whether the effective revision {stated!r} carried that protocol"
             ),
         )
+
+    if held == sides.after:
+        return SIDE_AFTER, None
     return None, Excluded(
         report_key=member.report_key,
         batch_id=member.batch_id,

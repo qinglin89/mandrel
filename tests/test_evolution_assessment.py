@@ -495,6 +495,80 @@ def test_a_side_this_checkout_cannot_read_places_nothing_and_blames_no_report(
     assert frame.subject.merge_input_revision in excluded.detail
 
 
+def drop_commit(config: evolution.EvolutionConfig, revision: str) -> None:
+    """Drop one commit object from a repository whose records still name it —
+    the shape of a clone fetched to a depth that stopped short of it.
+
+    Written rather than cloned because what a placement needs is one side of the
+    release missing while every record around it stands: a lineage reads a
+    promotion this checkout cannot describe, and a promotion whose parent is
+    gone still states the parents it was made from — which is exactly what a
+    truncated clone holds.
+    """
+
+    loose = config.repo_root / ".git" / "objects" / revision[:2] / revision[2:]
+    # A repository this small keeps its objects loose; a packed one would need
+    # unpacking first, and silently deleting nothing would make the test pass
+    # for the wrong reason.
+    assert loose.is_file()
+    loose.unlink()
+
+
+def test_a_match_on_the_readable_side_is_not_a_placement_where_the_before_side_is_missing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The asymmetry `before` being asked first forces on a truncated clone.
+
+    Here the reports match the readable `after` side exactly, and the match is
+    still not a placement: what this clone cannot compute is the answer `before`
+    would have given, and were the two sides one protocol that answer is
+    `before` for all of them — the reading of a release that moved nothing. So
+    taking the `after` match would let a clone missing an object form a
+    direction the clone holding it refuses, on the one reading that costs
+    somebody a promoted change.
+    """
+
+    drop_commit(config, promoted.merge_input_revision)
+    second = freeze_second(config, promoted)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    # The pre-release cohort states the missing revision itself, so it goes for
+    # its own reason; the reports this is about are `a1`-`a3`.
+    assert frame.before.report_keys == ()
+    assert frame.after.report_keys == ()
+    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_UNRESOLVABLE}
+    excluded = frame.exclusion("a1")
+    assert excluded is not None
+    # Named as the release's missing side and not as the report's: the revision
+    # these reports state is the one this clone reads perfectly.
+    assert "one side of this release" in excluded.detail
+    assert promoted.merge_input_revision in excluded.detail
+
+
+def test_a_match_on_the_before_side_places_even_where_the_after_side_is_missing(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The other half of the same asymmetry, which is not symmetric.
+
+    A report carrying the readable `before` protocol is `before` in every clone
+    whatever the other side turns out to be, since `before` is the side asked
+    first and no reading holding both could answer it otherwise. So this one
+    places where its mirror image excludes.
+    """
+
+    drop_commit(config, promoted.promotion_revision)
+    second = freeze_second(config, promoted, effective=promoted.merge_input_revision)
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.before.report_keys == ("b1", "b2", "b3", "a1", "a2", "a3")
+    assert frame.after.report_keys == ()
+    assert frame.excluded == ()
+
+
 def test_a_third_protocol_is_a_reading_of_this_repository_not_of_the_manifest() -> None:
     """Which exclusions a durable record is held to exactly, and which it is
     trusted about.
