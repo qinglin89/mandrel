@@ -32,6 +32,16 @@ class StateError(EvolutionError):
     evidence."""
 
 
+class ProposalError(EvolutionError):
+    """`.ai-evolution/batch-proposal.json` is unreadable, malformed, or no
+    longer describes the pool and the source line it was built against.
+
+    Separate from `StateError` because the two absences mean opposite things:
+    losing the pool loses evidence, while losing a proposal loses a reading
+    that the next `start` rebuilds. Nothing durable stands on it, so a bad one
+    is refused and rebuilt rather than repaired."""
+
+
 class LedgerError(EvolutionError):
     """`evolution/ledger.jsonl` cannot be appended to safely."""
 

@@ -181,6 +181,20 @@ def hub_page(entries: list[dict], *, cursor: int = 0, next_cursor: int | None = 
     ).encode("utf-8")
 
 
+def form_batch(config, *, now: datetime, **kwargs):
+    """The two commands a formation takes: offer the batch, then fix it.
+
+    The formation split in two so the human window falls before the manifest
+    exists, so anything that means "form a cohort out of this pool" runs both.
+    A test about one half calls that half directly.
+    """
+
+    from mandrel import evolution
+
+    evolution.build_proposal(config, now=now)
+    return evolution.freeze(config, now=now, **kwargs)
+
+
 def make_repo(tmp_path: Path) -> Path:
     """A repository carrying the real versioned evolution contract files.
 

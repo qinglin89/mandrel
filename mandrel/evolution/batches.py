@@ -1,9 +1,20 @@
-"""Admission policy and the immutable batch freeze.
+"""Admission policy, the batch proposal, and the immutable freeze.
 
-This is the step where evidence becomes a cohort. Three things make it safe:
+This is the step where evidence becomes a cohort, and it is **two operations**:
+a proposal offering a batch out of the pool (`proposals.py`), and the freeze
+that fixes it. The split is what makes the human window real — everything a
+person may argue with about membership happens while the offer is still ignored
+runtime state, so the manifest is immutable from the moment it exists rather
+than being an immutable record somebody edits.
 
-- **A human triggers it** (invariant 9). Nothing here is scheduled, and no code
-  path lowers the configured minimum.
+Four things make it safe:
+
+- **A human triggers both halves** (invariant 9). Nothing here is scheduled, and
+  no code path lowers the configured minimum.
+- **The proposal is a reading, never evidence.** It is rebuilt by the next
+  `start` and thrown away rather than repaired. The freeze re-reads the source
+  line, re-validates every member against the live pool and re-verifies every
+  staged bundle before it writes, so nothing durable ever stands on an offer.
 - **The manifest is immutable** (invariant 3). It is written once, by an atomic
   directory rename, and never edited afterwards — a late report belongs to a
   later batch.
@@ -24,11 +35,12 @@ the feed (`state.feed_exhausted`), because the freeze it would mislead need not
 be in the same run: `sync` and `freeze` are separate commands, and a cursor
 alone does not say why discovery stopped where it did.
 
-**Interruption.** A freeze commits in four steps, in this order: the manifest
+**Interruption.** A freeze commits in five steps, in this order: the manifest
 (the durable membership statement), the state transition that moves the batched
-reports out of the pending pool, the pending analysis task, then the audit line.
-Each step is safe to redo, so a restarted `start` finds the open batch and
-finishes whatever remains. The one residual, shared with the importer, is that
+reports out of the pending pool, the pending analysis task, the audit line, then
+dropping the offer it fixed. Each step is safe to redo, so a restarted `start`
+finds the open batch and finishes whatever remains — the offer included, since
+one left standing beside a frozen batch is what a second freeze would read. The one residual, shared with the importer, is that
 an interruption before the last step costs an audit line: nothing derives state
 from the ledger, so a missing line cannot corrupt a decision. A crash mid-freeze
 can leave a `.staging-*` directory under `evolution/batches/`; it is inert and
@@ -50,7 +62,7 @@ from ..hashing import sha256_bytes
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
 from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, ProposalError
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
@@ -67,6 +79,13 @@ from .manifests import (
     load_batches,
     next_batch_id,
     read_closure,
+)
+from .proposals import (
+    BatchProposal,
+    Member,
+    clear_proposal,
+    load_proposal,
+    save_proposal,
 )
 from .reports import (
     NormalizedReport,
@@ -111,6 +130,7 @@ REASON_BELOW_TARGET = "pool-below-target"
 COMPLETED_STATE = "state-transition"
 COMPLETED_TASK = "analysis-task"
 COMPLETED_INDEX = "index-row"
+COMPLETED_PROPOSAL = "proposal-cleared"
 
 
 @dataclass(frozen=True)
@@ -150,11 +170,40 @@ class FreezeResult:
 
 
 @dataclass(frozen=True)
+class ProposalResult:
+    """What building a batch proposal found, and whether one now stands.
+
+    `proposal` is None for the two states in which there is nothing to offer: a
+    batch whose change cycle is still running (invariant 14), and an empty
+    pool. Neither is a failure, and neither leaves a stale proposal behind.
+    """
+
+    decision: AdmissionDecision
+    proposal: BatchProposal | None = None
+    proposal_path: Path | None = None
+    current_batch_id: str | None = None
+    analysis_task_id: str | None = None
+    manifest_path: Path | None = None
+    completed: tuple[str, ...] = ()
+    # Batches whose completed analysis this run published as a closure record.
+    closed_batch_ids: tuple[str, ...] = ()
+
+    @property
+    def proposed(self) -> bool:
+        return self.proposal is not None
+
+
+@dataclass(frozen=True)
 class StartResult:
-    """`start` is discovery then admission, under one lock."""
+    """`start` is discovery then a proposal, under one lock.
+
+    It stopped being discovery then a *freeze* when the formation split in two:
+    the poll offers a batch and the human fixes it, so nothing durable is
+    written between the two commands.
+    """
 
     sync: SyncResult
-    freeze: FreezeResult
+    proposal: ProposalResult
 
 
 def awaiting_analysis(config: EvolutionConfig, batch: Batch) -> bool:
@@ -419,11 +468,29 @@ def freeze(
     now: datetime | None = None,
     forced: bool = False,
     justification: str | None = None,
+    expect: str | None = None,
 ) -> FreezeResult:
-    """Freeze the pending pool into a batch when policy allows, and create its
-    pending analysis task."""
+    """Fix the standing proposal as a batch, and create its pending analysis task.
 
+    The human's own command, and the first durable write of the whole
+    formation: the manifest, the report claim and the analysis task land here,
+    together and in that order, exactly as they did before the formation split
+    in two.
+
+    `expect` matters more here than anywhere else, because the lock does not
+    span the human window: the proposal was built by one command and is fixed by
+    another, with a person in between. A token taken from the reading the
+    operator decided over is what makes that gap safe.
+    """
+
+    from .guards import require_expected
+
+    # Before the lock: a forced freeze with no written reason is a request this
+    # build never performs, and refusing it here keeps it from ever holding the
+    # writer's lock to say so.
+    _require_justified(forced, justification)
     with single_writer_lock(config):
+        require_expected(config, expect)
         return freeze_locked(config, now=now, forced=forced, justification=justification)
 
 
@@ -432,18 +499,16 @@ def start(
     feed: ReportFeed,
     *,
     now: datetime | None = None,
-    forced: bool = False,
-    justification: str | None = None,
     expect: str | None = None,
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> StartResult:
-    """The human-triggered entry point: close, repair, import, then admit.
+    """The human-triggered entry point: close, repair, import, then propose.
 
-    One lock covers all four, so the pool admission measures is exactly the pool
-    the import produced. A feed failure aborts before any admission decision —
-    an unreachable feed means the pool's completeness is unknown, and freezing
-    an unknown pool is precisely what invariant 3 forbids.
+    One lock covers all four, so the proposal describes exactly the pool the
+    import produced. A feed failure aborts before any proposal is built — an
+    unreachable feed means the pool's completeness is unknown, and offering a
+    batch out of an unknown pool is what invariant 3 forbids one commit later.
 
     Closing and repair run *first*, and touch no feed. A batch whose analysis
     finished is still recorded open until this machine publishes that fact, and
@@ -452,11 +517,20 @@ def start(
     reachable feed would leave the repository stuck on an outage that has
     nothing to do with it.
 
+    Nothing here forms a cohort. `start` used to end in the freeze, which put
+    the pool, the manifest, the report claim and the analysis task in one
+    uninterruptible call with no human between them. It now ends in a proposal,
+    and `freeze` is the human's own command — so the whole window in which
+    membership can still be argued with falls before the first durable write
+    rather than beside it. `--force`
+    went with it: waiving the configured target is a decision about forming a
+    batch, and the poll no longer forms one.
+
     `expect` is the `state_revision` of the reading this run was decided from,
     and it is checked first thing under the lock like every other guarded
-    operation's. A freeze is a decision about a *particular* pool — the cohort it
-    forms is immutable — so a pool another writer imported into since that
-    reading is exactly what this refuses to freeze.
+    operation's. Building a proposal is a write — it moves the token — so a
+    caller acting on a reading somebody else has moved is refused here rather
+    than silently overwriting the selection that reading described.
     """
 
     # Locally imported: `guards` reads this module's closures and stage
@@ -464,26 +538,165 @@ def start(
     # thing needed back.
     from .guards import require_expected
 
-    _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
     with single_writer_lock(config):
         require_expected(config, expect)
-        # Before anything is closed, repaired, imported, or frozen: which batch
-        # is current is the question all four of those hang off, so a repository
-        # whose lineage does not answer it once stops the run here rather than
-        # after part of it has been written.
-        running = current_batch(config)
-        closed = record_closures(config, now=moment)
-        repaired = _reconcile_locked(config, now=moment, current=running)
+        prepared = _prepare_locked(config, now=moment)
         imported = sync_locked(config, feed, page_size=page_size, max_pages=max_pages)
-        admitted = freeze_locked(config, now=moment, forced=forced, justification=justification)
+        proposed = _propose_locked(config, prepared, now=moment)
+    return StartResult(sync=imported, proposal=proposed)
+
+
+def build_proposal(config: EvolutionConfig, *, now: datetime | None = None) -> ProposalResult:
+    """Offer a batch out of the pool as it already stands, without a feed.
+
+    The same step `start` ends in, reachable on its own so a proposal can be
+    rebuilt after the source line moved or the human window went stale without
+    reaching a feed this repository may not have.
+    """
+
+    moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
+    with single_writer_lock(config):
+        return _build_proposal_locked(config, now=moment)
+
+
+def _build_proposal_locked(config: EvolutionConfig, *, now: datetime) -> ProposalResult:
+    """Close, repair, and then select — for a caller that already holds the lock."""
+
+    return _propose_locked(config, _prepare_locked(config, now=now), now=now)
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """What the repository said before anything was selected out of it."""
+
+    running: Batch | None
+    closed: tuple[str, ...]
+    repaired: FreezeResult | None
+
+
+def _prepare_locked(config: EvolutionConfig, *, now: datetime) -> _Prepared:
+    """Settle the cycle, publish what finished, and finish what was interrupted.
+
+    First, and before any feed is contacted, for the reason it always was: a
+    batch whose analysis finished is recorded open until this machine publishes
+    that fact, and an open batch whose state transition or analysis task never
+    landed is a frozen manifest with no way to be analyzed. Making either wait
+    for a reachable feed would strand the repository on an outage that has
+    nothing to do with the repair.
+
+    Which batch is current is read once, here, and carried: it is the question
+    the closure, the repair and the selection all hang off, and a second reading
+    could answer differently from the one the first two acted on.
+    """
+
+    known = load_batches(config)
+    running = current_batch(config, batches=known)
+    closed = record_closures(config, now=now)
+    return _Prepared(running=running, closed=closed, repaired=_reconcile_locked(config, now=now, current=running))
+
+
+def _propose_locked(config: EvolutionConfig, prepared: _Prepared, *, now: datetime) -> ProposalResult:
+    """Offer a batch out of the pool as it now stands, or say why there is none."""
+
+    running, closed, repaired = prepared.running, prepared.closed, prepared.repaired
     if repaired is not None:
-        # The freeze above reconciled again and found nothing left; the steps
-        # this run actually completed are the ones the first pass did.
-        admitted = replace(admitted, completed=tuple(dict.fromkeys(repaired.completed + admitted.completed)))
-    if closed:
-        admitted = replace(admitted, closed_batch_ids=tuple(dict.fromkeys(closed + admitted.closed_batch_ids)))
-    return StartResult(sync=imported, freeze=admitted)
+        return ProposalResult(
+            decision=repaired.decision,
+            current_batch_id=repaired.current_batch_id,
+            analysis_task_id=repaired.analysis_task_id,
+            manifest_path=repaired.manifest_path,
+            completed=repaired.completed,
+            closed_batch_ids=closed,
+        )
+
+    state = load_state(config)
+    decision = evaluate_admission(
+        config,
+        state,
+        now=now,
+        current_batch_id=running.batch_id if running else None,
+    )
+    if running is not None or not state.pending:
+        # Nothing to offer, and nothing left standing that says otherwise: a
+        # proposal outliving the pool it selected over would be frozen against
+        # reports the freeze then could not find.
+        cleared = clear_proposal(config)
+        return ProposalResult(
+            decision=decision,
+            current_batch_id=running.batch_id if running else None,
+            analysis_task_id=running.analysis_task_id if running else None,
+            manifest_path=running.manifest_path if running else None,
+            completed=(COMPLETED_PROPOSAL,) if cleared else (),
+            closed_batch_ids=closed,
+        )
+
+    proposal = _select(config, state, now=now, standing=_standing(config))
+    path = save_proposal(config, proposal)
+    return ProposalResult(decision=decision, proposal=proposal, proposal_path=path, closed_batch_ids=closed)
+
+
+def _standing(config: EvolutionConfig) -> BatchProposal | None:
+    """The offer already on disk, or nothing readable.
+
+    A damaged proposal reads as none here, and that is the repair the refusal
+    everywhere else names: nothing durable stands on an offer, so rebuilding
+    over it costs the operator nothing and saves them deleting a file by hand.
+    Everything that would *act* on a proposal — the freeze, and the reading the
+    console publishes — still refuses it rather than guessing.
+    """
+
+    try:
+        return load_proposal(config)
+    except ProposalError:
+        return None
+
+
+def _select(
+    config: EvolutionConfig,
+    state: EvolutionState,
+    *,
+    now: datetime,
+    standing: BatchProposal | None,
+) -> BatchProposal:
+    """The pool read against the base, as one offer.
+
+    The base is the source line's tip read here, at the batch's creation, and it
+    is carried to the freeze rather than resolved again there: a line that moves
+    during the human window has to be visible as a mismatch, never as a quietly
+    different selection (invariants 8 and 15).
+
+    Every pooled task is selected. The membership test — a report's deployable
+    canonical identity equalling the base's — is not implemented yet, and the
+    absence is deliberate rather than forgotten: this is the operation that
+    carries it, and `not_selected` is the record it fills. Until it lands, the
+    proposal offers what the freeze took before the split, which keeps the two
+    commands together a behaviour-preserving change of *when* a human answers.
+
+    An offer that selects what the standing one selected, at the same base, *is*
+    the standing one and keeps its `built_at`. Stamping the clock on it would
+    move `state_revision` on every poll that changed nothing — and this file is
+    in that digest, so an operator's outstanding token would be refused by
+    somebody else's no-op `start`. That is the false positive the watched-ref
+    set was trimmed to avoid, and it would be reintroduced here.
+    """
+
+    offered = BatchProposal(
+        built_at=format_rfc3339(now),
+        source_line_ref=config.source_line.ref,
+        base_revision=_source_line_revision(config),
+        selected=tuple(
+            Member(
+                repo_id=entry.repo_id,
+                task_id=entry.task_id,
+                report_keys=tuple(sorted(entry.report_keys())),
+            )
+            for entry in _batched_entries(state)
+        ),
+    )
+    if standing is not None and replace(offered, built_at=standing.built_at) == standing:
+        return standing
+    return offered
 
 
 def freeze_locked(
@@ -493,7 +706,15 @@ def freeze_locked(
     forced: bool = False,
     justification: str | None = None,
 ) -> FreezeResult:
-    """`freeze` without acquiring the lock, for a caller that already holds it."""
+    """`freeze` without acquiring the lock, for a caller that already holds it.
+
+    The order below is the safety argument. Admission is asked first, because
+    "not enough evidence yet" is the contract's normal outcome and answering it
+    needs no offer at all; the proposal is required only once policy would
+    release a cohort. Everything the offer claimed is then re-checked against
+    what is actually here — the line, the pool, and every staged bundle — before
+    the first durable byte is written.
+    """
 
     _require_justified(forced, justification)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
@@ -533,7 +754,8 @@ def freeze_locked(
             closed_batch_ids=closed,
         )
 
-    revision = _source_line_revision(config)
+    proposal = _require_current_proposal(config, state)
+    revision = proposal.base_revision
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
     if analysis_task.task_exists(config, task_id):
@@ -542,7 +764,7 @@ def freeze_locked(
             f"{analysis_task.TASKS_DIRNAME}/; resolve it before freezing"
         )
 
-    entries = _batched_entries(state)
+    entries = _proposed_entries(state, proposal)
     manifest = _build_manifest(
         config,
         batch_id=batch_id,
@@ -580,6 +802,11 @@ def freeze_locked(
             )
         ],
     )
+    # Last, and after the audit line: while it stands, the proposal is an offer
+    # of a batch that now exists, and a second freeze reading it would try to
+    # claim reports this one already claimed. An interruption before this point
+    # leaves it for `_complete_freeze` to drop.
+    clear_proposal(config)
 
     return FreezeResult(
         decision=decision,
@@ -638,8 +865,8 @@ def _require_aware(moment: datetime) -> datetime:
 
 
 def _source_line_revision(config: EvolutionConfig) -> str:
-    """Where the configured source line stands at freeze time: this batch's base,
-    and the protocol revision governing its work.
+    """Where the configured source line stands when the batch is proposed: its
+    base, and the protocol revision governing its work.
 
     One commit under two readings, and they were separate fields until the base
     became a parameter of the batch. Invariant 8 is the first: the stable protocol
@@ -684,6 +911,89 @@ def _source_line_revision(config: EvolutionConfig) -> str:
             "members (invariants 8, 15)"
         )
     return revision
+
+
+def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) -> BatchProposal:
+    """The standing proposal, or why this freeze cannot use it.
+
+    Three things are re-read here rather than trusted, because the single-writer
+    lock does not span the human window — the proposal was built by one command
+    and is fixed by another, with a person and an unbounded amount of time in
+    between:
+
+    - **A proposal exists.** The freeze fixes an offer somebody made; there is
+      no path from the pool straight to a manifest, which is the whole point of
+      splitting the formation.
+    - **The line has not moved.** The base is what selects the batch's evidence
+      and what every experiment of it starts from, so a proposal built against a
+      different tip describes a different batch. Refused and rebuilt, never
+      re-based in place: silently taking the new tip would freeze a membership
+      nobody read against a base nobody chose. (`guards.read_inputs` watches the
+      same ref, so a caller passing `--expect` is already refused one step
+      earlier; this covers the operator who passed none.)
+    - **The pool still holds what was offered.** A member claimed by another
+      freeze, dropped, or re-imported under different reports is a member this
+      freeze would silently substitute for, and a task that entered the pool
+      after the build was never considered — so the denominator the proposal
+      records would be wrong about what it was selected out of.
+
+    Every refusal names the rebuild, because that is the only repair: a proposal
+    is a reading, and a stale reading is retaken rather than mended.
+    """
+
+    proposal = load_proposal(config)
+    if proposal is None:
+        raise BatchError(
+            f"no batch proposal stands in {config.proposal_path}; a freeze fixes an offer a human has seen, so "
+            "build one with `mandrel evolution start` (or `build-proposal` where there is no feed), review its "
+            "membership, and freeze that"
+        )
+
+    tip = _source_line_revision(config)
+    if tip != proposal.base_revision:
+        raise BatchError(
+            f"the proposal was built at {proposal.base_revision} on {proposal.source_line_ref} and that line now "
+            f"stands at {tip}; the base is what every experiment of this batch starts from and what selects its "
+            "evidence, so the offer is refused rather than re-based — run `mandrel evolution start` again and "
+            "review the batch it now proposes"
+        )
+
+    offered = {member.dedup_key for member in proposal.selected}
+    for member in proposal.selected:
+        entry = state.find(member.repo_id, member.task_id)
+        if entry is None:
+            raise BatchError(
+                f"the proposal offers {member.repo_id}/{member.task_id}, which is no longer in the pending pool; "
+                "rebuild the proposal with `mandrel evolution start` and review what it now offers"
+            )
+        if set(entry.report_keys()) != set(member.report_keys):
+            raise BatchError(
+                f"{member.repo_id}/{member.task_id} holds different reports than the proposal offered; a later "
+                "evaluation arrived after it was built, so rebuild it with `mandrel evolution start` and review "
+                "the batch that reads"
+            )
+    arrived = [entry for entry in state.pending if entry.dedup_key not in offered]
+    if arrived:
+        names = ", ".join(f"{entry.repo_id}/{entry.task_id}" for entry in sorted(arrived, key=lambda e: e.dedup_key))
+        raise BatchError(
+            f"the pool holds {len(arrived)} task(s) the proposal never considered ({names}); a batch states what "
+            "it was selected out of, so rebuild the proposal with `mandrel evolution start` rather than freezing "
+            "a denominator that predates them"
+        )
+    return proposal
+
+
+def _proposed_entries(state: EvolutionState, proposal: BatchProposal) -> list[PoolEntry]:
+    """The pool entries the proposal selected, in the manifest's order.
+
+    Ordered exactly as `_batched_entries` orders the pool rather than as the
+    proposal lists them: the manifest's order is a property of the evidence, and
+    the proposal sorts by task id so its own bytes stay stable while a human
+    moves entries in and out.
+    """
+
+    selected = {member.dedup_key for member in proposal.selected}
+    return [entry for entry in _batched_entries(state) if entry.dedup_key in selected]
 
 
 def _batched_entries(state: EvolutionState) -> list[PoolEntry]:
@@ -972,6 +1282,11 @@ def _complete_freeze(
     if not analysis_task.task_exists(config, task_id):
         analysis_task.write_task(config, spec)
         completed.append(COMPLETED_TASK)
+    if clear_proposal(config):
+        # The freeze this repair is finishing wrote its manifest and stopped
+        # before dropping its own offer. Left standing, the next freeze would
+        # read it and try to form a second batch out of reports this one claimed.
+        completed.append(COMPLETED_PROPOSAL)
     if analysis_task.append_index_row(config, spec):
         completed.append(COMPLETED_INDEX)
     return tuple(completed)

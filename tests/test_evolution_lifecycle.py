@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     complete_task,
+    form_batch,
     git_checkout,
     git_commit,
     git_release_commit,
@@ -144,7 +145,7 @@ def test_a_batch_runs_from_its_freeze_to_its_outcome(
     back after each one from nothing but what those operations wrote."""
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    frozen = evolution.freeze(config, now=at(1))
+    frozen = form_batch(config, now=at(1))
     assert frozen.batch_id == BATCH_ID
     assert phase.describe(config, now=at(1)).phase == phase.PHASE_BATCH_FROZEN
 
@@ -228,7 +229,7 @@ def test_the_history_outlives_the_machine_that_produced_it(
     it away, and a checkout is one command from being somewhere else."""
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    frozen = evolution.freeze(config, now=at(1))
+    frozen = form_batch(config, now=at(1))
     analyze(config, BATCH_ID, frozen.analysis_task_id or "", drafts=DRAFTS)
     admitted = experiments.create(config, ["loader-fallback"], now=at(2))
     work(config, admitted.ref, admitted.admitted[0].task_id, message="round 1: loader-fallback")
@@ -257,17 +258,17 @@ def test_a_concluded_batch_releases_the_next_cohort(
     for a batch that changed nothing."""
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    frozen = evolution.freeze(config, now=at(1))
+    frozen = form_batch(config, now=at(1))
     analyze(config, BATCH_ID, frozen.analysis_task_id or "", drafts=("loader-fallback",))
     experiments.reject(config, ["loader-fallback"], reason="one report is not recurrence", now=at(2))
 
     fill_pool(config, feed_root, prefix="n", sequence=100)
-    blocked = evolution.freeze(config, now=at(3))
+    blocked = form_batch(config, now=at(3))
     assert blocked.frozen is False
     assert blocked.current_batch_id == BATCH_ID
 
     experiments.conclude_no_change(config, reason="no cluster reached recurrence", now=at(4))
-    released = evolution.freeze(config, now=at(5))
+    released = form_batch(config, now=at(5))
 
     assert released.frozen is True
     assert released.batch_id == NEXT_BATCH
@@ -283,7 +284,7 @@ def test_status_names_what_the_operator_does_next_at_every_step(
     — not a fact that happens to be true."""
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    frozen = evolution.freeze(config, now=at(1))
+    frozen = form_batch(config, now=at(1))
     analyze(config, BATCH_ID, frozen.analysis_task_id or "", drafts=("loader-fallback", "hook-side-loader"))
 
     waiting = render.format_status(phase.describe(config, now=at(2)))
@@ -315,7 +316,7 @@ def test_nothing_in_the_arc_reads_the_ledger_back_as_state(
     the same next operation."""
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    frozen = evolution.freeze(config, now=at(1))
+    frozen = form_batch(config, now=at(1))
     analyze(config, BATCH_ID, frozen.analysis_task_id or "", drafts=("loader-fallback",))
     admitted = experiments.create(config, ["loader-fallback"], now=at(2))
     work(config, admitted.ref, admitted.admitted[0].task_id, message="round 1: loader-fallback")
@@ -340,7 +341,7 @@ def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
     """
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
-    first = evolution.freeze(config, now=at(1))
+    first = form_batch(config, now=at(1))
     analyze(config, BATCH_ID, first.analysis_task_id or "", drafts=("loader-fallback",))
     admitted = experiments.create(config, ["loader-fallback"], now=at(2))
     work(config, admitted.ref, admitted.admitted[0].task_id, message="round 1: loader-fallback")
@@ -350,7 +351,7 @@ def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
 
     fill_pool(config, feed_root, prefix="n", sequence=100)
     moved = git_release_commit(config.repo_root, "canonical work between the two cohorts")
-    second = evolution.freeze(config, now=at(5) + timedelta(days=1))
+    second = form_batch(config, now=at(5) + timedelta(days=1))
     analyze(config, NEXT_BATCH, second.analysis_task_id or "", drafts=("second-loader-fix",))
     later = experiments.create(config, ["second-loader-fix"], now=at(7))
 

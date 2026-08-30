@@ -493,11 +493,23 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
 def _authoritative_paths(config: EvolutionConfig) -> list[Path]:
     """Every file the lifecycle is derived from, in one order.
 
-    Walked rather than listed, so a record this workspace grows later is covered
-    by being written rather than by somebody remembering to add it here.
+    The two versioned roots are *walked*, so a record this workspace grows later
+    is covered by being written rather than by somebody remembering to add it
+    here. The runtime root is not: it is enumerated, file by file, and that
+    difference is deliberate rather than an omission this list is waiting to
+    outgrow. A blind walk of it would also take in `imported-artifacts/` and the
+    single-writer lock — hashing every staged bundle on every reading, and
+    hashing a lock held for the duration of every mutation, which would move the
+    token during the operation it guards.
+
+    So each runtime file that a decision is derived from is named here, and
+    `tests/test_evolution_console.py` fails when one exists that is not: the pool
+    the pending set is read from, and the proposal a freeze fixes. Both move
+    what the next verb would act on, which is the whole question a state
+    revision answers.
     """
 
-    known = [config.path, config.state_path]
+    known = [config.path, config.state_path, config.proposal_path]
     for root in (config.batches_root, config.experiments_root):
         known.extend(root.rglob("*"))
     return sorted(path for path in known if path.is_file())

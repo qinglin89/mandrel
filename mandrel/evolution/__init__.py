@@ -2,9 +2,10 @@
 
 `evolution/README.md` is the normative contract; this package implements the
 mechanical part of it — discovering already-complete orch-hub reports,
-validating and staging them as unique completed tasks, freezing an immutable
-cohort when admission policy allows, preparing that cohort's pending analysis
-task, and deriving where the lifecycle currently stands.
+validating and staging them as unique completed tasks, offering a batch out of
+that pool, freezing the offer a human fixes as an immutable cohort, preparing
+that cohort's pending analysis task, and deriving where the lifecycle currently
+stands.
 
 What it deliberately does not do: run or schedule an evaluation, and decide
 anything a human is supposed to decide. Batch formation, change admission, and
@@ -47,8 +48,10 @@ from .batches import (
     AdmissionDecision,
     Batch,
     FreezeResult,
+    ProposalResult,
     StartResult,
     batch_awaiting_analysis,
+    build_proposal,
     evaluate_admission,
     freeze,
     load_batches,
@@ -72,6 +75,7 @@ from .errors import (
     FeedError,
     LedgerError,
     LockError,
+    ProposalError,
     SchemaError,
     StateError,
     ValidationError,
@@ -120,6 +124,8 @@ __all__ = [
     "OrchHubFeed",
     "PromotionResult",
     "PoolEntry",
+    "ProposalError",
+    "ProposalResult",
     "RefState",
     "Rejection",
     "RejectionResult",
@@ -141,6 +147,7 @@ __all__ = [
     "ValidationError",
     "append_records",
     "batch_awaiting_analysis",
+    "build_proposal",
     "build_record",
     "current_batch",
     "evaluate_admission",

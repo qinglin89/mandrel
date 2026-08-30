@@ -1,7 +1,10 @@
 # Evolution batches
 
 Each `<batch-id>/manifest.json` is an immutable, schema-validated membership
-snapshot created before analysis. `findings.md` records every cluster's
+snapshot created before analysis, and it is the *first* durable write of the
+batch's formation: `start` offers a batch in ignored runtime state
+(`.ai-evolution/batch-proposal.json`) and `freeze` fixes that offer here, so
+every human adjustment to membership happens before this file exists. `findings.md` records every cluster's
 disposition. `analysis-complete.json` records that the analysis task finished,
 and is what ends the analysis stage. `proposed-tasks/<draft-id>.md` holds that
 analysis's change-task drafts; admission copies a draft into `.ai-tasks/` and

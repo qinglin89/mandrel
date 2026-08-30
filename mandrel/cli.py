@@ -108,6 +108,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     remove_parser = registry_subparsers.add_parser("remove", help="remove a repo from local registry tracking")
     remove_parser.add_argument("name_or_path", help="registered name or repo path")
 
+    from .evolution import phase
+
     evolution_parser = subparsers.add_parser(
         "evolution",
         help="protocol-evolution controller for this repository (human-triggered; never starts an evaluation)",
@@ -128,20 +130,27 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
     evolution_start = evolution_subparsers.add_parser(
         "start",
-        help="close finished analyses, repair, sync, then freeze a batch when admission policy allows",
+        help="close finished analyses, repair, sync, then propose the next batch; writes no manifest",
     )
     _add_workspace_argument(evolution_start)
     _add_feed_arguments(evolution_start)
-    evolution_start.add_argument(
+    _add_expectation_argument(evolution_start)
+
+    evolution_freeze = evolution_subparsers.add_parser(
+        phase.ACTION_FREEZE,
+        help="fix the standing proposal as a batch and generate its analysis task",
+    )
+    _add_workspace_argument(evolution_freeze)
+    evolution_freeze.add_argument(
         "--force",
         action="store_true",
         help="waive the configured target (never the minimum); requires --justification",
     )
-    evolution_start.add_argument(
+    evolution_freeze.add_argument(
         "--justification",
         help="written human reason recorded in the manifest when --force forms a below-target batch",
     )
-    _add_expectation_argument(evolution_start)
+    _add_expectation_argument(evolution_freeze)
 
     _add_lineage_commands(evolution_subparsers)
     _add_release_commands(evolution_subparsers)
@@ -574,9 +583,10 @@ def _evolution(args: argparse.Namespace) -> int:
     and what closes one are all decided in `mandrel.evolution`,
     where the contract's invariants are stated next to the code enforcing them.
 
-    Exit status is 0 for every completed run, including a `start` that formed no
-    batch: too little evidence is the contract's normal outcome, not a failure.
-    A refusal or an unusable feed raises and `main` reports it as 2.
+    Exit status is 0 for every completed run, including a `start` that offered no
+    batch and a `freeze` the admission policy will not release: too little
+    evidence is the contract's normal outcome, not a failure. A refusal or an
+    unusable feed raises and `main` reports it as 2.
     """
 
     from .evolution import batches, config as evolution_config, importer, phase, render
@@ -586,6 +596,19 @@ def _evolution(args: argparse.Namespace) -> int:
     if args.evolution_command == "status":
         status = phase.describe(config)
         print(json.dumps(status.to_json(), indent=2, sort_keys=True) if args.json else render.format_status(status))
+        return 0
+
+    if args.evolution_command == phase.ACTION_FREEZE:
+        # No feed: the freeze fixes a membership that was already selected, and
+        # reaching a feed here would let evidence arrive between the offer a
+        # human read and the batch this writes.
+        frozen = batches.freeze(
+            config,
+            forced=args.force,
+            justification=args.justification,
+            expect=args.expect,
+        )
+        print(render.format_freeze(frozen, config.repo_root))
         return 0
 
     if args.evolution_command in _lineage_verbs(phase):
@@ -614,8 +637,6 @@ def _evolution(args: argparse.Namespace) -> int:
     started = batches.start(
         config,
         feed,
-        forced=args.force,
-        justification=args.justification,
         expect=args.expect,
         page_size=args.page_size,
         max_pages=args.max_pages,

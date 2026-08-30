@@ -26,7 +26,7 @@ from .assessment import (
     Subject,
     Withdrawn,
 )
-from .batches import REASON_POOL_INCOMPLETE, FreezeResult, StartResult
+from .batches import REASON_POOL_INCOMPLETE, FreezeResult, ProposalResult, StartResult
 from .deployment import (
     HOLDING_BEHIND,
     HOLDING_CARRIES,
@@ -147,8 +147,54 @@ def format_freeze(result: FreezeResult, repo_root: Path) -> str:
     return "\n".join(lines)
 
 
+def format_proposal(result: ProposalResult, repo_root: Path) -> str:
+    """What the poll offered, and what it did not.
+
+    Says plainly that nothing durable was written, because the line above it
+    reports a batch by name and the two used to be the same event: an operator
+    who read `start` as the freeze would otherwise take an offer for a cohort.
+    """
+
+    lines: list[str] = []
+    for batch_id in result.closed_batch_ids:
+        lines.append(f"closed: {batch_id} — its analysis task completed; closure record written")
+
+    decision = result.decision
+    proposal = result.proposal
+    if proposal is not None:
+        lines.append(
+            f"proposal: {proposal.task_count} of {proposal.considered} considered task(s) selected at base "
+            f"{proposal.base_revision[:12]} ({proposal.source_line_ref})"
+        )
+        lines.append(_field("pool", f"{decision.task_count} unique completed task(s) pending"))
+        if result.proposal_path is not None:
+            lines.append(_field("offer", _relative(result.proposal_path, repo_root)))
+        if decision.freeze:
+            lines.append(_field("admission", f"ready to freeze — {decision.trigger}"))
+        else:
+            lines.append(
+                _field("admission", f"not yet — {decision.reason} ({decision.task_count}/{decision.target}, minimum {decision.minimum})")
+            )
+            if decision.reason == REASON_POOL_INCOMPLETE:
+                lines.append(_field("", "no discovery pass has reported the feed drained; run sync until it does"))
+        lines.append("nothing was frozen: review the membership, then `freeze` fixes it as a batch")
+    elif result.current_batch_id:
+        lines.append(
+            f"proposal: none — {result.current_batch_id} is still current; its outcome has not been recorded"
+        )
+        if result.analysis_task_id:
+            lines.append(_field("analysis", result.analysis_task_id))
+    else:
+        lines.append(f"proposal: none — {decision.reason} ({decision.task_count}/{decision.target}, minimum {decision.minimum})")
+        if decision.reason == REASON_POOL_INCOMPLETE:
+            lines.append(_field("", "no discovery pass has reported the feed drained; run sync until it does"))
+    if result.completed:
+        lines.append(_field("repaired", ", ".join(result.completed)))
+    return "\n".join(lines)
+
+
 def format_start(result: StartResult, repo_root: Path) -> str:
-    return f"{format_sync(result.sync)}\n{format_freeze(result.freeze, repo_root)}"
+    return f"{format_sync(result.sync)}\n{format_proposal(result.proposal, repo_root)}"
 
 
 # --- what a lifecycle verb did -----------------------------------------------
@@ -793,6 +839,20 @@ def format_status(status: LifecycleStatus) -> str:
         lines.append(_field("", "pool completeness unproven — no discovery pass has reported the feed drained"))
     elif decision.waited_days is not None:
         lines.append(_field("", f"oldest pending report imported {decision.waited_days} day(s) ago, max wait {decision.max_wait_days}"))
+
+    proposal = status.proposal
+    if proposal is not None:
+        lines.append(
+            _field(
+                "proposal",
+                f"{proposal.task_count} of {proposal.considered} considered task(s) at base "
+                f"{proposal.base_revision[:12]} ({proposal.source_line_ref})",
+            )
+        )
+        included = len(proposal.human_included)
+        if included:
+            majority = " — a majority of this batch" if included * 2 > proposal.task_count else ""
+            lines.append(_field("", f"{included} of them included by a human{majority}"))
 
     if decision.freeze:
         lines.append(_field("admission", f"ready to freeze — {decision.trigger}"))

@@ -168,12 +168,18 @@ from .lineage import describe as describe_lineage
 from .manifests import OUTCOME_PROMOTED, load_batches
 from .replay import Evidence, History, PendingRun, Replay, WithdrawnRequest, describe_evidence, read_replays
 from .revisions import Revision
+from .proposals import BatchProposal, load_proposal
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
+# A batch has been offered and not yet fixed. It sits between the pool and the
+# first frozen manifest, and it is the only phase in which membership can still
+# be argued with: the formation is two operations so that the human window falls
+# before the manifest exists rather than beside it (invariant 3).
+PHASE_BATCH_PROPOSED = "batch-proposed"
 PHASE_BATCH_FROZEN = "batch-frozen"
 PHASE_DISPOSITIONS_READY = "dispositions-ready"
 PHASE_PROPOSALS_PENDING = "proposals-pending"
@@ -202,6 +208,10 @@ COUNTERFACTUAL_COMPLETED = "completed"
 # domain operation and no name without one: a verb this surface offers that no
 # operation implements is a lifecycle only the console believes in.
 ACTION_START = "start"
+# Fixing the standing proposal as a batch. Deliberately not called `seal`: a
+# round seals its candidate (`ACTION_SEAL_ROUND`), and a second sealing word for
+# a different object would collide at the surface an operator reads.
+ACTION_FREEZE = "freeze"
 ACTION_CREATE = "create"
 ACTION_REJECT = "reject"
 ACTION_ADD_TASKS = "add-tasks"
@@ -596,6 +606,11 @@ class LifecycleStatus:
     # owes it. None when there is no release before it at all — which is most
     # batches, and is ordinary rather than missing.
     release: ReleaseReading | None = None
+    # The batch offered and not yet fixed, when one stands. Read from the
+    # runtime file rather than derived, because it is a decision in progress
+    # rather than a consequence of the durable records: nothing else in this
+    # reading can say a human has been offered a membership and has not answered.
+    proposal: BatchProposal | None = None
     # What each target the last promotion was planned for actually holds, read
     # from that target's own deploy receipt. None when nothing has been promoted:
     # the plan is where the targets in play come from, so with no promotion there
@@ -684,6 +699,8 @@ class LifecycleStatus:
 
         if self.phase == PHASE_POOL:
             return f"{PHASE_POOL} {self.decision.task_count}/{self.decision.target}"
+        if self.phase == PHASE_BATCH_PROPOSED and self.proposal is not None:
+            return f"{PHASE_BATCH_PROPOSED} {self.proposal.task_count}/{self.decision.target}"
         if self.phase in (PHASE_IMPLEMENTING, PHASE_CANDIDATE_READY) and self.experiment is not None:
             round_ = self.experiment.last_round
             tail = _round_tail(round_) if self.phase == PHASE_IMPLEMENTING else ""
@@ -713,6 +730,20 @@ class LifecycleStatus:
                 "oldest_pending_at": self.decision.oldest_pending_at,
                 "waited_days": self.decision.waited_days,
                 "max_wait_days": self.decision.max_wait_days,
+            },
+            # The batch on offer, beside the pool it was selected out of. Two
+            # numbers and never one: what a freeze would form is not what the
+            # pool holds, and an operator reading a single count cannot tell a
+            # short pool from a pool whose evidence is about another protocol.
+            "proposal": None
+            if self.proposal is None
+            else {
+                "built_at": self.proposal.built_at,
+                "source_line_ref": self.proposal.source_line_ref,
+                "base_revision": self.proposal.base_revision,
+                "task_count": self.proposal.task_count,
+                "considered": self.proposal.considered,
+                "human_included": len(self.proposal.human_included),
             },
             "admission": {
                 "freeze": self.decision.freeze,
@@ -832,9 +863,13 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         current_batch_id=current.batch_id if current else None,
     )
 
+    # Only meaningful while no batch is current: a proposal is an offer of the
+    # *next* cohort, and one standing beside a running change cycle is a leftover
+    # the next build drops rather than a state to report.
+    proposal = load_proposal(config) if current is None else None
     promotion = _promotion(lineage.last_promoted)
     reading = LifecycleStatus(
-        phase=_phase(current=current, stage_open=stage_open, pool=decision.task_count),
+        phase=_phase(current=current, stage_open=stage_open, pool=decision.task_count, proposal=proposal),
         decision=decision,
         pool_complete=state.feed_exhausted,
         batch_count=len(known),
@@ -846,6 +881,7 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         revisions=_revisions(current),
         last_promotion=promotion,
         pending_successor=_pending_successor(current),
+        proposal=proposal,
         evidence=_evidence(config, current),
         replays=_replays(config, current),
         batches=tuple(_record(item) for item in lineage.batches),
@@ -877,8 +913,10 @@ def _round_tail(round_: Round) -> str:
     return f" ({left} task{'s' if left != 1 else ''} left)"
 
 
-def _phase(*, current: BatchLineage | None, stage_open: bool, pool: int) -> str:
+def _phase(*, current: BatchLineage | None, stage_open: bool, pool: int, proposal: BatchProposal | None) -> str:
     if current is None:
+        if proposal is not None:
+            return PHASE_BATCH_PROPOSED
         return PHASE_POOL if pool else PHASE_IDLE
     if stage_open:
         return PHASE_DISPOSITIONS_READY if current.batch.findings_recorded else PHASE_BATCH_FROZEN
@@ -1209,6 +1247,7 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
     )
     return (
         _start_action(status),
+        _freeze_action(status),
         *_gate_actions(status, held),
         *_work_actions(config, status, held),
         *_replay_actions(status, held),
@@ -1225,12 +1264,13 @@ def _on(object_type: str, object_id: str | None) -> tuple[str | None, str | None
 
 
 def _start_action(status: LifecycleStatus) -> Action:
-    """Freezing the next cohort.
+    """Polling the feed and offering the next cohort.
 
     Refused for one reason, and a short pool is not it: `start` is a discovery
-    pass and then an admission, so running it below the target imports whatever
-    has arrived and reports no batch — a normal outcome rather than a refusal.
-    What it cannot do is form a cohort beside one whose cycle is still running.
+    pass and then a proposal, so running it below the target imports whatever
+    has arrived and offers a batch nothing may yet freeze — a normal outcome
+    rather than a refusal. What it cannot do is offer a cohort beside one whose
+    cycle is still running.
     """
 
     decision = status.decision
@@ -1242,6 +1282,50 @@ def _start_action(status: LifecycleStatus) -> Action:
         refusal=(
             f"{decision.current_batch_id} is current and no outcome has been recorded for it; the pool keeps "
             "accumulating and the next cohort forms once that batch concludes (invariant 14)"
+        ),
+    )
+
+
+def _freeze_action(status: LifecycleStatus) -> Action:
+    """Fixing the standing proposal as this batch.
+
+    Two conditions, checked in the order the operation checks them, because they
+    fail for different people: an offer has to exist for a human to have seen it,
+    and the admission policy has to release it. The second is not a defect —
+    `pool-below-target` is the ordinary state of a proposal waiting for evidence,
+    and `--force` is the answer where a human judges the cohort complete.
+    """
+
+    decision = status.decision
+    if decision.reason == REASON_CURRENT_BATCH:
+        # Said in `start`'s words rather than as a missing offer: while a cycle
+        # is running there is nothing to offer, so "build one" would send an
+        # operator at a command that would also refuse.
+        return Action(
+            ACTION_FREEZE,
+            OBJECT_POOL,
+            refusal=(
+                f"{decision.current_batch_id} is current and no outcome has been recorded for it; the pool keeps "
+                "accumulating and the next cohort forms once that batch concludes (invariant 14)"
+            ),
+        )
+    if status.proposal is None:
+        return Action(
+            ACTION_FREEZE,
+            OBJECT_POOL,
+            refusal=(
+                f"no batch proposal stands: {decision.reason or 'nothing has been offered'}. A freeze fixes an "
+                "offer a human has reviewed, so run `start` and read what it proposes"
+            ),
+        )
+    if decision.freeze:
+        return Action(ACTION_FREEZE, OBJECT_POOL)
+    return Action(
+        ACTION_FREEZE,
+        OBJECT_POOL,
+        refusal=(
+            f"the proposal stands but admission does not release it: {decision.reason} "
+            f"({decision.task_count}/{decision.target}, minimum {decision.minimum})"
         ),
     )
 

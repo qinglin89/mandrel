@@ -458,9 +458,10 @@ before relying on those hooks.
 
 `evolution/README.md` is the normative contract for changing the canonical
 protocol suite from evidence. `mandrel evolution` is the mechanical half of it:
-it discovers already-complete evaluation reports, stages them, freezes an
-immutable cohort when the admission policy allows, and prepares that cohort's
-pending analysis task. It runs against this repository, not a target.
+it discovers already-complete evaluation reports, stages them, offers a batch
+out of the pool, and — once a human fixes that offer — freezes an immutable
+cohort and prepares its pending analysis task. It runs against this repository,
+not a target.
 
 Nothing here starts or schedules an evaluation, and nothing here decides
 policy: batch formation, change admission, and canary promotion stay human
@@ -470,23 +471,39 @@ gates.
 ./bin/mandrel evolution status                 # lifecycle phase; writes nothing
 ./bin/mandrel evolution list  --feed-dir ...   # inspect candidates; writes nothing
 ./bin/mandrel evolution sync  --feed-dir ...   # import eligible reports into the pool
-./bin/mandrel evolution start --feed-dir ...   # repair/close, sync, then freeze if policy allows
+./bin/mandrel evolution start --feed-dir ...   # repair/close, sync, then propose a batch
+./bin/mandrel evolution freeze                 # fix that proposal as an immutable cohort
 ```
 
-Those four manage report intake and cohort formation. What a frozen cohort then
+Forming a batch is two commands on purpose. `start` writes a proposal to ignored
+runtime state — the base it read off the configured source line, and the pooled
+reports selected against it — and writes nothing durable at all: no manifest, no
+report claim, no analysis task, no ledger line. `freeze` is the human's own
+command and the first durable write of the formation. The window in between is
+where membership can still be argued with, which is precisely what an immutable
+manifest cannot offer.
+
+A proposal is a reading, not evidence. The next `start` rebuilds it, and the
+freeze refuses one whose source line has since moved or whose members the pool no
+longer holds — naming the rebuild, because a stale reading is retaken rather than
+mended. `--force` (with `--justification`) belongs to `freeze`: waiving the
+configured target is a decision about forming a batch, and `start` forms none.
+
+Those five manage report intake and cohort formation. What a frozen cohort then
 becomes — experiments, rounds, replays, a promotion, its reversal, and the next
 cohort's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
 
 Every subcommand takes `--repo <path>` to work on another checkout, and
 `status` takes `--json` for the same shape a script can read. Exit status is 0
-for any completed run — including a `start` that formed no batch, which is the
+for any completed run — including a `start` that offered no batch, which is the
 contract's normal outcome when evidence is still thin — and 2 for a refusal,
 corrupt local state, lock contention, or an unusable feed.
 
-`status` names a lifecycle phase — `idle`, `pool N/<target>`, `batch-frozen`,
-`dispositions-ready`, `proposals-pending`, `implementing`, `candidate-ready`,
-`supersede-pending`, `conclusion-pending` — and then the facts behind it:
+`status` names a lifecycle phase — `idle`, `pool N/<target>`,
+`batch-proposed N/<target>`, `batch-frozen`, `dispositions-ready`,
+`proposals-pending`, `implementing`, `candidate-ready`, `supersede-pending`,
+`conclusion-pending` — and then the facts behind it:
 
 ```text
 $ ./bin/mandrel evolution status
@@ -497,7 +514,7 @@ evolution: pool 4/20
   batches      0 frozen, none current
   revisions    none in play — no batch is current
   actions      start
-               21 other verb(s) refuse here; `--json` states each reason
+               22 other verb(s) refuse here; `--json` states each reason
   state        1-ac1087623f3fa990 — what this reading is of
 ```
 
@@ -607,7 +624,9 @@ habit `dev` invites is the thing to correct, not the guard.
 #### One cycle, end to end
 
 ```bash
-./bin/mandrel evolution start                      # freeze a cohort when policy allows
+./bin/mandrel evolution start                      # propose the next cohort
+# review what it offers, then fix it:
+./bin/mandrel evolution freeze                     # writes the manifest and the analysis task
 # complete the generated analysis task and commit its findings and drafts
 # create publishes the analysis closure before admitting the named drafts
 ./bin/mandrel evolution create loader-fallback hook-side-loader --reason "one change"
@@ -632,7 +651,7 @@ The cohort frozen after that promotion owes a reading of it, and no later first
 experiment is admitted until the reading is settled (invariant 17):
 
 ```bash
-./bin/mandrel evolution start
+./bin/mandrel evolution start && ./bin/mandrel evolution freeze
 ./bin/mandrel evolution assess --verdict improved --confidence medium \
     --rationale "..." --metric "remediation rounds" rounds 2.1 1.4 lower
 ./bin/mandrel evolution assess-measure --expectation "..."   # the pinned counterfactual
@@ -720,8 +739,9 @@ deployment is not lifecycle state.
 ### The JSON and action contract
 
 `status --json` is the machine shape of everything above, at
-`schema_version: 7`. Alongside the pool, admission, batches, gate, experiments,
-revisions, replay, release, `last_promotion` and `deployment` blocks it carries
+`schema_version: 8`. Alongside the pool, proposal, admission, batches, gate,
+experiments, revisions, replay, release, `last_promotion` and `deployment` blocks
+it carries
 the two fields a surface acts on:
 
 ```json

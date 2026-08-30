@@ -36,6 +36,7 @@ from evolution_fixtures import (
     completed_report,
     experiment_decision,
     experiment_round,
+    form_batch,
     git_canonical_commit,
     git_file_commit,
     git_repo,
@@ -803,7 +804,7 @@ def test_a_symbolic_revision_a_feed_published_reaches_the_freeze_and_is_excluded
             ],
         ),
     )
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
 
     assert result.manifest_path is not None
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
@@ -2331,7 +2332,7 @@ def test_a_reading_is_formed_while_the_analysis_is_still_being_written(
     refuses to act in."""
 
     fill_pool(config, tmp_path / "feed")
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
     assert result.batch_id == SECOND
     awaiting = evolution.batch_awaiting_analysis(config)
     assert awaiting is not None and awaiting.batch_id == SECOND
@@ -4317,7 +4318,7 @@ def test_the_first_cohort_after_a_release_is_asked_to_assess_it(
     it follows — identity only, and the path the reading goes to."""
 
     fill_pool(config, tmp_path / "feed")
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
 
     assert result.analysis_task_id is not None
     text = (config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md").read_text(encoding="utf-8")
@@ -4344,7 +4345,7 @@ def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(
     """
 
     fill_pool(config, tmp_path / "feed")
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
 
     assert result.analysis_task_id is not None
     text = (config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md").read_text(encoding="utf-8")
@@ -4360,7 +4361,7 @@ def test_a_first_cohort_is_asked_for_no_release_reading(
     tmp_path: Path,
 ) -> None:
     fill_pool(config, tmp_path / "feed")
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
 
     assert result.analysis_task_id is not None
     text = (config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md").read_text(encoding="utf-8")
@@ -4377,7 +4378,7 @@ def test_an_interrupted_freeze_writes_the_same_task(
     so the task it writes is the task the freeze would have written."""
 
     fill_pool(config, tmp_path / "feed")
-    result = evolution.freeze(config, now=FROZEN_AT)
+    result = form_batch(config, now=FROZEN_AT)
     assert result.analysis_task_id is not None
     task = config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md"
     written = task.read_text(encoding="utf-8")

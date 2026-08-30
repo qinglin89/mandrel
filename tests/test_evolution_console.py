@@ -63,7 +63,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import evolution
-from mandrel.evolution import assessment, experiments, phase, render, replay, rollback
+from mandrel.evolution import assessment, experiments, guards, phase, proposals, render, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -722,7 +722,7 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
     described = status(config)
     emitted = described.to_json()
 
-    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 7
+    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 8
     assert json.loads(json.dumps(emitted)) == emitted
     text = render.format_status(described)
     assert emitted["summary"] in text.splitlines()[0]
@@ -1853,3 +1853,62 @@ def test_a_repository_that_promoted_nothing_reads_no_targets(
 
     assert payload(config)["deployment"] is None
     assert "deployed" not in rendered(config)
+
+
+# --- what the token is computed over -----------------------------------------
+
+
+def test_every_runtime_state_file_is_named_in_the_state_revision(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The runtime root is enumerated rather than walked, and this is the check
+    that keeps the enumeration honest.
+
+    A blind walk is the wrong fix and stays refused: `imported-artifacts/` would
+    re-hash every staged bundle on every reading, and the single-writer lock is
+    held for the whole of every mutation, so hashing it would move the token
+    during the operation it guards. Those two are the stated exclusions; anything
+    else this workspace grows has to be named.
+    """
+
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    config.state_path.write_text(json.dumps(evolution.load_state(config).to_json()), encoding="utf-8")
+    proposals.save_proposal(
+        config,
+        proposals.BatchProposal(
+            built_at="2026-08-01T12:00:00Z",
+            source_line_ref=RELEASE_REF,
+            base_revision=release,
+        ),
+    )
+    excluded = {config.lock_path, config.repo_root / config.storage.imported_artifacts}
+
+    present = {
+        path
+        for path in config.runtime_root.rglob("*")
+        if path.is_file() and not any(path == item or item in path.parents for item in excluded)
+    }
+    named = set(guards._authoritative_paths(config))
+
+    assert present, "the fixture wrote nothing, so this proves nothing"
+    assert present <= named, f"runtime state not covered by the state revision: {sorted(present - named)}"
+
+
+def test_writing_the_proposal_moves_the_state_revision(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The human window spans separate commands, so an offer another writer
+    replaced has to be visible to a caller holding a token from before it."""
+
+    before = status(config).state_revision
+
+    proposals.save_proposal(
+        config,
+        proposals.BatchProposal(
+            built_at="2026-08-01T12:00:00Z",
+            source_line_ref=RELEASE_REF,
+            base_revision=release,
+        ),
+    )
+
+    assert status(config).state_revision != before

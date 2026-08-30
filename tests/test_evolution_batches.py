@@ -26,6 +26,7 @@ from evolution_fixtures import (
     experiment_decision,
     experiment_round,
     git_commit,
+    git_release_commit,
     git_repo,
     git_rev,
     make_record,
@@ -40,7 +41,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import evolution
-from mandrel.evolution import analysis_task, batches, ledger, manifests, revisions, state
+from mandrel.evolution import analysis_task, batches, ledger, manifests, proposals, revisions, state
 
 TARGET = 3
 MINIMUM = 2
@@ -113,6 +114,27 @@ def backdate(config: evolution.EvolutionConfig, timestamp: str) -> None:
 
 
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
+    """Offer the batch, then fix it — the two commands a human runs.
+
+    The formation is two operations, so a test that means "form a cohort out of
+    this pool" has to do both. Where the split itself is what is under test, the
+    two are called apart.
+    """
+
+    kwargs.setdefault("now", NOW)
+    evolution.build_proposal(config, now=kwargs["now"])
+    return evolution.freeze(config, **kwargs)
+
+
+def freeze_only(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
+    """The freeze command by itself, with no rebuild before it.
+
+    What an operator runs to finish an interrupted formation or to fix an offer
+    that already stands — and the call any test about repair or closure has to
+    make, since building a proposal repairs and closes first and would take the
+    step being measured.
+    """
+
     kwargs.setdefault("now", NOW)
     return evolution.freeze(config, **kwargs)
 
@@ -711,24 +733,26 @@ def test_a_repeated_start_neither_freezes_again_nor_creates_a_second_task(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
-    first = evolution.start(config, feed, now=NOW)
-    assert first.freeze.frozen
+    evolution.start(config, feed, now=NOW)
+    first = evolution.freeze(config, now=NOW)
+    assert first.frozen
 
     again = evolution.start(config, feed, now=NOW)
 
-    assert not again.freeze.frozen
-    assert again.freeze.decision.reason == batches.REASON_CURRENT_BATCH
-    assert again.freeze.current_batch_id == first.freeze.batch_id
-    assert again.freeze.completed == ()
+    assert again.proposal.proposal is None, "a batch is current, so there is nothing to offer"
+    assert again.proposal.decision.reason == batches.REASON_CURRENT_BATCH
+    assert again.proposal.current_batch_id == first.batch_id
+    assert again.proposal.completed == ()
+    assert not config.proposal_path.exists(), "the freeze dropped its own offer"
     assert [batch.batch_id for batch in evolution.load_batches(config)] == ["evolution-batch-0001"]
     index_rows = [
         line
         for line in analysis_task.index_path(config).read_text(encoding="utf-8").splitlines()
-        if first.freeze.analysis_task_id and first.freeze.analysis_task_id in line
+        if first.analysis_task_id and first.analysis_task_id in line
     ]
     assert len(index_rows) == 1
     assert sorted(path.name for path in analysis_task.tasks_root(config).iterdir()) == [
-        f"{first.freeze.analysis_task_id}.md",
+        f"{first.analysis_task_id}.md",
         analysis_task.INDEX_FILENAME,
     ]
 
@@ -752,14 +776,21 @@ def test_a_restart_completes_a_freeze_interrupted_after_the_manifest(
     assert [batch.batch_id for batch in frozen] == ["evolution-batch-0001"]
     assert not analysis_task.task_exists(config, frozen[0].analysis_task_id or "")
 
-    resumed = freeze(config)
+    resumed = freeze_only(config)
 
     assert not resumed.frozen
     assert resumed.current_batch_id == "evolution-batch-0001"
-    assert set(resumed.completed) == {batches.COMPLETED_TASK, batches.COMPLETED_INDEX}
+    assert set(resumed.completed) == {
+        batches.COMPLETED_TASK,
+        batches.COMPLETED_INDEX,
+        # The crash was before the freeze dropped its own offer, and an offer of
+        # a batch that now exists is exactly what a second freeze would read.
+        batches.COMPLETED_PROPOSAL,
+    }
+    assert not config.proposal_path.exists()
     assert analysis_task.task_exists(config, frozen[0].analysis_task_id or "")
     assert evolution.load_state(config).pending == []
-    assert freeze(config).completed == (), "a second restart has nothing left to complete"
+    assert freeze_only(config).completed == (), "a second restart has nothing left to complete"
 
 
 def test_a_restart_completes_a_freeze_interrupted_before_the_state_write(
@@ -777,7 +808,7 @@ def test_a_restart_completes_a_freeze_interrupted_before_the_state_write(
 
     assert len(evolution.load_state(config).pending) == TARGET
 
-    resumed = freeze(config)
+    resumed = freeze_only(config)
 
     assert set(resumed.completed) >= {batches.COMPLETED_STATE, batches.COMPLETED_TASK}
     persisted = evolution.load_state(config)
@@ -788,10 +819,11 @@ def test_a_restart_completes_a_freeze_interrupted_before_the_state_write(
 def test_a_restart_keeps_a_report_that_arrived_after_the_manifest_pending(
     config: evolution.EvolutionConfig, feed_root: Path, monkeypatch
 ) -> None:
-    """`start` syncs before it resumes, so a fresh evaluation of an
-    already-batched task can land in the pool between the manifest and the state
-    commit. It belongs to a later batch (invariant 3), not to the one that never
-    named it."""
+    """A fresh evaluation of an already-batched task can land in the pool
+    between the manifest and the state commit — `start` syncs in the same run
+    that repairs. The repair claims exactly the reports the manifest names, so
+    the late one stays pending: it belongs to a later batch (invariant 3), not
+    to the one that never named it."""
     feed = fill_pool(config, feed_root, TARGET)
 
     def interrupt(*_args, **_kwargs):
@@ -806,7 +838,7 @@ def test_a_restart_keeps_a_report_that_arrived_after_the_manifest_pending(
     write_feed(feed_root, [late])
     resumed = evolution.start(config, feed, now=NOW)
 
-    assert batches.COMPLETED_STATE in resumed.freeze.completed
+    assert batches.COMPLETED_STATE in resumed.proposal.completed
     persisted = evolution.load_state(config)
     assert [entry.dedup_key for entry in persisted.pending] == [("repo-alpha", "2026-07-01-task")]
     assert persisted.pending[0].primary.report_key == "late"
@@ -831,16 +863,22 @@ def test_a_bounded_partial_drain_freezes_nothing(
     bounded = evolution.start(config, feed, now=NOW, page_size=TARGET, max_pages=1)
 
     assert not bounded.sync.exhausted
-    assert not bounded.freeze.frozen
-    assert bounded.freeze.decision.reason == batches.REASON_POOL_INCOMPLETE
+    assert bounded.proposal.decision.reason == batches.REASON_POOL_INCOMPLETE
     assert evolution.load_batches(config) == []
     assert not analysis_task.tasks_root(config).exists()
+    # An offer stands over a prefix, and admission is what refuses it: the
+    # proposal says which reports were selected, the policy says whether a
+    # cohort may be formed out of them at all.
+    refused = evolution.freeze(config, now=NOW)
+    assert not refused.frozen
+    assert refused.decision.reason == batches.REASON_POOL_INCOMPLETE
 
     # Nothing was lost: the cursor carries on, and the complete pool freezes.
     drained = evolution.start(config, feed, now=NOW)
+    frozen = evolution.freeze(config, now=NOW)
 
     assert drained.sync.exhausted
-    assert drained.freeze.frozen
+    assert frozen.frozen
     assert evolution.load_batches(config)[0].task_count == TARGET + 1
 
 
@@ -986,8 +1024,8 @@ def test_an_open_batch_is_reconciled_before_the_feed_is_contacted(
 
     # And the repair is reported once the feed comes back, not repeated.
     resumed = evolution.start(config, feed, now=NOW)
-    assert resumed.freeze.completed == ()
-    assert resumed.freeze.current_batch_id == batch.batch_id
+    assert resumed.proposal.completed == ()
+    assert resumed.proposal.current_batch_id == batch.batch_id
 
 
 @pytest.mark.parametrize("replacement", ["# partial", "", "---\nid: something-else\n---\n"])
@@ -1035,7 +1073,7 @@ def test_an_interrupted_index_publish_leaves_the_other_rows_intact(
     assert index.read_text(encoding="utf-8") == before
     assert [path.name for path in sorted(index.parent.iterdir()) if path.name.startswith(".")] == []
 
-    resumed = freeze(config)
+    resumed = freeze_only(config)
 
     assert batches.COMPLETED_INDEX in resumed.completed
     assert "| 2026-07-01-other |" in index.read_text(encoding="utf-8")
@@ -1190,7 +1228,7 @@ def test_a_completed_analysis_closes_its_batch_on_every_machine(
     record_findings(config, first.batch_id or "")
     complete_analysis_task(config, first.analysis_task_id or "")
 
-    published = freeze(config)
+    published = freeze_only(config)
 
     assert published.closed_batch_ids == (first.batch_id,)
     closure = json.loads((config.batches_root / (first.batch_id or "") / batches.CLOSURE_FILENAME).read_text())
@@ -1613,7 +1651,7 @@ def test_a_manifest_from_another_machine_still_guards_the_open_batch(
     )
     assert not config.state_path.exists()
 
-    result = freeze(config)
+    result = freeze_only(config)
 
     assert not result.frozen
     assert result.decision.reason == batches.REASON_CURRENT_BATCH
@@ -1752,9 +1790,10 @@ def test_a_checkout_without_the_source_line_forms_no_batch(
     before = snapshot(repo / "evolution")
 
     with pytest.raises(evolution.BatchError, match="does not hold refs/heads/never-fetched"):
-        evolution.freeze(elsewhere, now=NOW)
+        evolution.build_proposal(elsewhere, now=NOW)
 
     assert snapshot(repo / "evolution") == before
+    assert not elsewhere.proposal_path.exists()
     assert len(evolution.load_state(config).pending) == TARGET
 
 
@@ -1883,7 +1922,8 @@ def test_the_freeze_appends_one_bounded_audit_record(
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
 
-    result = evolution.start(config, feed, now=NOW)
+    evolution.start(config, feed, now=NOW)
+    result = evolution.freeze(config, now=NOW)
     evolution.start(config, feed, now=NOW)
 
     frozen = [record for record in ledger.read_records(config) if record["record_type"] == batches.RECORD_BATCH_FROZEN]
@@ -1892,8 +1932,8 @@ def test_the_freeze_appends_one_bounded_audit_record(
         "record_type": batches.RECORD_BATCH_FROZEN,
         "schema_version": 1,
         "recorded_at": "2026-08-01T12:00:00Z",
-        "batch_id": result.freeze.batch_id,
-        "task_id": result.freeze.analysis_task_id,
+        "batch_id": result.batch_id,
+        "task_id": result.analysis_task_id,
         "revision": runner_revision(config),
         "detail": batches.TRIGGER_TARGET,
     }
@@ -1964,3 +2004,434 @@ def test_a_path_that_is_not_a_repository_resolves_no_source_line(tmp_path: Path)
     plain.mkdir()
 
     assert revisions.ref_tip(plain, RELEASE_REF) is None
+
+
+# --- the proposal, and the human window before the manifest -------------------
+
+
+def test_building_a_proposal_writes_nothing_durable(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The whole point of splitting the formation: `start` offers a batch and
+    fixes nothing, so a human stands between the pool and the analysis task.
+
+    Nothing under `evolution/` moves and the pending pool is byte-identical —
+    no manifest, no report claim, no analysis task, no batch ledger line."""
+    feed = fill_pool(config, feed_root, TARGET)
+    before = snapshot(repo / "evolution")
+    pool_before = config.state_path.read_bytes()
+
+    result = evolution.start(config, feed, now=NOW)
+
+    assert result.proposal.proposed
+    assert snapshot(repo / "evolution") == before
+    assert config.state_path.read_bytes() == pool_before
+    assert evolution.load_batches(config) == []
+    assert not analysis_task.tasks_root(config).exists()
+    assert [record["record_type"] for record in ledger.read_records(config)] == ["report-imported"] * TARGET
+
+
+def test_the_proposal_records_the_base_and_what_it_selected(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A batch is a base plus the reports selected against it, and both halves
+    are decided here rather than at the manifest."""
+    fill_pool(config, feed_root, TARGET)
+
+    result = evolution.build_proposal(config, now=NOW)
+
+    offered = result.proposal
+    assert offered is not None
+    assert offered.base_revision == runner_revision(config)
+    assert offered.source_line_ref == RELEASE_REF
+    assert offered.task_count == TARGET
+    assert {member.mode for member in offered.selected} == {proposals.MODE_AUTO}
+    assert offered.report_keys() == {f"r{index}" for index in range(1, TARGET + 1)}
+    # And it reads back through the parser it was written by.
+    assert proposals.load_proposal(config) == offered
+
+
+def test_the_frozen_batch_takes_the_base_the_proposal_was_built_at(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Not re-resolved at the freeze: the base is a parameter of the batch, read
+    once when it is created (invariants 8, 15)."""
+    fill_pool(config, feed_root, TARGET)
+    offered = evolution.build_proposal(config, now=NOW).proposal
+    assert offered is not None
+
+    result = evolution.freeze(config, now=NOW)
+
+    assert read_manifest(result)["runner_protocol_revision"] == offered.base_revision
+
+
+def test_a_freeze_with_no_proposal_refuses_and_names_the_offer(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """There is no path from the pool straight to a manifest. A freeze fixes an
+    offer somebody read, which is what makes the human window real."""
+    fill_pool(config, feed_root, TARGET)
+    before = snapshot(repo / "evolution")
+
+    with pytest.raises(evolution.BatchError, match="no batch proposal stands"):
+        evolution.freeze(config, now=NOW)
+
+    assert snapshot(repo / "evolution") == before
+    assert len(evolution.load_state(config).pending) == TARGET
+
+
+def test_a_freeze_refuses_a_proposal_built_before_the_line_moved(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The lock does not span the human window, so canonical work can land on
+    the source line between the offer and the freeze. The base selects the
+    evidence and is what every experiment starts from, so the offer is refused
+    rather than quietly re-based."""
+    fill_pool(config, feed_root, TARGET)
+    offered = evolution.build_proposal(config, now=NOW).proposal
+    assert offered is not None
+    moved = git_release_commit(repo, "canonical work between the offer and the freeze")
+    assert moved != offered.base_revision
+    before = snapshot(repo / "evolution")
+
+    with pytest.raises(evolution.BatchError, match="rather than re-based"):
+        evolution.freeze(config, now=NOW)
+
+    assert snapshot(repo / "evolution") == before
+    assert evolution.load_batches(config) == []
+    # And the rebuild the refusal names is what forms the batch, at the new tip.
+    rebuilt = evolution.build_proposal(config, now=NOW).proposal
+    assert rebuilt is not None and rebuilt.base_revision == moved
+    assert read_manifest(evolution.freeze(config, now=NOW))["runner_protocol_revision"] == moved
+
+
+def test_a_freeze_refuses_a_proposal_the_pool_has_outgrown(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A batch states what it was selected out of, so a task that entered the
+    pool after the offer was built has to be considered before it is left out —
+    otherwise the frozen denominator is wrong about its own population."""
+    feed = fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    write_feed(feed_root, [make_record(key="late", sequence=99, task_id="2026-07-99-task")])
+    evolution.sync(config, feed)
+
+    with pytest.raises(evolution.BatchError, match="never considered"):
+        evolution.freeze(config, now=NOW)
+
+    assert evolution.load_batches(config) == []
+
+
+def test_a_freeze_refuses_a_member_whose_reports_changed(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A later evaluation of an offered task lands in the same pool entry, so
+    freezing the stale offer would silently substitute one pack for another."""
+    feed = fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    write_feed(feed_root, [make_record(key="rerun", sequence=99, task_id="2026-07-01-task")])
+    evolution.sync(config, feed)
+
+    with pytest.raises(evolution.BatchError, match="different reports than the proposal offered"):
+        evolution.freeze(config, now=NOW)
+
+
+def test_the_freeze_drops_the_offer_it_fixed(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """An offer of a batch that now exists is what a second freeze would read,
+    and it would try to claim reports the first one already claimed."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    evolution.freeze(config, now=NOW)
+
+    assert not config.proposal_path.exists()
+    assert proposals.load_proposal(config) is None
+
+
+def test_a_current_batch_leaves_no_offer_standing(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A proposal is an offer of the *next* cohort. One standing beside a
+    running change cycle would be frozen the moment that cycle ended, out of a
+    pool nobody read again."""
+    feed = fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    evolution.freeze(config, now=NOW)
+    fill_pool(config, feed_root, TARGET, extra=[make_record(key="next", sequence=90, task_id="2026-09-01-task")])
+
+    result = evolution.start(config, feed, now=NOW)
+
+    assert result.proposal.proposal is None
+    assert result.proposal.decision.reason == batches.REASON_CURRENT_BATCH
+    assert not config.proposal_path.exists()
+
+
+def test_an_empty_pool_leaves_no_offer_standing(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    persisted = evolution.load_state(config)
+    persisted.pending = []
+    evolution.save_state(config, persisted)
+
+    result = evolution.build_proposal(config, now=NOW)
+
+    assert result.proposal is None
+    assert result.completed == (batches.COMPLETED_PROPOSAL,)
+    assert not config.proposal_path.exists()
+
+
+def test_a_freeze_still_verifies_every_staged_record_behind_the_offer(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Re-verification stays at the freeze and does not move to the proposal:
+    the proposal is not immutable and the freeze is the last moment a tampered
+    bundle can be caught."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    entry = evolution.load_state(config).pending[0]
+    staged = config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME
+    staged.write_text(staged.read_text(encoding="utf-8").replace("repo-alpha", "repo-tampered"), encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError):
+        evolution.freeze(config, now=NOW)
+
+    assert evolution.load_batches(config) == []
+
+
+# --- the proposal record itself ----------------------------------------------
+
+
+def offer(**overrides) -> dict:
+    """One well-formed proposal document, for tests that damage exactly one
+    field of it."""
+
+    document = {
+        "schema_version": proposals.PROPOSAL_SCHEMA_VERSION,
+        "built_at": "2026-08-01T12:00:00Z",
+        "source_line_ref": RELEASE_REF,
+        "base_revision": "b" * 40,
+        "selected": [
+            {
+                "repo_id": "repo-alpha",
+                "task_id": "2026-07-01-task",
+                "report_keys": ["r1"],
+                "mode": proposals.MODE_AUTO,
+                "reason": None,
+                "actor": None,
+                "moved_at": None,
+            }
+        ],
+        "not_selected": [],
+    }
+    document.update(overrides)
+    return document
+
+
+def read_offer(document: dict) -> proposals.BatchProposal:
+    return proposals.BatchProposal.from_json(document, Path("batch-proposal.json"))
+
+
+def test_a_human_move_carries_its_actor_reason_and_moment(tmp_path: Path) -> None:
+    """A human inclusion is invariant 1's exception, so nothing else bounds it:
+    the record has to say who made the judgement and why, or the exception is a
+    silent one."""
+    included = {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-02-task",
+        "report_keys": ["r2"],
+        "mode": proposals.MODE_HUMAN_INCLUDED,
+        "reason": "historical evidence, produced before the identity was published",
+        "actor": "operator@example.com",
+        "moved_at": "2026-08-01T13:00:00Z",
+    }
+
+    parsed = read_offer(offer(selected=[included]))
+
+    assert len(parsed.human_included) == 1
+    assert parsed.human_included[0].reason.startswith("historical evidence")
+
+
+@pytest.mark.parametrize("missing", ["reason", "actor", "moved_at"])
+def test_a_human_move_missing_any_of_the_three_is_refused(missing: str) -> None:
+    included = {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-02-task",
+        "report_keys": ["r2"],
+        "mode": proposals.MODE_HUMAN_INCLUDED,
+        "reason": "historical evidence",
+        "actor": "operator@example.com",
+        "moved_at": "2026-08-01T13:00:00Z",
+        missing: None,
+    }
+
+    with pytest.raises(evolution.ProposalError, match="records no judgement"):
+        read_offer(offer(selected=[included]))
+
+
+def test_an_automatic_member_naming_an_actor_is_refused() -> None:
+    """A name on an automatic selection would read as a judgement nobody made,
+    which is exactly what the mode is there to keep apart."""
+    named = {**offer()["selected"][0], "actor": "operator@example.com"}
+
+    with pytest.raises(evolution.ProposalError, match="nothing was moved here"):
+        read_offer(offer(selected=[named]))
+
+
+def test_a_human_exclusion_carries_its_actor_and_moment() -> None:
+    excluded = {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-03-task",
+        "report_keys": ["r3"],
+        "reason": proposals.REASON_HUMAN_EXCLUDED,
+        "actor": "operator@example.com",
+        "moved_at": "2026-08-01T13:00:00Z",
+    }
+
+    parsed = read_offer(offer(not_selected=[excluded]))
+
+    assert parsed.considered == 2
+    assert parsed.task_count == 1
+
+
+def test_an_automatic_non_selection_names_nobody() -> None:
+    """`identity-differs` is the test answering, not a person deciding."""
+    excluded = {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-03-task",
+        "report_keys": ["r3"],
+        "reason": proposals.REASON_IDENTITY_DIFFERS,
+        "actor": None,
+        "moved_at": None,
+    }
+
+    assert read_offer(offer(not_selected=[excluded])).considered == 2
+
+    with pytest.raises(evolution.ProposalError, match="nothing was moved here"):
+        read_offer(offer(not_selected=[{**excluded, "actor": "operator@example.com"}]))
+
+
+def test_a_task_cannot_be_both_selected_and_left_out() -> None:
+    """The two lists together are the batch's denominator, so a task in both
+    would make the considered count disagree with itself."""
+    both = {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-01-task",
+        "report_keys": ["r1"],
+        "reason": proposals.REASON_IDENTITY_DIFFERS,
+        "actor": None,
+        "moved_at": None,
+    }
+
+    with pytest.raises(evolution.ProposalError, match="named in both"):
+        read_offer(offer(not_selected=[both]))
+
+
+@pytest.mark.parametrize("field", ["built_at", "source_line_ref", "base_revision", "selected", "not_selected"])
+def test_an_incomplete_proposal_is_refused_rather_than_defaulted(field: str) -> None:
+    """The same rule the pool is read by: a missing field is damage, and reading
+    the gap as "nothing" is how a selection silently becomes a different one."""
+    document = offer()
+    del document[field]
+
+    with pytest.raises(evolution.ProposalError, match="incomplete proposal"):
+        read_offer(document)
+
+
+@pytest.mark.parametrize("version", [0, 2, "1", None, True, [], {}])
+def test_a_proposal_version_this_build_cannot_read_is_refused(version: object) -> None:
+    """`True` and `[]` are in the list on purpose: `True == 1` in Python, so a
+    version field of `true` would read as version 1 and parse, and an
+    unhashable value raises out of the lookup rather than being refused by
+    it."""
+
+    with pytest.raises(evolution.ProposalError, match="unsupported proposal schema_version"):
+        read_offer(offer(schema_version=version))
+
+
+def test_an_unparseable_proposal_names_the_rebuild(config: evolution.EvolutionConfig) -> None:
+    """Nothing durable stands on a proposal, so a damaged one is thrown away
+    rather than repaired — unlike the pool behind it."""
+    config.proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    config.proposal_path.write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(evolution.ProposalError, match="delete it and run `mandrel evolution start`"):
+        proposals.load_proposal(config)
+
+
+def test_a_writer_cannot_publish_a_proposal_its_own_reader_refuses(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Writers publish through the reader, so the cross-field rules hold in both
+    directions and an operator never meets one as a freeze that cannot start."""
+    broken = proposals.BatchProposal(
+        built_at="2026-08-01T12:00:00Z",
+        source_line_ref=RELEASE_REF,
+        base_revision="b" * 40,
+        selected=(
+            proposals.Member(
+                repo_id="repo-alpha",
+                task_id="2026-07-01-task",
+                report_keys=("r1",),
+                mode=proposals.MODE_HUMAN_INCLUDED,
+                reason="historical evidence",
+            ),
+        ),
+    )
+
+    with pytest.raises(evolution.ProposalError, match="records no judgement"):
+        proposals.save_proposal(config, broken)
+    assert not config.proposal_path.exists()
+
+
+def test_a_poll_that_changes_nothing_leaves_the_offer_and_the_token_alone(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The proposal is in the state digest, so re-stamping an unchanged offer
+    would refuse an operator's outstanding token over somebody else's no-op
+    poll — the exact false positive the watched-ref set was trimmed to avoid."""
+    feed = fill_pool(config, feed_root, TARGET)
+    first = evolution.start(config, feed, now=NOW).proposal.proposal
+    assert first is not None
+    bytes_before = config.proposal_path.read_bytes()
+
+    again = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
+
+    assert again == first
+    assert config.proposal_path.read_bytes() == bytes_before
+
+
+def test_a_pool_that_grew_gets_a_fresh_offer(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    feed = fill_pool(config, feed_root, TARGET)
+    first = evolution.start(config, feed, now=NOW).proposal.proposal
+    assert first is not None
+    write_feed(feed_root, [make_record(key="late", sequence=99, task_id="2026-07-99-task")])
+
+    again = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
+
+    assert again is not None
+    assert again.task_count == first.task_count + 1
+    assert again.built_at != first.built_at
+
+
+def test_a_damaged_offer_is_rebuilt_by_the_poll_and_refused_by_the_freeze(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Nothing durable stands on an offer, so the poll repairs it by replacing
+    it. Everything that would act on one still refuses rather than guessing."""
+    feed = fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    config.proposal_path.write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(evolution.ProposalError):
+        evolution.freeze(config, now=NOW)
+
+    rebuilt = evolution.start(config, feed, now=NOW).proposal.proposal
+
+    assert rebuilt is not None and rebuilt.task_count == TARGET
+    assert proposals.load_proposal(config) == rebuilt

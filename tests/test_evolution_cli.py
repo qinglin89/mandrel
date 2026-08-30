@@ -162,7 +162,15 @@ def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, count: int):
 
 
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
+    """Offer the batch, then fix it — the two commands a human runs.
+
+    The formation is two operations, so a test that means "form a cohort out of
+    this pool" has to do both. Where the split itself is what is under test, the
+    two are called apart.
+    """
+
     kwargs.setdefault("now", NOW)
+    evolution.build_proposal(config, now=kwargs["now"])
     return evolution.freeze(config, **kwargs)
 
 
@@ -246,6 +254,12 @@ def run(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str, 
 # --- lifecycle phase ---------------------------------------------------------
 
 
+def _action(status, verb: str):
+    """One verb out of the gate, by name."""
+
+    return next(action for action in status.actions if action.action == verb)
+
+
 def test_an_untouched_workspace_is_idle(config: evolution.EvolutionConfig) -> None:
     status = phase.describe(config, now=NOW)
 
@@ -281,6 +295,54 @@ def test_a_pool_left_as_a_prefix_reports_completeness_unproven(
     assert status.pool_complete is False
     assert status.decision.reason == batches.REASON_POOL_INCOMPLETE
     assert "completeness unproven" in render.format_status(status)
+
+
+def test_a_standing_offer_reports_the_batch_proposed_phase(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The phase between the pool and the first manifest — the only one in which
+    membership can still be argued with."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.phase == phase.PHASE_BATCH_PROPOSED
+    assert status.summary == f"batch-proposed {TARGET}/{TARGET}"
+    assert status.proposal is not None
+    assert status.to_json()["proposal"]["task_count"] == TARGET
+    assert status.to_json()["proposal"]["considered"] == TARGET
+    text = render.format_status(status)
+    assert "proposal" in text and f"{TARGET} of {TARGET} considered task(s) at base" in text
+
+
+def test_the_freeze_verb_is_offered_only_once_a_batch_is_on_offer(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Two conditions, and they fail for different people: an offer has to exist
+    for a human to have seen it, and admission has to release it."""
+    fill_pool(config, feed_root, TARGET)
+
+    before = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+    assert not before.allowed and "no batch proposal stands" in (before.refusal or "")
+
+    evolution.build_proposal(config, now=NOW)
+
+    after = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+    assert after.allowed and after.refusal is None
+
+
+def test_an_offer_admission_will_not_release_says_which_of_the_two_it_is(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    fill_pool(config, feed_root, 1)
+    evolution.build_proposal(config, now=NOW)
+
+    action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+
+    assert not action.allowed
+    assert "the proposal stands but admission does not release it" in (action.refusal or "")
+    assert batches.REASON_BELOW_TARGET in (action.refusal or "")
 
 
 def test_a_frozen_batch_holds_the_lifecycle_at_batch_frozen(
@@ -729,7 +791,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 7
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 8
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -1385,13 +1447,20 @@ def test_sync_imports_and_reports_the_pool(
 def test_start_runs_the_whole_flow_to_one_pending_analysis_task(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The acceptance end to end: an empty repository, a fixture feed, and one
-    command reaching a frozen cohort with its pending analysis task."""
+    """The acceptance end to end: an empty repository, a fixture feed, and the
+    two commands a formation takes — the poll that offers a batch, and the
+    freeze that fixes it as a cohort with its pending analysis task."""
     write_feed(feed_root, records(TARGET))
 
-    code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
+    offered, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     config = evolution.load_config(repo)
+    assert offered == 0
+    assert "nothing was frozen" in out
+    assert evolution.load_batches(config) == [], "the poll writes nothing durable"
+
+    code, out, _ = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+
     frozen = evolution.load_batches(config)
     assert code == 0
     assert len(frozen) == 1
@@ -1406,30 +1475,37 @@ def test_start_runs_the_whole_flow_to_one_pending_analysis_task(
     assert f"| {task_id} " in analysis_task.index_path(config).read_text(encoding="utf-8")
 
 
-def test_a_second_start_creates_no_second_batch(
+def test_a_second_start_offers_no_second_batch(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """The pool goes on accumulating while a cycle runs; what it may not do is
+    offer a second cohort beside it (invariant 14)."""
     write_feed(feed_root, records(TARGET))
     run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
+    run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
     code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     assert code == 0
     assert "is still current" in out
     assert len(evolution.load_batches(evolution.load_config(repo))) == 1
+    assert not evolution.load_config(repo).proposal_path.exists()
 
 
-def test_start_below_the_target_forms_no_batch_and_says_why(
+def test_start_below_the_target_offers_a_batch_nothing_may_freeze_yet(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Too little evidence is the contract's normal outcome, so the run
-    succeeds and reports the reason."""
+    succeeds and reports the reason. The offer still stands: what admission
+    refuses is forming a cohort out of it, not selecting it."""
     write_feed(feed_root, records(1))
 
     code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     assert code == 0
-    assert f"no batch — {batches.REASON_BELOW_TARGET}" in out
+    assert batches.REASON_BELOW_TARGET in out
+    assert "nothing was frozen" in out
+    assert evolution.load_config(repo).proposal_path.is_file()
     assert evolution.load_batches(evolution.load_config(repo)) == []
 
 
@@ -1437,10 +1513,9 @@ def test_force_without_a_justification_is_refused(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     write_feed(feed_root, records(1))
+    run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
-    code, _, err = run(
-        ["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root), "--force"], capsys
-    )
+    code, _, err = run(["evolution", "freeze", "--repo", str(repo), "--force"], capsys)
 
     assert code == 2
     assert "justification" in err
@@ -1450,16 +1525,17 @@ def test_force_without_a_justification_is_refused(
 def test_a_justified_force_freezes_a_below_target_batch(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """`--force` belongs to the freeze, not the poll: waiving the configured
+    target is a decision about forming a batch, and `start` forms none."""
     write_feed(feed_root, records(1))
+    run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     code, out, _ = run(
         [
             "evolution",
-            "start",
+            "freeze",
             "--repo",
             str(repo),
-            "--feed-dir",
-            str(feed_root),
             "--force",
             "--justification",
             "Severe correctness failure; escalated by the maintainer.",
@@ -1473,6 +1549,43 @@ def test_a_justified_force_freezes_a_below_target_batch(
     assert batches.TRIGGER_FORCED in out
     assert manifest["forced"] is True
     assert "escalated by the maintainer" in manifest["force_justification"].lower()
+    assert not config.proposal_path.exists()
+
+
+def test_a_freeze_with_nothing_offered_is_actionable(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one command an operator can reach for out of order, so its refusal
+    has to name the command that produces what it needs.
+
+    Asked of a pool the policy *would* release, because an empty or short pool
+    answers earlier and for a different reason: `freeze` reports no batch and
+    exits 0 there, exactly as it did before the formation split.
+    """
+
+    config = evolution.load_config(repo)
+    evolution.sync(config, write_feed(feed_root, records(TARGET)))
+
+    code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+
+    assert code == 2
+    assert "no batch proposal stands" in err and "mandrel evolution start" in err
+    assert evolution.load_batches(config) == []
+
+
+def test_a_freeze_below_the_target_reports_no_batch_rather_than_refusing(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Too little evidence stays the contract's normal outcome, not an error."""
+
+    config = evolution.load_config(repo)
+    evolution.sync(config, write_feed(feed_root, records(1)))
+
+    code, out, _ = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+
+    assert code == 0
+    assert batches.REASON_BELOW_TARGET in out
+    assert evolution.load_batches(config) == []
 
 
 def test_a_run_without_a_feed_or_credentials_is_actionable(
@@ -1791,7 +1904,34 @@ def test_a_commit_moving_no_watched_ref_leaves_an_outstanding_token_usable(
     code, out, _ = run(["evolution", "start", "--expect", outstanding, *where], capsys)
 
     assert code == 0
-    assert "frozen" in out
+    assert "proposal" in out
+    assert evolution.load_config(lineage_repo).proposal_path.is_file()
+
+
+def test_a_freeze_is_refused_on_a_token_taken_before_the_offer_was_built(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--expect` matters most here, because the lock does not span the human
+    window: the offer is built by one command and fixed by another, with a
+    person and unbounded time in between."""
+
+    config = evolution.load_config(lineage_repo)
+    write_feed(feed_root, records(TARGET))
+    where = ["--repo", str(lineage_repo), "--feed-dir", str(feed_root)]
+    before = token(config)
+
+    run(["evolution", "start", *where], capsys)
+
+    assert token(config) != before, "building the offer is a write"
+    code, _, err = run(["evolution", "freeze", "--repo", str(lineage_repo), "--expect", before], capsys)
+
+    assert code == 2
+    assert "the evolution records moved" in err
+    assert evolution.load_batches(config) == []
+
+    code, out, _ = run(["evolution", "freeze", "--repo", str(lineage_repo), "--expect", token(config)], capsys)
+
+    assert code == 0 and "frozen" in out
     assert len(evolution.load_batches(config)) == 1
 
 
@@ -1889,7 +2029,7 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
         # Followed by a space or the closing backtick, so `assess` is not
         # documented by `assess-measure`'s row happening to start with it.
         assert f"| `{verb} " in text or f"| `{verb}`" in text, f"{verb} is wired and not documented"
-    for verb in ("list", "sync", "status", "start"):
+    for verb in ("list", "sync", "status", "start", "freeze"):
         assert f"evolution {verb}" in text
 
     for state in (

@@ -35,6 +35,7 @@ REPLAYS_SCHEMA_FILENAME = "experiment-replays.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
 STATE_FILENAME = "state.json"
+PROPOSAL_FILENAME = "batch-proposal.json"
 LOCK_FILENAME = "lock"
 
 # Batch identity, mirroring `batch-manifest.schema.json`'s `batch_id` pattern.
@@ -73,6 +74,7 @@ VERSIONED_STORAGE_KEYS = ("ledger", "batches", "cases", "experiments")
 # a path away from the code that writes it by name.
 FIXED_PATHS = (
     (f"{SUPPORTED_RUNTIME_ROOT}/{STATE_FILENAME}", "the runtime state file"),
+    (f"{SUPPORTED_RUNTIME_ROOT}/{PROPOSAL_FILENAME}", "the batch proposal awaiting a freeze"),
     (f"{SUPPORTED_RUNTIME_ROOT}/{LOCK_FILENAME}", "the single-writer lock"),
     (CONFIG_RELATIVE_PATH.as_posix(), "this policy file"),
     (SCHEMAS_RELATIVE_PATH.as_posix(), "the versioned schemas every validator loads"),
@@ -203,6 +205,19 @@ class EvolutionConfig:
     @property
     def state_path(self) -> Path:
         return self.runtime_root / STATE_FILENAME
+
+    @property
+    def proposal_path(self) -> Path:
+        """The batch a human has been offered and has not yet fixed.
+
+        Machine-local and ignored like the pool it selects over: a proposal is
+        a reading of this checkout's pending pool against this checkout's
+        source line, and it is rebuilt by the next `start`. Nothing durable
+        derives from it — the manifest the freeze writes is the record, and
+        this file is gone by then.
+        """
+
+        return self.runtime_root / PROPOSAL_FILENAME
 
     @property
     def lock_path(self) -> Path:

@@ -30,6 +30,9 @@ complete an evaluation.
    reports with findings; otherwise recurrence and base rates are unknowable.
 3. **Freeze before analysis.** Every analysis uses an immutable manifest of
    report identities and content hashes. Later reports belong to a later batch.
+   The formation is two operations for exactly this reason: a batch is proposed
+   in ignored runtime state, argued with there, and only then frozen — so the
+   whole human window falls before the manifest exists rather than beside it.
 4. **Preserve provenance.** Keep source repo/task/evaluation identity,
    protocol/deployment revision, role models/profiles, evaluator/rubric
    revision, timestamps, artifact hashes, and explicit missing fields.
@@ -48,9 +51,10 @@ complete an evaluation.
    batch was created — a commit on the line the project releases from, not a
    release tag and not whichever branch that checkout was on — which is the
    same commit invariant 15 makes the batch's base. One reading, recorded once.
-9. **Human gates remain.** Humans trigger batch formation, admit proposed
+9. **Human gates remain.** Humans trigger batch formation — both halves of it,
+   the poll that proposes a batch and the freeze that fixes one — admit proposed
    canonical changes, and approve canary promotion. Automation may prepare
-   evidence and pending tasks, not make these policy decisions.
+   evidence, proposals, and pending tasks, not make these policy decisions.
 10. **Canary before promotion.** Candidate changes are versioned, exercised on
     a bounded cohort or replay, measured against a baseline, then promoted,
     revised, or reverted.
@@ -229,6 +233,8 @@ refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward 
 
 .ai-evolution/                      ignored machine-local runtime state
   state.json                        discovery cursor and pending pool
+  batch-proposal.json               the batch offered and not yet frozen: its base, its
+                                    members, and what was considered and left out
   lock                              single-writer guard
   imported-artifacts/               raw fetched bundles
 ```
@@ -245,7 +251,9 @@ different moments, and each has its own record:
 - Advancing discovery records that a feed item was inspected. Whether that
   discovery reached the end of the feed is recorded with it: a pool left as a
   prefix by a page bound is not a denominator (invariants 1 and 2).
-- A pending report remains eligible until assigned to a frozen batch.
+- A pending report remains eligible until assigned to a frozen batch. A
+  proposal selecting it changes nothing about that: an offer is a reading, and
+  only the freeze claims a report.
 - A batch's analysis is finished only after its analysis task completes
   successfully. `findings.md` is the disposition record and is written while
   that task is still being developed and reviewed, so it does not by itself end
@@ -275,8 +283,12 @@ completed archived-task L1+L2 evaluations
   -> orch-hub global completed-report feed
   -> human `mandrel evolution start`
   -> discover, validate, hash, deduplicate, stage
+  -> batch proposal: the configured source line's tip as the base, and the
+     pooled reports selected against it
+  -> human review of that proposal
   -> threshold/age admission check
-  -> immutable batch manifest, formed at the configured source line's tip
+  -> human `mandrel evolution freeze`
+  -> immutable batch manifest, formed at the base the proposal named
   -> pending batch-analysis task
   -> reviewed dispositions
   -> change-task drafts in batches/<batch-id>/proposed-tasks/
@@ -291,9 +303,28 @@ completed archived-task L1+L2 evaluations
      held to the line it chose
 ```
 
-`start` may discover too few eligible reports and exit without creating a
-batch. The default threshold is in `config.toml`; forced sub-threshold batches
-require a human justification and must still meet the configured minimum.
+`start` may discover too few eligible reports, and the batch it then offers is
+one admission will not release. The default threshold is in `config.toml`;
+forced sub-threshold batches require a human justification and must still meet
+the configured minimum.
+
+**Forming a batch is two operations, and that is what makes the human window
+real.** `start` writes a proposal to ignored runtime state and nothing else: no
+manifest, no report claim, no analysis task, no ledger line. `freeze` is the
+human's own command, and it is the first durable write of the whole formation —
+the manifest, the report claim and the analysis task, together, in that order.
+Everything a human may argue with about membership therefore happens *before*
+the manifest exists, which is what invariant 3 requires of it: an immutable
+membership record cannot also be the thing being adjusted.
+
+A proposal is a reading and never evidence. It is machine-local, it is rebuilt
+by the next `start`, and losing one costs a poll. The freeze re-reads the source
+line, re-validates every member against the live pool, and re-verifies every
+staged bundle before it writes — so a proposal built against a line that has
+since moved, or a pool that has since changed, is refused and rebuilt rather
+than fixed in place. `--force` belongs to `freeze` for the same reason: waiving
+the configured target is a decision about forming a batch, and the poll forms
+none.
 
 ## The report source
 
