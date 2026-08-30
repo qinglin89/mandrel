@@ -51,7 +51,6 @@ from typing import Any, Mapping
 
 from .config import (
     BATCH_SCHEMA_FILENAME,
-    BATCH_SCHEMA_V1_FILENAME,
     CLOSURE_SCHEMA_FILENAME,
     OUTCOME_SCHEMA_FILENAME,
     REJECTED_DRAFTS_SCHEMA_FILENAME,
@@ -79,12 +78,13 @@ ROLLBACK_SCHEMA_VERSION = 1
 OUTCOME_PROMOTED = "promoted"
 OUTCOME_NO_CHANGE = "no-change"
 
-# What a freeze writes.
+# What a freeze writes, and the only version this build reads. Version 1 was
+# dropped rather than kept as a reader arm: no batch has ever been frozen in this
+# repository, so there is no immutable manifest at that version anywhere to keep
+# readable. A second arm here would be compatibility with a record that does not
+# exist, and the window for that judgement closes at the first successful freeze.
 BATCH_SCHEMA_VERSION = 2
-# What this build reads, and the frozen schema each version is validated
-# against. Every version ever written keeps its entry here: dropping one would
-# make an immutable manifest unreadable rather than merely outdated.
-BATCH_SCHEMA_FILENAMES = {1: BATCH_SCHEMA_V1_FILENAME, 2: BATCH_SCHEMA_FILENAME}
+BATCH_SCHEMA_FILENAMES = {BATCH_SCHEMA_VERSION: BATCH_SCHEMA_FILENAME}
 
 
 @dataclass(frozen=True)

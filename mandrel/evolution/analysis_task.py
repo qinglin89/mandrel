@@ -104,10 +104,11 @@ class AnalysisTaskSpec:
     artifacts_root: str
     task_count: int
     report_count: int
-    # Where the configured source line stood when this cohort froze — the
-    # revision governing the task, not a tag some checkout described as
-    # (`batches._runner_revision`). None when that checkout did not hold the line.
-    runner_protocol_revision: str | None
+    # This batch's base: where the configured source line stood when the batch
+    # was formed (`batches._source_line_revision`) — the revision governing the
+    # task, not a tag some checkout described as. Always stated: a checkout that
+    # cannot resolve the line refuses to freeze rather than record its absence.
+    runner_protocol_revision: str
     config_sha256: str
     forced: bool
     force_justification: str | None
@@ -435,7 +436,6 @@ def render(spec: AnalysisTaskSpec) -> str:
     automation writes it.
     """
 
-    revision = spec.runner_protocol_revision or "unknown — this checkout did not hold the source line at freeze time"
     # Collapsed to one line so a multi-line justification stays one bullet. The
     # manifest keeps the operator's text verbatim.
     justification = " ".join((spec.force_justification or "").split())
@@ -468,8 +468,10 @@ justified is a valid outcome (invariant 7).
 - Batch: `{spec.batch_id}`. Immutable membership: `{spec.manifest_relative_path}`.
   Use only the reports it names for batch-level claims, and treat it as
   read-only — a late report belongs to a later batch (invariant 3).
-- Runner protocol revision: {revision}. It stays fixed for this task, and a
-  candidate revision never governs the run that creates it (invariant 8).
+- Base revision: {spec.runner_protocol_revision}. The commit this batch was
+  formed at, and the protocol revision its evidence was produced under. It stays
+  fixed for this task, and a candidate revision never governs the run that
+  creates it (invariants 8, 15).
 - Admission policy that formed this batch: `evolution/config.toml` at sha256
   `{spec.config_sha256}`.
 {force_line}- Raw evaluation bundles are machine-local runtime data under
@@ -607,13 +609,13 @@ other.
   visible. Retaining or rolling back the release is a human decision recorded on
   that artifact afterwards; this task produces the evidence and the verdict, not
   the settlement.
-- That settlement is what the next base freeze waits on (invariant 17): `retain`
-  leaves the release on `{release.merge_input_ref}` and `rolled-back` puts an
-  inverse commit there first, so no base is frozen until the reading is answered,
-  and the base that is then frozen has to be on the line the answer chose. The
-  obligation is this cohort's and stays this cohort's: a batch concluding without
-  answering does not pass it on, it leaves the next cohort's first experiment
-  waiting on this record. Nothing else here waits on it — the dispositions, the
+- That settlement is what the next first experiment waits on (invariant 17):
+  `retain` leaves the release on `{release.merge_input_ref}` and `rolled-back`
+  puts an inverse commit there first, so nothing is admitted until the reading is
+  answered, and the base the batch was formed at has to be on the line the answer
+  chose. The obligation is this cohort's and stays this cohort's: a batch
+  concluding without answering does not pass it on, it leaves the next cohort's
+  first experiment waiting on this record. Nothing else here waits on it — the dispositions, the
   drafts and this task's own completion are unaffected.
 """
 

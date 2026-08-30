@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/batch-manifest.schema.json",
   "title": "Evolution batch manifest (version 2)",
-  "description": "The shape a freeze writes today. Version 2 adds the per-report cohort provenance invariants 4 and 5 need; version 1 manifests keep their own frozen schema (batch-manifest-v1.schema.json) and stay readable, because a frozen manifest is immutable and cannot be migrated.",
+  "description": "The shape a freeze writes, and the only one this build reads. Version 2 adds the per-report cohort provenance invariants 4 and 5 need, and the batch base every experiment starts from. Version 1 was dropped rather than kept as a frozen reader schema: no batch has ever been frozen, so there is no immutable manifest at that version to keep readable. That window closes at the first successful freeze — after it, a frozen manifest cannot be migrated and its schema has to stay.",
   "type": "object",
   "required": [
     "schema_version",
@@ -10,6 +10,7 @@
     "created_at",
     "config_sha256",
     "forced",
+    "runner_protocol_revision",
     "reports"
   ],
   "properties": {
@@ -38,11 +39,9 @@
       ]
     },
     "runner_protocol_revision": {
-      "description": "The stable protocol revision governing this cohort's evolution task (contract invariant 8): where the configured source line ([source_line].ref) stood when the batch froze, as a full commit id. Null when the freezing checkout did not hold that line, which is recorded as the absence it is rather than substituted for (invariant 4). Not a release tag and not the per-report `provenance.runner_protocol_revision`, which is the revision a report's own runs were produced under.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "description": "This batch's base: where the configured source line ([source_line].ref) stood when the batch was formed, as a full commit id. One commit under two readings — the stable protocol revision governing this cohort's evolution tasks (contract invariant 8), and the commit every experiment of this batch starts from (invariant 15). Required and never null: the line is what selects the batch's members, so a checkout that cannot resolve it refuses to freeze rather than record the absence. Not a release tag and not the per-report `provenance.runner_protocol_revision`, which is the revision a report's own runs were produced under.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     },
     "analysis_task_id": {
       "type": [

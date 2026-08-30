@@ -57,7 +57,7 @@ order they are written in is the recovery story:
    a repair that "restored" the ref at the base would put it behind the real work
    and let the next commit fork the history;
 2. the experiment record, which is what makes the admission real — the drafts are
-   consumed, the tasks are named, the base is frozen;
+   consumed, the tasks are named, the batch's base is the commit it starts from;
 3. the task copies and their index rows, derivable from the record and the
    drafts, and therefore restorable;
 4. the audit line, which nothing derives state from.
@@ -705,43 +705,22 @@ def promotable_refusal(experiment: Experiment, evidence: Evidence | None) -> str
     )
 
 
-def unfinished_promotion_refusal(experiment: Experiment) -> str | None:
-    """Why a promotion interrupted before its batch outcome cannot be finished.
-
-    One state and one only: a record from a build that kept no prepared merge
-    (`experiment.json` v1). The outcome that ends the batch states the merge unit
-    and the targets it was planned for, and neither was ever written down.
-    """
-
-    return None if experiment.promotion is not None else _no_merge_unit(experiment)
-
-
-def _no_merge_unit(experiment: Experiment) -> str:
-    decision = experiment.decision
-    promoted = (decision.promotion_revision or "") if decision is not None else ""
-    return (
-        f"{experiment.experiment_id} was promoted as {promoted[:12]} by a build that "
-        "recorded no merge unit on the experiment, and the outcome that would end this batch states the "
-        "merge unit and the targets that promotion was planned for; the plan was never recorded, so this "
-        "batch cannot be concluded from what is on record rather than from what a later run supposes"
-    )
-
-
 def base_release_refusal(current: BatchLineage, owed: assessment.Obligation | None) -> str | None:
-    """Why a first base is not frozen before the release behind it is judged.
+    """Why a batch's base is not built on before the release behind it is judged.
 
     Invariant 17. The reading it waits on is the *owning* cohort's, which is the
     first batch frozen after that promotion and not necessarily this one; the
     caller resolves that obligation (`assessment.obligation`) and hands it here.
 
-    Only where a base is actually being frozen. A later experiment of the same
-    batch takes the frozen commit rather than resolving one, so asking again
-    there would gate work on a decision that can no longer change what it starts
-    from — and a batch with no promotion anywhere before it is not waiting on
-    anything.
+    Only at the batch's first experiment. The base itself was fixed when the
+    batch was formed, so this is not the moment it is chosen — it is the moment
+    it is first built on, and the last one before every alternative in the batch
+    stands on it. Asking again at a later experiment would gate work on a
+    decision that can no longer change what it starts from, and a batch with no
+    promotion anywhere before it is not waiting on anything.
     """
 
-    if current.base_revision is not None or owed is None:
+    if current.experiments or owed is None:
         return None
     subject = owed.frame.subject
     owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the cohort frozen after it, "
@@ -776,22 +755,21 @@ def create(
 ) -> AdmissionResult:
     """Admit a group of drafts as a new experiment on the current batch.
 
-    The first experiment of a batch freezes that batch's base revision — not the
-    batch freeze, which happens before anyone knows a change is warranted
-    (invariant 15). That base is the configured source line ([source_line].ref)
-    as this checkout holds it; every later experiment of the same batch is
-    created from the commit the first one froze. `base` names the commit the
-    operator expected in either case, and one naming anything else is refused
-    rather than reconciled.
+    Every experiment of a batch starts from the batch's own base (invariant 15):
+    the configured source line ([source_line].ref) as the batch's formation read
+    it, recorded in the immutable manifest and never re-resolved here. `base`
+    names the commit the operator expected, and one naming anything else is
+    refused rather than reconciled.
 
     Running it again with the same selection is the resume path, not a second
     admission: it finishes whatever the interrupted run left and reports what it
     completed.
 
-    Where a base is being frozen, the release before this batch has to have been
-    judged first (invariant 17): what that decision settles is whether the
-    commit every alternative here starts from carries the previous release or the
-    reversal of it.
+    At the batch's first experiment, the release before it has to have been
+    judged first (invariant 17): what that decision settles is whether the commit
+    every alternative here starts from carries the previous release or the
+    reversal of it. The base itself is not chosen by that answer — the batch was
+    formed at it — so the answer is what the frozen base is held to.
     """
 
     moment = _moment(now)
@@ -1498,10 +1476,10 @@ def _successor(
 ) -> Experiment:
     """The replacement a supersession creates: next id, same base, empty round 1.
 
-    The base comes from the batch rather than from the attempt being replaced —
-    the same commit every experiment of this batch starts from (invariant 15),
-    which is also what `_base_revision` refuses to resolve when this checkout no
-    longer holds it.
+    The base comes from the batch's manifest rather than from the attempt being
+    replaced — the same commit every experiment of this batch starts from
+    (invariant 15), which is also what `_base_revision` refuses to proceed on
+    when this checkout no longer holds it.
     """
 
     successor_id = format_experiment_id(current.batch_id, experiment.ordinal + 1)
@@ -2296,15 +2274,16 @@ def _finish_promotion(
         raise no_open_experiment(current, "promote")
     prepared = last.promotion
     if prepared is None:
-        # A version-1 record, whose promotion recorded the revision alone and
-        # stopped before the outcome. The merge unit is recoverable from the
-        # evidence and the commit, and the plan it was made under is recoverable
-        # from nowhere: it was never written down. Taking this run's targets for
-        # it would write a plan nobody promoted under as though it were the
-        # original — the one thing the outcome is trusted to state about intent
-        # — so the state is reported instead of guessed at (design: fail closed
-        # on missing provenance a decision needs).
-        raise BatchError(_no_merge_unit(last))
+        # Unreachable: `lineage.parse_experiment` refuses a `promoted` decision
+        # carrying no merge unit, so a promotion waiting for its outcome always
+        # has the unit and the plan it was made under. Narrowing, not a second
+        # rule — and the state it once covered was a version-1 record, which no
+        # reader accepts now.
+        raise BatchError(
+            f"{last.experiment_id} is promoted and states no merge unit; the outcome that ends this batch "
+            "states the merge unit and the targets that promotion was planned for, so the record is unreadable "
+            "rather than merely incomplete"
+        )
     if decision.reason != reason:
         raise BatchError(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
@@ -3108,73 +3087,37 @@ def _base_revision(
 ) -> tuple[str, str | None]:
     """The commit this experiment starts from, and the release it builds on.
 
-    A batch has exactly one base and its first experiment settled it (invariant
-    15), so a later experiment takes that commit rather than resolving one:
-    attempts against different sources are not alternatives to each other. An
-    explicit `base` is still checked against it, because an operator who names a
-    revision expecting it to be used should be told it was not.
+    Read from the batch, never resolved here. The base is a parameter of the
+    batch, fixed at its formation from the configured source line
+    ([source_line].ref) and recorded in the immutable manifest — so every
+    experiment of the batch takes that commit, the first one included, and
+    attempts against different sources are never alternatives to each other
+    (invariant 15). An explicit `base` is an assertion against it in every case:
+    it says which commit the operator expected, and a mismatch is told rather
+    than obeyed.
 
-    The freeze itself takes the configured source line ([source_line].ref), not
-    this checkout. A base is what every alternative in the batch is an attempt
-    against, and the branch the operator happens to be on is not that line — a
-    topic branch, a review checkout, or a fetch left behind all resolve
-    perfectly well and freeze a base nothing was released from. `base` is an
-    assertion here for the same reason it is one above: it says which commit the
-    operator expected, and a mismatch is told rather than obeyed.
+    What used to happen here was the freeze itself, on the first experiment. It
+    took the same line for the same reason — the branch the operator happens to
+    be on is not what the project releases from, and a topic branch, a review
+    checkout, or a fetch left behind all resolve perfectly well and would have
+    frozen a base nothing was released from. Moving it to the formation moved
+    nothing but the moment: the manifest reads the same ref, and it reads it
+    where the batch's own membership is being decided by it.
+
+    The release tag is derived rather than stored, so it is read once — at the
+    first admission, from the base — and carried by the experiments after that.
     """
 
     frozen = current.base_revision
-    if frozen is not None:
-        _require_requested_base(config, current, frozen, requested)
-        if resolve_commit(config.repo_root, frozen) is None:
-            raise BatchError(
-                f"this checkout does not hold {current.batch_id}'s base revision {frozen[:12]}; fetch it before "
-                "starting another experiment, since the new ref has to be created at exactly that commit"
-            )
-        return frozen, current.base_release_ref
-
-    resolved = _source_line_revision(config)
-    _require_requested_line(config, resolved, requested)
-    return resolved, release_ref(config.repo_root, resolved)
-
-
-def _source_line_revision(config: EvolutionConfig) -> str:
-    """Where the configured source line stands in this checkout.
-
-    Refused rather than substituted when it stands nowhere. A clone that never
-    fetched the line is the ordinary state of a fresh checkout, and the answer
-    to it is a fetch — freezing whatever else this repository holds would put
-    every alternative in the batch on a line the project does not release from.
-    """
-
-    ref = config.source_line.ref
-    revision = ref_tip(config.repo_root, ref)
-    if revision is None:
+    _require_requested_base(config, current, frozen, requested)
+    if resolve_commit(config.repo_root, frozen) is None:
         raise BatchError(
-            f"this checkout does not hold {ref}, which {config.path} names as the source line every experiment "
-            "of a batch starts from; fetch that line before freezing a base, since the base is recorded as an "
-            "exact commit and every alternative here is built on it (invariant 15)"
+            f"this checkout does not hold {current.batch_id}'s base revision {frozen[:12]}; fetch it before "
+            "starting an experiment, since the new ref has to be created at exactly that commit"
         )
-    return revision
-
-
-def _require_requested_line(config: EvolutionConfig, resolved: str, requested: str | None) -> None:
-    """A named base is checked against where the configured source line stands.
-
-    The freeze is not going to take anything else, so silence would leave an
-    operator believing a revision they named was used. Compared as commits
-    rather than as strings: naming the ref, the sha, or a tag pointing at it are
-    the same assertion, and all three are the operator saying which commit they
-    read.
-    """
-
-    if requested is None or _resolve(config, requested) == resolved:
-        return
-    raise BatchError(
-        f"{requested!r} is not where {config.source_line.ref} stands ({resolved[:12]}), and the base a first "
-        f"experiment freezes is that line as {config.path} names it; `--base` says which commit was expected "
-        "rather than choosing one, so fetch the line, or take the reading again and name the commit it is on"
-    )
+    if current.experiments:
+        return frozen, current.base_release_ref
+    return frozen, release_ref(config.repo_root, frozen)
 
 
 def _require_release_settled(
@@ -3182,16 +3125,22 @@ def _require_release_settled(
     known: Lineage,
     current: BatchLineage,
 ) -> assessment.Obligation | None:
-    """The release before this batch has been judged, before a base is frozen.
+    """The release before this batch has been judged, before its base is built on.
 
-    Invariant 17, and it is asked here because this is where the decision would
-    otherwise be made by accident. The first experiment of a batch freezes the
-    commit every alternative in it starts from (invariant 15), and whether the
-    previous release belongs in that commit is exactly what the reading of it
-    settles: `retain` leaves the release on the line, `rolled-back` puts an
-    inverse commit there first, so the base a freeze then takes is the line as
-    the decision left it. Freezing before the answer would take whichever of the
-    two the source line happened to be holding.
+    Invariant 17, and it is asked here because this is the last moment before the
+    base is built on. The batch's formation fixed the commit every alternative in
+    it starts from (invariant 15), and whether the previous release belongs in
+    that commit is exactly what the reading of it settles: `retain` leaves the
+    release on the line, `rolled-back` puts an inverse commit there first. So the
+    answer is not consulted to *choose* the base — it is what the frozen base is
+    then held to (`_require_settled_line`), and admitting before the answer would
+    build on whichever of the two the batch happened to be formed at.
+
+    There is no circularity in forming the batch before the answer: a batch is
+    created unconditionally, because the batch being created is the evidence
+    about that release. The two are five events apart on a strictly ordered
+    chain, and the settlement's two outcomes both land: a `retain` leaves the
+    already-frozen base carrying the release, so this gate passes.
 
     The reading it waits on is the *owning* cohort's, which is the first batch
     frozen after that promotion and not necessarily this one. The two part
@@ -3201,11 +3150,10 @@ def _require_release_settled(
     would find nothing to wait for and freeze a base on a line nobody decided
     about — the obligation stays where it was, and so does what waits on it.
 
-    Only where a base is actually being frozen. A later experiment of the same
-    batch takes the frozen commit rather than resolving one, so asking again
-    there would gate work on a decision that can no longer change what it starts
-    from — and a batch with no promotion anywhere before it is not waiting on
-    anything.
+    Only at the batch's first experiment, for `base_release_refusal`'s reason:
+    a later attempt of the same batch is already standing on the base, so asking
+    again would hold work against a decision that can no longer change what it
+    starts from.
 
     Nothing else in the batch waits on this either: the reading is taken while
     the analysis is still being written, and drafts, rejections and the closure
@@ -3215,7 +3163,7 @@ def _require_release_settled(
     where there is no release before this batch to judge.
     """
 
-    if current.base_revision is not None:
+    if current.experiments:
         return None
     owed = assessment.obligation(config, current.batch, lineage=known)
     refusal = base_release_refusal(current, owed)
@@ -3230,24 +3178,35 @@ def _require_settled_line(
     base_revision: str,
     requested: str | None,
 ) -> None:
-    """The base being frozen is the source line as the settlement left it.
+    """The base this batch was formed at is the source line as the settlement
+    left it.
 
     The other half of invariant 17, and without it the gate only asks that
     somebody answered. What the answer selects is a commit: `retain` says the
     alternatives are built on the line carrying the release, `rolled-back` says
     they are built on the line with the inverse commit on it. A base carrying
     neither — the pre-promotion revision after a `retain`, the promoted revision
-    after a `rolled-back` — is the freeze deciding for itself what the human was
+    after a `rolled-back` — is the batch deciding for itself what the human was
     asked, which is the accident this gate exists to stop.
 
-    Asked of the resolved base however it was reached. Naming the line in
-    configuration settles which ref a base comes off, not what that ref carries:
-    a clone that never fetched it, a line the project releases from that this
-    promotion never reached, and a line moved since the reading all resolve
-    perfectly well. It is also what keeps a rollback run *after* a recorded
-    `retain` from quietly realigning the base — the reading says the release
-    stays, and a line that no longer carries it is not the line that was decided
-    on.
+    A `retain` passes on the frozen base by construction: the batch was formed at
+    the line while the release was on it, and retaining leaves it there. A
+    `rolled-back` is the case where the base and the decision genuinely part
+    company — the reversal lands after the batch was formed, so its base carries
+    the promotion the human just took back off the line. The resolution of that
+    is a rollback ending the batch it settles, so no first experiment is ever
+    admitted against it and this is never reached with a `rolled-back` decision.
+    Until that lands, this refuses, which is the safe half of the gap: an
+    operator is told the base is off the line the decision chose rather than
+    building every alternative in the batch on a protocol nobody decided on.
+
+    Asked of the base however it was reached. Naming the line in configuration
+    settles which ref a base comes off, not what that ref carries: a clone that
+    never fetched it, a line the project releases from that this promotion never
+    reached, and a line moved since the reading all resolve perfectly well. It is
+    also what keeps a rollback run *after* a recorded `retain` from quietly
+    realigning the base — the reading says the release stays, and a line that no
+    longer carries it is not the line that was decided on.
 
     Ancestry rather than equality: the base is ordinarily the line's tip and may
     be anything later built on it, and what matters is whether the commit the
@@ -3350,19 +3309,26 @@ def _require_requested_base(
     frozen: str,
     requested: str | None,
 ) -> None:
-    """A named base is checked against the one this batch already froze.
+    """A named base is checked against the one this batch was formed at.
 
     Silence would be the wrong answer in either direction: the base is not going
     to change (invariant 15), and an operator who named a revision expecting it to
-    be used has to be told it was not.
+    be used has to be told it was not. Compared as commits rather than as
+    strings — naming the ref, the sha, or a tag pointing at it are the same
+    assertion, and all three are the operator saying which commit they read.
     """
 
     if requested is None or _resolve(config, requested) == frozen:
         return
+    where = (
+        f"with {current.experiments[0].experiment_id}"
+        if current.experiments
+        else f"in {current.batch.manifest_path.name}"
+    )
     raise BatchError(
-        f"{current.batch_id} froze its base at {frozen[:12]} with {current.experiments[0].experiment_id}, so "
-        f"{requested!r} cannot be this experiment's base; every alternative starts from the same commit or they "
-        "are not alternatives (invariant 15)"
+        f"{current.batch_id} froze its base at {frozen[:12]} {where}, so {requested!r} cannot be this "
+        "experiment's base; every alternative starts from the same commit or they are not alternatives "
+        "(invariant 15)"
     )
 
 
@@ -3926,7 +3892,6 @@ def _admission_lines(
     """
 
     relative = _draft_path(current.batch, draft_id).relative_to(config.repo_root).as_posix()
-    runner = current.batch.manifest.get("runner_protocol_revision")
     release = experiment.base_release_ref or "no release tag reachable"
     return (
         ADMISSION_HEADING,
@@ -3942,9 +3907,9 @@ def _admission_lines(
         "  fast-forwards; the round is sealed — every admitted task observed complete,",
         "  the tip pinned — before anything measures the candidate (invariants 15, 16).",
         f"- Base revision `{experiment.base_revision}`",
-        f"  ({release}): the commit every experiment of this batch starts from.",
-        f"- Runner protocol revision: {runner or 'unknown — none recorded at freeze time'}.",
-        "  It stays fixed for this task, and a candidate revision never governs the run",
+        f"  ({release}): the commit this batch was formed at and every experiment of it",
+        "  starts from (invariant 15). It is also this batch's runner protocol revision:",
+        "  it stays fixed for this task, and a candidate revision never governs the run",
         "  that creates it (invariant 8).",
     )
 

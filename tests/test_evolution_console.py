@@ -139,12 +139,16 @@ def freeze_cohort(
     *,
     effective: str | None,
     prefix: str = "a",
+    base: str | None = None,
 ) -> None:
     """A frozen cohort whose reports were produced at `effective`.
 
     `None` is the ordinary shape of everything imported before orch-hub began
     publishing the protocol identity: no report states what its target held, so
     no report can be placed on either side of a release.
+
+    Formed at the source line as it stands, which is what a real formation reads
+    and the base every experiment of this cohort then starts from.
     """
 
     write_manifest(
@@ -152,6 +156,7 @@ def freeze_cohort(
         batch_id,
         [],
         analysis_task_id=f"2026-08-10-{batch_id}",
+        runner_protocol_revision=base if base is not None else git_rev(config.repo_root, RELEASE_REF),
         reports=[
             make_manifest_report(
                 key=f"{prefix}{index}",
@@ -211,9 +216,9 @@ def prepare_promotion(config: evolution.EvolutionConfig, release: str) -> str:
     the line untouched.
     """
 
-    freeze_cohort(config, FIRST, effective=None)
-    analyzed(config, FIRST, drafts=("loader-fallback",))
     candidate = git_rev(config.repo_root, "HEAD")
+    freeze_cohort(config, FIRST, effective=None, base=candidate)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
     write_experiment(
         config.experiments_root,
         f"{FIRST}-exp-01",
@@ -257,9 +262,9 @@ def test_a_prepared_promotion_is_a_field_rather_than_a_refusal(
 def test_an_experiment_with_nothing_prepared_says_so_by_saying_nothing(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
-    """Null there means one thing and only one — no promotion prepared. The other
-    absence a prepared promotion has, a version-1 record that kept no merge unit,
-    belongs to an attempt that already ended, and this is asked of the open one."""
+    """Null there means one thing and only one — no promotion prepared. A record
+    that simply lost the field is refused rather than read as this, which is what
+    keeps the absence unambiguous."""
 
     freeze_cohort(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
@@ -1409,18 +1414,12 @@ def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
 def test_the_state_revision_covers_the_commit_a_first_base_would_freeze(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
-    """The one revision an operation resolves that no record names yet. A batch
-    with no experiment has no base, no candidate and no promotion to stand on,
-    and the grouped admission that opens its first attempt freezes the configured
-    source line — a ref named in TOML, which no record's bytes carry until that
-    freeze has already happened. So the line moving between the reading and the
-    write is exactly the state change a token has to notice, and it moves without
-    this checkout moving at all: another clone pushing to the line is what it
-    ordinarily looks like."""
-
-    freeze_cohort(config, FIRST, effective=None)
-    analyzed(config, FIRST, drafts=("loader-fallback",))
-    assert status(config).revisions.base is None
+    """The one revision an operation resolves that no record names yet. Forming a
+    batch reads the configured source line — a ref named in TOML, which no
+    record's bytes carry until that formation has already happened. So the line
+    moving between the reading and the write is exactly the state change a token
+    has to notice, and it moves without this checkout moving at all: another
+    clone pushing to the line is what it ordinarily looks like."""
 
     before = status(config).state_revision
     head = git_rev(config.repo_root, "HEAD")
@@ -1439,9 +1438,10 @@ def test_the_state_revision_is_stable_across_a_checkout_of_another_branch(
 ) -> None:
     """`HEAD` is deliberately not watched, and this is what that buys.
 
-    Nothing this package writes resolves the checkout any more — a first base and
-    the freeze's own `runner_protocol_revision` both take the configured source
-    line — so where the operator happens to be standing is not lifecycle state.
+    Nothing this package writes resolves the checkout any more — a batch is
+    formed at the configured source line, and that one commit is both its base
+    and its runner protocol revision — so where the operator happens to be
+    standing is not lifecycle state.
     Watching it would have made every commit and every branch switch invalidate
     outstanding tokens, which only the surfaces that always pass one (a script,
     the Web adapter, orch-hub) would ever have felt.

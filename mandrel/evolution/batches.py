@@ -533,7 +533,7 @@ def freeze_locked(
             closed_batch_ids=closed,
         )
 
-    revision = _runner_revision(config)
+    revision = _source_line_revision(config)
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
     if analysis_task.task_exists(config, task_id):
@@ -637,17 +637,20 @@ def _require_aware(moment: datetime) -> datetime:
     return moment
 
 
-def _runner_revision(config: EvolutionConfig) -> str | None:
-    """The protocol revision governing this cohort's work, or None when this
-    checkout cannot say.
+def _source_line_revision(config: EvolutionConfig) -> str:
+    """Where the configured source line stands at freeze time: this batch's base,
+    and the protocol revision governing its work.
 
-    Where the configured source line stands at freeze time (invariant 8: the
-    stable protocol revision governing an evolution task stays fixed for that
-    task, and a candidate revision never governs the run that creates it). The
-    line satisfies the second half by construction — candidates accumulate on
-    `refs/evolution/experiments/*`, and the only commits this package ever puts
-    on the source line are a promotion's merge and a rollback's inverse, neither
-    of which is a candidate.
+    One commit under two readings, and they were separate fields until the base
+    became a parameter of the batch. Invariant 8 is the first: the stable protocol
+    revision governing an evolution task stays fixed for that task, and a
+    candidate revision never governs the run that creates it — which the line
+    satisfies by construction, since candidates accumulate on
+    `refs/evolution/experiments/*` and the only commits this package ever puts on
+    the source line are a promotion's merge and a rollback's inverse. Invariant 15
+    is the second: every experiment of this batch starts from this commit, and the
+    membership test that selects the batch's evidence is equality against its
+    deployable canonical identity.
 
     What it replaced was `git describe --tags HEAD`, which was wrong twice over:
     it answered with a *tag name* where every other revision in play is a commit,
@@ -660,15 +663,27 @@ def _runner_revision(config: EvolutionConfig) -> str | None:
     line the project releases from, named once in `evolution/config.toml`, and
     not the branch whoever ran the freeze was on.
 
-    None rather than a refusal when the checkout does not hold the line. A batch
-    freeze is a decision about the report pool, and refusing one over an
-    unfetched ref would stop a cohort forming for a reason that has nothing to do
-    with the evidence; the manifest and the generated task state the absence
-    explicitly instead (invariant 4). A base freeze does refuse — by then the
-    commit is what everything is built on (`experiments._source_line_revision`).
+    Refused rather than recorded as absent when this checkout does not hold the
+    line. That is the reverse of what it did while the field was provenance
+    only — a freeze was then a decision about the report pool alone, and refusing
+    one over an unfetched ref would have stopped a cohort forming for a reason
+    that had nothing to do with the evidence. The line is now what *selects* the
+    evidence, so a checkout that cannot resolve it cannot say what the batch is:
+    there is no membership to test against and no base for the alternatives to be
+    built on. A fetch is the answer, and it is the ordinary state of a fresh
+    clone rather than a repository to repair.
     """
 
-    return ref_tip(config.repo_root, config.source_line.ref)
+    ref = config.source_line.ref
+    revision = ref_tip(config.repo_root, ref)
+    if revision is None:
+        raise BatchError(
+            f"this checkout does not hold {ref}, which {config.path} names as the source line a batch is formed "
+            "at; fetch that line before freezing, since the base is recorded as an exact commit, every "
+            "alternative in the batch is built on it, and its canonical identity is what selects the batch's "
+            "members (invariants 8, 15)"
+        )
+    return revision
 
 
 def _batched_entries(state: EvolutionState) -> list[PoolEntry]:
@@ -690,7 +705,7 @@ def _build_manifest(
     created_at: datetime,
     decision: AdmissionDecision,
     justification: str | None,
-    runner_revision: str | None,
+    runner_revision: str,
     analysis_task_id: str,
 ) -> dict[str, Any]:
     """Assemble and validate the membership snapshot before anything is written.
@@ -1041,7 +1056,7 @@ def _task_spec(
         artifacts_root=config.storage.imported_artifacts,
         task_count=len({(report["repo_id"], report["task_id"]) for report in reports}),
         report_count=len(reports),
-        runner_protocol_revision=_optional_string(manifest.get("runner_protocol_revision")),
+        runner_protocol_revision=str(manifest["runner_protocol_revision"]),
         config_sha256=str(manifest.get("config_sha256") or ""),
         forced=bool(manifest.get("forced")),
         force_justification=_optional_string(justification),

@@ -25,19 +25,12 @@ SCHEMAS_RELATIVE_PATH = Path("evolution") / "schemas"
 
 IMPORT_SCHEMA_FILENAME = "evaluation-import.schema.json"
 BATCH_SCHEMA_FILENAME = "batch-manifest.schema.json"
-# A frozen manifest is immutable, so each manifest version keeps the schema it
-# was written against; `manifests.py` picks between them by declared version.
-BATCH_SCHEMA_V1_FILENAME = "batch-manifest-v1.schema.json"
 CLOSURE_SCHEMA_FILENAME = "batch-closure.schema.json"
 OUTCOME_SCHEMA_FILENAME = "batch-outcome.schema.json"
 ROLLBACK_SCHEMA_FILENAME = "batch-rollback.schema.json"
 REJECTED_DRAFTS_SCHEMA_FILENAME = "rejected-drafts.schema.json"
 ASSESSMENT_SCHEMA_FILENAME = "release-assessment.schema.json"
 EXPERIMENT_SCHEMA_FILENAME = "experiment.schema.json"
-# A promoted experiment record states what a promotion went as, and a version-1
-# one states less than the current reader asks for rather than something
-# different; `lineage.py` picks between them by declared version.
-EXPERIMENT_SCHEMA_V1_FILENAME = "experiment-v1.schema.json"
 REPLAYS_SCHEMA_FILENAME = "experiment-replays.schema.json"
 LEDGER_SCHEMA_FILENAME = "ledger-record.schema.json"
 
@@ -470,7 +463,7 @@ def _ref(data: dict[str, object], section: str, key: str, path: Path) -> str:
     """A Git ref this policy names, refused unless it is fully qualified.
 
     Refused at load rather than where it is used, because everything downstream
-    of it is a commit: a base is frozen from this ref and an assertion is
+    of it is a commit: a batch is formed at this ref and an assertion is
     checked against it, and by then a name that resolved to something else is
     indistinguishable from a line that moved. `main`, `v2.3.0` and `HEAD` all
     resolve somewhere in most checkouts — which is the failure, not the fix.

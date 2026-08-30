@@ -397,20 +397,20 @@ def read_inputs(config: EvolutionConfig) -> Inputs:
     no reading mentions.
 
     One line is seeded rather than learned that way. The configured source line
-    is named in TOML, so no record's bytes carry it, and the first freeze of a
-    batch resolves it *before* any record names it — which is the one window
-    where what it stands on is being decided. Learned from the records it would
-    join the watch set only once an experiment had already been frozen off it,
-    and until then a caller holding a token from before the line moved would be
-    told the state still stands and freeze a base nobody read. The policy file's
+    is named in TOML, so no record's bytes carry it, and a batch's formation
+    resolves it *before* any record names it — which is the one window where what
+    it stands on is being decided. Learned from the records it would join the
+    watch set only once a batch had already been formed off it, and until then a
+    caller holding a token from before the line moved would be told the state
+    still stands and form a batch at a commit nobody read. The policy file's
     own bytes are hashed below, so an edit naming a *different* line is covered
     already; this covers that line moving.
 
     `HEAD` is deliberately not watched, and that absence is load-bearing. It was
-    here because two writes resolved the checkout — the base a first experiment
-    froze, and the freeze's own `runner_protocol_revision` — and both now take
-    the configured line instead, so nothing this package writes depends on where
-    the checkout stands. Watching it anyway would mean any commit at all, a docs
+    here because the writes that pinned a protocol revision resolved the
+    checkout; a batch's formation now takes the configured line for both of them
+    — its base and its runner protocol revision are one commit — so nothing this
+    package writes depends on where the checkout stands. Watching it anyway would mean any commit at all, a docs
     commit included, invalidated every outstanding token: an interactive operator
     would never notice (`--expect` is optional) while a script, the Web adapter
     and orch-hub, which always pass one, would be refused for a change that moved

@@ -45,7 +45,6 @@ from .config import (
     BATCH_ID_DIGITS,
     BATCH_ID_PREFIX,
     EXPERIMENT_SCHEMA_FILENAME,
-    EXPERIMENT_SCHEMA_V1_FILENAME,
     EvolutionConfig,
 )
 from .errors import BatchError
@@ -61,15 +60,14 @@ from .revisions import commit_shape, contains, ref_tip, revert_tree
 from .schema import load_schema, validate_or_raise
 
 EXPERIMENT_FILENAME = "experiment.json"
+# What this build writes, and the only version it reads. Version 1 was dropped
+# rather than kept as a reader arm: no experiment has ever been created in this
+# repository, so there is no durable record at that version for the arm to keep
+# readable. The window for that judgement closes at the first successful freeze,
+# after which a dropped arm would make a real history unreadable — and unreadable
+# is what stops every operation on the batch it belongs to.
 EXPERIMENT_SCHEMA_VERSION = 2
-# What this build writes, and the schema each version ever written is validated
-# against. Every version keeps its entry: an experiment record is the only
-# durable account of an attempt, so dropping one would make a history unreadable
-# rather than merely outdated — and unreadable is what stops every operation on
-# the batch it belongs to. Version 2 added the prepared promotion; a version-1
-# record is rewritten at the current version by the next operation that touches
-# it, which is why nothing here migrates one on the way in.
-EXPERIMENT_SCHEMA_FILENAMES = {1: EXPERIMENT_SCHEMA_V1_FILENAME, 2: EXPERIMENT_SCHEMA_FILENAME}
+EXPERIMENT_SCHEMA_FILENAMES = {EXPERIMENT_SCHEMA_VERSION: EXPERIMENT_SCHEMA_FILENAME}
 
 # Identity and namespace, mirroring `experiment.schema.json`. The batch half is
 # built from the config's own constants so the two spellings of a batch id
@@ -385,15 +383,27 @@ class BatchLineage:
         return self.outcome is None
 
     @property
-    def base_revision(self) -> str | None:
-        """The source commit every experiment of this batch starts from, frozen
-        by the first of them. None until there is one: a batch with no
-        experiment has no base, and the freeze deliberately did not pin one."""
+    def base_revision(self) -> str:
+        """The source commit every experiment of this batch starts from.
 
-        return self.experiments[0].base_revision if self.experiments else None
+        The manifest's, not the first experiment's: the base is a parameter of
+        the batch, fixed when it was formed and never re-resolved, so a batch
+        with no experiment yet still has one (invariant 15). The experiments are
+        held to it rather than consulted for it (`_require_one_base`) — a reading
+        that took the first experiment's would answer from a record written five
+        events after the commit was chosen, and would have nothing to answer with
+        before the first admission.
+        """
+
+        return str(self.batch.manifest["runner_protocol_revision"])
 
     @property
     def base_release_ref(self) -> str | None:
+        """The release tag reachable from the base, as the first experiment read
+        it. None until there is one: the manifest froze the commit, and the tag
+        beside it is derived at the first admission rather than recorded at the
+        freeze — it is a convenience for a reader, and the commit is the fact."""
+
         return self.experiments[0].base_release_ref if self.experiments else None
 
     @property
@@ -761,19 +771,30 @@ def _batch_lineage(
 
 
 def _require_one_base(batch: Batch, experiments: Iterable[Experiment]) -> None:
-    """Invariant 15: the batch has one base, settled by its first experiment.
+    """Invariant 15: every experiment of the batch starts from the batch's base.
 
-    Refused rather than reconciled, because attempts against different sources
-    are not alternatives to each other and no reading of this repository can say
-    which of the two the evidence meant.
+    Held to the manifest rather than only to each other. Agreement among the
+    experiments was all there was to ask while the first of them chose the
+    commit; now the batch states it, so a set of experiments that agree on some
+    *other* revision is a set built on a protocol this cohort's evidence was
+    never selected against — and the membership test is what that base decided.
+
+    Refused rather than reconciled in either direction, because attempts against
+    different sources are not alternatives to each other and no reading of this
+    repository can say which of them the evidence meant.
     """
 
-    bases = {experiment.base_revision: experiment.experiment_id for experiment in experiments}
-    if len(bases) > 1:
-        listed = ", ".join(f"{name} at {revision[:12]}" for revision, name in sorted(bases.items()))
+    frozen = str(batch.manifest["runner_protocol_revision"])
+    off_base = {
+        experiment.base_revision: experiment.experiment_id
+        for experiment in experiments
+        if experiment.base_revision != frozen
+    }
+    if off_base:
+        listed = ", ".join(f"{name} at {revision[:12]}" for revision, name in sorted(off_base.items()))
         raise BatchError(
-            f"{batch.batch_id} has experiments on more than one base revision ({listed}); every experiment of "
-            "one batch starts from the commit its first experiment froze"
+            f"{batch.batch_id} was formed at base {frozen[:12]} and has experiments on another revision "
+            f"({listed}); every experiment of one batch starts from the commit its manifest froze"
         )
 
 
@@ -1004,13 +1025,10 @@ def _require_checkable_merge_unit(
     loading on a shallow clone would take every other reading with it. The
     replay answers everywhere.
 
-    The prepared record is the one of the three a promotion may not have. A
-    version-1 experiment record kept the promotion revision alone, so for those
-    the outcome is the only place the merge unit was ever written — which is
-    exactly why the other two checks are put to the stated values rather than to
-    the prepared ones. What is lost with it is one record agreeing with another;
-    what a version-1 promotion is still held to is the run that measured the
-    tree and the commit that carries it.
+    The prepared record is the third, and the other two checks are still put to
+    the *stated* values rather than to it: the outcome is what a reader of the
+    batch has, and holding the replay and the commit to it is what makes the
+    outcome's own claim checkable rather than merely internally consistent.
 
     Read here rather than at each consumer because `status`, the promotion
     itself, and everything downstream read one derivation: a forged merge unit
@@ -1023,6 +1041,9 @@ def _require_checkable_merge_unit(
     from .replay import read_replays
 
     stated = outcome["promotion"]
+    # Never None on a promoted experiment: `parse_experiment` refuses a
+    # `promoted` decision carrying no merge unit, which is the same rule read
+    # from the experiment's side.
     prepared = promoted.promotion
     if prepared is not None:
         unit = {
@@ -1040,9 +1061,8 @@ def _require_checkable_merge_unit(
                 f"{promoted.experiment_id} was prepared as; the outcome states the merge unit that was promoted, "
                 "which is the one the experiment recorded before the source line moved"
             )
-    # The decision's own sentence rather than the prepared record's, because a
-    # version-1 promotion has only the decision — and the two are one sentence
-    # wherever both exist, which `parse_experiment` is what holds them to.
+    # The decision's own sentence rather than the prepared record's; the two are
+    # one sentence, which `parse_experiment` is what holds them to.
     decided = promoted.decision.reason if promoted.decision is not None else None
     if outcome["reason"] != decided:
         raise BatchError(
@@ -1364,20 +1384,12 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     _require_appended_rounds(path, rounds)
     _require_one_admission_per_draft(path, rounds)
     decision = _read_decision(path, record["decision"], last=rounds[-1])
-    # The version decides whether there is a field to read at all: version 1 has
-    # none — its schema refuses one — and every version after states it, with
-    # null for "no promotion prepared". So the absence is read from the version
-    # and never from the record, which is the difference between a build that
-    # kept no merge unit and a current record that lost one. A default here would
-    # collapse the two, and the state it would silently forget is a merge this
-    # controller made and may already have put on the source line.
-    promotion = _read_promotion(
-        path,
-        record["promotion"] if version > 1 else None,
-        rounds=rounds,
-        decision=decision,
-        version=version,
-    )
+    # Read from the record and never defaulted: the schema states the field with
+    # null for "no promotion prepared", so an absent one is a record that lost it
+    # rather than a build that kept none. A default here would collapse the two,
+    # and the state it would silently forget is a merge this controller made and
+    # may already have put on the source line.
+    promotion = _read_promotion(path, record["promotion"], rounds=rounds, decision=decision)
 
     return Experiment(
         experiment_id=experiment_id,
@@ -1523,7 +1535,6 @@ def _read_promotion(
     *,
     rounds: tuple[Round, ...],
     decision: Decision | None,
-    version: int,
 ) -> PreparedPromotion | None:
     """The merge unit a promotion was prepared as, checked against the rest of
     the record it sits in.
@@ -1542,19 +1553,14 @@ def _read_promotion(
     because the revision alone is a commit nothing can afterwards be held to —
     the rule the batch outcome states from its own side.
 
-    That last pairing is the one thing here the version decides, and it is why
-    `None` arrives with the version it came from: at version 1 it is a field that
-    never existed, and after it the explicit null a record states when nothing is
-    prepared. A version-1 promotion recorded the revision and no merge unit,
-    because the operation that wrote it kept none; refusing it would make an
-    attempt this controller itself promoted unreadable, and with it every reading
-    of the batch it ended. So it is read as the version-1 promotion it is, and
-    what it went as is checked where that version did record it — the batch
-    outcome, held to the run that measured it and to the commit itself.
+    `None` here is the explicit null a record states when nothing is prepared,
+    and nothing else. It was once also the shape of a version-1 record, which had
+    no field at all and recorded a promotion as the revision alone; that arm went
+    with the version, because no experiment was ever created under it.
     """
 
     if promotion is None:
-        if decision is not None and decision.outcome == DECISION_PROMOTED and version > 1:
+        if decision is not None and decision.outcome == DECISION_PROMOTED:
             raise BatchError(
                 f"{path}: records a promotion of {(decision.promotion_revision or '')[:12]} and not the merge "
                 "unit it went as; a promotion revision on its own is a commit nothing can be held to, so the "

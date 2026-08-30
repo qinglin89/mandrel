@@ -30,10 +30,11 @@ from any fresh checkout. A machine that holds an unfinished task keeps the
 analysis stage open even against the record — local lifecycle may only be more
 conservative than the committed answer, never less.
 
-Manifests are versioned and never rewritten, so each version keeps the schema it
-was written against: `batch-manifest-v1.schema.json` for version 1, and
-`batch-manifest.schema.json` for the current version, which adds the per-report
-evaluator and provenance blocks cohort coherence needs. New batches are written
-at the current version; older ones stay readable as frozen.
+Manifests are versioned and never rewritten, so once a batch exists its version
+keeps the schema it was written against. Only `batch-manifest.schema.json`
+(version 2) is read today: it carries the per-report evaluator and provenance
+blocks cohort coherence needs, and the base the batch was formed at. Version 1
+was dropped with its schema rather than kept as a reader arm, because no batch
+has ever been frozen here — that window closes at the first freeze.
 
 Never edit a frozen manifest to add late reports; create a later batch.

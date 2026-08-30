@@ -1492,7 +1492,9 @@ def admitted(config: evolution.EvolutionConfig) -> None:
         BATCH_ID,
         ["r1", "r2"],
         analysis_task_id=ANALYSIS_TASK,
-        runner_protocol_revision="d" * 40,
+        # The batch's base, as a formation records it: the commit the configured
+        # source line stands at, which is what the admission below starts from.
+        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
     )
     # `findings.md` gates the closure: dispositions written beside an
     # unfinished analysis task are not a completed analysis.

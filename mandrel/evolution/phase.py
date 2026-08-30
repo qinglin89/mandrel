@@ -912,12 +912,15 @@ def _view(config: EvolutionConfig, current: BatchLineage, *, analysis_complete: 
 def _revisions(current: BatchLineage | None) -> LifecycleRevisions:
     """The base, the tip, and the pinned candidate — three different commits.
 
-    The tip is what the ref actually holds and is absent on a clone that never
-    fetched the namespace; the round candidate is what the record pinned, which
-    is the only one replay evidence may name (invariant 16). They are equal only
-    while the last round is candidate-ready and nobody has committed since.
+    The base is stated for every current batch, because a batch is formed at one
+    (invariant 15); its `ref` is the release tag the first experiment read beside
+    it and stays null until there is one. The tip is what the experiment ref
+    actually holds and is absent on a clone that never fetched the namespace; the
+    round candidate is what the record pinned, which is the only one replay
+    evidence may name (invariant 16). Tip and candidate are equal only while the
+    last round is candidate-ready and nobody has committed since.
 
-    Both are also absent for a reason of a different kind: a batch between
+    Those two are also absent for a reason of a different kind: a batch between
     attempts has no open experiment, so no round left a candidate unsealed and
     no ref was inspected at all. That reason is not encoded here — a reader
     tells the two apart by `experiments.open`, which is null exactly then, and
@@ -926,9 +929,7 @@ def _revisions(current: BatchLineage | None) -> LifecycleRevisions:
 
     if current is None:
         return LifecycleRevisions()
-    base = None
-    if current.base_revision is not None:
-        base = Revision(sha=current.base_revision, ref=current.base_release_ref)
+    base = Revision(sha=current.base_revision, ref=current.base_release_ref)
     tip = None
     if current.ref is not None and current.ref.tip is not None:
         tip = Revision(sha=current.ref.tip, ref=current.ref.ref)
@@ -1812,7 +1813,7 @@ def _promote_refusal(status: LifecycleStatus, held: _Held, unfinished: Experimen
         # Every question this verb's own preamble runs, which is the whole of it
         # but the unfinished promotion — the state it is here to finish
         # (`experiments.promote`).
-        return held.ending or experiments.unfinished_promotion_refusal(unfinished)
+        return held.ending
     hold = _attempt_refusal(status, held, "promote")
     experiment = status.experiment
     if hold is not None or experiment is None or held.current is None:

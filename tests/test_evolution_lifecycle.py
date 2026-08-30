@@ -331,9 +331,13 @@ def test_nothing_in_the_arc_reads_the_ledger_back_as_state(
 def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """Two cycles in one repository: the second batch freezes its own base when
-    its first experiment is created, and the first batch's history stays exactly
-    where it was."""
+    """Two cycles in one repository: the second batch is formed at its own base,
+    and the first batch's history stays exactly where it was.
+
+    Canonical work lands on the line between the two cohorts, which is what makes
+    the two bases different commits — and it lands before the second formation,
+    because a formation reads the line once and never re-resolves it.
+    """
 
     fill_pool(config, feed_root, prefix="r", sequence=0)
     first = evolution.freeze(config, now=at(1))
@@ -345,9 +349,9 @@ def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
     experiments.conclude_no_change(config, reason="the one approach failed replay", now=at(4))
 
     fill_pool(config, feed_root, prefix="n", sequence=100)
+    moved = git_release_commit(config.repo_root, "canonical work between the two cohorts")
     second = evolution.freeze(config, now=at(5) + timedelta(days=1))
     analyze(config, NEXT_BATCH, second.analysis_task_id or "", drafts=("second-loader-fix",))
-    moved = git_release_commit(config.repo_root, "canonical work between the two cohorts")
     later = experiments.create(config, ["second-loader-fix"], now=at(7))
 
     assert later.experiment_id == f"{NEXT_BATCH}-exp-01"

@@ -114,7 +114,9 @@ SECOND = "evolution-batch-0002"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    root = make_repo(tmp_path)
+    # Under Git with the configured source line present: a batch is formed at
+    # that line's tip, so a workspace that cannot resolve it forms nothing.
+    root = git_repo(make_repo(tmp_path), tag="v2.2.0")
     path = root / "evolution" / "config.toml"
     text = path.read_text(encoding="utf-8")
     for old, new in (
@@ -202,15 +204,27 @@ def experiment(
     rounds: list[dict] | None = None,
     decision: dict | None = None,
 ) -> Path:
-    """One experiment record for `batch_id`, on that batch's frozen base."""
+    """One experiment record for `batch_id`, on that batch's frozen base.
+
+    Read from the manifest rather than restated: the batch is formed at a commit
+    and every experiment of it starts there (`lineage._require_one_base`), so a
+    record naming anything else is a lineage no reading accepts.
+    """
 
     return write_experiment(
         config.experiments_root,
         f"{batch_id}-exp-{ordinal:02d}",
-        base_revision=BASE,
+        base_revision=formed_base(config, batch_id),
         rounds=rounds,
         decision=decision,
     )
+
+
+def formed_base(config: evolution.EvolutionConfig, batch_id: str) -> str:
+    """The commit a batch was formed at, read from its manifest."""
+
+    manifest = json.loads((config.batches_root / batch_id / "manifest.json").read_text(encoding="utf-8"))
+    return str(manifest["runner_protocol_revision"])
 
 
 def copy_into_tasks(config: evolution.EvolutionConfig, path: Path) -> Path:
@@ -409,7 +423,7 @@ def test_a_sealed_round_is_candidate_ready_and_names_the_revision_it_pinned(
 
     assert status.phase == phase.PHASE_CANDIDATE_READY
     assert status.summary == f"candidate-ready {batch_id}-exp-01 round 1"
-    assert status.revisions.base is not None and status.revisions.base.sha == BASE
+    assert status.revisions.base is not None and status.revisions.base.sha == formed_base(config, batch_id)
     assert status.revisions.round_candidate is not None
     assert status.revisions.round_candidate.sha == CANDIDATE
     # No ref in this checkout, which says nothing about the record's pins — and
@@ -428,7 +442,13 @@ def test_a_candidate_that_does_not_descend_from_the_frozen_base_is_named(
     rather than as a ref resting where its record says."""
     root = git_repo(make_repo(tmp_path), tag="v2.2.0")
     config = evolution.load_config(root)
-    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], analysis_task_id="2026-07-31-analysis")
+    write_manifest(
+        config.batches_root,
+        "evolution-batch-0001",
+        ["r1"],
+        analysis_task_id="2026-07-31-analysis",
+        runner_protocol_revision=git_rev(root, "HEAD"),
+    )
     record_findings(config, "evolution-batch-0001")
     write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-analysis")
     stranded = git_unrelated_commit(root, "an attempt on a history of its own")
@@ -537,7 +557,7 @@ def test_a_batch_between_attempts_explains_its_revisions_by_what_is_open(
     assert status.phase == (phase.PHASE_PROPOSALS_PENDING if waiting else phase.PHASE_CONCLUSION_PENDING)
     assert status.experiment is None and status.ref is None
     assert status.to_json()["experiments"]["open"] is None, "what the rendering reads the absence off"
-    assert status.revisions.base is not None and status.revisions.base.sha == BASE
+    assert status.revisions.base is not None and status.revisions.base.sha == formed_base(config, batch_id)
     assert status.revisions.round_candidate is None and status.revisions.candidate_tip is None
     assert "no experiment is open" in rendered
     assert "the open round has not been sealed" not in rendered
@@ -660,7 +680,13 @@ def test_an_experiment_ref_that_moved_past_its_seal_is_reported_not_hidden(
     Refusing to describe the lifecycle is not how an operator finds out."""
     root = git_repo(make_repo(tmp_path), tag="v2.2.0")
     config = evolution.load_config(root)
-    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], analysis_task_id="2026-07-31-analysis")
+    write_manifest(
+        config.batches_root,
+        "evolution-batch-0001",
+        ["r1"],
+        analysis_task_id="2026-07-31-analysis",
+        runner_protocol_revision=git_rev(root, "HEAD~1"),
+    )
     record_findings(config, "evolution-batch-0001")
     write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-analysis")
     sealed = git_rev(root, "HEAD")
@@ -742,7 +768,7 @@ def test_the_status_json_names_the_five_revisions_apart(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["revisions"]["base"] == {"sha": BASE, "ref": "v2.2.0"}
+    assert payload["revisions"]["base"] == {"sha": formed_base(config, batch_id), "ref": "v2.2.0"}
     assert payload["revisions"]["round_candidate"] == {"sha": CANDIDATE, "ref": None}
     assert payload["revisions"]["candidate_tip"] is None
     assert payload["experiments"]["open"]["round"] == {
@@ -1313,12 +1339,13 @@ def test_status_prints_the_phase(tmp_path: Path, capsys: pytest.CaptureFixture[s
 def test_status_reports_no_revisions_in_play_before_any_experiment(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A checkout is not a candidate. Before an experiment freezes a base there
-    is nothing in play, whatever branch the operator happens to be on."""
+    """A checkout is not a candidate. With no batch there is nothing in play,
+    whatever branch the operator happens to be on — the base arrives with the
+    batch that was formed at it."""
     code, out, _ = run(["evolution", "status", "--repo", str(repo)], capsys)
 
     assert code == 0
-    assert "revisions    none in play — no experiment has frozen a base" in out
+    assert "revisions    none in play — no batch is current" in out
     assert "candidate" not in out
 
 
@@ -1550,10 +1577,10 @@ def test_lock_contention_is_reported_with_its_holder(
 
 @pytest.fixture
 def lineage_repo(repo: Path) -> Path:
-    """The workspace under Git, which a change lineage needs: an experiment
-    freezes a base revision and creates a durable ref at it."""
+    """The workspace, named for what the lineage tests need of it: an experiment
+    is created at its batch's base and puts a durable ref there. `repo` is
+    already under Git, because a formation reads the source line."""
 
-    git_repo(repo, tag="v2.2.0")
     return repo
 
 
@@ -2300,7 +2327,7 @@ def test_the_release_reading_and_its_gate_are_one_verb_each(
 
     assert code == 0
     assert f"settled {assessment.SETTLEMENT_RETAIN}" in out
-    assert "the release stays the line the first experiment of this batch freezes its base on" in out
+    assert "the release stays the line this batch's alternatives are built on" in out
     assert git_rev(lineage_repo, RELEASE_REF) == promoted
 
 

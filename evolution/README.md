@@ -45,8 +45,9 @@ complete an evaluation.
 8. **Pin the runner.** The stable protocol revision governing an evolution
    task remains fixed for that task. A candidate revision never governs the
    run that creates it. It is where the configured source line stood when the
-   batch froze — a commit on the line the project releases from, not a release
-   tag and not whichever branch the freezing checkout was on.
+   batch was created — a commit on the line the project releases from, not a
+   release tag and not whichever branch that checkout was on — which is the
+   same commit invariant 15 makes the batch's base. One reading, recorded once.
 9. **Human gates remain.** Humans trigger batch formation, admit proposed
    canonical changes, and approve canary promotion. Automation may prepare
    evidence and pending tasks, not make these policy decisions.
@@ -70,13 +71,16 @@ complete an evaluation.
     evidence, not a reason to cut this one short. Terminal experiments are
     history and never block anything: abandoning or superseding one frees the
     batch for another alternative, and only a promotion ends the batch.
-15. **One frozen base per batch, and rounds only add.** The first experiment
-    created for a batch freezes the source revision every experiment of that
-    batch starts from, so the alternatives are alternatives and none is built on
-    another. Within an experiment a revision round is appended, never rewritten:
-    each round's candidate revision stays reachable from the next one's, which
-    is what keeps prior task selections, candidate trees, and the evidence
-    measured against them readable after the experiment has moved on.
+15. **One frozen base per batch, and rounds only add.** A batch is created at
+    the configured source line's tip, and that commit — recorded in its
+    manifest — is the source revision every experiment of that batch starts
+    from, so the alternatives are alternatives and none is built on another.
+    It is read once, at the batch's creation, and never re-resolved: it is also
+    the identity the batch's own membership is selected by, so the two cannot be
+    separate readings. Within an experiment a revision round is appended, never
+    rewritten: each round's candidate revision stays reachable from the next
+    one's, which is what keeps prior task selections, candidate trees, and the
+    evidence measured against them readable after the experiment has moved on.
 16. **Pin the candidate before measuring it.** A round is measured only once it
     is **candidate-ready**: every task admitted into it durably observed
     complete, and its candidate revision pinned from the ref. Replay and every
@@ -167,17 +171,16 @@ and the decision that follows.
 
 ## Revisions in play
 
-Eight different commits, which an evidence trail must not substitute for one
+Seven different commits, which an evidence trail must not substitute for one
 another — a candidate measured against the wrong one measures nothing.
 
 | Term | What it is | Recorded in |
 |---|---|---|
-| Runner protocol revision | where the configured source line stood when the batch froze: the stable protocol revision governing that batch's evolution tasks (invariant 8). A commit rather than a release tag, and never the checkout the freeze happened to run in | `manifest.json.runner_protocol_revision` |
-| Base revision | the exact source commit every experiment of one batch starts from, frozen when that batch's first experiment is created | `experiment.json.base_revision` |
+| Base revision (runner protocol revision) | where the configured source line stood when the batch was created: one commit under two readings, and they are the same fact. It is the stable protocol revision governing that batch's evolution tasks (invariant 8), and the exact source commit every experiment of the batch starts from (invariant 15). A commit rather than a release tag, and never the checkout the creation happened to run in. Required: a checkout that cannot resolve the line forms no batch | `manifest.json.runner_protocol_revision`, restated by `experiment.json.base_revision` |
 | Candidate tip | the current head of the experiment's ref — where an open round's work is accumulating, and nothing to measure while it can still move | `refs/evolution/experiments/<experiment-id>` |
 | Round candidate revision | the tip pinned when a round was sealed; immutable, what replay exercises, and what that round's evidence describes | `experiment.json.rounds[].seal.candidate_revision` |
 | Merge input revision | where the source line stood when a replay integrated the candidate onto it; it moves for reasons the experiment knows nothing about, and each time it does that replay stops describing what a promotion would carry | `replays.json` `integration.merge_input_revision` |
-| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch. A promotion recorded before the experiment carried a merge unit (`experiment.json` version 1) states the revision alone, and the outcome is the only record of what it went as | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
+| Promotion revision | the canonical source-line commit carrying a promoted experiment's change; never the candidate tip it came from, and recorded with the merge unit that identifies it — the round, the candidate, the merge input, and the tree. Written on the experiment before the line moves, which is what makes an interrupted promotion finishable, and stated again by the outcome that ends the batch | `experiment.json.promotion`, `outcome.json.promotion_revision`, `outcome.json.promotion` |
 | Rollback revision | the source-line commit that takes a promoted change back out; a commit of its own with the line's tip as its parent, never the promotion it reverses and never a rewrite of it | `outcome.json`'s batch: `rollback.json` `revision` |
 | Deployed (effective) revision | what one target repository actually holds; per target, and it lags promotion until that target is redeployed. Stated only where the deploy could tie the payload to that commit and the deployed files were checked against their receipt while the work being evaluated ran; otherwise the report has none to state | target `.ai-deploy-lock.json` `source_git_commit`, captured by the publisher when each contributing run was launched and verified at that run's end; published with its payload digest as the `provenance.protocol` pair and copied onto a report as `provenance.effective_revision` |
 
@@ -263,7 +266,7 @@ completed archived-task L1+L2 evaluations
   -> human `mandrel evolution start`
   -> discover, validate, hash, deduplicate, stage
   -> threshold/age admission check
-  -> immutable batch manifest
+  -> immutable batch manifest, formed at the configured source line's tip
   -> pending batch-analysis task
   -> reviewed dispositions
   -> change-task drafts in batches/<batch-id>/proposed-tasks/
@@ -274,7 +277,8 @@ completed archived-task L1+L2 evaluations
   -> human promote | revise (next round) | abandon | supersede (next experiment)
   -> batch outcome: promoted, or no-change
   -> next frozen cohort assesses the release: improved | neutral | regressed | inconclusive
-  -> human settlement: retain, or roll back -> the next base freeze, on the line it chose
+  -> human settlement: retain, or roll back -> the next batch's first experiment,
+     held to the line it chose
 ```
 
 `start` may discover too few eligible reports and exit without creating a
@@ -522,10 +526,11 @@ task.
 
 What the copy adds is what the draft could not know: an `## Admission` section
 naming the batch, the experiment and round, the base revision and the release it
-builds on, the runner protocol revision, and the ref to work on. Those are the
-facts the task requirements below demand of a change task, and without the last
-one the session implementing it has nowhere to commit. The hash in the record is
-of the draft — what was proposed — and the copy is derived from it.
+builds on, and the ref to work on. The base is stated once, because the batch's
+base and its runner protocol revision are one commit. Those are the facts the
+task requirements below demand of a change task, and without the ref the session
+implementing it has nowhere to commit. The hash in the record is of the draft —
+what was proposed — and the copy is derived from it.
 
 A human may also decline a draft instead of admitting it, which is recorded in
 `batches/<batch-id>/rejected-drafts.json` with the reason and the bytes
@@ -573,42 +578,48 @@ one before it ended.
 
 Creating one *is* the grouped admission of step 2 above. The human selects the
 drafts that belong together, and one operation creates the experiment's ref at
-the batch's base revision, the record, and the admitted tasks. For the first
-experiment of a batch that base is where the **configured source line**
-(`config.toml` `[source_line].ref`) stands, recorded as its sha, because a
+the batch's base revision, the record, and the admitted tasks. That base is the
+batch's own, read from its manifest and never resolved here — every experiment
+of the batch, the first included, starts from that exact commit; otherwise the
+alternatives are not alternatives but attempts against different protocols. A
+different base is refused rather than reconciled. `--base` states which commit
+the operator expected, and a mismatch is refused rather than obeyed.
+
+The base was fixed when the batch was created, at where the **configured source
+line** (`config.toml` `[source_line].ref`) stood, recorded as its sha because a
 branch or a tag means a different commit tomorrow. The line is named in
 configuration rather than taken from whoever runs the command: a checkout is on
 a topic branch, a review, or a colleague's fetch as often as on the line the
 project releases from, and a base taken from it is an alternative measured
-against a protocol nobody released. `--base` states which commit the operator
-expected there, and a mismatch is refused rather than obeyed.
+against a protocol nobody released. A checkout that cannot resolve the line
+forms no batch at all: the line is what selects the batch's evidence as well as
+what its alternatives are built on, so there is nothing to form.
 
-The **first** experiment created for a batch freezes that batch's base revision
-(invariant 15) — not the batch freeze, which happens before anyone knows a
-change is warranted and would pin a base to evidence rather than to work. Every
-later experiment for the same batch starts from that exact commit; otherwise
-the alternatives are not alternatives but attempts against different protocols.
-A different base is refused rather than reconciled: the batch has one base, and
-which one it is was settled by its first experiment.
-
-That freeze is also where the previous release stops being an open question. A
-batch frozen after a promotion owes a reading of it, and until a human settles
-that reading the first experiment refuses to freeze anything (invariant 17,
-Release assessment): `retain` and `rolled-back` leave two different commits on
-the source line, so a base taken before the answer is the answer made by
-accident. The reading it waits on is the owning cohort's — the first batch
-frozen after that promotion — which is not always the batch doing the freezing:
-a cohort that ended `no-change` promoted nothing, so the next one follows the
-same release while owing no reading of its own.
+The first experiment is where the previous release stops being an open question.
+A batch created after a promotion owes a reading of it, and until a human settles
+that reading no experiment is admitted (invariant 17, Release assessment):
+`retain` and `rolled-back` leave two different commits on the source line, so
+building on the base before the answer is the answer made by accident. The
+reading it waits on is the owning cohort's — the first batch created after that
+promotion — which is not always the batch doing the admitting: a cohort that
+ended `no-change` promoted nothing, so the next one follows the same release
+while owing no reading of its own.
 
 The base is then held to what that settlement chose. `retain` selects the line
 carrying the release and `rolled-back` the line carrying the inverse commit, so
-a base that does not have the chosen commit in its history is refused however it
-was reached. Configuration settles which ref a base comes off, not what that ref
-carries: a clone that never fetched the line, a line this promotion never
-reached, and a line a standalone rollback moved after the gate said the release
-stays all resolve perfectly well. Later experiments of the batch take the frozen
-commit and ask nothing.
+a base that does not have the chosen commit in its history is refused. There is
+no circularity in creating the batch before the answer, because the batch being
+created is the evidence about that release: a `retain` leaves the already-fixed
+base carrying the release and the gate passes, and a `rolled-back` is meant to
+end the batch it settles, so no first experiment is ever admitted against it.
+Until that half lands, a `rolled-back` settlement leaves its own cohort's base
+carrying the promotion the human took back off, and the gate refuses rather than
+building every alternative on a protocol nobody decided on. Configuration settles
+which ref a base comes off, not what that ref carried when it was read: a clone
+that never fetched the line, a line this promotion never reached, and a line a
+standalone rollback moved after the gate said the release stays all resolve
+perfectly well. Later experiments of the batch take the same commit and ask
+nothing.
 
 Work happens on the durable ref `refs/evolution/experiments/<experiment-id>`,
 checked out under whatever local branch name suits the operator. The ref only
@@ -964,15 +975,12 @@ already on the source line; the redo would then find that attempt, try to promot
 it instead, and refuse on evidence nothing measured, leaving the interrupted
 promotion unfinishable until the new attempt was abandoned.
 
-Promotions recorded before the experiment carried a merge unit are read as what
-they are rather than refused. That shape is an `experiment.json` at version 1: it
-states the promotion revision and nothing about the merge, because the operation
-that wrote it kept nothing else, and its schema is frozen so those records keep a
-read path. Refusing them would not make one record stricter — it would stop every
-reading of the batch that record ended. What such a promotion is still held to is
-below; what it cannot be finished from is its own interrupted window, since the
-targets it was planned for were never written down and no later run may state
-them as the original plan.
+Every promoted experiment states the merge unit it went as, and a record that
+does not is refused rather than read as a promotion nobody kept the plan for.
+The one shape that ever stated the revision alone was an `experiment.json` at
+version 1, which no reader accepts now: no experiment was ever created under it,
+so keeping the arm would have been compatibility with a record that does not
+exist.
 
 Every version after that one states the field on every record, null included, and
 the absence of it is read from the version rather than from the record. A current
@@ -1202,8 +1210,9 @@ The release is read from the promoted batch's `outcome.json`. That record carrie
 the whole merge unit, which is what makes the pair to compare a reading rather
 than a reconstruction: the pre-promotion revision is the merge input — the
 promotion's first parent — and the promoted one is the revision itself. The
-experiment's own prepared promotion is not the place to read it, since a
-promotion made at experiment schema version 1 states its revision alone.
+experiment's own prepared promotion is not the place to read it: the outcome is
+what a reader of the batch has, and holding the pair to it is what makes the
+outcome's claim checkable rather than merely internally consistent.
 
 **Which question is being answered.** A promotion a rollback reversed is a
 different question from a standing one, not the same question with a caveat: the
@@ -1879,8 +1888,9 @@ stop the run instead of one of them being picked to continue.
 Every evolution task must:
 
 - Cite this contract and, after batching, one immutable batch ID.
-- State its runner protocol revision; change tasks also state the batch's base
-  revision, and the experiment and draft id they were admitted from.
+- State its batch's base revision, which is also that batch's runner protocol
+  revision; change tasks also state the experiment and draft id they were
+  admitted from.
 - Use only reports named by the batch manifest for batch-level claims.
 - Record, when it analyzes the first batch frozen after a promotion, one reading
   of that release from its own frozen provenance and the promoted batch's

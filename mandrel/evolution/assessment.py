@@ -193,8 +193,8 @@ CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW)
 SETTLEMENT_RETAIN = "retain"
 SETTLEMENT_ROLLED_BACK = "rolled-back"
 # The two answers the gate has. There is no third: a release is either what the
-# next base is frozen on or it is taken back off the line first, and "not yet" is
-# the unsettled reading rather than a decision.
+# next batch's alternatives are built on or it is taken back off the line first,
+# and "not yet" is the unsettled reading rather than a decision.
 SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 
 # Why a frozen report is in neither cohort. All four are about what its
@@ -1902,14 +1902,14 @@ def settle(
     expect: str | None = None,
     now: datetime | None = None,
 ) -> Settled:
-    """Answer the human gate between a release and the next base freeze.
+    """Answer the human gate between a release and the next batch's first
+    experiment.
 
-    What it decides is what the batch's own experiments will start from
-    (invariant 17): `retain` leaves the release as the line every alternative in
-    this batch builds on, and `rolled-back` takes it back off first, so the base
-    the first experiment then freezes is the line as this decision left it. Until
-    it is answered no base is frozen, which is what keeps the decision from being
-    made silently by whatever the source line happened to hold.
+    What it decides is what the batch's own experiments are held to (invariant
+    17): `retain` leaves the release as the line every alternative in this batch
+    builds on, and `rolled-back` takes it back off first. Until it is answered
+    nothing is admitted, which is what keeps the decision from being made
+    silently by whatever the base a batch was formed at happened to carry.
 
     **The reversal is composed, not repeated.** `rolled-back` runs the rollback
     operation, which takes the reason and nothing else — which promotion, which
@@ -1950,7 +1950,8 @@ def settle(
     if settlement not in SETTLEMENTS:
         raise BatchError(
             f"{settlement!r} is not an answer to a release assessment; the gate settles {SETTLEMENT_RETAIN!r} — "
-            f"the release stays the line the next base is frozen on — or {SETTLEMENT_ROLLED_BACK!r}, which takes "
+            f"the release stays the line the next alternatives are built on — or {SETTLEMENT_ROLLED_BACK!r}, "
+            "which takes "
             "it back off first"
         )
     text = require_reason(
@@ -2347,7 +2348,7 @@ def _require_standing(frame: Frame) -> None:
     raise BatchError(
         f"{assessed.batch_id}'s promotion {assessed.revision[:12]} is no longer on {assessed.merge_input_ref}: "
         f"{(assessed.rollback_revision or '')[:12]} took it back out. {SETTLEMENT_RETAIN!r} says the release "
-        f"stays the line the next base is frozen on, and that line now carries the reversal instead — "
+        f"stays the line the next alternatives are built on, and that line now carries the reversal instead — "
         f"{SETTLEMENT_ROLLED_BACK!r} is what happened, and its reason is where a release taken back for reasons "
         "this reading never found is explained"
     )

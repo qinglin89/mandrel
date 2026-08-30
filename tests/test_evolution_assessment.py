@@ -148,9 +148,16 @@ def freeze_second(
     batch_id: str = SECOND,
     reports: list[dict] | None = None,
     effective: str | None = None,
+    base: str | None = None,
 ) -> lineage.Batch:
     """The cohort that measures the release: a frozen batch whose reports were
-    produced at the promoted revision unless a test says otherwise."""
+    produced at the promoted revision unless a test says otherwise.
+
+    Formed at the source line as it stands now, which is a real formation's own
+    reading — after a promotion that is the promoted revision, and it is the base
+    every experiment of this cohort then starts from (invariant 15). `base` states
+    it instead, for a checkout that can no longer resolve the line.
+    """
 
     at = effective if effective is not None else promotion.promotion_revision
     write_manifest(
@@ -158,6 +165,7 @@ def freeze_second(
         batch_id,
         [],
         analysis_task_id=f"2026-08-10-{batch_id}",
+        runner_protocol_revision=base if base is not None else git_rev(config.repo_root, RELEASE_REF),
         reports=reports
         if reports is not None
         else [
@@ -560,7 +568,11 @@ def test_a_match_on_the_before_side_places_even_where_the_after_side_is_missing(
     """
 
     drop_commit(config, promoted.promotion_revision)
-    second = freeze_second(config, promoted, effective=promoted.merge_input_revision)
+    # Stated rather than read: this clone no longer holds the commit the line
+    # points at, which is the state under examination.
+    second = freeze_second(
+        config, promoted, effective=promoted.merge_input_revision, base=promoted.promotion_revision
+    )
     frame = assessment.describe(config, second)
 
     assert frame is not None
@@ -895,29 +907,6 @@ def test_a_repository_present_on_only_one_side_is_not_a_comparison(
         assessment.FACET_REPOSITORY_COVERAGE,
     )
     assert frame.cohorts_support_direction is False
-
-
-def test_a_version_one_manifest_carries_no_cohort_provenance(
-    config: evolution.EvolutionConfig,
-    promoted: experiments.PromotionResult,
-) -> None:
-    """Version 1 froze identity and hashes and nothing about what a target held,
-    so those reports are placed nowhere rather than assumed comparable."""
-
-    write_manifest(
-        config.batches_root,
-        SECOND,
-        ["a1"],
-        version=1,
-        analysis_task_id=f"2026-08-10-{SECOND}",
-    )
-    second = next(item for item in evolution.load_batches(config) if item.batch_id == SECOND)
-    frame = assessment.describe(config, second)
-
-    assert frame is not None
-    assert [(item.report_key, item.reason) for item in frame.excluded] == [
-        ("a1", assessment.EXCLUDED_REVISION_ABSENT)
-    ]
 
 
 def test_a_reversed_promotion_is_a_different_question(
@@ -3301,7 +3290,16 @@ def build_absent_release(config: evolution.EvolutionConfig) -> lineage.Batch:
         promotion_revision="f" * 40,
         reason="the approach needs a loader change this batch cannot justify",
     )
-    write_manifest(config.batches_root, SECOND, ["a1"], analysis_task_id="2026-08-10-second")
+    # Formed at a commit this checkout does hold: what it cannot answer is the
+    # *relation* between that base and the promotion, which is the question the
+    # settled line is put to.
+    write_manifest(
+        config.batches_root,
+        SECOND,
+        ["a1"],
+        analysis_task_id="2026-08-10-second",
+        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
+    )
     return next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
 
 
@@ -3375,7 +3373,7 @@ def test_retaining_a_release_leaves_it_on_the_line(
     promoted: experiments.PromotionResult,
 ) -> None:
     """The ordinary answer: the reading found nothing that costs the release, so
-    the line keeps it and the next base is frozen on it.
+    the line keeps it and the next batch is formed on it.
 
     Nothing about the source line changes, and the audit says which way the gate
     went — a `retain` that left no trace would be indistinguishable from a gate
@@ -3485,7 +3483,7 @@ def test_a_release_already_off_the_line_is_not_retained(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """`retain` says the release stays the line the next base is frozen on, and
+    """`retain` says the release stays the line the next alternatives are built on, and
     that line now carries the reversal instead."""
 
     second = freeze_second(config, promoted)
@@ -3772,13 +3770,25 @@ def test_no_base_is_frozen_before_the_release_is_judged(
     assert admitted.base_revision == promoted.promotion_revision
 
 
-def test_a_rolled_back_release_leaves_the_next_base_on_the_line_it_made(
+def test_a_rolled_back_release_is_not_the_base_the_batch_was_formed_at(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The sequencing the gate exists for: the inverse commit lands first, and
-    the base the first experiment then freezes is the line as the decision left
-    it — not the promoted revision the batch was frozen beside."""
+    """The one place the frozen base and the settlement genuinely part company.
+
+    A batch is formed at the line unconditionally, because the batch being formed
+    is the evidence about the release. A `retain` leaves that base carrying the
+    release and the gate passes; a `rolled-back` lands the inverse commit
+    *after* the formation, so the base carries the promotion the human just took
+    back off — and the gate refuses rather than building every alternative in the
+    batch on a protocol nobody decided on.
+
+    The resolution is a rollback ending the batch it settles, which is not
+    implemented here: with it, there is no first experiment and this is never
+    reached with a `rolled-back` decision. Until then the refusal is the safe
+    half of the gap and this pins it, so a later session sees the state rather
+    than discovering it.
+    """
 
     second = freeze_second(config, promoted)
     suspected(config, second)
@@ -3787,11 +3797,14 @@ def test_a_rolled_back_release_leaves_the_next_base_on_the_line_it_made(
     answered = assessment.settle(
         config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
     )
-    admitted = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
-
     assert answered.reversal is not None
-    assert admitted.base_revision == answered.reversal.revision
-    assert admitted.base_revision != promoted.promotion_revision
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, drafts, now=RESOLVED_AT)
+
+    assert "does not carry" in str(error.value)
+    assert answered.reversal.revision[:12] in str(error.value)
+    assert lineage.describe(config).current.experiments == ()
 
 
 def test_a_batch_that_owes_no_reading_freezes_its_base_freely(
@@ -3803,10 +3816,19 @@ def test_a_batch_that_owes_no_reading_freezes_its_base_freely(
 
     write_manifest(config.batches_root, FIRST, ["r1"], analysis_task_id="2026-07-31-first")
     write_outcome(config.batches_root, FIRST, outcome="no-change")
-    write_manifest(config.batches_root, SECOND, [], analysis_task_id=f"2026-08-10-{SECOND}", reports=[
-        make_manifest_report(key=f"a{index}", sequence=index, task_id=f"2026-08-0{index}-task", effective_revision=release)
-        for index in (1, 2, 3)
-    ])
+    write_manifest(
+        config.batches_root,
+        SECOND,
+        [],
+        analysis_task_id=f"2026-08-10-{SECOND}",
+        runner_protocol_revision=release,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}", sequence=index, task_id=f"2026-08-0{index}-task", effective_revision=release
+            )
+            for index in (1, 2, 3)
+        ],
+    )
     second = next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
     drafts = open_second(config, second)
 
@@ -4164,20 +4186,20 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     """What the settlement selects is a commit, not merely an answer.
 
     `retain` says the alternatives are built on the line carrying the release, so
-    a base at the revision the line stood at *before* it is the decision undone
-    by the freeze — the accident invariant 17 exists to stop, arriving one step
-    later than the gate that only asks whether somebody answered.
+    a batch formed at the revision the line stood at *before* it is the decision
+    undone at admission — the accident invariant 17 exists to stop, arriving one
+    step later than the gate that only asks whether somebody answered.
+
+    A formation reads the line, so the ordinary way to reach this is a line that
+    was not carrying the release when the batch was formed: naming the line in
+    configuration settles which ref a base comes off, not what that ref carried
+    at the moment it was read.
     """
 
-    second = freeze_second(config, promoted)
+    second = freeze_second(config, promoted, base=promoted.merge_input_revision)
     form_reading(config)
     drafts = open_second(config, second)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
-
-    # Naming the line in configuration settles which ref a base comes off, not
-    # what that ref carries: this is the same line, wound back to where it stood
-    # before the promotion.
-    git_update_ref(config.repo_root, RELEASE_REF, promoted.merge_input_revision)
 
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, now=RESOLVED_AT)
@@ -4187,13 +4209,17 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     assert lineage.describe(config).current.experiments == ()
 
 
-def test_a_reversed_release_is_not_the_base_it_was_taken_off(
+def test_a_batch_formed_on_the_reversed_line_satisfies_a_rolled_back_settlement(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The same rule the other way round: `rolled-back` puts the inverse commit
-    on the line, and the promoted revision the batch was frozen beside is the one
-    commit the decision ruled out."""
+    """The other side of the same rule, and what the gate lets through.
+
+    `rolled-back` selects the line carrying the inverse commit, so a batch formed
+    at that line is exactly what the decision chose. Stated by re-forming the
+    cohort at the reversed tip, which is what a formation taken after the
+    reversal would have read.
+    """
 
     second = freeze_second(config, promoted)
     suspected(config, second)
@@ -4202,20 +4228,14 @@ def test_a_reversed_release_is_not_the_base_it_was_taken_off(
         config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
     )
     assert answered.reversal is not None
+    assert git_rev(config.repo_root, RELEASE_REF) == answered.reversal.revision
 
-    # The settlement put the inverse commit on the line; this winds it back to
-    # the promoted revision the batch was frozen beside.
-    reversed_line = git_rev(config.repo_root, RELEASE_REF)
-    git_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision)
+    freeze_second(config, promoted, base=answered.reversal.revision)
 
-    with pytest.raises(evolution.BatchError) as error:
-        experiments.create(config, drafts, now=RESOLVED_AT)
-    assert "does not carry" in str(error.value)
-    assert answered.reversal.revision[:12] in str(error.value)
-
-    git_update_ref(config.repo_root, RELEASE_REF, reversed_line)
     admitted = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
+
     assert admitted.base_revision == answered.reversal.revision
+    assert admitted.base_revision != promoted.promotion_revision
 
 
 def test_a_rollback_after_a_retained_release_does_not_realign_the_base(
@@ -4225,10 +4245,13 @@ def test_a_rollback_after_a_retained_release_does_not_realign_the_base(
     """A reversal nobody settled does not become the base by standing on the line.
 
     The rollback operation is available on its own, and after a `retain` nothing
-    is yet built on the release to stop it. What must not follow is a freeze that
-    quietly takes the reversed line: the recorded decision says the release
+    is yet built on the release to stop it. What must not follow is a batch formed
+    on the reversed line quietly taking it: the recorded decision says the release
     stays, so a base carrying the inverse commit is a realignment no reading
     justified.
+
+    The reversal lands after this cohort was formed, so the cohort is re-formed at
+    the reversed tip — which is what a formation taken after it would have read.
     """
 
     second = freeze_second(config, promoted)
@@ -4236,6 +4259,7 @@ def test_a_rollback_after_a_retained_release_does_not_realign_the_base(
     drafts = open_second(config, second)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
     reversal = rollback.rollback(config, reason="reversed outside the gate", now=RESOLVED_AT)
+    freeze_second(config, promoted, base=reversal.revision)
 
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)

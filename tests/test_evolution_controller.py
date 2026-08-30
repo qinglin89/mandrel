@@ -247,7 +247,6 @@ def test_shipped_schemas_use_only_implemented_keywords(config: evolution.Evoluti
     for filename in (
         config_module.IMPORT_SCHEMA_FILENAME,
         config_module.BATCH_SCHEMA_FILENAME,
-        config_module.BATCH_SCHEMA_V1_FILENAME,
         config_module.LEDGER_SCHEMA_FILENAME,
     ):
         loaded = schema.load_schema(config.schema_path(filename))

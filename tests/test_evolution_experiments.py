@@ -101,9 +101,11 @@ def batch(config: evolution.EvolutionConfig) -> Path:
         BATCH_ID,
         ["r1", "r2"],
         analysis_task_id=ANALYSIS_TASK,
-        # A commit, as a freeze records it: where the configured source line
-        # stood, not the release tag reachable from it (invariant 8).
-        runner_protocol_revision="d" * 40,
+        # A commit, as a formation records it: where the configured source line
+        # stood, not the release tag reachable from it (invariants 8, 15). It has
+        # to be one this repository holds, because it is the base every
+        # experiment admitted below is created at.
+        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
     )
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
     write_closure(config.batches_root, BATCH_ID, analysis_task_id=ANALYSIS_TASK)
@@ -250,9 +252,9 @@ def test_an_admitted_draft_stays_in_the_batch_that_proposed_it(
 def test_the_first_experiment_freezes_the_base_every_later_one_starts_from(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    """Invariant 15. The batch freeze deliberately pins nothing — it happens
-    before anyone knows a change is warranted — and alternatives built on
-    different sources would not be alternatives to each other."""
+    """Invariant 15. The batch was formed at one commit and every attempt in it
+    starts there; alternatives built on different sources would not be
+    alternatives to each other."""
 
     first = experiments.create(config, ["loader-fallback"], now=NOW)
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
@@ -278,12 +280,12 @@ def test_a_base_that_is_not_the_batchs_is_refused_rather_than_reconciled(
         experiments.create(config, ["hook-side-loader"], base="HEAD", now=NOW)
 
 
-def test_the_base_is_the_configured_source_line_and_not_this_checkout(
+def test_the_base_is_the_line_the_batch_was_formed_at_and_not_this_checkout(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     """The commit every alternative in the batch is an attempt against is the
-    line the project releases from, which is a property of the project rather
-    than of whoever ran the command."""
+    line the project releases from as the batch's formation read it, which is a
+    property of the cohort rather than of whoever ran the command."""
 
     ahead = git_commit(config.repo_root, "unrelated work on the operator's branch")
 
@@ -293,19 +295,22 @@ def test_the_base_is_the_configured_source_line_and_not_this_checkout(
     assert result.base_revision != ahead == git_rev(config.repo_root, "HEAD")
 
 
-def test_a_checkout_without_the_source_line_freezes_nothing(
+def test_an_admission_resolves_no_ref_and_takes_the_batchs_own_base(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    """A clone that never fetched the line is the ordinary state of a fresh
-    checkout, and the answer to it is a fetch — not whatever else this
-    repository happens to hold."""
+    """The base is a parameter of the batch, fixed at its formation and recorded
+    in the immutable manifest — so admission reads it rather than resolving the
+    line again. A checkout that lost the line since the batch was formed still
+    admits at the same commit, which is what makes the base a fact about the
+    cohort rather than about whoever ran the command. The freeze is where a
+    missing line refuses (`batches._source_line_revision`)."""
 
+    line = git_rev(config.repo_root, RELEASE_REF)
     git_delete_ref(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match="does not hold refs/"):
-        experiments.create(config, ["loader-fallback"], now=NOW)
+    result = experiments.create(config, ["loader-fallback"], now=NOW)
 
-    assert not (config.experiments_root / EXP_01).exists()
+    assert result.base_revision == line
 
 
 def test_the_base_is_recorded_as_the_commit_not_the_name_that_was_typed(
@@ -320,13 +325,15 @@ def test_the_base_is_recorded_as_the_commit_not_the_name_that_was_typed(
     assert result.base_revision != RELEASE_REF
 
 
-def test_a_named_base_that_is_not_the_source_line_is_refused_rather_than_used(
+def test_a_named_base_that_is_not_the_batchs_is_refused_at_the_first_experiment_too(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    """`--base` states which commit the operator read, and the freeze is not
-    going to take anything else; silence would leave them believing it had."""
+    """`--base` states which commit the operator read, and admission is not going
+    to take anything else; silence would leave them believing it had. Asserted at
+    the first experiment as much as at every later one — the base was fixed
+    before any of them, so there is no admission that chooses it."""
 
-    with pytest.raises(evolution.BatchError, match="is not where refs/"):
+    with pytest.raises(evolution.BatchError, match="froze its base at"):
         experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
     assert not (config.experiments_root / EXP_01).exists()
@@ -3027,35 +3034,6 @@ def test_a_promoted_batch_is_over_and_releases_the_next_cohort(
     assert status.to_json()["last_promotion"]["tree"] == result.tree
 
 
-def test_a_promotion_this_controller_made_before_the_merge_unit_existed_still_reports(
-    config: evolution.EvolutionConfig, batch: Path, release: str
-) -> None:
-    """The whole reason a version-1 promoted record is read rather than refused.
-    The experiment that promoted this batch was written by a build that recorded
-    only the revision; the outcome it wrote states the merge unit, and `status`
-    goes on answering — where refusing the record would take the batch it ended,
-    every batch after it, and every operation guarded by that reading."""
-
-    result = prepared_promotion_at_version_1(config)
-
-    assert lineage.current_batch(config) is None
-    status = phase.describe(config, now=PROMOTED)
-    assert status.last_promotion is not None
-    assert status.last_promotion.revision == result.promotion_revision
-    assert status.to_json()["last_promotion"]["tree"] == result.tree
-
-
-def prepared_promotion_at_version_1(config: evolution.EvolutionConfig) -> experiments.PromotionResult:
-    """A promoted batch whose experiment record is the shape the build before the
-    prepared promotion wrote — the promotion made here, then the record put back
-    the way that build would have left it."""
-
-    prepared(config)
-    result = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
-    downgrade(config, EXP_01)
-    return result
-
-
 def test_the_planned_targets_are_a_plan_and_never_a_deployment(
     config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3798,56 +3776,24 @@ def test_the_promotion_owed_an_outcome_is_offered_only_where_its_evidence_reads(
     assert experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST).recorded is True
 
 
-def downgrade(config: evolution.EvolutionConfig, experiment_id: str) -> None:
-    """Put a record back into the shape the build before the prepared promotion
-    wrote: its version, and no merge unit — the field did not exist there."""
+def test_a_record_at_a_version_this_build_does_not_read_is_refused(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Version 1 went with the schema file rather than being kept as a reader
+    arm: no experiment was ever created under it, so the arm would have been
+    compatibility with a record that does not exist. What is left is one version,
+    and a record claiming another is unreadable rather than migrated — the same
+    answer a record from a *later* build gets."""
 
-    path = config.experiments_root / experiment_id / "experiment.json"
+    experiments.create(config, ["loader-fallback"], now=NOW)
+    path = config.experiments_root / EXP_01 / "experiment.json"
     written = json.loads(path.read_text(encoding="utf-8"))
     written["schema_version"] = 1
     written.pop("promotion", None)
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-
-def test_a_decision_recorded_before_the_merge_unit_existed_is_reported_not_guessed(
-    config: evolution.EvolutionConfig, batch: Path, release: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The same interrupted window, left by the build that recorded no merge unit
-    on the experiment. The unit itself is recoverable from the run and the commit;
-    the targets that promotion was planned for are recoverable from nowhere,
-    because nothing wrote them down. Taking this run's would state a plan nobody
-    promoted under as the original, so the state is reported instead.
-
-    The lineage still reads throughout — which is the point of accepting the
-    record at all — so `status` answers and only the operation that would have to
-    invent something refuses."""
-
-    prepared(config)
-    interrupt(monkeypatch, "_conclude_promoted")
-    with pytest.raises(OSError):
-        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
-    monkeypatch.undo()
-    downgrade(config, EXP_01)
-
-    assert lineage.current_batch(config) is not None
-
-    with pytest.raises(evolution.BatchError, match="the plan was never recorded"):
-        experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
-
-
-def test_an_operation_over_a_record_written_at_version_1_writes_it_at_this_one(
-    config: evolution.EvolutionConfig, batch: Path
-) -> None:
-    """Nothing migrates a record on the way in: the next operation that writes one
-    writes the whole record at the current version, which is what the serializer
-    already did with every other field."""
-
-    experiments.create(config, ["loader-fallback"], now=NOW)
-    downgrade(config, EXP_01)
-
-    experiments.add_tasks(config, ["hook-side-loader"], now=LATER)
-
-    assert record(config, EXP_01)["schema_version"] == lineage.EXPERIMENT_SCHEMA_VERSION == 2
+    with pytest.raises(evolution.BatchError, match="unsupported experiment record schema_version 1"):
+        experiments.add_tasks(config, ["hook-side-loader"], now=LATER)
 
 
 def test_a_different_reason_after_the_decision_is_not_that_promotion_redone(

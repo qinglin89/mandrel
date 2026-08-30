@@ -459,13 +459,16 @@ def config(tmp_path: Path) -> config_module.EvolutionConfig:
 
 
 def frozen(config: config_module.EvolutionConfig) -> None:
-    """One current cohort: frozen, and with no outcome recorded."""
+    """One current cohort: frozen at the source line, and with no outcome
+    recorded. The base is the manifest's, so every experiment written against
+    this batch starts from the line's tip (`lineage._require_one_base`)."""
 
     write_manifest(
         config.batches_root,
         BATCH,
         [],
         analysis_task_id=f"2026-08-10-{BATCH}",
+        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
         reports=[
             make_manifest_report(key=f"a{index}", sequence=index, task_id=f"2026-08-0{index}-task")
             for index in (1, 2, 3)

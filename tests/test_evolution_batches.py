@@ -76,9 +76,11 @@ def config(repo: Path) -> evolution.EvolutionConfig:
 
 
 def runner_revision(config: evolution.EvolutionConfig) -> str:
-    """What a freeze taken now records as this cohort's protocol revision: where
-    the configured source line stands, read the way a test states a fact rather
-    than the way the code derives one."""
+    """What a formation taken now records as this batch's base: where the
+    configured source line stands, read the way a test states a fact rather than
+    the way the code derives one. It is also every experiment of that batch's
+    base, so a hand-written experiment record has to state it too
+    (`lineage._require_one_base`)."""
 
     return git_rev(config.repo_root, RELEASE_REF)
 
@@ -1443,6 +1445,7 @@ def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
         write_experiment(
             config.experiments_root,
             f"{batch_id}-exp-01",
+            base_revision=runner_revision(config),
             rounds=[experiment_round(1, candidate_revision=recorded)],
             decision=experiment_decision("promoted", promotion_revision=recorded),
         )
@@ -1484,6 +1487,7 @@ def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
     write_experiment(
         config.experiments_root,
         f"{batch_id}-exp-01",
+        base_revision=runner_revision(config),
         rounds=[experiment_round(1, candidate_revision="e" * 40)],
         decision=experiment_decision("superseded", superseded_by=f"{batch_id}-exp-02"),
     )
@@ -1572,42 +1576,39 @@ def test_staging_residue_from_an_interrupted_freeze_is_inert(
 # --- manifest versions -------------------------------------------------------
 
 
-def test_a_version_1_manifest_keeps_its_read_path(
+def test_a_batch_frozen_elsewhere_reads_back_and_a_new_one_is_written_at_this_version(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """A frozen manifest is immutable, so the schema it was written against is
-    too. Version 2 added the cohort provenance invariants 4 and 5 need; a
-    version-1 manifest cannot grow those fields, so it keeps its own schema and
-    stays readable rather than becoming a batch nothing can load."""
-    closed_elsewhere(config, "evolution-batch-0001", ["old1", "old2"], version=1)
+    """A committed manifest is the whole of what another machine's freeze leaves
+    behind, and it reads back without the ignored runtime state it was frozen
+    from."""
+    closed_elsewhere(config, "evolution-batch-0001", ["old1", "old2"])
 
     loaded = evolution.load_batches(config)
 
-    assert [batch.schema_version for batch in loaded] == [1]
+    assert [batch.schema_version for batch in loaded] == [2]
     assert loaded[0].task_count == 2
     assert loaded[0].report_keys == {"old1", "old2"}
     assert batches.batch_awaiting_analysis(config) is None
 
-    # And a new batch is written at the current version, beside the old one.
     write_outcome(config.batches_root, "evolution-batch-0001")
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
 
     assert read_manifest(result)["schema_version"] == batches.BATCH_SCHEMA_VERSION == 2
-    assert [batch.schema_version for batch in evolution.load_batches(config)] == [1, 2]
+    assert [batch.schema_version for batch in evolution.load_batches(config)] == [2, 2]
 
 
-def test_a_version_1_manifest_still_guards_the_open_batch(
+def test_a_manifest_from_another_machine_still_guards_the_open_batch(
     config: evolution.EvolutionConfig,
 ) -> None:
-    """Also the fresh-clone shape: the committed manifest is here and the
-    ignored runtime state it was frozen from is not, which is a batch this
-    machine never staged rather than one whose evidence it lost."""
+    """The fresh-clone shape: the committed manifest is here and the ignored
+    runtime state it was frozen from is not, which is a batch this machine never
+    staged rather than one whose evidence it lost."""
     write_manifest(
         config.batches_root,
         "evolution-batch-0001",
         ["old1"],
-        version=1,
         analysis_task_id="2026-07-31-evolution-batch-0001-analysis",
     )
     assert not config.state_path.exists()
@@ -1623,12 +1624,17 @@ def test_a_version_1_manifest_still_guards_the_open_batch(
     assert evolution.load_state(config).processed["old1"]["batch_id"] == "evolution-batch-0001"
 
 
-@pytest.mark.parametrize("version", [0, 3, "1", None])
+@pytest.mark.parametrize("version", [0, 1, 3, "1", None])
 def test_a_manifest_version_this_build_cannot_read_fails_closed(
     config: evolution.EvolutionConfig, version: object
 ) -> None:
     """Guessing at an unknown version would either misread a future manifest or
-    silently drop it from the id allocation and the open-batch guard."""
+    silently drop it from the id allocation and the open-batch guard.
+
+    Version 1 is in the list on purpose. It was dropped with its frozen schema
+    rather than kept as a reader arm, because no batch has ever been frozen in
+    this repository — so the arm would have been compatibility with a record that
+    does not exist. That window closes at the first successful freeze."""
     directory = write_manifest(config.batches_root, "evolution-batch-0001", ["r1"])
     manifest = json.loads((directory / batches.MANIFEST_FILENAME).read_text(encoding="utf-8"))
     (directory / batches.MANIFEST_FILENAME).write_text(
@@ -1697,19 +1703,26 @@ def test_the_generated_task_cites_the_contract_batch_revision_and_boundaries(
     assert ".ai-evolution/imported-artifacts" in body
 
 
-def test_the_generated_task_states_an_unknown_runner_revision_explicitly(
-    config: evolution.EvolutionConfig, feed_root: Path
+def test_a_checkout_without_the_source_line_forms_no_batch(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
-    """A checkout that does not hold the configured source line has no revision
-    to name; the task says so rather than borrowing whatever else is here."""
+    """The line is what the batch is formed at: it is the base every experiment
+    starts from and the identity the membership test selects evidence by. A
+    checkout that cannot resolve it cannot say what the batch is, so it refuses
+    rather than recording the absence — the answer is a fetch.
+
+    This is the reverse of what the field did while it was provenance alone,
+    where a freeze went ahead and named the absence.
+    """
     fill_pool(config, feed_root, TARGET)
     elsewhere = releasing_from(config, "refs/heads/never-fetched")
+    before = snapshot(repo / "evolution")
 
-    result = evolution.freeze(elsewhere, now=NOW)
+    with pytest.raises(evolution.BatchError, match="does not hold refs/heads/never-fetched"):
+        evolution.freeze(elsewhere, now=NOW)
 
-    assert result.analysis_task_path is not None
-    assert "did not hold the source line" in result.analysis_task_path.read_text(encoding="utf-8")
-    assert read_manifest(result)["runner_protocol_revision"] is None
+    assert snapshot(repo / "evolution") == before
+    assert len(evolution.load_state(config).pending) == TARGET
 
 
 def test_a_forced_batch_carries_its_justification_into_the_task(
@@ -1913,7 +1926,7 @@ def test_a_directory_inside_another_repository_does_not_borrow_its_revision(tmp_
     assert revisions.ref_tip(inner, RELEASE_REF) is None
 
 
-def test_a_path_that_is_not_a_repository_has_no_runner_revision(tmp_path: Path) -> None:
+def test_a_path_that_is_not_a_repository_resolves_no_source_line(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
 

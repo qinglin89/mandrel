@@ -35,6 +35,12 @@ RELEASE_REF = config_module.load_config(REPO_ROOT).source_line.ref
 # sitting on, and because a base resolved from configuration must be visibly
 # unrelated to wherever the checkout happens to be.
 WORK_BRANCH = "work"
+# The base a hand-written batch is formed at, and the base a hand-written
+# experiment starts from: one constant, because the manifest now states the
+# batch's base and every experiment of it is held to that commit
+# (`lineage._require_one_base`). A fixture stating the two separately would
+# describe a lineage no reading of this repository accepts.
+BASE_REVISION = "a" * 40
 PROMOTION_REASON = "replay showed fewer remediation rounds with no regression"
 PROMOTION_EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 
@@ -289,11 +295,19 @@ def write_manifest(
     report_keys: list[str],
     *,
     version: int = 2,
+    runner_protocol_revision: str = BASE_REVISION,
     **overrides,
 ) -> Path:
     """A schema-valid manifest on disk, for tests that need a frozen batch
-    without freezing one — an older manifest version, or a batch whose reports
-    were never imported here."""
+    without freezing one — a batch whose reports were never imported here, or one
+    formed at a base this test chose.
+
+    `runner_protocol_revision` is the batch's base and defaults to the same
+    constant `write_experiment` starts from, so the ordinary hand-written pairing
+    reads as one lineage. A test that goes on to run a real admission has to pass
+    the commit its temporary repository actually holds: the base is taken from
+    here and never re-resolved.
+    """
 
     manifest = {
         "schema_version": version,
@@ -301,6 +315,7 @@ def write_manifest(
         "created_at": "2026-07-31T00:00:00Z",
         "config_sha256": "c" * 64,
         "forced": False,
+        "runner_protocol_revision": runner_protocol_revision,
         "reports": [
             make_manifest_report(key=key, sequence=index + 1, task_id=f"2026-07-{index + 1:02d}-task", version=version)
             for index, key in enumerate(report_keys)
@@ -508,7 +523,7 @@ def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEM
     operator does: the cohort reads the release, and a human says whether the
     line keeps it. `inconclusive` and `retain` because that is the ordinary
     answer — no manifest states the shape of the work, so the cohorts suspect
-    rather than settle, and the release stays the commit the next base is frozen
+    rather than settle, and the release stays the commit the next batch is formed
     on.
 
     A no-op where nothing is owed, which is every first batch and every cohort
@@ -577,13 +592,14 @@ def promote_candidate(
     repository carries the same empty protocol and any test placing a target or a
     report against these commits proves nothing at all.
 
-    A cycle following an earlier promotion answers that release's gate first
-    (`settle_release`), because no base is frozen until somebody does — and it
-    starts from the line that release is on, because that is what the answer
-    selects (invariant 17). So this leaves the checkout on the promotion it made:
-    an operator's next cycle is worked on a line carrying the release, and a
-    fixture whose `HEAD` stayed behind the promotion would freeze its next base
-    off the line the gate just decided on.
+    The batch is formed at the source line as this repository holds it, which is
+    what a real freeze records and what the admission below then starts from. A
+    cycle following an earlier promotion answers that release's gate before its
+    first experiment is admitted, because the frozen base is held to the answer
+    (`settle_release`, invariant 17) — so this leaves the checkout on the
+    promotion it made: an operator's next cycle is worked on a line carrying the
+    release, and a fixture whose `HEAD` stayed behind the promotion would form
+    its next batch off the line the gate just decided on.
     """
 
     directory = write_manifest(
@@ -591,6 +607,7 @@ def promote_candidate(
         batch_id,
         ["r1", "r2"],
         analysis_task_id=f"2026-07-31-{batch_id}",
+        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
         **({} if reports is None else {"reports": reports}),
     )
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
@@ -682,7 +699,7 @@ def write_experiment(
     experiment_id: str,
     *,
     batch_id: str | None = None,
-    base_revision: str = "a" * 40,
+    base_revision: str = BASE_REVISION,
     base_release_ref: str | None = "v2.2.0",
     rounds: list[dict] | None = None,
     decision: dict | None = None,
@@ -777,7 +794,7 @@ def measurement(
 
 def replay_integration(
     *,
-    base_revision: str = "a" * 40,
+    base_revision: str = BASE_REVISION,
     candidate_revision: str = "b" * 40,
     merge_input_revision: str = "e" * 40,
     merge_input_ref: str | None = RELEASE_REF,
@@ -1170,7 +1187,7 @@ def git_release_commit(root: Path, message: str) -> str:
     """One more commit, landed on the source line as well as on the checkout.
 
     What canonical work between two cohorts actually is: the line the project
-    releases from moves, which is where the next base is frozen from. A commit
+    releases from moves, which is where the next batch is formed. A commit
     left on the operator's branch alone moves nothing a freeze reads.
     """
 

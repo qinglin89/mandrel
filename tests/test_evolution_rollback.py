@@ -841,7 +841,11 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     """
 
     directory = write_manifest(
-        config.batches_root, SECOND_BATCH, ["r3"], analysis_task_id=f"2026-08-09-{SECOND_BATCH}"
+        config.batches_root,
+        SECOND_BATCH,
+        ["r3"],
+        analysis_task_id=f"2026-08-09-{SECOND_BATCH}",
+        runner_protocol_revision=promoted.promotion_revision,
     )
     (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
     write_closure(config.batches_root, SECOND_BATCH, analysis_task_id=f"2026-08-09-{SECOND_BATCH}")
@@ -864,7 +868,7 @@ def test_a_later_attempt_this_checkout_cannot_place_stops_it(
     between an irreversible move and somebody's work, so a checkout that cannot
     see whether the two are related does not get to decide they are not."""
 
-    write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
+    write_manifest(config.batches_root, SECOND_BATCH, ["r3"], runner_protocol_revision="9" * 40)
     write_experiment(
         config.experiments_root,
         f"{SECOND_BATCH}-exp-01",

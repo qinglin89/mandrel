@@ -761,7 +761,7 @@ def format_settlement(result: Settled, repo_root: Path) -> str:
         _field("record", _relative(result.record_path, repo_root)),
     ]
     if decision.settlement == SETTLEMENT_RETAIN:
-        lines.append(_field("", "the release stays the line the first experiment of this batch freezes its base on"))
+        lines.append(_field("", "the release stays the line this batch's alternatives are built on"))
     elif result.reversal is not None and result.reversal.reverted:
         lines.append(_field("inverse", f"{_short(result.reversal.revision)} — committed by this settlement"))
     elif result.reversal is not None:
@@ -1505,10 +1505,11 @@ def _ref_lines(status: LifecycleStatus) -> list[str]:
 
 
 def _revision_lines(revisions: LifecycleRevisions, *, open_experiment: bool) -> list[str]:
-    """The base is what the other two hang off — a batch with no experiment has
-    no revisions in play at all, rather than three absent ones. The three are
-    never collapsed into one line: substituting one for another is what an
-    evidence trail must not do (contract: Revisions in play).
+    """The base is what the other two hang off, and it is stated whenever there
+    is a current batch — a batch is formed at one (invariant 15). With no current
+    batch there are no revisions in play at all, rather than three absent ones.
+    The three are never collapsed into one line: substituting one for another is
+    what an evidence trail must not do (contract: Revisions in play).
 
     The candidate and the tip belong to the *open* experiment, so why they are
     absent has to be read off whether there is one. Between attempts — every
@@ -1519,7 +1520,7 @@ def _revision_lines(revisions: LifecycleRevisions, *, open_experiment: bool) -> 
     """
 
     if revisions.base is None:
-        return [_field("revisions", "none in play — no experiment has frozen a base")]
+        return [_field("revisions", "none in play — no batch is current")]
     if not open_experiment:
         return [
             _field("base", revisions.base.describe()),

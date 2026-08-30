@@ -327,14 +327,15 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_expectation_argument(assess_resolve)
 
     settle = subparsers.add_parser(
-        phase.ACTION_SETTLE, help="answer the gate between this release and the next base freeze (invariant 17)"
+        phase.ACTION_SETTLE,
+        help="answer the gate between this release and the next first experiment (invariant 17)",
     )
     settle.add_argument(
         "--settlement",
         required=True,
         choices=list(assessment.SETTLEMENTS),
         help=(
-            f"{assessment.SETTLEMENT_RETAIN}: the release stays the line the next base is frozen on; "
+            f"{assessment.SETTLEMENT_RETAIN}: the release stays the line the next alternatives are built on; "
             f"{assessment.SETTLEMENT_ROLLED_BACK}: it comes back off first, which this verb does itself"
         ),
     )
