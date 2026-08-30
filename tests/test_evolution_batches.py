@@ -33,6 +33,7 @@ from evolution_fixtures import (
     git_rev,
     git_unreadable_canonical_commit,
     git_update_ref,
+    make_manifest_report,
     make_record,
     make_repo,
     releasing_from,
@@ -455,7 +456,7 @@ def test_a_report_produced_at_the_same_protocol_is_a_member_whatever_its_commit(
     assert offered is not None
     assert offered.task_count == TARGET
     assert offered.not_selected == ()
-    assert {member.mode for member in offered.selected} == {proposals.MODE_AUTO}
+    assert {member.mode for member in offered.selected} == {manifests.MODE_AUTO}
 
 
 def test_a_report_produced_at_another_protocol_is_left_out_with_that_reason(
@@ -473,7 +474,7 @@ def test_a_report_produced_at_another_protocol_is_left_out_with_that_reason(
 
     assert offered is not None
     assert [item.task_id for item in offered.not_selected] == ["2026-09-01-task"]
-    assert offered.not_selected[0].reason == proposals.REASON_IDENTITY_DIFFERS
+    assert offered.not_selected[0].reason == manifests.REASON_IDENTITY_DIFFERS
     assert offered.considered == offered.task_count + 1
 
 
@@ -509,11 +510,112 @@ def test_the_three_ways_a_revision_fails_are_three_different_records(
 
     assert offered is not None
     assert {item.task_id: item.reason for item in offered.not_selected} == {
-        "2026-08-01-absent": proposals.REASON_REVISION_ABSENT,
-        "2026-08-02-malformed": proposals.REASON_REVISION_MALFORMED,
-        "2026-08-03-unresolvable": proposals.REASON_REVISION_UNRESOLVABLE,
+        "2026-08-01-absent": manifests.REASON_REVISION_ABSENT,
+        "2026-08-02-malformed": manifests.REASON_REVISION_MALFORMED,
+        "2026-08-03-unresolvable": manifests.REASON_REVISION_UNRESOLVABLE,
     }
     assert [member.task_id for member in offered.selected] == ["2026-07-01-task"]
+
+
+def two_evaluations(
+    config: evolution.EvolutionConfig,
+    feed_root: Path,
+    *,
+    task_id: str,
+    first: str | None,
+    second: str | None,
+) -> None:
+    """Import two evaluations of one completed task, produced at two revisions.
+
+    Two syncs rather than one, in the given order: the pool takes the highest
+    sequence it has seen as the entry's primary and the feed cursor never goes
+    back, so this is the arrival order a real pool has. `second` ends up the
+    primary and `first` its rerun. `None` is a report whose provenance states no
+    revision at all.
+    """
+
+    for key, sequence, revision in (("first-pass", 10, first), ("second-pass", 20, second)):
+        record = make_record(
+            key=key,
+            sequence=sequence,
+            task_id=task_id,
+            evaluation_id=f"eval-{key}",
+            effective_revision=revision,
+        )
+        evolution.sync(config, write_feed(feed_root, [record]))
+
+
+def test_an_off_base_rerun_keeps_its_task_out_of_the_batch(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """A member's whole evidence set is frozen into the manifest under the task's
+    one decision, so the decision has to be true of every report it owns.
+
+    Deciding from the latest evaluation alone would stamp `auto` on a report
+    produced under another protocol — a claim about that report nobody derived,
+    inside the immutable record a cohort's coherence claim is read from.
+    """
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, TARGET)
+    two_evaluations(
+        config, feed_root, task_id="2026-08-01-task", first=elsewhere, second=runner_revision(config)
+    )
+
+    manifest = read_manifest(freeze(config))
+
+    assert manifest["selection"]["not_selected"] == [
+        {
+            "repo_id": "repo-alpha",
+            "task_id": "2026-08-01-task",
+            "report_keys": ["first-pass", "second-pass"],
+            "reason": manifests.REASON_IDENTITY_DIFFERS,
+            "actor": None,
+            "moved_at": None,
+        }
+    ]
+    assert {report["report_key"] for report in manifest["reports"]}.isdisjoint({"first-pass", "second-pass"})
+
+
+def test_the_order_two_disagreeing_evaluations_arrived_in_does_not_decide_membership(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The same task and the same two revisions the other way round, and the same
+    answer: whether a cohort holds this evidence cannot be a fact about which
+    reading of it happened to land last."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, TARGET)
+    two_evaluations(
+        config, feed_root, task_id="2026-08-01-task", first=runner_revision(config), second=elsewhere
+    )
+
+    offered = evolution.build_proposal(config, now=NOW).proposal
+
+    assert offered is not None
+    assert [item.task_id for item in offered.not_selected] == ["2026-08-01-task"]
+    assert offered.not_selected[0].reason == manifests.REASON_IDENTITY_DIFFERS
+    assert offered.not_selected[0].report_keys == ("first-pass", "second-pass")
+
+
+def test_the_reason_a_task_is_left_out_is_one_of_its_own_reports_reasons(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """One task gets one reason, and it has to be a reason some report of it
+    actually gave.
+
+    That is what keeps the denominator portable: `revision-absent` is settled
+    identically in every clone while `revision-unresolvable` is a fact about this
+    one, so a task whose rerun states nothing must not borrow the
+    `identity-differs` its primary would never have given.
+    """
+    fill_pool(config, feed_root, TARGET)
+    two_evaluations(config, feed_root, task_id="2026-08-01-task", first=None, second=runner_revision(config))
+
+    offered = evolution.build_proposal(config, now=NOW).proposal
+
+    assert offered is not None
+    assert {item.task_id: item.reason for item in offered.not_selected} == {
+        "2026-08-01-task": manifests.REASON_REVISION_ABSENT
+    }
 
 
 def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
@@ -635,7 +737,7 @@ def test_an_empty_pool_and_an_off_base_pool_are_different_answers(
     assert offer.proposal is not None and offer.proposal.task_count == 0
     printed = render.format_proposal(offer, config.repo_root)
     assert "none of them is a member of a batch formed at this base" in printed
-    assert f"1 not selected: {proposals.REASON_IDENTITY_DIFFERS}" in printed
+    assert f"1 not selected: {manifests.REASON_IDENTITY_DIFFERS}" in printed
 
 
 def test_a_frozen_manifest_states_its_own_denominator(
@@ -669,7 +771,7 @@ def test_a_frozen_manifest_states_its_own_denominator(
                 "repo_id": "repo-alpha",
                 "task_id": "2026-08-01-task",
                 "report_keys": ["o1"],
-                "reason": proposals.REASON_IDENTITY_DIFFERS,
+                "reason": manifests.REASON_IDENTITY_DIFFERS,
                 "actor": None,
                 "moved_at": None,
             }
@@ -678,7 +780,7 @@ def test_a_frozen_manifest_states_its_own_denominator(
     assert {report["task_id"] for report in manifest["reports"]} == {
         f"2026-07-{index:02d}-task" for index in range(1, TARGET + 1)
     }
-    assert all(report["selection"]["mode"] == proposals.MODE_AUTO for report in manifest["reports"])
+    assert all(report["selection"]["mode"] == manifests.MODE_AUTO for report in manifest["reports"])
     assert all(report["selection"]["actor"] is None for report in manifest["reports"])
 
 
@@ -1978,6 +2080,115 @@ def test_a_manifest_version_this_build_cannot_read_fails_closed(
         evolution.load_batches(config)
 
 
+def excluded_task(**overrides) -> dict:
+    """One non-selection record, in the shape a manifest's denominator states."""
+
+    return {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-08-01-task",
+        "report_keys": ["x1"],
+        "reason": manifests.REASON_IDENTITY_DIFFERS,
+        "actor": None,
+        "moved_at": None,
+        **overrides,
+    }
+
+
+def human_selection(**overrides) -> dict:
+    """A member a person argued in, as the report entry records it."""
+
+    return {
+        "mode": manifests.MODE_HUMAN_INCLUDED,
+        "reason": "historical evidence, argued in",
+        "actor": "operator",
+        "moved_at": "2026-07-31T00:00:00Z",
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        (
+            {"selection": {"considered": 101, "auto_selected": 1, "human_included": 99, "not_selected": []}},
+            "do not describe this manifest",
+        ),
+        (
+            {
+                "selection": {
+                    "considered": 1,
+                    "auto_selected": 1,
+                    "human_included": 0,
+                    "not_selected": [excluded_task(task_id="2026-07-01-task")],
+                }
+            },
+            "is a member and is also listed as not selected",
+        ),
+        (
+            {
+                "selection": {
+                    "considered": 3,
+                    "auto_selected": 1,
+                    "human_included": 0,
+                    "not_selected": [excluded_task(), excluded_task()],
+                }
+            },
+            "twice, counting one judgement as two",
+        ),
+        (
+            {
+                "reports": [
+                    make_manifest_report(key="r1", task_id="2026-07-01-task", selection=human_selection(actor=None)),
+                ],
+                "selection": {"considered": 1, "auto_selected": 0, "human_included": 1, "not_selected": []},
+            },
+            "records no judgement",
+        ),
+        (
+            {
+                "selection": {
+                    "considered": 2,
+                    "auto_selected": 1,
+                    "human_included": 0,
+                    "not_selected": [excluded_task(reason=manifests.REASON_HUMAN_EXCLUDED)],
+                }
+            },
+            "records no judgement",
+        ),
+        (
+            {
+                "reports": [
+                    make_manifest_report(key="r1", sequence=1, task_id="2026-07-01-task"),
+                    make_manifest_report(key="rerun", sequence=2, task_id="2026-07-01-task", selection=human_selection()),
+                ],
+                "selection": {"considered": 1, "auto_selected": 0, "human_included": 1, "not_selected": []},
+            },
+            "carries two different selections across its reports",
+        ),
+    ],
+    ids=["counts", "both-lists", "counted-twice", "unnamed-inclusion", "unnamed-exclusion", "two-answers"],
+)
+def test_a_manifest_stating_a_cohort_that_cannot_exist_is_refused(
+    config: evolution.EvolutionConfig, overrides: dict, message: str
+) -> None:
+    """A manifest is immutable and everything downstream reads its denominator as
+    fact, so the shape check is not enough on its own.
+
+    JSON Schema constrains each field alone: it will accept counts that no set of
+    reports could produce, a task both selected and left out, one judgement
+    counted twice, a human move nobody is named for, and one task answered two
+    ways across its own reports. Every one of those is a cohort that never
+    existed, and `Batch.considered`, `Batch.human_included`, `status` and a
+    repaired analysis task would each report it as the batch's own account of
+    what it was drawn from. The freeze publishes through this same reader, so a
+    writer cannot commit one either.
+    """
+    write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], **overrides)
+
+    with pytest.raises(evolution.BatchError, match=message):
+        evolution.load_batches(config)
+
+
 # --- the generated analysis task ---------------------------------------------
 
 
@@ -2344,7 +2555,7 @@ def test_the_proposal_records_the_base_and_what_it_selected(
     assert offered.base_revision == runner_revision(config)
     assert offered.source_line_ref == RELEASE_REF
     assert offered.task_count == TARGET
-    assert {member.mode for member in offered.selected} == {proposals.MODE_AUTO}
+    assert {member.mode for member in offered.selected} == {manifests.MODE_AUTO}
     assert offered.report_keys() == {f"r{index}" for index in range(1, TARGET + 1)}
     # And it reads back through the parser it was written by.
     assert proposals.load_proposal(config) == offered
@@ -2518,7 +2729,7 @@ def offer(**overrides) -> dict:
                 "repo_id": "repo-alpha",
                 "task_id": "2026-07-01-task",
                 "report_keys": ["r1"],
-                "mode": proposals.MODE_AUTO,
+                "mode": manifests.MODE_AUTO,
                 "reason": None,
                 "actor": None,
                 "moved_at": None,
@@ -2542,7 +2753,7 @@ def test_a_human_move_carries_its_actor_reason_and_moment(tmp_path: Path) -> Non
         "repo_id": "repo-alpha",
         "task_id": "2026-07-02-task",
         "report_keys": ["r2"],
-        "mode": proposals.MODE_HUMAN_INCLUDED,
+        "mode": manifests.MODE_HUMAN_INCLUDED,
         "reason": "historical evidence, produced before the identity was published",
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
@@ -2560,7 +2771,7 @@ def test_a_human_move_missing_any_of_the_three_is_refused(missing: str) -> None:
         "repo_id": "repo-alpha",
         "task_id": "2026-07-02-task",
         "report_keys": ["r2"],
-        "mode": proposals.MODE_HUMAN_INCLUDED,
+        "mode": manifests.MODE_HUMAN_INCLUDED,
         "reason": "historical evidence",
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
@@ -2585,7 +2796,7 @@ def test_a_human_exclusion_carries_its_actor_and_moment() -> None:
         "repo_id": "repo-alpha",
         "task_id": "2026-07-03-task",
         "report_keys": ["r3"],
-        "reason": proposals.REASON_HUMAN_EXCLUDED,
+        "reason": manifests.REASON_HUMAN_EXCLUDED,
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
     }
@@ -2602,7 +2813,7 @@ def test_an_automatic_non_selection_names_nobody() -> None:
         "repo_id": "repo-alpha",
         "task_id": "2026-07-03-task",
         "report_keys": ["r3"],
-        "reason": proposals.REASON_IDENTITY_DIFFERS,
+        "reason": manifests.REASON_IDENTITY_DIFFERS,
         "actor": None,
         "moved_at": None,
     }
@@ -2620,7 +2831,7 @@ def test_a_task_cannot_be_both_selected_and_left_out() -> None:
         "repo_id": "repo-alpha",
         "task_id": "2026-07-01-task",
         "report_keys": ["r1"],
-        "reason": proposals.REASON_IDENTITY_DIFFERS,
+        "reason": manifests.REASON_IDENTITY_DIFFERS,
         "actor": None,
         "moved_at": None,
     }
@@ -2675,7 +2886,7 @@ def test_a_writer_cannot_publish_a_proposal_its_own_reader_refuses(
                 repo_id="repo-alpha",
                 task_id="2026-07-01-task",
                 report_keys=("r1",),
-                mode=proposals.MODE_HUMAN_INCLUDED,
+                mode=manifests.MODE_HUMAN_INCLUDED,
                 reason="historical evidence",
             ),
         ),

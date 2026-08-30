@@ -37,9 +37,18 @@ A manifest states its own denominator as well as its membership. `selection`
 records how many unique completed tasks the formation answered for, how the
 members split between the identity test and human judgement, and why each
 considered task that is not a member was left out; each report restates its own
-task's answer. That is what makes a cohort's recurrence claim checkable from
-committed content: the pool it was selected out of is ignored machine-local
-state and has moved by the time anyone reads the batch.
+task's answer, the same answer on every report of that task. That is what makes
+a cohort's recurrence claim checkable from committed content: the pool it was
+selected out of is ignored machine-local state and has moved by the time anyone
+reads the batch.
+
+Those are cross-field facts, and JSON Schema can only constrain one field at a
+time — so the reader checks the agreement itself and refuses a manifest whose
+counts no set of reports could produce, which answers one task two ways, which
+both selects and excludes a task, or which records a human move nobody is named
+for. The freeze publishes through that same reader, because a manifest is
+immutable from the moment it is written: a contradiction caught only on the next
+read is one that can no longer be repaired.
 
 Manifests are versioned and never rewritten, so once a batch exists its version
 keeps the schema it was written against. Only `batch-manifest.schema.json`

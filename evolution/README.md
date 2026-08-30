@@ -42,13 +42,23 @@ complete an evaluation.
    formation: a pooled report is a member when its evaluated target was running
    the protocol the batch's base carries — equality of deployable canonical
    identity (`lockfile.canonical_identity`), never commit equality, because the
-   source line moves for work no target receives. The other two are recorded
+   source line moves for work no target receives. The decision is the task's
+   (invariant 1) and it is taken over **every report that task owns**, reruns
+   included, because the freeze puts all of them into the manifest under that
+   one answer: a task whose evaluations disagree about the protocol they were
+   produced under is not a member, and no report is ever marked automatic on
+   another report's evidence. In a coherent pool the question does not arise —
+   a rerun is a second reading of one run (invariant 4), so every report of a
+   task states the same production revision. The other two facets are recorded
    per report and read by the analysis. Every frozen manifest states its own
    denominator in `selection`: how many tasks the formation considered, how the
    membership split between the identity test and human judgement, and why each
    considered task that is not a member was left out. A cohort's recurrence
    claim is about the set it was drawn from, so a manifest listing only its
-   members would read as if the pool held exactly them.
+   members would read as if the pool held exactly them. That denominator is
+   read back as strictly as it is written: counts that no set of reports could
+   produce, a task both selected and left out, and a human move nobody is named
+   for are refused when the manifest is loaded, not only when it is formed.
 6. **Analysis is not implementation.** A batch-analysis task classifies and
    disposes findings. It does not edit `canonical/`. Accepted recommendations
    become separate protocol-improvement tasks.

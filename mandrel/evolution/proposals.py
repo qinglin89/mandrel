@@ -28,6 +28,13 @@ longer serve. Neither cost exists here: a malformed proposal is thrown away and
 rebuilt from state that is still whole. So this parser is exactly as strict —
 every field of the declared version required, absent included — and its refusal
 names the rebuild rather than a repair.
+
+**Why the vocabulary is not here.** The selection modes, the non-selection
+reasons and the rule that a human move carries its name live in `manifests.py`:
+they become permanent when a batch is frozen, and every argument for keeping
+them apart is about what a reader of that immutable record can tell. This
+module speaks them so that the offer and the manifest cannot mean different
+things by the same word.
 """
 
 from __future__ import annotations
@@ -40,6 +47,16 @@ from typing import Any, Iterable, Mapping
 
 from .config import EvolutionConfig
 from .errors import ProposalError
+from .manifests import (
+    EXCLUSION_ATTRIBUTION,
+    EXCLUSION_REASONS,
+    HUMAN_REASONS,
+    MEMBER_ATTRIBUTION,
+    MODE_AUTO,
+    MODE_HUMAN_INCLUDED,
+    SELECTION_MODES,
+    attribution_problem,
+)
 from .schema import is_rfc3339_date_time
 from .state import atomic_write_text
 
@@ -55,47 +72,6 @@ _PROPOSAL_FIELDS = {
 _PROPOSAL_KEYS = {version: frozenset(fields) | {"schema_version"} for version, fields in _PROPOSAL_FIELDS.items()}
 _MEMBER_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "mode", "reason", "actor", "moved_at"})
 _EXCLUSION_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "reason", "actor", "moved_at"})
-
-# How a report came to be a member. `auto` is the identity test answering yes;
-# `human-included` is a person overriding it, and invariant 1's exception —
-# which is why it is a recorded mode rather than an unmarked member.
-MODE_AUTO = "auto"
-MODE_HUMAN_INCLUDED = "human-included"
-SELECTION_MODES = frozenset({MODE_AUTO, MODE_HUMAN_INCLUDED})
-
-# Why a considered report is not a member. Bounded, because these are the
-# batch's own denominator: an operator reading a frozen manifest has to be able
-# to tell evidence about a different protocol from evidence this clone merely
-# could not place, and both from a judgement somebody made.
-REASON_IDENTITY_DIFFERS = "identity-differs"
-REASON_REVISION_ABSENT = "revision-absent"
-REASON_REVISION_MALFORMED = "revision-malformed"
-REASON_REVISION_UNRESOLVABLE = "revision-unresolvable"
-REASON_HUMAN_EXCLUDED = "human-excluded"
-EXCLUSION_REASONS = frozenset(
-    {
-        REASON_IDENTITY_DIFFERS,
-        REASON_REVISION_ABSENT,
-        REASON_REVISION_MALFORMED,
-        REASON_REVISION_UNRESOLVABLE,
-        REASON_HUMAN_EXCLUDED,
-    }
-)
-
-# `revision-malformed` and `revision-unresolvable` are two facts about different
-# things, and separating them is what makes the denominator portable. A stated
-# revision that is not a commit id is a fact about the *record*: every clone
-# reads the same string and refuses it identically, from committed content
-# alone. A revision this checkout cannot read the canonical tree of is a fact
-# about the *clone*, and another clone holding the object would select the very
-# same report. Recording both as one reason would tell a reader of a frozen
-# manifest that an unfetched object and a corrupt field are the same problem,
-# and only one of them is fixed by a fetch. `assessment.py` splits its cohort
-# exclusions on the same line for the same reason.
-
-# The reasons a human owns. Both carry an actor and a moment, because a move
-# nobody is named for is not a recorded judgement.
-_HUMAN_REASONS = frozenset({REASON_HUMAN_EXCLUDED})
 
 _REVISION = re.compile(r"\A[0-9a-f]{40}\Z", re.ASCII)
 _REF = re.compile(r"\Arefs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+\Z", re.ASCII)
@@ -141,7 +117,7 @@ class Member:
             **_require_attribution(
                 data,
                 where,
-                names=("reason", "actor", "moved_at"),
+                names=MEMBER_ATTRIBUTION,
                 stated=mode == MODE_HUMAN_INCLUDED,
                 what="a human-included member",
             ),
@@ -192,8 +168,8 @@ class Exclusion:
             **_require_attribution(
                 data,
                 where,
-                names=("actor", "moved_at"),
-                stated=reason in _HUMAN_REASONS,
+                names=EXCLUSION_ATTRIBUTION,
+                stated=reason in HUMAN_REASONS,
                 what=f"a {reason} exclusion",
             ),
         )
@@ -380,31 +356,16 @@ def _require_attribution(
 ) -> dict[str, Any]:
     """The fields that name a human move — all of them or none of them.
 
-    A human move is a recorded judgement or it is not one: an actor without a
-    reason is an unexplained override, and a reason without an actor is an
-    override nobody owns. The automatic side is the mirror image — an entry
-    nobody moved must not carry a name, because a name there would read as a
-    judgement that was never made.
+    The rule itself is `manifests.attribution_problem`, because the same move
+    has to survive into the immutable record with the same attribution; only the
+    refusal differs, and it differs for a reason (`ProposalError`: a bad offer is
+    rebuilt, a bad manifest is a batch nobody can read).
     """
 
-    values = {name: data.get(name) for name in names}
-    for name, value in values.items():
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise ProposalError(f"{where}: {name} must be a non-empty string or null")
-    moved_at = values.get("moved_at")
-    if moved_at is not None and not is_rfc3339_date_time(moved_at):
-        raise ProposalError(f"{where}: moved_at {moved_at!r} is not an RFC 3339 timestamp")
-    if stated:
-        missing = sorted(name for name, value in values.items() if value is None)
-        if missing:
-            raise ProposalError(
-                f"{where}: {what} must state {missing} — a move nobody is named for records no judgement"
-            )
-    else:
-        named = sorted(name for name, value in values.items() if value is not None)
-        if named:
-            raise ProposalError(f"{where}: {named} is stated but nothing was moved here; this entry is automatic")
-    return values
+    problem = attribution_problem(data, names=names, stated=stated, what=what)
+    if problem is not None:
+        raise ProposalError(f"{where}: {problem}")
+    return {name: data.get(name) for name in names}
 
 
 def _require_one_decision(

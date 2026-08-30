@@ -60,7 +60,7 @@ from .config import (
     format_batch_id,
 )
 from .errors import BatchError
-from .schema import load_schema, validate_or_raise
+from .schema import is_rfc3339_date_time, load_schema, validate_or_raise
 
 MANIFEST_FILENAME = "manifest.json"
 FINDINGS_FILENAME = "findings.md"
@@ -85,6 +85,61 @@ OUTCOME_NO_CHANGE = "no-change"
 # exist, and the window for that judgement closes at the first successful freeze.
 BATCH_SCHEMA_VERSION = 2
 BATCH_SCHEMA_FILENAMES = {BATCH_SCHEMA_VERSION: BATCH_SCHEMA_FILENAME}
+
+# --- how a task came to be in or out of a batch ------------------------------
+#
+# The vocabulary of the `selection` block, defined here rather than beside the
+# proposal that first writes it: the proposal is a rebuildable reading of an
+# ignored pool, while these values become permanent the moment a manifest is
+# frozen, and every argument below is about what a reader of that immutable
+# record can tell. `proposals.py` speaks this vocabulary; it does not own it.
+
+# How a report came to be a member. `auto` is the identity test answering yes;
+# `human-included` is a person overriding it, and invariant 1's exception —
+# which is why it is a recorded mode rather than an unmarked member.
+MODE_AUTO = "auto"
+MODE_HUMAN_INCLUDED = "human-included"
+SELECTION_MODES = frozenset({MODE_AUTO, MODE_HUMAN_INCLUDED})
+
+# Why a considered report is not a member. Bounded, because these are the
+# batch's own denominator: an operator reading a frozen manifest has to be able
+# to tell evidence about a different protocol from evidence this clone merely
+# could not place, and both from a judgement somebody made.
+REASON_IDENTITY_DIFFERS = "identity-differs"
+REASON_REVISION_ABSENT = "revision-absent"
+REASON_REVISION_MALFORMED = "revision-malformed"
+REASON_REVISION_UNRESOLVABLE = "revision-unresolvable"
+REASON_HUMAN_EXCLUDED = "human-excluded"
+EXCLUSION_REASONS = frozenset(
+    {
+        REASON_IDENTITY_DIFFERS,
+        REASON_REVISION_ABSENT,
+        REASON_REVISION_MALFORMED,
+        REASON_REVISION_UNRESOLVABLE,
+        REASON_HUMAN_EXCLUDED,
+    }
+)
+
+# `revision-malformed` and `revision-unresolvable` are two facts about different
+# things, and separating them is what makes the denominator portable. A stated
+# revision that is not a commit id is a fact about the *record*: every clone
+# reads the same string and refuses it identically, from committed content
+# alone. A revision this checkout cannot read the canonical tree of is a fact
+# about the *clone*, and another clone holding the object would select the very
+# same report. Recording both as one reason would tell a reader of a frozen
+# manifest that an unfetched object and a corrupt field are the same problem,
+# and only one of them is fixed by a fetch. `assessment.py` splits its cohort
+# exclusions on the same line for the same reason.
+
+# The reasons a human owns. Both carry an actor and a moment, because a move
+# nobody is named for is not a recorded judgement.
+HUMAN_REASONS = frozenset({REASON_HUMAN_EXCLUDED})
+
+# The fields that name a human move, on both records: a member states why it was
+# argued in, an exclusion states only who and when, because its `reason` is
+# already the judgement.
+MEMBER_ATTRIBUTION = ("reason", "actor", "moved_at")
+EXCLUSION_ATTRIBUTION = ("actor", "moved_at")
 
 
 @dataclass(frozen=True)
@@ -465,6 +520,127 @@ def read_batch_record(
     return record
 
 
+def attribution_problem(
+    values: Mapping[str, Any],
+    *,
+    names: tuple[str, ...],
+    stated: bool,
+    what: str,
+) -> str | None:
+    """What is wrong with the fields naming a human move, or None where nothing is.
+
+    A human move is a recorded judgement or it is not one: an actor without a
+    reason is an unexplained override, and a reason without an actor is an
+    override nobody owns. The automatic side is the mirror image — an entry
+    nobody moved must not carry a name, because a name there would read as a
+    judgement that was never made.
+
+    Returns the problem rather than raising it: the same rule holds for the
+    machine-local proposal and for the immutable manifest, and those two refuse
+    with different errors because losing a proposal costs a rebuild while a
+    manifest that contradicts itself is a batch nobody can read.
+    """
+
+    stated_fields = {name: values.get(name) for name in names}
+    for name, value in stated_fields.items():
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            return f"{name} must be a non-empty string or null"
+    moved_at = stated_fields.get("moved_at")
+    if moved_at is not None and not is_rfc3339_date_time(moved_at):
+        return f"moved_at {moved_at!r} is not an RFC 3339 timestamp"
+    if stated:
+        missing = sorted(name for name, value in stated_fields.items() if value is None)
+        if missing:
+            return f"{what} must state {missing} — a move nobody is named for records no judgement"
+        return None
+    named = sorted(name for name, value in stated_fields.items() if value is not None)
+    if named:
+        return f"{named} is stated but nothing was moved here; this entry is automatic"
+    return None
+
+
+def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> None:
+    """The denominator's cross-field rules, which its schema cannot state.
+
+    JSON Schema constrains each field on its own, so a shape-valid manifest can
+    still describe a cohort that never existed: counts that disagree with the
+    reports they summarize, one task marked a member on one of its reports and
+    something else on another, a task both selected and not selected, or a human
+    judgement nobody is named for. Every one of those is a *frozen* record —
+    immutable by invariant 3 — and `Batch.considered`, `Batch.human_included`,
+    the status surfaces and the repaired analysis task all read it as fact, so a
+    reader that stopped at the shape would report and analyze the fiction.
+
+    Called by `read_manifest` and by the freeze that writes one, in that order of
+    importance: publishing through the reader is what keeps a writer from
+    persisting a manifest its own build refuses.
+
+    Assumes the schema has already validated: every key read here is required
+    there, so this asks only about agreement between them.
+    """
+
+    selection = manifest["selection"]
+
+    answers: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for report in manifest["reports"]:
+        task = (report["repo_id"], report["task_id"])
+        answer = report["selection"]
+        previous = answers.setdefault(task, answer)
+        if previous != answer:
+            raise BatchError(
+                f"{where}: {task[0]}/{task[1]} carries two different selections across its reports "
+                f"({previous} and {answer}); membership is decided once per completed task (invariant 1) "
+                "and a rerun is that task's evidence, not a second candidate"
+            )
+
+    for (repo_id, task_id), answer in sorted(answers.items()):
+        problem = attribution_problem(
+            answer,
+            names=MEMBER_ATTRIBUTION,
+            stated=answer["mode"] == MODE_HUMAN_INCLUDED,
+            what=f"the human-included member {repo_id}/{task_id}",
+        )
+        if problem is not None:
+            raise BatchError(f"{where}: {problem}")
+
+    excluded: set[tuple[str, str]] = set()
+    for item in selection["not_selected"]:
+        task = (item["repo_id"], item["task_id"])
+        if task in answers:
+            raise BatchError(
+                f"{where}: {task[0]}/{task[1]} is a member and is also listed as not selected; "
+                "the two lists are this batch's denominator, so a task named in both makes the "
+                "considered count disagree with itself"
+            )
+        if task in excluded:
+            raise BatchError(
+                f"{where}: not_selected names {task[0]}/{task[1]} twice, counting one judgement as two"
+            )
+        excluded.add(task)
+        problem = attribution_problem(
+            item,
+            names=EXCLUSION_ATTRIBUTION,
+            stated=item["reason"] in HUMAN_REASONS,
+            what=f"the {item['reason']} exclusion of {task[0]}/{task[1]}",
+        )
+        if problem is not None:
+            raise BatchError(f"{where}: {problem}")
+
+    human = {task for task, answer in answers.items() if answer["mode"] == MODE_HUMAN_INCLUDED}
+    stated = {key: selection[key] for key in ("considered", "auto_selected", "human_included")}
+    counted = {
+        "considered": len(answers) + len(excluded),
+        "auto_selected": len(answers) - len(human),
+        "human_included": len(human),
+    }
+    if stated != counted:
+        raise BatchError(
+            f"{where}: the selection counts {stated} do not describe this manifest, which names {counted} "
+            "over unique completed tasks; a batch states its own denominator, and one that states a "
+            "population its reports contradict is not a membership record"
+        )
+
+
 def read_manifest(config: EvolutionConfig, path: Path) -> Mapping[str, Any]:
     """One manifest, validated against the schema of the version it declares."""
 
@@ -492,4 +668,5 @@ def read_manifest(config: EvolutionConfig, path: Path) -> Mapping[str, Any]:
         load_schema(config.schema_path(filename)),
         description=f"batch manifest {path} (schema version {version})",
     )
+    require_coherent_selection(manifest, where=f"batch manifest {path}")
     return manifest

@@ -51,7 +51,7 @@
       ]
     },
     "selection": {
-      "description": "This batch's own denominator: what was considered when it was formed, how it split, and why each considered task that is not a member was left out. Membership is equality of deployable canonical identity against `runner_protocol_revision` (contract invariants 1 and 5), decided over the pending pool as it stood at formation. Recorded here because the pool is ignored machine-local state that moves: without it a frozen manifest reads as if the pool held exactly its members, and a cohort's recurrence claim is about the set it was drawn from.",
+      "description": "This batch's own denominator: what was considered when it was formed, how it split, and why each considered task that is not a member was left out. Membership is equality of deployable canonical identity against `runner_protocol_revision` (contract invariants 1 and 5), decided per unique completed task over every report that task owns, against the pending pool as it stood at formation. Recorded here because the pool is ignored machine-local state that moves: without it a frozen manifest reads as if the pool held exactly its members, and a cohort's recurrence claim is about the set it was drawn from. The agreement between these counts and the reports below is a cross-field rule this schema cannot state; `manifests.require_coherent_selection` enforces it in both directions, and a manifest that contradicts itself is refused when it is read as well as when it is written.",
       "type": "object",
       "required": [
         "considered",
@@ -148,7 +148,7 @@
   },
   "$defs": {
     "selection": {
-      "description": "How this report's task came to be a member. The same answer on every report of one task: membership is decided per unique completed task (invariant 1) and a rerun is that task's evidence, not a second candidate. Carried on the report so an entry read on its own says why it is in the batch.",
+      "description": "How this report's task came to be a member. The same answer on every report of one task, checked by the reader: membership is decided per unique completed task (invariant 1) and a rerun is that task's evidence, not a second candidate — which is also why the identity test is taken over every report the task owns, so that no report is marked automatic on another report's evidence. Carried on the report so an entry read on its own says why it is in the batch.",
       "type": "object",
       "required": [
         "mode",

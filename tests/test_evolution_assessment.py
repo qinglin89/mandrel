@@ -56,7 +56,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import deploy, evolution, lockfile
-from mandrel.evolution import assessment, batches, experiments, lineage, proposals, replay, rollback
+from mandrel.evolution import assessment, batches, experiments, lineage, manifests, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -816,7 +816,7 @@ def test_a_symbolic_revision_a_feed_published_never_reaches_a_frozen_manifest(
 
     assert offer.proposal is not None
     assert offer.proposal.task_count == 0
-    assert {item.reason for item in offer.proposal.not_selected} == {proposals.REASON_REVISION_MALFORMED}
+    assert {item.reason for item in offer.proposal.not_selected} == {manifests.REASON_REVISION_MALFORMED}
     assert offer.decision.reason == batches.REASON_POOL_OFF_BASE
 
     result = form_batch(config, now=FROZEN_AT)

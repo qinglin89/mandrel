@@ -77,16 +77,17 @@ from .manifests import (
     CLOSURE_SCHEMA_VERSION,
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
-    Batch,
-    load_batches,
-    next_batch_id,
-    read_closure,
-)
-from .proposals import (
     REASON_IDENTITY_DIFFERS,
     REASON_REVISION_ABSENT,
     REASON_REVISION_MALFORMED,
     REASON_REVISION_UNRESOLVABLE,
+    Batch,
+    load_batches,
+    next_batch_id,
+    read_closure,
+    require_coherent_selection,
+)
+from .proposals import (
     BatchProposal,
     Exclusion,
     Member,
@@ -824,14 +825,30 @@ def _non_selection(
     """Why this pooled task is not a member of a batch formed at `base`, or None
     where it is.
 
-    The revision asked about is the entry's **primary** report's
+    **Every report the entry owns is asked, and all of them have to answer the
+    base.** The revision asked about is each report's
     `provenance.effective_revision` — the evaluated target's own deploy-lock
-    commit, which is what says which protocol produced the work. `primary` is
-    the latest evaluation of that task, and a rerun is a second reading of the
-    same run rather than a second run (invariant 4), so the task has one
-    production revision and this is where it is stated. Whether a rerun's
-    provenance agrees with it is a cohort-coherence question about recorded
-    facts and not a membership test.
+    commit, which is what says which protocol produced the work. Invariant 5
+    states membership per report; membership is *decided* per completed task
+    (invariant 1), and a freeze puts every report of a member into the manifest
+    stamped with that one decision. So the decision has to be true of all of
+    them: testing the primary alone would freeze an off-base rerun marked
+    `auto`, a claim about that report nobody derived, and it would make the
+    answer depend on which of two disagreeing evaluations happened to arrive
+    last.
+
+    A rerun is a second reading of the same run rather than a second run
+    (invariant 4), so in a coherent pool every report of a task states the same
+    production revision and this test is the primary's. Where they disagree the
+    task is not a member, and the human window is the door — the same door the
+    reports that state nothing at all go through.
+
+    The reason recorded is the **first** failure over the entry's reports, taken
+    in a fixed order (`_entry_reports`: the primary, then the reruns by
+    evaluation order). One task gets one reason, so it has to be a report's own
+    reason to keep the denominator's portability intact: `revision-absent` and
+    `revision-malformed` are settled identically in every clone, while
+    `revision-unresolvable` is a fact about this one.
 
     The four ways to fail, kept apart because an operator's next move differs
     for each:
@@ -857,19 +874,35 @@ def _non_selection(
     of the equality.
     """
 
-    stated = _staged_effective_revision(config, entry)
-    if stated is None:
-        return REASON_REVISION_ABSENT
-    if not is_object_id(stated):
-        return REASON_REVISION_MALFORMED
-    if identities.of(stated) is None:
-        return REASON_REVISION_UNRESOLVABLE
-    return None if identities.same(base, stated) else REASON_IDENTITY_DIFFERS
+    for ref in _entry_reports(entry):
+        stated = _staged_effective_revision(config, entry, ref)
+        if stated is None:
+            return REASON_REVISION_ABSENT
+        if not is_object_id(stated):
+            return REASON_REVISION_MALFORMED
+        if identities.of(stated) is None:
+            return REASON_REVISION_UNRESOLVABLE
+        if not identities.same(base, stated):
+            return REASON_IDENTITY_DIFFERS
+    return None
 
 
-def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry) -> str | None:
-    """The protocol revision the entry's primary report was produced at, as its
-    staged bundle states it — or None where the report states none.
+def _entry_reports(entry: PoolEntry) -> tuple[ReportRef, ...]:
+    """Every report one pooled task owns, in one fixed order.
+
+    The primary first — it is the latest evaluation, so its answer is the task's
+    headline answer — then the reruns in evaluation order. One spelling, shared
+    by the membership test and the freeze, because the set a task is judged over
+    and the set frozen into its manifest have to be the same set: a report the
+    test never saw would enter the batch carrying a decision it was not part of.
+    """
+
+    return (entry.primary, *sorted(entry.reruns, key=lambda ref: (ref.sequence, ref.report_key)))
+
+
+def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry, ref: ReportRef) -> str | None:
+    """The protocol revision one staged report was produced at, as its bundle
+    states it — or None where the report states none.
 
     Read from the staged record rather than from the pool, because the pool
     keeps identity and hashes and no report content: duplicating provenance into
@@ -890,7 +923,6 @@ def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry) -> str
     into a smaller batch nobody was told about.
     """
 
-    ref = entry.primary
     path = config.repo_root / ref.artifacts_path / REPORT_JSON_FILENAME
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -1351,7 +1383,9 @@ def _build_manifest(
 
     Every report the batched tasks own goes in, reruns included: they are
     provenance (invariant 4) and they do not raise the task count (invariant 1),
-    which is derived from the distinct `(repo_id, task_id)` pairs.
+    which is derived from the distinct `(repo_id, task_id)` pairs. It is the same
+    set `_non_selection` judged, through the same `_entry_reports` — each of
+    these reports earned the marker it is stamped with.
 
     The offer's whole answer is copied in, not just the half that was selected.
     A frozen batch has to state its own denominator — what was considered, what
@@ -1364,7 +1398,7 @@ def _build_manifest(
     schema = load_import_schema(config)
     reports: list[dict[str, Any]] = []
     for entry in entries:
-        for ref in (entry.primary, *entry.reruns):
+        for ref in _entry_reports(entry):
             reports.append(_manifest_report(config, entry, ref, schema, members[entry.dedup_key]))
     reports.sort(key=lambda report: (report["sequence"], report["report_key"]))
 
@@ -1385,6 +1419,11 @@ def _build_manifest(
         load_schema(config.schema_path(BATCH_SCHEMA_FILENAME)),
         description=f"batch manifest for {batch_id}",
     )
+    # Published through the reader's own cross-field rules, the way
+    # `save_proposal` is: the shape check above says nothing about whether the
+    # counts describe these reports, and a writer that skipped the agreement
+    # could freeze — immutably — a manifest this build refuses to load.
+    require_coherent_selection(manifest, where=f"batch manifest for {batch_id}")
     return manifest
 
 
