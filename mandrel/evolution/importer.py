@@ -158,10 +158,12 @@ def sync_locked(
 ) -> SyncResult:
     """`sync` without acquiring the lock, for a caller that already holds it.
 
-    `evolution start` is sync-then-admit under one lock: the pool it admits
-    from must be the pool the sync just wrote, and the lock is a plain
+    `evolution start` is sync-then-propose under one lock: the pool it offers a
+    batch out of must be the pool the sync just wrote, and the lock is a plain
     `O_EXCL` file, so taking it twice in one process would deadlock against
-    itself.
+    itself. Nothing here or there freezes anything — the manifest is
+    `evolution freeze`'s own write, and the lock is deliberately released between
+    the two so a human can read the offer.
     """
 
     schema = load_import_schema(config)

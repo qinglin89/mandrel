@@ -109,8 +109,9 @@ def no_current_batch() -> str:
     """Why there is nothing for any of these operations to act on."""
 
     return (
-        "no batch is current, and every change lineage belongs to one; freeze a cohort with "
-        "`mandrel evolution start` and let its analysis produce the drafts (invariant 14)"
+        "no batch is current, and every change lineage belongs to one; a cohort takes two commands — "
+        "`mandrel evolution start` offers one out of the pool and `mandrel evolution freeze` fixes it — and its "
+        "analysis then produces the drafts (invariant 14)"
     )
 
 

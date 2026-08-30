@@ -2353,15 +2353,16 @@ def _redo_promotion(
     if latest is None or outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
         raise BatchError(
             "no batch is current, so there is nothing to promote; a batch is current from the freeze of its "
-            "manifest until its outcome is recorded (invariant 14), and freezing the next cohort is "
-            "`mandrel evolution start`"
+            "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
+            "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
         )
     merge = outcome["promotion"]
     if outcome["reason"] != reason or tuple(merge["planned_targets"]) != planned:
         raise BatchError(
             f"no batch is current, so there is nothing to promote; the newest, {latest.batch_id}, was promoted "
             f"for {outcome['reason']!r} planning {merge['planned_targets']}, which is not this request "
-            f"({reason!r} planning {list(planned)}) redone — freezing the next cohort is `mandrel evolution start`"
+            f"({reason!r} planning {list(planned)}) redone — the next cohort is offered by "
+            "`mandrel evolution start` and fixed by `mandrel evolution freeze`"
         )
     _require_promotion_line(outcome["experiment_id"], merge["merge_input_ref"], source_ref)
     return PromotionResult(
@@ -2544,8 +2545,8 @@ def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
     if latest is None:
         raise BatchError(
             "no batch is current, so there is nothing to conclude; a batch is current from the freeze of its "
-            "manifest until its outcome is recorded (invariant 14), and freezing the next cohort is "
-            "`mandrel evolution start`"
+            "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
+            "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
         )
     return ConclusionResult(
         batch_id=latest.batch_id,

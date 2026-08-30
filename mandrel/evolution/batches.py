@@ -550,9 +550,15 @@ def start(
 def build_proposal(config: EvolutionConfig, *, now: datetime | None = None) -> ProposalResult:
     """Offer a batch out of the pool as it already stands, without a feed.
 
-    The same step `start` ends in, reachable on its own so a proposal can be
-    rebuilt after the source line moved or the human window went stale without
-    reaching a feed this repository may not have.
+    The same step `start` ends in, reachable on its own for a caller that
+    already has the pool it wants offered.
+
+    **No CLI verb exposes it, and no refusal names it.** An operator's rebuild is
+    `mandrel evolution start`, whatever went stale: a command that offered a
+    cohort without discovery would select out of a pool nothing had just proved
+    whole, which is the completeness a freeze may not assume (invariants 1
+    and 2). A recovery pointing at a verb this build has no parser for is worse
+    than none, so the sentences that name the rebuild name only `start`.
     """
 
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
@@ -901,20 +907,80 @@ def _source_line_revision(config: EvolutionConfig) -> str:
     clone rather than a repository to repair.
     """
 
-    ref = config.source_line.ref
-    revision = ref_tip(config.repo_root, ref)
+    revision = ref_tip(config.repo_root, config.source_line.ref)
     if revision is None:
-        raise BatchError(
-            f"this checkout does not hold {ref}, which {config.path} names as the source line a batch is formed "
-            "at; fetch that line before freezing, since the base is recorded as an exact commit, every "
-            "alternative in the batch is built on it, and its canonical identity is what selects the batch's "
-            "members (invariants 8, 15)"
-        )
+        raise BatchError(_unfetched_line_refusal(config))
     return revision
 
 
-def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) -> BatchProposal:
-    """The standing proposal, or why this freeze cannot use it.
+def _unfetched_line_refusal(config: EvolutionConfig) -> str:
+    """Why a checkout without the source line can neither propose nor freeze."""
+
+    return (
+        f"this checkout does not hold {config.source_line.ref}, which {config.path} names as the source line a "
+        "batch is formed at; fetch that line before freezing, since the base is recorded as an exact commit, "
+        "every alternative in the batch is built on it, and its canonical identity is what selects the batch's "
+        "members (invariants 8, 15)"
+    )
+
+
+def current_batch_refusal(batch_id: str | None) -> str:
+    """Why neither half of a formation runs beside a cycle that is still going.
+
+    One sentence for both commands (invariant 14). `start` cannot offer a cohort
+    beside one whose cycle is still running, and a freeze has nothing to fix for
+    the same reason — so a reader meets the same fact whichever they asked about,
+    and neither is sent at the other as a repair.
+    """
+
+    return (
+        f"{batch_id} is current and no outcome has been recorded for it; the pool keeps accumulating and the "
+        "next cohort forms once that batch concludes (invariant 14)"
+    )
+
+
+def freeze_refusal(
+    config: EvolutionConfig,
+    state: EvolutionState,
+    decision: AdmissionDecision,
+    proposal: BatchProposal | None,
+) -> str | None:
+    """Why this state does not accept a freeze, or None where it does.
+
+    The read-only form of `freeze_locked`'s preflight, asked by the console's
+    gate (`phase.allowed_actions`) with the same records the operation is handed,
+    and in the operation's own order — admission first, then the offer. Order is
+    the whole point: the two fail for different people, and a gate that asked
+    them the other way round names a missing offer where the operation answers
+    "not enough evidence yet", or predicts a refusal a freeze never reaches.
+
+    **A short pool is a refusal only where no argument lifts it.** `--force`
+    waives the configured target and nothing else (`evaluate_admission`), so
+    `pool-below-target` beside a standing offer is a state `freeze` accepts —
+    with a justification, which is the operator's to write and not a fact about
+    this state. Every other unreleased reason (an undrained feed, an empty pool,
+    the minimum) holds against every argument, and is refused here. Which is why
+    the force flag is not modelled: the gate says whether the verb may run at
+    all, never which arguments it was given (contract: The gate).
+    """
+
+    if decision.reason == REASON_CURRENT_BATCH:
+        return current_batch_refusal(decision.current_batch_id)
+    if not decision.freeze and decision.reason != REASON_BELOW_TARGET:
+        return (
+            f"admission does not release the pool ({decision.reason}: {decision.task_count} pooled, target "
+            f"{decision.target}, minimum {decision.minimum}); a freeze forms a cohort only once policy releases "
+            "one, and `--force` waives the configured target rather than any of this"
+        )
+    return proposal_refusal(config, state, proposal)
+
+
+def proposal_refusal(
+    config: EvolutionConfig,
+    state: EvolutionState,
+    proposal: BatchProposal | None,
+) -> str | None:
+    """Why the standing offer is not one this freeze may fix, or None where it is.
 
     Three things are re-read here rather than trusted, because the single-writer
     lock does not span the human window — the proposal was built by one command
@@ -937,21 +1003,28 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
       after the build was never considered — so the denominator the proposal
       records would be wrong about what it was selected out of.
 
-    Every refusal names the rebuild, because that is the only repair: a proposal
-    is a reading, and a stale reading is retaken rather than mended.
+    Every refusal a stale offer earns names the rebuild, because that is the only
+    repair: a proposal is a reading, and a stale reading is retaken rather than
+    mended. The one exception is a checkout that cannot resolve the line at all,
+    which no rebuild fixes and which answers with the same fetch `_select` asks
+    for.
+
+    Read-only, and stated once for both directions: the freeze raises it and the
+    console's gate reports it. Two spellings of these three rules is how a menu
+    comes to advertise a freeze the operation refuses as stale.
     """
 
-    proposal = load_proposal(config)
     if proposal is None:
-        raise BatchError(
+        return (
             f"no batch proposal stands in {config.proposal_path}; a freeze fixes an offer a human has seen, so "
-            "build one with `mandrel evolution start` (or `build-proposal` where there is no feed), review its "
-            "membership, and freeze that"
+            "build one with `mandrel evolution start`, review its membership, and freeze that"
         )
 
-    tip = _source_line_revision(config)
+    tip = ref_tip(config.repo_root, config.source_line.ref)
+    if tip is None:
+        return _unfetched_line_refusal(config)
     if tip != proposal.base_revision:
-        raise BatchError(
+        return (
             f"the proposal was built at {proposal.base_revision} on {proposal.source_line_ref} and that line now "
             f"stands at {tip}; the base is what every experiment of this batch starts from and what selects its "
             "evidence, so the offer is refused rather than re-based — run `mandrel evolution start` again and "
@@ -962,12 +1035,12 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
     for member in proposal.selected:
         entry = state.find(member.repo_id, member.task_id)
         if entry is None:
-            raise BatchError(
+            return (
                 f"the proposal offers {member.repo_id}/{member.task_id}, which is no longer in the pending pool; "
                 "rebuild the proposal with `mandrel evolution start` and review what it now offers"
             )
         if set(entry.report_keys()) != set(member.report_keys):
-            raise BatchError(
+            return (
                 f"{member.repo_id}/{member.task_id} holds different reports than the proposal offered; a later "
                 "evaluation arrived after it was built, so rebuild it with `mandrel evolution start` and review "
                 "the batch that reads"
@@ -975,11 +1048,29 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
     arrived = [entry for entry in state.pending if entry.dedup_key not in offered]
     if arrived:
         names = ", ".join(f"{entry.repo_id}/{entry.task_id}" for entry in sorted(arrived, key=lambda e: e.dedup_key))
-        raise BatchError(
+        return (
             f"the pool holds {len(arrived)} task(s) the proposal never considered ({names}); a batch states what "
             "it was selected out of, so rebuild the proposal with `mandrel evolution start` rather than freezing "
             "a denominator that predates them"
         )
+    return None
+
+
+def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) -> BatchProposal:
+    """The standing proposal, or the refusal `proposal_refusal` states, raised.
+
+    The write side of the same predicate the console's gate reads, so an
+    operator meets one sentence whether they asked `status` or ran the freeze.
+    """
+
+    proposal = load_proposal(config)
+    refusal = proposal_refusal(config, state, proposal)
+    if refusal is not None:
+        raise BatchError(refusal)
+    # `proposal_refusal` answers on a missing offer before anything else, so a
+    # None here is unreachable; asserted rather than assumed, since the
+    # narrowing is what the caller's `proposal.base_revision` stands on.
+    assert proposal is not None
     return proposal
 
 

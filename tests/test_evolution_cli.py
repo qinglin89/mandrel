@@ -20,9 +20,11 @@ shipped file's real numbers load.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
+import re
 import shutil
 import threading
 import urllib.error
@@ -79,6 +81,8 @@ from mandrel.evolution import (
     assessment,
     batches,
     deployment,
+    experiments,
+    guards,
     hub,
     importer,
     lineage,
@@ -332,17 +336,86 @@ def test_the_freeze_verb_is_offered_only_once_a_batch_is_on_offer(
     assert after.allowed and after.refusal is None
 
 
-def test_an_offer_admission_will_not_release_says_which_of_the_two_it_is(
+def test_a_below_target_offer_is_a_freeze_the_gate_allows(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    fill_pool(config, feed_root, 1)
+    """`--force` waives the configured target, so a short offer is a state the
+    verb accepts — with a justification the operator writes.
+
+    The gate says whether a verb may run at all and never which arguments it was
+    given (contract: The gate), so modelling the force flag as state is exactly
+    what it must not do: what it reports is that the operation reaches its
+    writes from here, which it does.
+    """
+
+    fill_pool(config, feed_root, MINIMUM)
     evolution.build_proposal(config, now=NOW)
 
     action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
 
+    assert action.allowed and action.refusal is None
+    frozen = evolution.freeze(config, now=NOW, forced=True, justification="the cohort is complete")
+    assert frozen.frozen and frozen.decision.trigger == batches.TRIGGER_FORCED
+
+
+def test_a_shortfall_no_force_waives_is_the_refusal_admission_gives(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Admission is asked first, exactly as the operation asks it.
+
+    With an empty pool there is no offer either, and the gate used to name that:
+    a missing proposal is a condition `freeze` never reaches here, since the
+    minimum is a floor no argument crosses and the operation answers on the pool
+    before it ever looks for an offer.
+    """
+
+    evolution.sync(config, write_feed(feed_root, []))
+
+    action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+
     assert not action.allowed
-    assert "the proposal stands but admission does not release it" in (action.refusal or "")
-    assert batches.REASON_BELOW_TARGET in (action.refusal or "")
+    assert batches.REASON_POOL_EMPTY in (action.refusal or "")
+    assert "no batch proposal stands" not in (action.refusal or "")
+
+
+def test_a_line_that_moved_under_the_offer_is_refused_by_the_gate_too(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The human window is unbounded and the writer's lock does not span it, so
+    the base the offer was built at is re-read — by the freeze, and by the
+    reading an operator decides from."""
+
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "the line moves"))
+
+    action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+
+    assert not action.allowed
+    assert "the offer is refused rather than re-based" in (action.refusal or "")
+    with pytest.raises(evolution.BatchError) as excinfo:
+        evolution.freeze(config, now=NOW)
+    assert str(excinfo.value) == action.refusal
+
+
+def test_a_pool_that_outgrew_the_offer_is_refused_by_the_gate_too(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A batch states what it was selected out of, so a task that arrived after
+    the offer was built refuses the freeze — and the gate says so rather than
+    advertising a verb that refuses this exact reading."""
+
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    evolution.sync(config, write_feed(feed_root, records(TARGET + 1)))
+
+    action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
+
+    assert not action.allowed
+    assert "the proposal never considered" in (action.refusal or "")
+    with pytest.raises(evolution.BatchError) as excinfo:
+        evolution.freeze(config, now=NOW)
+    assert str(excinfo.value) == action.refusal
 
 
 def test_a_frozen_batch_holds_the_lifecycle_at_batch_frozen(
@@ -1386,6 +1459,69 @@ def test_an_entry_the_feed_mangled_is_translated_and_then_rejected(
 
 
 # --- CLI ---------------------------------------------------------------------
+
+
+def _exposed_verbs() -> set[str]:
+    """Every `mandrel evolution <verb>` this build has a parser for."""
+
+    parser = cli.build_parser()
+    evolution_action = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    return set(evolution_action.choices["evolution"]._subparsers._group_actions[0].choices)
+
+
+def test_every_command_a_refusal_names_is_one_this_build_exposes() -> None:
+    """A recovery pointing at a verb with no parser behind it is worse than no
+    recovery at all: the operator follows it, meets `invalid choice`, and is left
+    with the refusal and nowhere to go.
+
+    Scanned over the source rather than asserted per sentence, because the
+    failure this pins is a *rename* — the formation split `start` in two, and
+    every sentence naming the old single command went stale at once. A refusal
+    naming a Python entry point the CLI does not expose fails here the same way.
+    """
+
+    named = {
+        match.group(1)
+        for path in sorted(Path(evolution.__file__).parent.rglob("*.py"))
+        for match in re.finditer(r"`mandrel evolution ([a-z][a-z0-9-]*)`", path.read_text(encoding="utf-8"))
+    }
+
+    assert named, "the scan found no commands at all, so it proves nothing"
+    assert named <= _exposed_verbs(), f"named in a refusal, absent from the CLI: {sorted(named - _exposed_verbs())}"
+
+
+def test_a_refusal_that_sends_an_operator_to_form_a_cohort_names_both_commands(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Forming a cohort takes two commands, and a recovery naming only the poll
+    leaves the operator exactly where they started.
+
+    `start` offers a batch and writes no manifest, so an operator told to freeze
+    with it runs it, sees no current batch, and meets the same refusal — which is
+    how these four read before the split landed. The reachable refusals are
+    raised here rather than quoted so the pin is on what an operator is actually
+    told.
+    """
+
+    with pytest.raises(evolution.BatchError) as promoting:
+        experiments.promote(config, reason="the candidate holds", targets=("orch-hub",), now=NOW)
+    with pytest.raises(evolution.BatchError) as concluding:
+        experiments.conclude_no_change(config, reason="nothing justified", now=NOW)
+
+    for refusal in (
+        guards.no_current_batch(),
+        assessment.no_cohort_refusal(),
+        str(promoting.value),
+        str(concluding.value),
+    ):
+        assert "`mandrel evolution start`" in refusal, refusal
+        assert "`mandrel evolution freeze`" in refusal, refusal
+
+
 
 
 def test_status_prints_the_phase(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

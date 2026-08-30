@@ -85,8 +85,8 @@ confirm) are what it exists for.
 It is a reading, and the operation stays the authority — which is why nothing
 here decides what a verb refuses on. Each condition is the owning module's own
 read-only predicate, asked from here with the same records the operation is
-handed (`guards.stage_refusal` and the preamble beside it,
-`experiments.sealable_refusal` and its neighbours, `replay.conclude_refusal`,
+handed (`batches.freeze_refusal`, `guards.stage_refusal` and the preamble beside
+it, `experiments.sealable_refusal` and its neighbours, `replay.conclude_refusal`,
 `assessment.settleable_refusal`, `rollback.nothing_promoted_refusal`), so an
 operator meets one sentence whether they asked `status` or ran the command. A
 rule written down twice is one that drifts, and the direction it drifts in is a
@@ -148,7 +148,14 @@ from . import experiments, guards, replay as replay_ops, rollback as rollback_op
 from .analysis_task import task_finished
 from .assessment import Assessment, Counterfactual, Frame, Obligation, Subject
 from .assessment import obligation as describe_obligation
-from .batches import REASON_CURRENT_BATCH, AdmissionDecision, awaiting_analysis, evaluate_admission
+from .batches import (
+    REASON_CURRENT_BATCH,
+    AdmissionDecision,
+    awaiting_analysis,
+    current_batch_refusal,
+    evaluate_admission,
+    freeze_refusal,
+)
 from .config import EvolutionConfig
 from .deployment import TargetHolding
 from .deployment import describe as describe_deployment
@@ -813,7 +820,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     moment = now or datetime.now(timezone.utc)
     inputs = guards.read_inputs(config)
     for _ in range(_SNAPSHOT_ATTEMPTS):
-        reading, lineage = _read(config, moment)
+        reading, lineage, freeze_hold = _read(config, moment)
         after = guards.read_inputs(config)
         if after == inputs:
             # The gate last, over the assembled reading: what may be done next is
@@ -822,7 +829,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
             # already refuses.
             return replace(
                 reading,
-                actions=_actions(config, reading, lineage),
+                actions=_actions(config, reading, lineage, freeze_hold),
                 state_revision=guards.state_revision(after),
             )
         inputs = after
@@ -834,7 +841,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     )
 
 
-def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage]:
+def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage, str | None]:
     """The lifecycle as the artifacts now have it, without the gate or the token.
 
     Both of those are derived from this and from nothing else, which is why they
@@ -843,7 +850,10 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
 
     The lineage travels with the reading because the gate asks the operations
     themselves what a redo would find here, and their predicates take the records
-    rather than this projection of them.
+    rather than this projection of them. The freeze hold travels for the same
+    reason and is answered here rather than in the gate: the pool it re-validates
+    the standing offer against is this reading's own `EvolutionState`, and a
+    second load could answer over a pool the phase label above disagrees with.
     """
 
     state = load_state(config)
@@ -888,7 +898,7 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         release=_release(config, lineage, current),
         deployment=_deployment(config, promotion),
     )
-    return reading, lineage
+    return reading, lineage, freeze_refusal(config, state, decision, proposal)
 
 
 def _round_tail(round_: Round) -> str:
@@ -1209,7 +1219,12 @@ class _Held:
         return self.stage or self.successor or self.evidence
 
 
-def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage) -> tuple[Action, ...]:
+def _actions(
+    config: EvolutionConfig,
+    status: LifecycleStatus,
+    lineage: Lineage,
+    freeze_hold: str | None,
+) -> tuple[Action, ...]:
     """Every verb, and what this state does with it.
 
     Emitted in lifecycle order — the pool, the gate, the work, its measurement,
@@ -1219,7 +1234,9 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
     The records rather than this projection of them are what the guards are
     asked about, which is why the lineage travels this far: the operations take
     `BatchLineage`, `Experiment`, `History`, `Evidence` and `Frame`, and handing
-    them the same objects is what makes this the operation's answer.
+    them the same objects is what makes this the operation's answer. `freeze_hold`
+    arrives already answered for the same reason — `batches.freeze_refusal` takes
+    the pending pool, which is the one record this projection does not carry.
     """
 
     current = lineage.current
@@ -1247,7 +1264,7 @@ def _actions(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage)
     )
     return (
         _start_action(status),
-        _freeze_action(status),
+        _freeze_action(freeze_hold),
         *_gate_actions(status, held),
         *_work_actions(config, status, held),
         *_replay_actions(status, held),
@@ -1270,64 +1287,28 @@ def _start_action(status: LifecycleStatus) -> Action:
     pass and then a proposal, so running it below the target imports whatever
     has arrived and offers a batch nothing may yet freeze — a normal outcome
     rather than a refusal. What it cannot do is offer a cohort beside one whose
-    cycle is still running.
+    cycle is still running, which is the one sentence both halves of a formation
+    share (`batches.current_batch_refusal`).
     """
 
     decision = status.decision
     if decision.reason != REASON_CURRENT_BATCH:
         return Action(ACTION_START, OBJECT_POOL)
-    return Action(
-        ACTION_START,
-        OBJECT_POOL,
-        refusal=(
-            f"{decision.current_batch_id} is current and no outcome has been recorded for it; the pool keeps "
-            "accumulating and the next cohort forms once that batch concludes (invariant 14)"
-        ),
-    )
+    return Action(ACTION_START, OBJECT_POOL, refusal=current_batch_refusal(decision.current_batch_id))
 
 
-def _freeze_action(status: LifecycleStatus) -> Action:
+def _freeze_action(freeze_hold: str | None) -> Action:
     """Fixing the standing proposal as this batch.
 
-    Two conditions, checked in the order the operation checks them, because they
-    fail for different people: an offer has to exist for a human to have seen it,
-    and the admission policy has to release it. The second is not a defect —
-    `pool-below-target` is the ordinary state of a proposal waiting for evidence,
-    and `--force` is the answer where a human judges the cohort complete.
+    Every condition is `batches.freeze_refusal`, which is `freeze_locked`'s own
+    preflight read-only: admission first, then the offer, then that offer against
+    the live line and pool. Nothing is decided here, for the reason nothing is
+    decided anywhere else in this gate — the operation is the authority, and a
+    second spelling of its order is what makes a menu advertise a freeze the
+    operation refuses as stale.
     """
 
-    decision = status.decision
-    if decision.reason == REASON_CURRENT_BATCH:
-        # Said in `start`'s words rather than as a missing offer: while a cycle
-        # is running there is nothing to offer, so "build one" would send an
-        # operator at a command that would also refuse.
-        return Action(
-            ACTION_FREEZE,
-            OBJECT_POOL,
-            refusal=(
-                f"{decision.current_batch_id} is current and no outcome has been recorded for it; the pool keeps "
-                "accumulating and the next cohort forms once that batch concludes (invariant 14)"
-            ),
-        )
-    if status.proposal is None:
-        return Action(
-            ACTION_FREEZE,
-            OBJECT_POOL,
-            refusal=(
-                f"no batch proposal stands: {decision.reason or 'nothing has been offered'}. A freeze fixes an "
-                "offer a human has reviewed, so run `start` and read what it proposes"
-            ),
-        )
-    if decision.freeze:
-        return Action(ACTION_FREEZE, OBJECT_POOL)
-    return Action(
-        ACTION_FREEZE,
-        OBJECT_POOL,
-        refusal=(
-            f"the proposal stands but admission does not release it: {decision.reason} "
-            f"({decision.task_count}/{decision.target}, minimum {decision.minimum})"
-        ),
-    )
+    return Action(ACTION_FREEZE, OBJECT_POOL, refusal=freeze_hold)
 
 
 def _gate_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:

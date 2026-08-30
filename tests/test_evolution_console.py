@@ -1478,14 +1478,14 @@ def test_a_reading_is_never_published_with_a_token_from_after_it(
     taken: list[phase.LifecycleStatus] = []
 
     def racing(cfg: evolution.EvolutionConfig, moment: datetime) -> tuple:
-        reading, lineage = read(cfg, moment)
+        reading, lineage, freeze_hold = read(cfg, moment)
         if not taken:
             # A writer finishing while the lifecycle was being read: the record
             # lands after this reading saw the draft waiting, and before the
             # token is taken.
             experiments.reject(cfg, ["hook-side-loader"], reason="one report is not recurrence", now=NOW)
         taken.append(reading)
-        return reading, lineage
+        return reading, lineage, freeze_hold
 
     monkeypatch.setattr(phase, "_read", racing)
     reading = status(config)
