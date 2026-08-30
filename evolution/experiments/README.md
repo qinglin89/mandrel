@@ -28,9 +28,10 @@ terminal decision — and what it already says is never rewritten.
 
 A batch may hold several experiments and usually will — abandoned, superseded,
 and one open alternative is an ordinary state. All of them start from the same
-base revision, frozen by the batch's first experiment, because alternatives
-built on different sources are not alternatives. Only one experiment is open at
-a time, and only a promotion ends the batch; the rest stay as evidence.
+base revision, fixed when the batch was formed and recorded in its manifest,
+because alternatives built on different sources are not alternatives. Only one
+experiment is open at a time, and only a promotion ends the batch; the rest stay
+as evidence.
 
 Rounds are the unit replay evidence names. Sealing a round records that every
 task admitted into it was observed complete and pins the ref tip as that round's

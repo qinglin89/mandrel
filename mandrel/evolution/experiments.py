@@ -3278,12 +3278,12 @@ def _require_carried(
     requirement: str,
     carried: bool = True,
 ) -> None:
-    """Whether the base about to be frozen has one commit in its history, where
+    """Whether the base about to be built on has one commit in its history, where
     the settlement says what the answer has to be.
 
     Unanswerable refuses either way. Everywhere else a Git relation this clone
     cannot resolve is reported as the fact about the clone that it is; this one
-    stands between a frozen base and every alternative built on it (invariant
+    stands between the frozen base and every alternative built on it (invariant
     15), so a checkout that cannot see the relation does not get to assume it.
     """
 
@@ -3291,7 +3291,7 @@ def _require_carried(
     if answer is None:
         raise BatchError(
             f"whether {base_revision[:12]}{requested} carries {revision[:12]} cannot be answered in this "
-            f"checkout, which does not hold both commits; {requirement}, so this refuses rather than freeze a "
+            f"checkout, which does not hold both commits; {requirement}, so this refuses rather than admit on a "
             "base it cannot place on the line the decision chose"
         )
     if answer is carried:
@@ -3321,15 +3321,10 @@ def _require_requested_base(
 
     if requested is None or _resolve(config, requested) == frozen:
         return
-    where = (
-        f"with {current.experiments[0].experiment_id}"
-        if current.experiments
-        else f"in {current.batch.manifest_path.name}"
-    )
     raise BatchError(
-        f"{current.batch_id} froze its base at {frozen[:12]} {where}, so {requested!r} cannot be this "
-        "experiment's base; every alternative starts from the same commit or they are not alternatives "
-        "(invariant 15)"
+        f"{current.batch_id} was formed at base {frozen[:12]}, recorded in "
+        f"{current.batch.manifest_path.name}, so {requested!r} cannot be this experiment's base; every "
+        "alternative starts from the same commit or they are not alternatives (invariant 15)"
     )
 
 

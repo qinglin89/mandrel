@@ -249,7 +249,7 @@ def test_an_admitted_draft_stays_in_the_batch_that_proposed_it(
     assert gate.missing == ()
 
 
-def test_the_first_experiment_freezes_the_base_every_later_one_starts_from(
+def test_every_experiment_of_a_batch_starts_from_the_one_base_it_was_formed_at(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     """Invariant 15. The batch was formed at one commit and every attempt in it
@@ -276,7 +276,7 @@ def test_a_base_that_is_not_the_batchs_is_refused_rather_than_reconciled(
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
     git_commit(config.repo_root, "unrelated source work")
 
-    with pytest.raises(evolution.BatchError, match="froze its base at"):
+    with pytest.raises(evolution.BatchError, match="was formed at base"):
         experiments.create(config, ["hook-side-loader"], base="HEAD", now=NOW)
 
 
@@ -333,7 +333,7 @@ def test_a_named_base_that_is_not_the_batchs_is_refused_at_the_first_experiment_
     the first experiment as much as at every later one — the base was fixed
     before any of them, so there is no admission that chooses it."""
 
-    with pytest.raises(evolution.BatchError, match="froze its base at"):
+    with pytest.raises(evolution.BatchError, match="was formed at base"):
         experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
     assert not (config.experiments_root / EXP_01).exists()
@@ -347,7 +347,7 @@ def test_a_redo_naming_a_different_base_is_refused_rather_than_ignored(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="froze its base at"):
+    with pytest.raises(evolution.BatchError, match="was formed at base"):
         experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
 

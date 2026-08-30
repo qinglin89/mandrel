@@ -3579,7 +3579,7 @@ def test_the_gate_answers_once(
 ) -> None:
     """The same answer run again reports what is on record and audits nothing
     twice; a different answer is refused, because what this gate releases is the
-    base every experiment of the batch is frozen on."""
+    next first experiment and the line its base is held to."""
 
     second = freeze_second(config, promoted)
     form_reading(config)
@@ -3812,12 +3812,12 @@ def test_a_rolled_back_release_is_not_the_base_the_batch_was_formed_at(
     assert lineage.describe(config).current.experiments == ()
 
 
-def test_a_batch_that_owes_no_reading_freezes_its_base_freely(
+def test_a_batch_that_owes_no_reading_admits_on_its_base_freely(
     config: evolution.EvolutionConfig,
     release: str,
 ) -> None:
     """A predecessor that concluded `no-change` fabricates no revision, so there
-    is no release to judge and nothing for the freeze to wait on."""
+    is no release to judge and nothing for the first admission to wait on."""
 
     write_manifest(config.batches_root, FIRST, ["r1"], analysis_task_id="2026-07-31-first")
     write_outcome(config.batches_root, FIRST, outcome="no-change")
@@ -3847,13 +3847,13 @@ def test_a_later_experiment_of_the_batch_is_not_gated_again(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The gate is asked where a base is being frozen and nowhere else.
+    """The gate is asked at a batch's first admission and nowhere else.
 
-    A batch has one base and its first experiment settled it (invariant 15), so a
-    later attempt takes that commit rather than resolving one — asking again
-    would hold work against a decision that can no longer change what it starts
-    from. The reading is stripped back to unsettled here to prove the second
-    admission never looks.
+    A batch has one base and its formation fixed it (invariant 15), so a later
+    attempt takes that commit rather than resolving one — asking again would
+    hold work against a decision that can no longer change what it starts from.
+    The reading is stripped back to unsettled here to prove the second admission
+    never looks.
     """
 
     second = freeze_second(config, promoted)
@@ -3887,8 +3887,9 @@ def test_a_rollback_a_later_attempt_stands_on_is_refused_and_retaining_stays_ope
     is not an operation here and so not one this gate can record as its own.
 
     The state itself is a repair case rather than a sequence the gate allows: in
-    the ordinary flow the settlement lands before the first experiment can freeze
-    a base, so nothing is standing on the release when a rollback would run.
+    the ordinary flow the settlement lands before the first experiment can be
+    admitted on the base, so nothing is standing on the release when a rollback
+    would run.
     """
 
     second = freeze_second(config, promoted)

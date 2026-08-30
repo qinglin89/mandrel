@@ -1092,7 +1092,7 @@ def _target_line(holding: TargetHolding, *, reversed_promotion: bool) -> str:
 
 def _release_lines(release: ReleaseReading | None) -> list[str]:
     """The reading of the release before this batch — the gate the next first
-    experiment base waits on (invariant 17).
+    experiment waits on (invariant 17).
 
     Absent for most batches, and that is ordinary: only a promotion produces
     something to assess. What is never ordinary is the shape of the absence, so
@@ -1302,7 +1302,7 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
             _field(
                 "",
                 "no reading recorded — the analysis of this release forms one, and the next first experiment "
-                "base waits on it being settled (invariant 17)",
+                "waits on it being settled (invariant 17)",
             )
         ]
     lines = [

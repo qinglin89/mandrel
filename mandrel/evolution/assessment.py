@@ -907,10 +907,13 @@ def owed_by(lineage: Lineage, batch: Batch) -> Subject | None:
     """The release `batch` itself owes a reading of, or None when it owes none.
 
     The obligation belongs to the *first* cohort frozen after a promotion, which
-    is the one whose reports are the earliest evidence about it. A later batch
-    still derives the same subject — that is how it reads the record — and owes
-    nothing, because the reading was taken and settled before it could freeze
-    (invariant 14 keeps the batches in a series).
+    is the one whose reports are the earliest evidence about it, and it stays
+    there. A later batch still derives the same subject — that is how it reads
+    the record — and owes no reading of its own, because invariant 14 keeps the
+    batches in a series and there is only one first cohort. Its formation waits
+    on nothing either way; what a later batch's first admission may still wait
+    on is the *owning* cohort's answer, which invariant 17 keeps with that
+    cohort rather than passing on.
 
     Read from records alone, so the freeze that generates an analysis task can
     ask it without depending on which Git objects the machine holds.
@@ -2095,7 +2098,7 @@ def _redone_settlement(
     raise BatchError(
         f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decided.settlement!r} "
         f"at {decided.decided_at}: {decided.reason!r}; this gate answers once, because what it releases is the "
-        "base every experiment of this batch is frozen on — a release judged again after that is the next "
+        "next first experiment and the line its base is held to — a release judged again after that is the next "
         "cohort's reading of the line as it now is"
     )
 

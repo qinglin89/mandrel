@@ -34,7 +34,7 @@
       "format": "date-time"
     },
     "base_revision": {
-      "description": "The exact source commit this experiment starts from, frozen by the batch's first experiment. Every experiment of one batch carries the same value; a differing one is refused rather than reconciled (contract invariant 15).",
+      "description": "The exact source commit this experiment starts from: the batch's base, fixed when the batch was formed and read out of its manifest rather than chosen here. Every experiment of one batch carries the same value; a differing one is refused rather than reconciled (contract invariant 15).",
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },

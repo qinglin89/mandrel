@@ -170,8 +170,8 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
     create.add_argument(
         "--base",
         help=(
-            "assert the commit being frozen: a batch's first experiment takes the configured source line, later "
-            "ones take that frozen commit, and naming anything else refuses"
+            "assert the commit this batch was formed at: every experiment starts from the base its manifest "
+            "recorded, and naming anything else refuses"
         ),
     )
     create.add_argument("--reason", help="optional note recorded with the admission")

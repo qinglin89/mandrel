@@ -1319,7 +1319,7 @@ def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
 
 
 def _base_refusal(status: LifecycleStatus, held: _Held) -> str | None:
-    """Invariant 17, asked only where a base is about to be frozen.
+    """Invariant 17, asked only where the batch's base is about to be built on.
 
     The obligation is derived once for the whole reading (`_release`) and handed
     to the operation's own predicate, which is also what says which line the base
@@ -2055,7 +2055,7 @@ def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
             ACTION_ASSESS: read,
             ACTION_SETTLE: (
                 f"the gate answered {decision.settlement!r} at {decision.decided_at}; it answers once, and the "
-                "decision the next base was frozen on is not one to re-take"
+                "decision the next first experiment's base is held to is not one to re-take"
             ),
         }
 

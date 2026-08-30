@@ -834,10 +834,10 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     back out from under it leaves evidence describing a line that no longer
     exists.
 
-    The attempt can only stand there because somebody decided it should: no base
-    is frozen until the cohort's reading of the release is settled (invariant
-    17), so `retain` is what put this work on the promoted line in the first
-    place.
+    The attempt can only stand there because somebody decided it should: nothing
+    is admitted on a batch's base until the cohort's reading of the release is
+    settled (invariant 17), so `retain` is what put this work on the promoted
+    line in the first place.
     """
 
     directory = write_manifest(

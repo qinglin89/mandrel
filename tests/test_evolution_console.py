@@ -470,7 +470,7 @@ def test_a_rolled_back_promotion_is_still_the_promotion_it_was(
 def test_the_reading_of_a_release_is_owed_by_the_cohort_frozen_after_it(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """The gate the next first experiment base waits on (invariant 17), and the
+    """The gate the next first experiment waits on (invariant 17), and the
     surface names the line the base is expected on rather than letting an
     operator discover it from a refusal."""
 
@@ -933,13 +933,13 @@ def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
     assert "recorded no reading" in named["settle"]["reason"]
 
 
-def test_a_first_base_freeze_names_the_settlement_it_waits_on(
+def test_a_first_admission_names_the_settlement_it_waits_on(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """Invariant 17 from the operator's side: an admission that would freeze this
-    batch's base is refused until the release before it is settled, and the
+    """Invariant 17 from the operator's side: the first admission on this batch's
+    already-fixed base is refused until the release before it is settled, and the
     refusal says whose record that is rather than leaving it to be met at the
-    freeze."""
+    admission."""
 
     freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
     analyzed(config, SECOND, drafts=("loader-fallback",))
@@ -947,10 +947,10 @@ def test_a_first_base_freeze_names_the_settlement_it_waits_on(
     named = verbs(config)
     assert not named["create"]["allowed"]
     assert "recorded no reading" in named["create"]["reason"]
-    # Which line the base is expected on, said here rather than met at the freeze.
+    # Which line the base is expected on, said here rather than met at the admission.
     assert "the line with it taken back out" in named["create"]["reason"]
     assert "invariant 17" in named["create"]["reason"]
-    # Declining a draft is not what the settlement gates — only the base is.
+    # Declining a draft is not what the settlement gates — only admitting on the base is.
     assert named["reject"]["allowed"] is True
 
     assessment.form(
@@ -1411,7 +1411,7 @@ def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
     assert status(config).state_revision != first
 
 
-def test_the_state_revision_covers_the_commit_a_first_base_would_freeze(
+def test_the_state_revision_covers_the_commit_a_formation_would_read(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
     """The one revision an operation resolves that no record names yet. Forming a

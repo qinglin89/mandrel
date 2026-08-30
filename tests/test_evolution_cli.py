@@ -1916,8 +1916,8 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
 #
 # What the change lineage produces and what is done about it afterwards: a
 # candidate carried onto the source line, a run that measured it ended or given
-# up, the next cohort's reading of that release, and the gate the next base
-# freeze waits on. The same two properties are under test as for the lineage
+# up, the next cohort's reading of that release, and the gate the next first
+# experiment waits on. The same two properties are under test as for the lineage
 # verbs — every operation reachable, and a run that found the work already done
 # saying so — with one more that belongs to this half alone: a `rolled-back`
 # settlement performs the reversal itself, so the console offers one verb where
