@@ -491,14 +491,18 @@ longer holds — naming the rebuild, because a stale reading is retaken rather t
 mended. `--force` (with `--justification`) belongs to `freeze`: waiving the
 configured target is a decision about forming a batch, and `start` forms none.
 
-**The window is two verbs.** Both name one pooled task as `<repo-id>/<task-id>`,
-and both require `--reason` and `--actor` — a move nobody is named for is not a
-recorded judgement, and it survives into the frozen manifest.
+**The window is two verbs.** Both name one pooled task as two arguments —
+`<repo-id> <task-id>`, each exactly as the offer states it — and both require
+`--reason` and `--actor`, because a move nobody is named for is not a recorded
+judgement, and it survives into the frozen manifest. The two halves stay apart
+on the command line because a report's repository id may itself hold a slash
+(`owner/repo` is the ordinary form of one); readings still print the pair
+joined, and that is a display rather than a spelling to type back.
 
 | Verb | What it does |
 |---|---|
-| `batch-include <repo-id>/<task-id> --reason ... --actor ...` | argue one pooled task into the offer past the membership test; counts toward the thresholds like any other member |
-| `batch-exclude <repo-id>/<task-id> --reason ... --actor ...` | take one task out of the offer, on a stated judgement, recorded as `human-excluded` |
+| `batch-include <repo-id> <task-id> --reason ... --actor ...` | argue one pooled task into the offer past the membership test; counts toward the thresholds like any other member |
+| `batch-exclude <repo-id> <task-id> --reason ... --actor ...` | take one task out of the offer, on a stated judgement, recorded as `human-excluded` |
 
 Each is refused where the move would change no answer: a task the identity test
 already selects cannot be included, and one it already refuses cannot be

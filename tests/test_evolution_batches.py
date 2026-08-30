@@ -46,7 +46,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import evolution
-from mandrel.evolution import analysis_task, batches, ledger, manifests, proposals, render, revisions, state
+from mandrel.evolution import analysis_task, batches, ledger, manifests, phase, proposals, render, revisions, state
 
 TARGET = 3
 MINIMUM = 2
@@ -3108,6 +3108,27 @@ def test_a_move_nobody_is_named_for_is_refused_before_the_lock(
         evolution.include(config, "repo-alpha", absent, now=NOW, **stated)
 
 
+def test_a_move_naming_no_task_is_refused_before_anything_is_read(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Both halves of the identity are the caller's to state, and neither is
+    checked any further here.
+
+    The import contract bounds them only as non-empty strings — a slash, a
+    space, a colon are legal in either — so the offer is the one authority on
+    what its names are, and stating nothing at all is the only thing that can be
+    answered before the pool is read."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    before = config.proposal_path.read_bytes()
+
+    for repo_id, task_id in (("", "2026-07-01-task"), ("repo-alpha", "   ")):
+        with pytest.raises(evolution.BatchError, match="names one pooled task by both halves"):
+            evolution.exclude(config, repo_id, task_id, justification=WHY_OUT, actor=ACTOR, now=NOW)
+
+    assert config.proposal_path.read_bytes() == before
+
+
 def test_the_same_move_twice_writes_nothing(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
@@ -3172,6 +3193,48 @@ def test_a_recorded_move_survives_the_rebuild_that_would_discard_it(
     assert carried.justification == WHY_IN and carried.moved_at == "2026-08-01T12:00:00Z"
     # And the poll did its own job around it.
     assert rebuilt.considered == 3
+
+
+def test_a_no_op_poll_holds_the_offer_still_whatever_order_the_pool_arrived_in(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The offer is held in one order, and it is not the pool's.
+
+    The pool is read in report-sequence order and the offer lists its decisions
+    by task identity; a task named late can be imported first, so the two run in
+    different directions as a matter of course. Where the offer's identity was
+    the order it happened to be assembled in, a poll that changed nothing would
+    find the same selection unequal to the standing one, restamp `built_at`, and
+    move the bytes and the state token with it — refusing an operator's
+    outstanding token over a decision nobody made."""
+    feed = write_feed(
+        feed_root,
+        at_line(
+            config,
+            [
+                make_record(key=f"r{index}", sequence=index, task_id=task_id)
+                # Sequence ascending, task identity descending: the reversal is
+                # the whole point of the fixture.
+                for index, task_id in enumerate(("2026-09-01-task", "2026-08-01-task", "2026-07-01-task"), start=1)
+            ],
+        ),
+    )
+    evolution.sync(config, feed)
+    evolution.build_proposal(config, now=NOW)
+    evolution.exclude(config, "repo-alpha", "2026-08-01-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
+    moved = config.proposal_path.read_bytes()
+    token = phase.describe(config, now=NOW).state_revision
+    # Both lists of the standing offer are in one order, and one that is not the
+    # pool's — otherwise the rebuild below is comparing what it happens to agree
+    # with.
+    standing = standing_offer(config)
+    assert [member.task_id for member in standing.selected] == ["2026-07-01-task", "2026-09-01-task"]
+
+    rebuilt = evolution.start(config, write_feed(feed_root, []), now=NOW + timedelta(days=1)).proposal.proposal
+
+    assert rebuilt == standing and rebuilt.built_at == "2026-08-01T12:00:00Z"
+    assert config.proposal_path.read_bytes() == moved
+    assert phase.describe(config, now=NOW).state_revision == token
 
 
 def test_a_rebuild_drops_an_inclusion_the_base_now_selects(

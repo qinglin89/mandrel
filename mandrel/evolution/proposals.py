@@ -186,6 +186,20 @@ class BatchProposal:
     is carried here rather than resolved again at freeze time so that a line
     that moved during the human window is visible as a mismatch instead of
     silently reselecting the evidence.
+
+    **Both lists are held in one order, by `(repo_id, task_id)`, and that order
+    is a property of the value rather than of whoever built it.** An offer is
+    compared against the one already standing to decide whether a poll changed
+    anything, and the two sides reach that comparison by different routes: the
+    standing one is parsed back from the file, the fresh one is built in the
+    pool's arrival order (`batches._select`), and a move appends to the list it
+    lands in (`batches._with_move`). Ordering only on the way out would leave
+    those routes disagreeing about the same selection whenever a task's name and
+    its report's sequence run in different directions — the poll would stamp a
+    new `built_at`, the bytes would move, and `state_revision` with them, so an
+    operator's outstanding token would be refused over a decision nobody made.
+    Ordering here is what makes "the same selection" one question with one
+    answer.
     """
 
     built_at: str
@@ -193,6 +207,10 @@ class BatchProposal:
     base_revision: str
     selected: tuple[Member, ...] = ()
     not_selected: tuple[Exclusion, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "selected", _ordered(self.selected))
+        object.__setattr__(self, "not_selected", _ordered(self.not_selected))
 
     @property
     def task_count(self) -> int:
@@ -215,8 +233,10 @@ class BatchProposal:
             "built_at": self.built_at,
             "source_line_ref": self.source_line_ref,
             "base_revision": self.base_revision,
-            "selected": [member.to_json() for member in _ordered(self.selected)],
-            "not_selected": [item.to_json() for item in _ordered(self.not_selected)],
+            # Already in the one order (`__post_init__`), so the file's bytes are
+            # a function of the selection rather than of whoever assembled it.
+            "selected": [member.to_json() for member in self.selected],
+            "not_selected": [item.to_json() for item in self.not_selected],
         }
 
     @classmethod
@@ -318,11 +338,16 @@ def clear_proposal(config: EvolutionConfig) -> bool:
     return True
 
 
-def _ordered(items: Iterable[Member] | Iterable[Exclusion]) -> list[Any]:
-    """One deterministic order for both lists, so the file's bytes are a
-    function of the selection rather than of dictionary iteration."""
+def _ordered(items: Iterable[Member] | Iterable[Exclusion]) -> tuple[Any, ...]:
+    """The one order both lists are held and written in.
 
-    return sorted(items, key=lambda item: (item.repo_id, item.task_id))
+    By the identity a decision is about, never by the pool's arrival order: the
+    pool moves under a standing offer while a human argues with it, and an order
+    that moved with it would make the same selection compare and serialize as a
+    different one.
+    """
+
+    return tuple(sorted(items, key=lambda item: (item.repo_id, item.task_id)))
 
 
 def _entry_fields(data: Any, where: str, *, allowed: frozenset[str]) -> dict[str, Any]:

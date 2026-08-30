@@ -163,10 +163,17 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 def _add_window_commands(subparsers: argparse._SubParsersAction, phase) -> None:
     """The two verbs of the human window, between the offer and the freeze.
 
-    Both name one pooled task as `<repo-id>/<task-id>` — the identity the
-    proposal, the manifest and every refusal already spell that way — and both
-    require the words and the name that make the move a recorded judgement
-    rather than an edit.
+    Both name one pooled task as two arguments, because it is two values
+    everywhere else: the import contract bounds `repo_id` and `task_id` only as
+    non-empty strings, so a publisher's `owner/repo` slug is a legal repo id and
+    a task id may hold a slash of its own. A single `<repo-id>/<task-id>`
+    positional would have to guess where the pair divides, and would put every
+    such task out of reach of the only verbs that can move it while the offer
+    still lists it. Readings still join the pair with a slash — a printed
+    identity is read, not parsed.
+
+    Both also require the words and the name that make the move a recorded
+    judgement rather than an edit.
 
     The flag is `--reason`, as it is on every other verb an operator states a
     judgement to, while the field it lands in is `justification`. The two differ
@@ -184,7 +191,8 @@ def _add_window_commands(subparsers: argparse._SubParsersAction, phase) -> None:
         help="take one task out of the offered batch, on a stated judgement",
     )
     for parser, direction in ((include, "for including it"), (exclude, "for leaving it out")):
-        parser.add_argument("task", help="the pooled task to move, as <repo-id>/<task-id>")
+        parser.add_argument("repo_id", metavar="repo-id", help="the repository the offer names that task under")
+        parser.add_argument("task_id", metavar="task-id", help="the pooled task to move, as the offer names it")
         _add_reason_argument(parser, direction)
         parser.add_argument(
             "--actor",
@@ -698,23 +706,18 @@ def _window_verbs(phase) -> frozenset[str]:
 def _window(config, args: argparse.Namespace) -> str:
     """Move one task in or out of the standing offer, and describe what changed.
 
-    The task is split here and nowhere deeper: `<repo-id>/<task-id>` is a
-    command-line spelling of a pair the domain takes as two values, and a
-    parser that pushed the string down would make every caller of the operation
-    speak a CLI convention.
+    The pair passes through untouched, each half as the offer states it: this
+    adapter neither joins nor splits an identity, so no value the import
+    contract permits into the pool can be spelled in a way the operation cannot
+    read. What names no task — a blank half — is the domain's refusal, taken
+    there so every caller of the operation meets the same one.
     """
 
     from .evolution import batches, phase, render
 
-    repo_id, _, task_id = args.task.partition("/")
-    if not repo_id or not task_id or "/" in task_id:
-        raise evolution_errors.BatchError(
-            f"{args.task!r} does not name one pooled task; give it as <repo-id>/<task-id>, exactly as the "
-            "standing offer and `mandrel evolution status` name it"
-        )
     move = batches.include if args.evolution_command == phase.ACTION_BATCH_INCLUDE else batches.exclude
     return render.format_move(
-        move(config, repo_id, task_id, justification=args.reason, actor=args.actor, expect=args.expect),
+        move(config, args.repo_id, args.task_id, justification=args.reason, actor=args.actor, expect=args.expect),
         config.repo_root,
     )
 

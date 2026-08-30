@@ -89,6 +89,7 @@ from mandrel.evolution import (
     importer,
     lineage,
     phase,
+    proposals,
     render,
     reports,
     replay,
@@ -473,7 +474,8 @@ def test_a_human_move_reads_back_through_the_console_and_the_command(
         [
             "evolution",
             phase.ACTION_BATCH_EXCLUDE,
-            "repo-alpha/2026-07-01-task",
+            "repo-alpha",
+            "2026-07-01-task",
             "--reason",
             "the evaluated target was mispatched",
             "--actor",
@@ -517,32 +519,60 @@ def test_a_human_inclusion_shows_in_the_reading_as_its_own_number(
     assert "1 of them included by a human" in render.format_status(status)
 
 
-def test_a_task_argument_that_is_not_one_pooled_task_is_refused(
+def test_the_window_reaches_a_task_whose_identity_holds_a_slash(
     config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`<repo-id>/<task-id>` is the spelling the offer, the manifest and every
-    refusal already use; a string that is not one of those is refused at the
-    adapter rather than searched for."""
-    fill_pool(config, feed_root, TARGET)
+    """The import contract bounds `repo_id` and `task_id` only as non-empty
+    strings, and a publisher's `owner/repo` slug is the ordinary form of the
+    first. So the adapter takes the pair as two arguments: one joined by a slash
+    would have to divide it somewhere nothing states, and every such task —
+    pooled, listed in the offer, and named in every refusal — would be
+    unreachable by the only two verbs that can move it.
+
+    Both halves are pinned, because the contract permits the slash in either."""
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [
+                    make_record(key="r1", sequence=1, repo_id="team/repo", task_id="2026-07-01-task"),
+                    make_record(key="r2", sequence=2, repo_id="repo-alpha", task_id="2026-07/02-task"),
+                ],
+            ),
+        ),
+    )
     evolution.build_proposal(config, now=NOW)
 
-    code, _, err = run(
-        [
-            "evolution",
-            phase.ACTION_BATCH_INCLUDE,
-            "2026-07-01-task",
-            "--reason",
-            "why",
-            "--actor",
-            "operator",
-            "--repo",
-            str(config.repo_root),
-        ],
-        capsys,
-    )
+    for repo_id, task_id in (("team/repo", "2026-07-01-task"), ("repo-alpha", "2026-07/02-task")):
+        code, out, _ = run(
+            [
+                "evolution",
+                phase.ACTION_BATCH_EXCLUDE,
+                repo_id,
+                task_id,
+                "--reason",
+                "the evaluated target was mispatched",
+                "--actor",
+                "operator",
+                "--repo",
+                str(config.repo_root),
+            ],
+            capsys,
+        )
 
-    assert code == 2
-    assert "does not name one pooled task" in err
+        assert code == 0
+        # Printed joined, and that stays a display: a read identity is not a
+        # parsed one.
+        assert f"batch-exclude: {repo_id}/{task_id} is now out of the offered batch" in out
+
+    offered = proposals.load_proposal(config)
+    assert offered is not None and offered.task_count == 0
+    assert {item.dedup_key for item in offered.not_selected} == {
+        ("team/repo", "2026-07-01-task"),
+        ("repo-alpha", "2026-07/02-task"),
+    }
 
 
 def test_a_move_refuses_a_token_taken_before_it(
@@ -3437,7 +3467,7 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
 def _minimal(verb: str) -> list[str]:
     """The arguments a verb needs to parse — not to run."""
 
-    task = ["repo-alpha/2026-07-01-task"] if verb in ("batch-include", "batch-exclude") else []
+    task = ["repo-alpha", "2026-07-01-task"] if verb in ("batch-include", "batch-exclude") else []
     drafts = ["a-draft"] if verb in ("create", "add-tasks", "reject") else []
     actor = ["--actor", "operator"] if verb in ("batch-include", "batch-exclude") else []
     reason = (

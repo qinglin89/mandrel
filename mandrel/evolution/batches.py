@@ -699,6 +699,7 @@ def _move(
 
     from .guards import require_expected
 
+    _require_identified(repo_id, task_id)
     _require_stated(justification, actor)
     moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
     with single_writer_lock(config):
@@ -827,6 +828,28 @@ def _with_move(proposal: BatchProposal, moved: Member | Exclusion) -> BatchPropo
     if isinstance(moved, Member):
         return replace(proposal, selected=(*selected, moved), not_selected=not_selected)
     return replace(proposal, selected=selected, not_selected=(*not_selected, moved))
+
+
+def _require_identified(repo_id: str, task_id: str) -> None:
+    """A move argues about one named task, and both halves of that name are its.
+
+    Neither half is validated any further here. The import contract bounds them
+    only as non-empty strings — a slash, a space, a colon are all legal in
+    either — so the only thing a caller can get wrong before the pool is
+    consulted is stating nothing at all. Everything else is answered by whether
+    the offer holds that task (`_unanswered_refusal`), which is the one authority
+    on what its names are.
+
+    Refused before the lock, for the reason `_require_stated` is: a caller that
+    named no task is not waiting on the workspace.
+    """
+
+    missing = sorted(name for name, value in (("repo_id", repo_id), ("task_id", task_id)) if not (value or "").strip())
+    if missing:
+        raise BatchError(
+            f"a move names one pooled task by both halves of its identity, and {missing} is blank; the offer "
+            "states the two apart, and so does every record a move lands in"
+        )
 
 
 def _require_stated(justification: str, actor: str) -> None:
@@ -1072,11 +1095,16 @@ def _select(
     verb to clear the way.
 
     An offer that selects what the standing one selected, at the same base, *is*
-    the standing one and keeps its `built_at`. Stamping the clock on it would
-    move `state_revision` on every poll that changed nothing — and this file is
-    in that digest, so an operator's outstanding token would be refused by
-    somebody else's no-op `start`. That is the false positive the watched-ref
-    set was trimmed to avoid, and it would be reintroduced here.
+    the standing one and keeps its `built_at`. "What it selected" is a question
+    about the decisions and not about the order they were assembled in: this
+    loop follows the pool's arrival order, the standing offer is parsed back from
+    a file, and the two need not run in the same direction — so the comparison
+    rests on `BatchProposal` holding both lists in one order of its own.
+    Stamping the clock on an unchanged offer would move `state_revision` on every
+    poll that changed nothing — and this file is in that digest, so an operator's
+    outstanding token would be refused by somebody else's no-op `start`. That is
+    the false positive the watched-ref set was trimmed to avoid, and it would be
+    reintroduced here.
     """
 
     base = _source_line_revision(config)
@@ -1717,9 +1745,9 @@ def _proposed_entries(state: EvolutionState, proposal: BatchProposal) -> list[Po
     """The pool entries the proposal selected, in the manifest's order.
 
     Ordered exactly as `_batched_entries` orders the pool rather than as the
-    proposal lists them: the manifest's order is a property of the evidence, and
-    the proposal sorts by task id so its own bytes stay stable while a human
-    moves entries in and out.
+    proposal lists them: the manifest's order is a property of the evidence,
+    while the proposal is held by task identity so that the same selection stays
+    one document while a human moves entries in and out.
     """
 
     selected = {member.dedup_key for member in proposal.selected}
