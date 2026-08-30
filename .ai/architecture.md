@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-29
-verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # Architecture
@@ -88,15 +88,21 @@ evolution runtime/import pool → frozen batch → analysis/change/replay
 `mandrel evolution` is the authoritative standalone human-triggered controller;
 an optional Web surface consumes its JSON/actions rather than implementing a
 second lifecycle.
-One fully-qualified configured source line supplies the batch runner revision,
-the first experiment base, and replay input. Promotion and rollback instead use
-their persisted evidence, so a policy edit can neither redirect a measured merge
-nor its inverse.
+One fully-qualified configured source line supplies the manifest-owned batch
+base/runner commit and replay input. The first experiment reads that frozen
+manifest base; release settlement gates its admission and checks the base
+against the selected line rather than resolving a second commit. Promotion and
+rollback instead use their persisted evidence, so a policy edit can neither
+redirect a measured merge nor its inverse.
 It consumes a protected orch-hub feed or deterministic local bundles, validates
 and hashes complete L1+L2 reports, deduplicates them by completed source task,
-and persists the cursor, drain proof, pending pool, rejections, and processed
-claims under ignored `.ai-evolution/`. Admission freezes the eligible pool into
-an immutable versioned manifest and generates one analysis-only task; closure
+and persists the cursor, drain proof, pending pool, rejections, processed claims,
+and machine-local batch proposal under ignored `.ai-evolution/`. `start` selects
+the proposal by equality between each pooled task's report-set protocol identity
+and the source-line base; a human may record an include/exclude judgement before
+`freeze` publishes the immutable manifest, claims reports, and generates one
+analysis-only task. Admission thresholds and age measure the proposal, while the
+manifest preserves its selected/excluded denominator and attribution. Closure
 and proposed change-task drafts remain separate artifacts with a human admission
 gate before implementation. Guarded domain operations then create one durable
 experiment ref and record, admit task copies, append and seal candidate rounds,
@@ -121,9 +127,9 @@ and a revision matching neither side is excluded rather than ancestry-sorted.
 `.ai-tasks/` supplies local completion observations, never historical identity;
 the audit ledger is not flow state. Per-experiment replay histories and prepared
 promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
-commits are the release-decision state. Schema-v7 status adds a digest of those
+commits are the release-decision state. Schema-v10 status adds a digest of those
 authoritative inputs and their named ref tips, including the configured source
-line but excluding the operator's `HEAD`, plus per-verb
+line and batch proposal but excluding the operator's `HEAD`, plus per-verb
 allowed/refused/recovery actions and a machine-local reading of planned targets'
 validated deploy locks; the deployment reading neither enters the digest nor
 gates lifecycle actions. Versioned `evolution/` holds safe policy, schemas,

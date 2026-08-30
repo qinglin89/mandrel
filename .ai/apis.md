@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-29
-verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # APIs and Interfaces
@@ -17,14 +17,17 @@ verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 | `registry remove <name-or-path>` | Remove local tracking only |
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
-| `evolution status [--json]` | Derive schema-v7 pool/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result |
-| `evolution start [--force --justification <text>]` | Reconcile, sync, and freeze one batch when admission policy allows; force never waives the minimum |
+| `evolution status [--json]` | Derive schema-v10 pool/proposal/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result |
+| `evolution start` | Reconcile, sync, and write a machine-local base-keyed batch proposal; creates no manifest, report claim, analysis task, or batch audit line |
+| `evolution batch-include|batch-exclude <repo-id> <task-id> --reason ... --actor ...` | Record an attributed human override of the proposal's automatic canonical-identity membership; identities remain two arguments because either half may contain `/` |
+| `evolution freeze [--force --justification <text>]` | Revalidate and immutably publish the standing proposal, claim its reports, and generate its analysis task; force may waive the target but never the minimum |
 | `evolution create|add-tasks|reject|seal-round|revise|abandon|supersede|conclude-no-change` | Drive the guarded, recoverable experiment and batch lineage |
 | `evolution replay-start|replay-conclude|replay-abandon|replay-withdraw|promote|rollback` | Record/resume exact-integration evidence, promote its exact tree, or reverse the latest promotion |
 | `evolution assess|assess-measure|assess-conclude|assess-abandon|assess-withdraw|assess-resolve|settle` | Record the next cohort's release reading/counterfactual and settle retain or composed rollback |
 
 All evolution operations are human-invoked and make no evaluation model call.
-`list` and `status` are read-only; `start` returning no batch is a normal
+`list` and `status` are read-only; `start` may return no proposal when the pool
+is empty or a batch is current, and `freeze` returning no batch is a normal
 successful outcome when policy is not met. Lifecycle mutations accept optional
 `--expect <state_revision>` and check it first under their writer lock. The
 token hashes authoritative record bytes plus the configured source line and
@@ -46,6 +49,7 @@ evolution write resolves the operator's checkout.
 | `deployment.describe` | Read each planned target through the machine-local registry and its validated deploy lock; return placement/absence/error states without gating lifecycle status |
 | `lockfile.canonical_identity` / `CanonicalIdentities` | Derive the mode-aware deployed-canonical path/blob identity from a commit with an injected deployment filter; cache per revision and never equate unreadable revisions |
 | `lockfile.is_object_id` / `stated_source_commit` | Share the full-object-id predicate with release-assessment placement; accept only supported deploy-lock schemas with a present, null-or-full-object-id `source_git_commit`, distinguishing explicit null from a malformed absent field |
+| `batches.start` / `include` / `exclude` / `freeze` | Sync and build the proposal; apply attributed human membership overrides; revalidate and publish the immutable batch under separate writer locks across the human window |
 
 ## Persisted Interfaces
 
@@ -56,11 +60,12 @@ evolution write resolves the operator's checkout.
 | `.registry/repos.local.json` | Ignored machine-local repo inventory |
 | `orchestrator.toml` | Schema-v3 deployed defaults/profiles plus advisory per-backend/agent model catalog; uncatalogued models remain launchable |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
-| `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; batch runner provenance, first bases, and replays resolve it, while promotion/rollback take their line from evidence |
+| `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; `start` records its tip in the proposal, `freeze` publishes it as the batch base/runner commit after revalidation, and replays resolve it, while promotion/rollback take their line from evidence |
 | `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
 | `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
+| `.ai-evolution/batch-proposal.json` | Ignored schema-v1 base, selected members, excluded denominator, and attributed human moves; included in `state_revision`, revalidated at freeze |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
-| `evolution/batches/<id>/manifest.json` | Immutable committed cohort membership and evaluator/protocol provenance |
+| `evolution/batches/<id>/manifest.json` | Immutable committed base, semantically validated selected/excluded denominator, human attribution, and evaluator/protocol provenance |
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
 | `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |
 | `evolution/batches/<id>/rejected-drafts.json` | Durable terminal decisions for declined draft identities and bytes |

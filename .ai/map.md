@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-29
-verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # Project Map
@@ -20,9 +20,9 @@ verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts, schema-v7 status, state revision and allowed/refused/recovery actions |
+| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v10 status, state revision and allowed/refused/recovery actions |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
-| Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v7 |
+| Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v10 |
 | Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity cohorts/exclusions, CLI-visible assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
 | Evolution deployment visibility | deployment/lockfile/registry/revision services | planned target names beside validated machine-local deploy-lock placement states; observation is outside lifecycle state |
 | Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |

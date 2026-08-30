@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-15
-verified-against: 712b34f89c6436a001dfff9b73d801715c4e51b0
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # Project Overview
@@ -23,10 +23,11 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
 - `mandrel` deploy, dry-run, drift status, local registry, orchestrator bootstrap,
   portable lock receipts, and repository-local workflow skills with
   personal-skill precedence detection.
-- Human-triggered `mandrel evolution` control of the full lifecycle: report pool,
+- Human-triggered `mandrel evolution` control of the full lifecycle: report
+  pool, base-keyed batch proposal and recorded human membership window,
   immutable batches, guarded draft/round/experiment decisions, operator-stated
   exact-integration replay, exact-tree promotion and inverse rollback,
-  cross-batch assessment/settlement, and schema-v7 status with stale-state
+  cross-batch assessment/settlement, and schema-v10 status with stale-state
   tokens, allowed actions, recovery forms, and per-target deployment readings.
 - One deterministic regression entrypoint shared by local runs, CI, and the
   optional pre-push hook; credentialed live probes remain manual.

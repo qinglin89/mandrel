@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-29
-verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # Design Principles and Decisions
@@ -26,10 +26,16 @@ verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
-- Protocol evolution uses repeated unique-task evidence, immutable cohorts,
-  separate analysis/change tasks, human gates, and one configured source line:
-  its frozen commit is batch runner provenance and the first base/replay input;
-  evidence, never configuration, supplies promotion and rollback lines.
+- Protocol evolution uses repeated unique-task evidence, immutable batches,
+  separate analysis/change tasks, human gates, and one configured source line.
+  A batch proposal records that line's tip; `freeze` refuses a moved line and
+  publishes the same commit as the manifest-owned base/runner. The first
+  experiment consumes that base, while evidence—not configuration—supplies
+  promotion and rollback lines.
+- Automatic batch membership is per-task agreement across every owned report:
+  each report's deployable-canonical identity must equal the proposal base's.
+  Human inclusion/exclusion is the only override and remains attributed in the
+  proposal, immutable manifest denominator, and generated analysis task.
 - The shipped evolution source line is the exclusive receiving branch
   `refs/heads/dev`; `refs/heads/main` is human-maintained and canonical work
   stays on feature branches. Rollback's current-tip three-way inverse depends
@@ -135,6 +141,9 @@ verified-against: 051a2a91891e16466f58aeb1ba0fef446c2eef21
   fact being recorded.
 - Evolution writers publish through the reader's parser so persisted
   cross-field rules are enforced in both directions.
+- Batch proposal decisions are held in `(repo_id, task_id)` order independent
+  of report arrival, so a no-op poll preserves proposal bytes and stale-state
+  tokens; human moves carry forward while their automatic answer still differs.
 - Cross-operation release settlement holds one single-writer lock across
   preflight, optional inverse rollback, lineage re-derivation, and decision
   publication; an answered earlier-cohort obligation is followed only for the

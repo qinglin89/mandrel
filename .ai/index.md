@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-29
-verified-against: 3384626a0062dce990a5fcadf1f0e1474d6f3862
+last-updated: 2026-08-31
+verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 ---
 
 # AI Knowledge Router
@@ -45,10 +45,10 @@ Load only what the current task needs.
 | Taskfile | Local `.ai-tasks/<id>.md` lifecycle and cross-session handoff record |
 | Deploy manifest | Ignored target-local rendered-file receipt used by `status` |
 | Deploy lock | Portable committable canonical payload receipt |
-| Runner protocol revision | Batch manifest's frozen full commit at the configured source line; distinct from each report's run provenance |
+| Runner protocol revision | Batch manifest's frozen base commit at the configured source line; one commit with the batch base, distinct from each report's run provenance |
 | Evolution report | Archived completed-task evaluation with durable complete L1+L2 artifacts |
-| Evolution batch | Immutable cohort of unique completed-task reports analyzed together |
+| Evolution batch | Immutable base plus proposal-selected unique tasks; automatic report-set canonical-identity agreement or an attributed human override |
 | Evolution experiment | One durable alternative attempted inside a batch, with its own ref, rounds, tasks, and terminal decision |
 | Experiment round | Append-only revision pass; candidate-ready only after task completion is observed and the ref tip is sealed |
-| Evolution revisions | Batch runner, batch base, moving candidate tip, sealed round candidate, source-line promotion, and per-target effective revision are distinct commits |
+| Evolution revisions | Manifest-owned batch base/runner, per-report effective revision, moving candidate tip, sealed round candidate, source-line promotion, and per-target effective revision are distinct roles; the base and runner are one commit |
 | Release assessment | First post-promotion cohort's durable reading of the prior release: derived provenance frame, pinned counterfactual, and retain/rollback settlement |
