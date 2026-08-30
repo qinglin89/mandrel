@@ -1944,7 +1944,7 @@ def test_a_settlement_beside_a_prepared_rollback_is_refused(
     in this window the record already states the revision and the promotion is
     still what the line has. A settlement read on the revision alone would call an
     interrupted rollback a completed one — and the settlement is what the next
-    base freeze is gated on, so it would gate on a release still standing.
+    first experiment is gated on, so it would gate on a release still standing.
     """
 
     second = freeze_second(config, promoted)
@@ -3325,7 +3325,7 @@ def test_a_release_this_checkout_does_not_hold_is_not_measured(
     assert read_reading(config, absent).counterfactual is None
 
 
-# --- the settlement, and the base freeze it releases -------------------------
+# --- the settlement, and the admission it releases ---------------------------
 
 
 KEPT = "the reading found nothing measured against the release, so it stays on the line"
@@ -3377,7 +3377,7 @@ def test_retaining_a_release_leaves_it_on_the_line(
 
     Nothing about the source line changes, and the audit says which way the gate
     went — a `retain` that left no trace would be indistinguishable from a gate
-    nobody answered, which is the state the base freeze waits on.
+    nobody answered, which is the state the next first experiment waits on.
     """
 
     second = freeze_second(config, promoted)
@@ -3549,7 +3549,7 @@ def test_a_settlement_finishes_a_rollback_that_was_only_prepared(
     record it prepared — the same commit, now on the line — and the settlement
     names it afterwards. The alternative, reading the prepared revision off the
     record, would call an interrupted rollback a completed one and gate the next
-    base freeze on a release still standing.
+    first experiment on a release still standing.
     """
 
     second = freeze_second(config, promoted)
@@ -3736,14 +3736,15 @@ def test_only_the_last_promotion_is_reversed_by_this_gate(
     assert read_reading(config, second).settled is False
 
 
-def test_no_base_is_frozen_before_the_release_is_judged(
+def test_no_experiment_is_admitted_before_the_release_is_judged(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """Invariant 17 from the other side. The first experiment of the assessing
-    cohort freezes the commit every alternative in it starts from, and the two
-    settlements leave two different commits on the line — so a freeze taken
-    before the answer is the answer made by accident.
+    """Invariant 17 from the other side. The base was fixed when the assessing
+    cohort was formed; what the settlement gates is the first admission, which is
+    the last moment before every alternative in the batch stands on that commit.
+    The two settlements leave two different commits on the line, so admitting
+    before the answer builds on whichever one the formation happened to read.
 
     Two refusals, because they are two different states for an operator: nobody
     has read the release, and nobody has decided what to do about the reading.
@@ -3755,11 +3756,15 @@ def test_no_base_is_frozen_before_the_release_is_judged(
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     assert "has recorded no reading" in str(error.value)
+    # What it refuses is the admission, not a freeze: telling an operator the
+    # base is still to be pinned would name a fact the formation already wrote.
+    assert "nothing may be admitted on" in str(error.value)
 
     form_reading(config)
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     assert "nobody has settled it" in str(error.value)
+    assert "nothing may be admitted on" in str(error.value)
     assert lineage.describe(config).current is not None
     assert lineage.describe(config).current.experiments == ()
 
@@ -3959,10 +3964,11 @@ def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
     lapse when that cohort ends.
 
     `no-change` promotes nothing, so the batch after it still follows the same
-    release while owing no reading of its own. Asking only whether the *freezing*
-    cohort owes one would find nothing to wait for and freeze a base on the line
-    the source happened to be holding — which is invariant 17 defeated by a
-    sequence every step of which is legal.
+    release while owing no reading of its own. Asking only whether the
+    *admitting* cohort owes one would find nothing to wait for and build every
+    alternative on whichever commit the line happened to be holding when the
+    batch was formed — which is invariant 17 defeated by a sequence every step of
+    which is legal.
 
     The way out is the obligation itself: it stays answerable where it sits, so
     the gate names a decision somebody can still take rather than one nobody can.

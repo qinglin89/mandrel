@@ -99,14 +99,15 @@ and both leave the reading `inconclusive`, which is what this contract already
 says about a comparison that was never made.
 
 **The gate is the last thing written on it.** A reading is evidence until a
-human answers it, and the answer is what the next base freeze waits on: `retain`
-leaves the release as the line every alternative in the assessing batch starts
-from, `rolled-back` takes it off first. The reversal itself is composed rather
-than repeated — the rollback operation reverses the newest promotion, refuses on
-a line later work stands on, and takes the reason and nothing else — so what is
-added here is the decision, its sequencing, and the refusals that have to be made
-before a commit rather than after one. Once it answers, nothing more is added to
-the record: a settlement stands on the reading it was made from.
+human answers it, and the answer is what the next first experiment waits on:
+`retain` leaves the release as the line every alternative in the assessing
+batch starts from, `rolled-back` takes it off first. The reversal itself is
+composed rather than repeated — the rollback operation reverses the newest
+promotion, refuses on a line later work stands on, and takes the reason and
+nothing else — so what is added here is the decision, its sequencing, and the
+refusals that have to be made before a commit rather than after one. Once it
+answers, nothing more is added to the record: a settlement stands on the
+reading it was made from.
 
 **Vocabulary is shared, not restated.** The case set, evaluator, harness,
 regression and result shapes are the replay record's own value objects: a
@@ -550,7 +551,7 @@ class WithdrawnRequest:
 @dataclass(frozen=True)
 class Decision:
     """The human settlement of one assessment: the gate between a release and
-    the next base freeze."""
+    the next batch's first experiment."""
 
     settlement: str
     decided_at: str
@@ -754,8 +755,8 @@ class Obligation:
     stays there — a later batch never acquires it — so this pairs that cohort's
     derived frame with whatever it has recorded so far. Ordinarily the two are
     the same batch and this says nothing new; it exists for the case where they
-    are not, because the answer a base freeze waits on is the *owner's* and not
-    the freezing cohort's own (invariant 17).
+    are not, because the answer an admission waits on is the *owner's* and not
+    the admitting cohort's own (invariant 17).
     """
 
     frame: Frame
@@ -769,9 +770,10 @@ class Obligation:
 
     @property
     def settled(self) -> bool:
-        """Whether the human gate has answered — the one state a base freeze may
-        go ahead on. A reading nobody recorded and one nobody decided about are
-        different states to an operator and both stop a freeze."""
+        """Whether the human gate has answered — the one state a first
+        experiment may go ahead on. A reading nobody recorded and one nobody
+        decided about are different states to an operator and both stop an
+        admission."""
 
         return self.decision is not None
 
@@ -1034,8 +1036,8 @@ def obligation(
     `no-change` promoted nothing, so the batch after it still follows the older
     release — while the obligation to read that release stays with the first
     cohort frozen after it, which is where the record is and where it stays.
-    Asking `owed_by` of the freezing batch alone would find no obligation there
-    and let the freeze proceed on a line nobody decided about (invariant 17).
+    Asking `owed_by` of the admitting batch alone would find no obligation there
+    and let the admission proceed on a base nobody decided about (invariant 17).
 
     Read-only, and the answer is the whole state: which cohort owes it, the frame
     its record is checked against, and the record itself where there is one.
@@ -1290,11 +1292,11 @@ def _owing_frame(
     The third of those is a refusal only where that earlier cohort *answered*.
     An obligation it left outstanding — a cohort that ended without reading the
     release, or read it and was never settled — is still the obligation the next
-    base freeze waits on, and the record still belongs in that cohort's own
+    first experiment waits on, and the record still belongs in that cohort's own
     directory. So these operations follow it there rather than refusing from the
     cohort that happens to be current: a gate nothing can answer would stop the
-    lineage for good, since what freezes the next cohort is the settlement and
-    what would record the settlement is this.
+    lineage for good, since what releases the next admission is the settlement
+    and what would record the settlement is this.
 
     `follow_answered` is the settlement's own exception, and it is about
     reporting rather than about writing. Everything a settlement does to a
@@ -1941,7 +1943,7 @@ def settle(
 
     Run again with the same answer, it reports the settlement on record and
     appends no second audit line — the rule every redo here follows, because the
-    event happened once. A different answer is refused: the base freeze this gate
+    event happened once. A different answer is refused: the admission this gate
     releases may already have happened, and a decision the line was built on is
     not one to re-take.
     """
@@ -3459,7 +3461,7 @@ def _require_reversal_landed(path: Path, revision: str, derived: Subject, descri
     Called after the identity check, which is the half that says *which* rollback
     is meant. This is the half that says it happened, and the two questions are
     separate in the ordinary flow: the settlement that depends on it is what a
-    later base freeze is gated on, and a release still on the line is not one a
+    later admission is gated on, and a release still on the line is not one a
     record may settle as taken off it.
     """
 

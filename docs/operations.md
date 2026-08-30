@@ -495,7 +495,7 @@ evolution: pool 4/20
                oldest pending report imported 5 day(s) ago, max wait 30
   admission    no batch — pool-below-minimum
   batches      0 frozen, none current
-  revisions    none in play — no experiment has frozen a base
+  revisions    none in play — no batch is current
   actions      start
                21 other verb(s) refuse here; `--json` states each reason
   state        1-ac1087623f3fa990 — what this reading is of
@@ -533,7 +533,7 @@ release is kept — all of it is a human judgement stated here and recorded
 
 | Verb | What it does |
 |---|---|
-| `create <draft>... [--base <rev>] [--reason ...]` | admit a group of drafts as a new experiment; a batch's first experiment freezes the base at the configured source line, and `--base` asserts which commit that was expected to be |
+| `create <draft>... [--base <rev>] [--reason ...]` | admit a group of drafts as a new experiment on the base the batch was formed at; `--base` asserts which commit that is expected to be |
 | `add-tasks <draft>...` | admit further drafts into the open experiment's open round |
 | `reject <draft>... --reason ...` | decline drafts at the admission gate; terminal for those proposals |
 | `seal-round` | observe every admitted task complete and pin the round's candidate revision |
@@ -563,27 +563,28 @@ release is kept — all of it is a human judgement stated here and recorded
 | `assess-abandon --reason ...` | record why that run ended when its harness cannot say |
 | `assess-withdraw` | give up a counterfactual request the harness never answered for |
 | `assess-resolve --verdict ... --confidence ... --rationale ...` | revise the reading on the strength of the completed run |
-| `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next base freeze waits on; `rolled-back` runs the reversal itself |
+| `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next batch's first experiment waits on; `rolled-back` runs the reversal itself |
 
 `settle` is one verb and not a sequence: a `rolled-back` settlement performs the
 rollback, adopts an inverse already on the line, and finishes one left prepared.
 `rollback` is for a reversal that answers no gate.
 
 Where the source line comes from differs by verb, and `--source-ref` never
-changes it. A base freeze and a replay *resolve* the line, from
+changes it. A batch freeze and a replay *resolve* the line, from
 `evolution/config.toml` `[source_line].ref` — one name for the project, so every
 clone measures against the line it releases from rather than the branch someone
-was on. A batch freeze reads the same line without asserting anything, for the
-manifest's `runner_protocol_revision`: where that line stands is the protocol
-revision the cohort's tasks are governed by, and a checkout that does not hold
-the line records the absence rather than stopping the freeze. A promotion and a
-rollback do not resolve one at all: they take it from their own evidence, the
-replay's integration and the promoted outcome's merge unit, so no edit to the
-policy file can put an unmeasured tree or an inverse commit on a line nothing
-was measured against. On replay, promotion, and
-rollback, `--source-ref` states which line the operator read; on the base
-freeze, `--base` states which commit they read at the configured line. Either
-mismatch refuses before anything is written.
+was on. The freeze resolves it for the manifest's `runner_protocol_revision`,
+which is this batch's base: where that line stands when the batch is formed is
+both the protocol revision the cohort's tasks are governed by and the commit
+every experiment of that batch starts from, so a checkout that does not hold the
+line refuses to freeze rather than record the absence. Admission resolves
+nothing — it reads the base out of the manifest. A promotion and a rollback do
+not resolve one either: they take it from their own evidence, the replay's
+integration and the promoted outcome's merge unit, so no edit to the policy file
+can put an unmeasured tree or an inverse commit on a line nothing was measured
+against. On replay, promotion, and rollback, `--source-ref` states which line the
+operator read; on `create`, `--base` states which commit they expect the batch to
+have been formed at. Either mismatch refuses before anything is written.
 
 **`refs/heads/dev` is evolution's receiving line, and `refs/heads/main` is
 human-maintained.** Evolution moves `dev` and its own `refs/evolution/...`
@@ -627,8 +628,8 @@ habit `dev` invites is the thing to correct, not the guard.
 ./bin/mandrel deploy ../orch-hub                   # promotion is not deployment
 ```
 
-The cohort frozen after that promotion owes a reading of it, and no later base is
-frozen until the reading is settled (invariant 17):
+The cohort frozen after that promotion owes a reading of it, and no later first
+experiment is admitted until the reading is settled (invariant 17):
 
 ```bash
 ./bin/mandrel evolution start
@@ -766,11 +767,12 @@ the two fields a surface acts on:
 `1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
 records under `evolution/batches` and `evolution/experiments`,
 `evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
-records name, and the configured source line (which no record names until a base
-has been frozen off it). `HEAD` is deliberately not in it: nothing this tool
-writes resolves the checkout any more, so a `git checkout` of an unrelated
-branch, or a commit touching no evolution record and no watched ref, leaves an
-outstanding token usable. Pass it back on any mutation:
+records name, and the configured source line (which no record names, and which a
+batch's formation resolves before any record could). `HEAD` is deliberately not
+in it: nothing this tool writes resolves the checkout any more, so a
+`git checkout` of an unrelated branch, or a commit touching no evolution record
+and no watched ref, leaves an outstanding token usable. Pass it back on any
+mutation:
 
 ```bash
 ./bin/mandrel evolution seal-round --expect 1-ac1087623f3fa990

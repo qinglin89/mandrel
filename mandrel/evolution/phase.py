@@ -51,9 +51,9 @@ finished leaves `promote` as the only verb its experiment accepts. A replay
 request the harness never answered for is work that may be going, and it is
 deliberately left out of the evidence notes exactly where the evidence supports
 a promotion — so "no note" never means "nothing outstanding" and only the field
-can say. The reading a release owes is a gate on the next base freeze, and it
-belongs to the cohort frozen after the promotion whether or not that cohort is
-still the current one. Every one of those used to be met as a refusal with
+can say. The reading a release owes is a gate on the next first experiment, and
+it belongs to the cohort frozen after the promotion whether or not that cohort
+is still the current one. Every one of those used to be met as a refusal with
 nothing on the surface explaining it.
 
 **Absences are states.** Null here is a fact and not a gap, and the pairs that
@@ -406,8 +406,7 @@ class ReleaseReading:
     is running, and the cohort that owes the reading. They part company as soon
     as the owing cohort ends without answering — the obligation stays where the
     record is (invariant 17) — and a surface that showed only the current
-    batch's own frame would offer an admission that the next base freeze
-    refuses.
+    batch's own frame would offer an admission that the release gate refuses.
     """
 
     batch_id: str
@@ -994,9 +993,9 @@ def _release(
 
     Asked through `obligation` rather than of the current batch's own frame,
     because those are two questions: a cohort that ends without answering leaves
-    the obligation where it was, and the next base freeze waits on the owner's
-    record (invariant 17). Asking the freezing batch alone would find nothing
-    owed and offer an admission that refuses.
+    the obligation where it was, and the next first experiment waits on the
+    owner's record (invariant 17). Asking the admitting batch alone would find
+    nothing owed and offer an admission that refuses.
 
     None for a batch with no release before it at all, which is most of them:
     only a promotion produces something to assess, and `no-change` produces

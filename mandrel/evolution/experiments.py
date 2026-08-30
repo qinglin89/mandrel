@@ -728,19 +728,20 @@ def base_release_refusal(current: BatchLineage, owed: assessment.Obligation | No
     if reading is None:
         return (
             f"{owner or current.batch_id + ' '}has recorded no reading of the {subject.batch_id} release "
-            f"({subject.revision[:12]}), so {current.batch_id} has nothing to freeze a base against; that "
-            "cohort's reports are the first evidence of what the release did, and the commit every experiment "
-            "of this batch starts from is either the line carrying it or the line with it taken back out "
+            f"({subject.revision[:12]}), so nothing may be admitted on {current.batch_id}'s base yet; that "
+            "cohort's reports are the first evidence of what the release did, and the base this batch was "
+            "formed at has to be either the line carrying the release or the line with it taken back out "
             "(invariant 17)"
         )
     if reading.settled:
         return None
     return (
         f"{owner or current.batch_id + ' '}reads the {subject.batch_id} release {reading.verdict!r} and nobody "
-        f"has settled it, so {current.batch_id}'s base cannot be frozen yet; the settlement is what says whether "
-        f"the release stays on the line every alternative here is built from — {assessment.SETTLEMENT_RETAIN!r} "
-        f"keeps it, {assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off first, and either way the base is "
-        "frozen afterwards (invariant 17)"
+        f"has settled it, so nothing may be admitted on {current.batch_id}'s base yet; the settlement is what "
+        f"says whether the release stays on the line every alternative here is built from — "
+        f"{assessment.SETTLEMENT_RETAIN!r} keeps it, {assessment.SETTLEMENT_ROLLED_BACK!r} takes it back off "
+        "first, and the base this batch was formed at is then held to whichever the answer chose "
+        "(invariant 17)"
     )
 
 
@@ -3147,8 +3148,8 @@ def _require_release_settled(
     company as soon as that cohort ends without answering: a batch that concluded
     `no-change` promoted nothing, so this batch still follows the older release
     while owing no reading of its own. Asking only whether *this* cohort owes one
-    would find nothing to wait for and freeze a base on a line nobody decided
-    about — the obligation stays where it was, and so does what waits on it.
+    would find nothing to wait for and admit on a line nobody decided about — the
+    obligation stays where it was, and so does what waits on it.
 
     Only at the batch's first experiment, for `base_release_refusal`'s reason:
     a later attempt of the same batch is already standing on the base, so asking

@@ -518,10 +518,10 @@ def complete_task(config, task_id: str) -> Path:
 def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEMENT_RETAIN) -> bool:
     """Answer the release gate a cohort frozen after a promotion owes.
 
-    Every base freeze after the first promotion waits on this (invariant 17), so
-    a fixture that wants a second change cycle has to go through it exactly as an
-    operator does: the cohort reads the release, and a human says whether the
-    line keeps it. `inconclusive` and `retain` because that is the ordinary
+    Every first experiment after the first promotion waits on this (invariant
+    17), so a fixture that wants a second change cycle has to go through it
+    exactly as an operator does: the cohort reads the release, and a human says
+    whether the line keeps it. `inconclusive` and `retain` because that is the ordinary
     answer — no manifest states the shape of the work, so the cohorts suspect
     rather than settle, and the release stays the commit the next batch is formed
     on.

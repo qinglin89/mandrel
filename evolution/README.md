@@ -90,22 +90,32 @@ complete an evaluation.
     the ref stays where it was pinned; opening a new round is what lets work
     resume. An experiment dropped before it ever became candidate-ready records
     no candidate at all, in the same spirit as invariant 7.
-17. **Judge the release before freezing the next base.** A batch frozen after a
-    promotion reads what that release did (Release assessment), and a human
-    settles that reading — `retain` or `rolled-back` — before any base is frozen
-    on the line that release is on. The two answers give two different commits
-    to start from: `retain` leaves the release on the source line,
-    `rolled-back` puts the inverse commit there first. So the settlement decides
-    twice over: freezing before the answer takes whichever of the two the line
-    happened to be holding, and a base that carries neither the release nor its
-    reversal is the same accident one step later. The obligation stays with the
-    first cohort frozen after the promotion and does not lapse when that cohort
-    ends: a batch that concluded `no-change` promoted nothing, so the batch after
-    it still follows the same release and still waits on that cohort's answer.
-    Nothing else in the batch waits on it — the reading is taken while the
-    analysis is still being written, and drafts, rejections and the closure are
-    unaffected. A batch with no promotion anywhere before it owes nothing and
-    waits for nothing.
+17. **Judge the release before the next batch's first experiment.** A batch
+    frozen after a promotion reads what that release did (Release assessment),
+    and a human settles that reading — `retain` or `rolled-back` — before any
+    experiment is admitted on that batch. The base is not what waits on the
+    answer: it was fixed when the batch was formed (invariant 15), and
+    formation is unconditional because the batch being formed is the evidence
+    about that release. What waits is the first admission, the last moment
+    before every alternative in the batch stands on that base. The two answers
+    leave two different commits on the line — `retain` leaves the release
+    there, `rolled-back` puts the inverse commit there first — and the frozen
+    base is then held to whichever the answer chose, because a base carrying
+    neither the release nor its reversal is the batch settling by accident what
+    the human was asked. `retain` passes on the frozen base by construction:
+    the batch was formed at the line while the release was on it. `rolled-back`
+    is where the two genuinely part company, since the reversal lands after the
+    formation — that cohort's base still carries the promotion just taken back,
+    and its first admission refuses rather than building every alternative on a
+    protocol nobody decided on. What resolves that is a rollback ending the
+    batch it settles, which this contract does not yet describe. The obligation
+    stays with the first cohort frozen after the promotion and does not lapse
+    when that cohort ends: a batch that concluded `no-change` promoted nothing,
+    so the batch after it still follows the same release and still waits on
+    that cohort's answer. Nothing else in the batch waits on it — the reading
+    is taken while the analysis is still being written, and drafts, rejections
+    and the closure are unaffected. A batch with no promotion anywhere before
+    it owes nothing and waits for nothing.
 18. **`main` is human-maintained; the source line is evolution's alone.**
     Evolution's line is `refs/heads/dev` (`evolution/config.toml`
     `[source_line].ref`). Evolution moves that line and its own
@@ -119,15 +129,15 @@ complete an evaluation.
     worth having once.
 
     **Configuration names the line to measure against; evidence names the line
-    to move.** `[source_line].ref` supplies the line a base is frozen from, the
-    line a replay integrates onto, and the line a batch's runner protocol
-    revision is read at. Evidence supplies the rest: a promotion takes its line
-    from the promotable run's integration, and a rollback from the merge unit of
-    the outcome it reverses. So editing the policy redirects what the *next*
-    batch is measured against, and can never redirect a promotion or its
-    inverse — including the edit that moved this project from `main` to `dev`,
-    which left every measured merge already on record pointing where it was
-    measured.
+    to move.** `[source_line].ref` supplies the line a batch's base is read at
+    when it is formed — the same commit under invariant 8's reading — and the
+    line a replay integrates onto. Evidence supplies the rest: a promotion
+    takes its line from the promotable run's integration, and a rollback from
+    the merge unit of the outcome it reverses. So editing the policy redirects
+    what the *next* batch is measured against, and can never redirect a
+    promotion or its inverse — including the edit that moved this project from
+    `main` to `dev`, which left every measured merge already on record pointing
+    where it was measured.
 
     **Rollback rests on the exclusivity.** A rollback applies the promotion's
     change backwards *to the line as it now stands*, not as a rewind to the base
@@ -254,9 +264,9 @@ different moments, and each has its own record:
   sits in the directory of the cohort that produced the reading rather than the
   one being read (Release assessment). It ends nothing of its own batch's
   lifecycle; what it settles is whether the release before it stands, and the one
-  thing that waits on the answer is the next base freeze on that line — this
-  cohort's own, or a later cohort's where this one ended without answering
-  (invariant 17).
+  thing that waits on the answer is the next first experiment admitted on that
+  line — this cohort's own, or a later cohort's where this one ended without
+  answering (invariant 17).
 
 ## Normal workflow
 
@@ -913,7 +923,7 @@ way for a promotion to be unjustified:
 
 **Which line.** The one the promotable run integrated onto, read off that
 evidence. A promotion resolves no line and reads none from `[source_line].ref`:
-the configured name settles where a base is frozen from and what a replay
+the configured name settles where a batch's base is read and what a replay
 measures, and a promotion carries a measured tree, so taking its line from a file
 that may have been edited since the evidence was produced would put an unmeasured
 tree wherever that file points today. `--source-ref` states which line the
@@ -1177,11 +1187,12 @@ without answering the gate — concluding `no-change` asks only that nothing abo
 *that* batch is still open — and the release before it is then still unjudged
 while the next cohort follows it and owes no reading. So the obligation is
 resolved by asking which cohort owes the reading of the release before this
-batch, rather than by asking whether this batch owes one: the next base freeze
-waits on that cohort's settlement, and an obligation it left outstanding is
-recorded and settled where it sits, in that cohort's own directory. A gate that
-could no longer be answered would stop the lineage for good, since the freeze
-waits on the settlement and the settlement is what would release it.
+batch, rather than by asking whether this batch owes one: the next first
+experiment waits on that cohort's settlement, and an obligation it left
+outstanding is recorded and settled where it sits, in that cohort's own
+directory. A gate that could no longer be answered would stop the lineage for
+good, since the admission waits on the settlement and the settlement is what
+would release it.
 
 **Derived, then recorded.** The release under assessment, the two cohorts, their
 denominators, the exclusions and the comparability facets all follow from two
@@ -1524,16 +1535,17 @@ to guess at the other. The reason is the operator's and not the assessment's —
 `inconclusive` reading is an ordinary ground for retaining a release, and a
 rollback is a judgement the promotion's own evidence never contained (Rollback).
 
-What waits on it is the next base freeze and nothing else (invariant 17). The
-first experiment of the batch being frozen takes the commit every alternative in
-it starts from, and the two settlements give two different commits: the line
+What waits on it is the next first experiment and nothing else (invariant 17).
+That admission is what puts every alternative in the batch on the base its
+formation fixed, and the two settlements give two different commits: the line
 carrying the release, or the line with the inverse commit on it. So the gate sits
-between the reading and that freeze, and nowhere else — the analysis, its drafts,
-its rejections and its closure are all unaffected, and a batch with no release
-before it waits for nothing. The freeze is held to the commit as well as to the
-answer: a base that carries neither the release nor the reversal would settle by
-accident what the human was asked, so it is refused whether it came from `HEAD`,
-from an explicit revision, or from a line that moved after the decision.
+between the reading and that admission, and nowhere else — the analysis, its
+drafts, its rejections and its closure are all unaffected, and a batch with no
+release before it waits for nothing. The admission is held to the commit as well
+as to the answer: a base that carries neither the release nor the reversal would
+settle by accident what the human was asked, so it is refused whether the batch
+was formed at a line that had not taken the reversal yet or at one that moved
+after the decision.
 
 Recording the settlement composes the reversal rather than repeating it.
 `rolled-back` runs the rollback operation, which takes the reason and nothing
@@ -1561,7 +1573,7 @@ because a later attempt was already built on it gets explained; the alternative
 is to end that lineage and reverse the change outside this controller, which is
 not an operation here and so is not one this gate can record as its own. In the
 ordinary sequence that state does not arise: the gate answers before the batch's
-first experiment freezes a base, so at the moment a rollback would run there is
+first experiment is admitted, so at the moment a rollback would run there is
 nothing built on the release to take it out from under.
 
 ### What is derived
@@ -1705,8 +1717,8 @@ first, because a pinned run answers a suspicion they raised and the reading is
 where that run is recorded; the run's numbers settle a verdict only once it has
 completed; the gate answers over evidence that is over, never over a run still
 going or a request outstanding; and nothing is added to a reading its gate has
-already answered. What the answer releases is the next base freeze, which is
-guarded from the other side: the first experiment of a batch following that
+already answered. What the answer releases is the next first experiment, which
+is guarded from the other side: the first experiment of a batch following that
 release refuses until the owing cohort's settlement is on record, and then
 refuses a base that is not on the line the settlement chose (invariant 17).
 

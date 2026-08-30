@@ -1703,6 +1703,39 @@ def test_the_generated_task_cites_the_contract_batch_revision_and_boundaries(
     assert ".ai-evolution/imported-artifacts" in body
 
 
+def test_the_generated_task_keeps_the_base_apart_from_where_the_evidence_came_from(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The base governs the analysis and every experiment of the batch; it is not
+    a claim about where the members were produced.
+
+    The two are separate facts and the manifest carries both. A member's own
+    `provenance.effective_revision` is where that report was produced; the base
+    is where the batch was formed, and nothing holds the two to the same commit.
+    A task calling the base "the protocol revision its evidence was produced
+    under" would have the analysing session state cohort provenance no report
+    actually says.
+    """
+    fill_pool(config, feed_root, TARGET)
+
+    result = freeze(config)
+    manifest = read_manifest(result)
+    assert result.analysis_task_path is not None
+    body = result.analysis_task_path.read_text(encoding="utf-8")
+
+    base = manifest["runner_protocol_revision"]
+    produced_at = {report["provenance"]["effective_revision"] for report in manifest["reports"]}
+    # Otherwise the distinction under test is vacuous here.
+    assert base not in produced_at
+
+    # Flattened, so the assertions are about the sentences and not about where
+    # the renderer happened to wrap them.
+    flat = " ".join(body.split())
+    assert f"Base revision: {base}." in flat
+    assert "it is the commit every experiment of this batch starts from" in flat
+    assert "each member keeps its own production revision in the manifest (`provenance.effective_revision`)" in flat
+
+
 def test_a_checkout_without_the_source_line_forms_no_batch(
     config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:

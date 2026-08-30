@@ -603,7 +603,7 @@ def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
     if not result.recorded:
         lines.append(_field("", "this run wrote nothing: the same reading was already on record"))
     if not reading.settled:
-        lines.append(_field("", "the gate is unanswered — `settle` is what the next base freeze waits on"))
+        lines.append(_field("", "the gate is unanswered — `settle` is what the next first experiment waits on"))
     return "\n".join(lines)
 
 
@@ -1285,8 +1285,8 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
     """What was recorded, and what the human gate still owes.
 
     The settlement is stated as the commit it selects rather than as a word,
-    because the thing an operator is about to do with it is freeze a base: the
-    first experiment of the next cohort has to stand on the line the answer
+    because the thing an operator is about to do with it is admit an experiment:
+    the base the next cohort was formed at has to be on the line the answer
     chose, and discovering that from a refusal is the miss this line exists to
     prevent.
 
@@ -1331,7 +1331,9 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
                 )
             )
         else:
-            lines.append(_field("", "not settled — retain the release or roll it back; the next base freeze waits"))
+            lines.append(
+                _field("", "not settled — retain the release or roll it back; the next first experiment waits")
+            )
         return lines
 
     selected = (

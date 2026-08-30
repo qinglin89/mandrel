@@ -469,9 +469,12 @@ justified is a valid outcome (invariant 7).
   Use only the reports it names for batch-level claims, and treat it as
   read-only — a late report belongs to a later batch (invariant 3).
 - Base revision: {spec.runner_protocol_revision}. The commit this batch was
-  formed at, and the protocol revision its evidence was produced under. It stays
-  fixed for this task, and a candidate revision never governs the run that
-  creates it (invariants 8, 15).
+  formed at: it governs this task, and it is the commit every experiment of this
+  batch starts from (invariants 8, 15). It stays fixed for this task, and a
+  candidate revision never governs the run that creates it. It is not where the
+  evidence came from — each member keeps its own production revision in the
+  manifest (`provenance.effective_revision`), and that is what a claim about
+  where a finding was produced names.
 - Admission policy that formed this batch: `evolution/config.toml` at sha256
   `{spec.config_sha256}`.
 {force_line}- Raw evaluation bundles are machine-local runtime data under

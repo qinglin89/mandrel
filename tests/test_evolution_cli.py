@@ -2283,7 +2283,7 @@ def test_the_release_reading_and_its_gate_are_one_verb_each(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """What the cohort after a promotion owes: a reading of that release, and an
-    answer to the gate the next base freeze waits on. The quantities are the
+    answer to the gate the next first experiment waits on. The quantities are the
     operator's — read off machine-local artifacts nothing here can re-derive —
     and everything else about the reading is the lineage's own."""
 
