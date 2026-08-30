@@ -25,7 +25,18 @@ complete an evaluation.
 
 1. **Batch evidence, not anecdotes.** An ordinary single report cannot justify
    protocol evolution. Batches count unique completed tasks, not evaluator
-   reruns or artifact files.
+   reruns or artifact files. A human may enter a report the membership test of
+   invariant 5 refuses, and take out one it selected, before the batch is frozen
+   — recorded each time with the mover's name and their reason, and counted like
+   any other member. That is the one sanctioned exception and it is deliberately
+   not a second threshold beneath the first: the judgement that a report belongs
+   in this cohort is a person's to make, and the configured minimum is a default
+   for the automatic path rather than a rule they are subject to. What bounds it
+   is the record. A frozen manifest states its automatic and human-included
+   members as two numbers and never one, so a batch of ten that is nine
+   judgements and one qualifying report cannot be read as a batch of ten, and the
+   generated analysis task states the same composition to the session that reads
+   recurrence off it.
 2. **Import the denominator.** Include successful/clean reports as well as
    reports with findings; otherwise recurrence and base rates are unknowable.
 3. **Freeze before analysis.** Every analysis uses an immutable manifest of
@@ -255,7 +266,8 @@ refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward 
 .ai-evolution/                      ignored machine-local runtime state
   state.json                        discovery cursor and pending pool
   batch-proposal.json               the batch offered and not yet frozen: its base, its
-                                    members, and what was considered and left out
+                                    members, what was considered and left out, and
+                                    every move a human has made on it
   lock                              single-writer guard
   imported-artifacts/               raw fetched bundles
 ```
@@ -308,6 +320,8 @@ completed archived-task L1+L2 evaluations
      pooled report whose canonical identity equals it — the rest recorded with
      why they were left out
   -> human review of that proposal
+  -> optional `batch-include` / `batch-exclude`, each recorded with a name and
+     a reason
   -> threshold/age admission check
   -> human `mandrel evolution freeze`
   -> immutable batch manifest, formed at the base the proposal named
@@ -356,6 +370,36 @@ since moved, or a pool that has since changed, is refused and rebuilt rather
 than fixed in place. `--force` belongs to `freeze` for the same reason: waiving
 the configured target is a decision about forming a batch, and the poll forms
 none.
+
+**The window itself is two verbs.** `batch-include` argues one pooled task into
+the offer past the membership test; `batch-exclude` takes one out. Each states
+who is moving it and why, each is refused where the move would change no answer
+— a task the test already selects cannot be "included", and one it already
+refuses cannot be "excluded" — and both are refused outright once the batch is
+frozen, because a frozen manifest is immutable and its membership stopped being
+a question. The same two verbs answer for the reports that state no protocol
+identity at all, which no fetch and no rebuild will ever select: that is the
+door historical evidence comes through, and it is the only one.
+
+**A rebuild carries a recorded move forward; it does not discard one.** The
+ordinary poll overwrites the standing proposal, and a judgement somebody made is
+not a reading to be retaken — an operator who argues a report in on Monday and
+syncs on Tuesday would otherwise find their decision gone with nothing said. So
+the next `start` re-applies every move the standing offer records, and the one
+thing that drops one is the automatic answer having come to agree with it: a
+move is a person overriding the membership test, so where the test no longer
+needs overriding there is no judgement left to record, in either direction. The
+alternative — refusing to rebuild over an offer that carries a move — was
+rejected because it strands the workspace: `start` is the rebuild every refusal
+names, and a poll that would not overwrite leaves an offer the freeze refuses as
+stale and no verb to clear the way.
+
+A move can therefore be lost, and only these ways: the base moving to one the
+task's own evidence matches, the task leaving the pool, or the offer itself
+becoming unreadable — which the poll answers by rebuilding, as it does for any
+damaged offer. All three are the proposal being machine-local runtime state
+rather than evidence, and cost what losing the offer entirely costs. What is
+durable is what the freeze writes.
 
 ## The report source
 

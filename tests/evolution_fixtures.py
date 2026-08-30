@@ -340,7 +340,7 @@ def make_manifest_report(
         # manifest means unless it says otherwise: a human inclusion is a
         # recorded judgement and a fixture that produced one silently would
         # make every reader of these manifests read a decision nobody made.
-        "selection": selection or {"mode": "auto", "reason": None, "actor": None, "moved_at": None},
+        "selection": selection or {"mode": "auto", "justification": None, "actor": None, "moved_at": None},
     }
 
 

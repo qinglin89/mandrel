@@ -472,6 +472,8 @@ gates.
 ./bin/mandrel evolution list  --feed-dir ...   # inspect candidates; writes nothing
 ./bin/mandrel evolution sync  --feed-dir ...   # import eligible reports into the pool
 ./bin/mandrel evolution start --feed-dir ...   # repair/close, sync, then propose a batch
+./bin/mandrel evolution batch-include ...      # argue one task into that proposal
+./bin/mandrel evolution batch-exclude ...      # take one out of it
 ./bin/mandrel evolution freeze                 # fix that proposal as an immutable cohort
 ```
 
@@ -489,7 +491,28 @@ longer holds — naming the rebuild, because a stale reading is retaken rather t
 mended. `--force` (with `--justification`) belongs to `freeze`: waiving the
 configured target is a decision about forming a batch, and `start` forms none.
 
-Those five manage report intake and cohort formation. What a frozen cohort then
+**The window is two verbs.** Both name one pooled task as `<repo-id>/<task-id>`,
+and both require `--reason` and `--actor` — a move nobody is named for is not a
+recorded judgement, and it survives into the frozen manifest.
+
+| Verb | What it does |
+|---|---|
+| `batch-include <repo-id>/<task-id> --reason ... --actor ...` | argue one pooled task into the offer past the membership test; counts toward the thresholds like any other member |
+| `batch-exclude <repo-id>/<task-id> --reason ... --actor ...` | take one task out of the offer, on a stated judgement, recorded as `human-excluded` |
+
+Each is refused where the move would change no answer: a task the identity test
+already selects cannot be included, and one it already refuses cannot be
+excluded. Both are refused outright once the batch is frozen — a manifest is
+immutable, so the next window is the offer that follows this batch's outcome.
+
+Moves survive the ordinary poll. The next `start` re-applies every one the
+standing offer records, and drops only those the automatic answer has come to
+agree with — where the test no longer needs overriding there is no judgement
+left to record. A move is lost only three ways — the task leaves the pool, the
+base moves to one its evidence matches, or the offer becomes unreadable and the
+poll rebuilds it — each costing what losing the offer entirely costs.
+
+Those seven manage report intake and cohort formation. What a frozen cohort then
 becomes — experiments, rounds, replays, a promotion, its reversal, and the next
 cohort's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
@@ -516,6 +539,8 @@ evolution: batch-proposed 4/20
   batches      0 frozen, none current
   revisions    none in play — no batch is current
   actions      start
+               batch-include
+               batch-exclude
                22 other verb(s) refuse here; `--json` states each reason
   state        1-ac1087623f3fa990 — what this reading is of
 ```
@@ -741,7 +766,7 @@ deployment is not lifecycle state.
 ### The JSON and action contract
 
 `status --json` is the machine shape of everything above, at
-`schema_version: 9`. Alongside the pool, proposal, admission, batches, gate,
+`schema_version: 10`. Alongside the pool, proposal, admission, batches, gate,
 experiments, revisions, replay, release, `last_promotion` and `deployment` blocks
 it carries
 the two fields a surface acts on:
@@ -788,9 +813,16 @@ the two fields a surface acts on:
 `state_revision` is what makes acting on the reading safe. It is a digest —
 `1-<16 hex>` — of the durable state the lifecycle is derived from: the versioned
 records under `evolution/batches` and `evolution/experiments`,
-`evolution/config.toml`, `.ai-evolution/state.json`, the tips of every ref those
+`evolution/config.toml`, `.ai-evolution/state.json`,
+`.ai-evolution/batch-proposal.json`, the tips of every ref those
 records name, and the configured source line (which no record names, and which a
-batch's formation resolves before any record could). `HEAD` is deliberately not
+batch's formation resolves before any record could). The offer is in it because
+the window's verbs are writes like any other: a token taken before somebody
+argued a report in or out describes a batch that is no longer the one on offer.
+The staged bundles and the writer's lock are the two runtime files left out, and
+for opposite reasons — hashing every bundle would re-read the whole pool on every
+reading, and the lock is held for the duration of every mutation, so hashing it
+would move the token during the operation it guards. `HEAD` is deliberately not
 in it: nothing this tool writes resolves the checkout any more, so a
 `git checkout` of an unrelated branch, or a commit touching no evolution record
 and no watched ref, leaves an outstanding token usable. Pass it back on any

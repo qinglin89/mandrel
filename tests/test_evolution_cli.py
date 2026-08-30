@@ -427,6 +427,142 @@ def test_a_pool_that_outgrew_the_offer_is_refused_by_the_gate_too(
     assert str(excinfo.value) == action.refusal
 
 
+def test_the_window_verbs_are_offered_exactly_while_an_offer_stands(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """One condition for both, and it is not admission's: a short offer is
+    precisely the state a human move exists to argue with, so the thresholds
+    must not close the window at the moment invariant 1's exception is for.
+
+    What does close it is the manifest. A frozen batch's membership is immutable
+    (invariant 3), and the sentence says so rather than repeating the
+    "another cohort is running" refusal `start` gives — a reader has to be able
+    to tell a window that has closed from a cohort that is busy.
+    """
+    fill_pool(config, feed_root, MINIMUM)
+
+    before = phase.describe(config, now=NOW)
+    for verb in (phase.ACTION_BATCH_INCLUDE, phase.ACTION_BATCH_EXCLUDE):
+        action = _action(before, verb)
+        assert not action.allowed and "no batch proposal stands" in (action.refusal or "")
+
+    evolution.build_proposal(config, now=NOW)
+    offered = phase.describe(config, now=NOW)
+    assert not offered.decision.freeze  # short of the target, and still arguable
+    for verb in (phase.ACTION_BATCH_INCLUDE, phase.ACTION_BATCH_EXCLUDE):
+        assert _action(offered, verb).allowed
+
+    fill_pool(config, feed_root, TARGET)
+    freeze(config, now=NOW)
+    closed = phase.describe(config, now=NOW)
+    for verb in (phase.ACTION_BATCH_INCLUDE, phase.ACTION_BATCH_EXCLUDE):
+        action = _action(closed, verb)
+        assert not action.allowed
+        assert "was fixed when it was frozen" in (action.refusal or "")
+
+
+def test_a_human_move_reads_back_through_the_console_and_the_command(
+    config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The verb an operator types, the reading they check it against, and the
+    number that makes the exception legible rather than silent."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    code, out, _ = run(
+        [
+            "evolution",
+            phase.ACTION_BATCH_EXCLUDE,
+            "repo-alpha/2026-07-01-task",
+            "--reason",
+            "the evaluated target was mispatched",
+            "--actor",
+            "operator@example.com",
+            "--repo",
+            str(config.repo_root),
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert "batch-exclude: repo-alpha/2026-07-01-task is now out of the offered batch" in out
+    status = phase.describe(config, now=NOW)
+    assert status.to_json()["proposal"]["not_selected"] == {batches.REASON_HUMAN_EXCLUDED: 1}
+    assert status.to_json()["proposal"]["task_count"] == TARGET - 1
+
+
+def test_a_human_inclusion_shows_in_the_reading_as_its_own_number(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Two numbers and never one total: a batch a human curated is a different
+    document from one the identity test selected, and the reading says so in the
+    human form as well as the JSON."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            [make_record(key="x1", sequence=50, task_id="2026-08-01-absent", effective_revision=None)],
+        ),
+    )
+    evolution.build_proposal(config, now=NOW)
+    evolution.include(
+        config, "repo-alpha", "2026-08-01-absent", justification="historical evidence", actor="operator", now=NOW
+    )
+
+    status = phase.describe(config, now=NOW)
+
+    assert status.to_json()["proposal"]["human_included"] == 1
+    assert status.to_json()["proposal"]["task_count"] == TARGET + 1
+    assert "1 of them included by a human" in render.format_status(status)
+
+
+def test_a_task_argument_that_is_not_one_pooled_task_is_refused(
+    config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`<repo-id>/<task-id>` is the spelling the offer, the manifest and every
+    refusal already use; a string that is not one of those is refused at the
+    adapter rather than searched for."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    code, _, err = run(
+        [
+            "evolution",
+            phase.ACTION_BATCH_INCLUDE,
+            "2026-07-01-task",
+            "--reason",
+            "why",
+            "--actor",
+            "operator",
+            "--repo",
+            str(config.repo_root),
+        ],
+        capsys,
+    )
+
+    assert code == 2
+    assert "does not name one pooled task" in err
+
+
+def test_a_move_refuses_a_token_taken_before_it(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The offer is in the state digest, so a move is a write like any other:
+    the lock does not span the human window, and a caller acting on a reading
+    somebody else has moved is refused rather than layered on top of it."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+    token = phase.describe(config, now=NOW).state_revision
+    evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification="why", actor="operator", now=NOW)
+
+    with pytest.raises(evolution.BatchError, match="the evolution records moved since"):
+        evolution.include(
+            config, "repo-alpha", "2026-07-01-task", justification="on second thought", actor="operator",
+            now=NOW, expect=token,
+        )
+
+
 def test_a_frozen_batch_holds_the_lifecycle_at_batch_frozen(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
@@ -873,7 +1009,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 9
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 10
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -3301,11 +3437,15 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
 def _minimal(verb: str) -> list[str]:
     """The arguments a verb needs to parse — not to run."""
 
+    task = ["repo-alpha/2026-07-01-task"] if verb in ("batch-include", "batch-exclude") else []
     drafts = ["a-draft"] if verb in ("create", "add-tasks", "reject") else []
+    actor = ["--actor", "operator"] if verb in ("batch-include", "batch-exclude") else []
     reason = (
         ["--reason", "why"]
         if verb
         in (
+            "batch-include",
+            "batch-exclude",
             "reject",
             "revise",
             "abandon",
@@ -3334,4 +3474,4 @@ def _minimal(verb: str) -> list[str]:
         if verb in ("replay-conclude", "assess-conclude")
         else []
     )
-    return drafts + reason + reading + settlement + expectation + report
+    return task + drafts + actor + reason + reading + settlement + expectation + report

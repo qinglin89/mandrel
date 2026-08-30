@@ -152,10 +152,47 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     _add_expectation_argument(evolution_freeze)
 
+    _add_window_commands(evolution_subparsers, phase)
+
     _add_lineage_commands(evolution_subparsers)
     _add_release_commands(evolution_subparsers)
     _add_harness_commands(evolution_subparsers)
     return parser
+
+
+def _add_window_commands(subparsers: argparse._SubParsersAction, phase) -> None:
+    """The two verbs of the human window, between the offer and the freeze.
+
+    Both name one pooled task as `<repo-id>/<task-id>` — the identity the
+    proposal, the manifest and every refusal already spell that way — and both
+    require the words and the name that make the move a recorded judgement
+    rather than an edit.
+
+    The flag is `--reason`, as it is on every other verb an operator states a
+    judgement to, while the field it lands in is `justification`. The two differ
+    on purpose: on a non-selection record `reason` is already taken by the
+    bounded vocabulary a machine reads (`identity-differs`, `human-excluded`, …),
+    so the human's own words need a name of their own to sit beside it.
+    """
+
+    include = subparsers.add_parser(
+        phase.ACTION_BATCH_INCLUDE,
+        help="argue one pooled task into the offered batch past the identity test",
+    )
+    exclude = subparsers.add_parser(
+        phase.ACTION_BATCH_EXCLUDE,
+        help="take one task out of the offered batch, on a stated judgement",
+    )
+    for parser, direction in ((include, "for including it"), (exclude, "for leaving it out")):
+        parser.add_argument("task", help="the pooled task to move, as <repo-id>/<task-id>")
+        _add_reason_argument(parser, direction)
+        parser.add_argument(
+            "--actor",
+            required=True,
+            help="who is making this move; recorded beside the reason and frozen into the manifest",
+        )
+        _add_workspace_argument(parser)
+        _add_expectation_argument(parser)
 
 
 def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -611,6 +648,13 @@ def _evolution(args: argparse.Namespace) -> int:
         print(render.format_freeze(frozen, config.repo_root))
         return 0
 
+    if args.evolution_command in _window_verbs(phase):
+        # No feed either, and for the freeze's reason: a move argues with the
+        # membership somebody was offered, so importing here would answer for a
+        # pool the operator never read.
+        print(_window(config, args))
+        return 0
+
     if args.evolution_command in _lineage_verbs(phase):
         print(_lineage(config, args))
         return 0
@@ -643,6 +687,36 @@ def _evolution(args: argparse.Namespace) -> int:
     )
     print(render.format_start(started, config.repo_root))
     return 0
+
+
+def _window_verbs(phase) -> frozenset[str]:
+    """The two verbs that argue with an offered membership, by the gate's names."""
+
+    return frozenset({phase.ACTION_BATCH_INCLUDE, phase.ACTION_BATCH_EXCLUDE})
+
+
+def _window(config, args: argparse.Namespace) -> str:
+    """Move one task in or out of the standing offer, and describe what changed.
+
+    The task is split here and nowhere deeper: `<repo-id>/<task-id>` is a
+    command-line spelling of a pair the domain takes as two values, and a
+    parser that pushed the string down would make every caller of the operation
+    speak a CLI convention.
+    """
+
+    from .evolution import batches, phase, render
+
+    repo_id, _, task_id = args.task.partition("/")
+    if not repo_id or not task_id or "/" in task_id:
+        raise evolution_errors.BatchError(
+            f"{args.task!r} does not name one pooled task; give it as <repo-id>/<task-id>, exactly as the "
+            "standing offer and `mandrel evolution status` name it"
+        )
+    move = batches.include if args.evolution_command == phase.ACTION_BATCH_INCLUDE else batches.exclude
+    return render.format_move(
+        move(config, repo_id, task_id, justification=args.reason, actor=args.actor, expect=args.expect),
+        config.repo_root,
+    )
 
 
 def _lineage_verbs(phase) -> frozenset[str]:
@@ -721,7 +795,7 @@ def _wired_verbs(phase) -> frozenset[str]:
     `allowed_actions` straight to the command line.
     """
 
-    return _lineage_verbs(phase) | _release_verbs(phase) | _harness_verbs(phase)
+    return _window_verbs(phase) | _lineage_verbs(phase) | _release_verbs(phase) | _harness_verbs(phase)
 
 
 def _lineage(config, args: argparse.Namespace) -> str:

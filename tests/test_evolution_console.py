@@ -722,7 +722,7 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
     described = status(config)
     emitted = described.to_json()
 
-    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 9
+    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 10
     assert json.loads(json.dumps(emitted)) == emitted
     text = render.format_status(described)
     assert emitted["summary"] in text.splitlines()[0]

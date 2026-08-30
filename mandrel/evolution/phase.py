@@ -155,6 +155,7 @@ from .batches import (
     current_batch_refusal,
     evaluate_admission,
     freeze_refusal,
+    moves_refusal,
 )
 from .config import EvolutionConfig
 from .deployment import TargetHolding
@@ -178,7 +179,7 @@ from .revisions import Revision
 from .proposals import BatchProposal, load_proposal
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -219,6 +220,12 @@ ACTION_START = "start"
 # round seals its candidate (`ACTION_SEAL_ROUND`), and a second sealing word for
 # a different object would collide at the surface an operator reads.
 ACTION_FREEZE = "freeze"
+# The two directions of the human window, on the batch being offered. Named
+# `batch-*` and not `draft-*`: "draft" is already a change-task proposal at the
+# admission gate (`ACTION_REJECT`), and a second meaning for it would collide at
+# exactly the surface an operator reads.
+ACTION_BATCH_INCLUDE = "batch-include"
+ACTION_BATCH_EXCLUDE = "batch-exclude"
 ACTION_CREATE = "create"
 ACTION_REJECT = "reject"
 ACTION_ADD_TASKS = "add-tasks"
@@ -845,7 +852,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     moment = now or datetime.now(timezone.utc)
     inputs = guards.read_inputs(config)
     for _ in range(_SNAPSHOT_ATTEMPTS):
-        reading, lineage, freeze_hold = _read(config, moment)
+        reading, lineage, holds = _read(config, moment)
         after = guards.read_inputs(config)
         if after == inputs:
             # The gate last, over the assembled reading: what may be done next is
@@ -854,7 +861,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
             # already refuses.
             return replace(
                 reading,
-                actions=_actions(config, reading, lineage, freeze_hold),
+                actions=_actions(config, reading, lineage, holds),
                 state_revision=guards.state_revision(after),
             )
         inputs = after
@@ -866,7 +873,21 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     )
 
 
-def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage, str | None]:
+@dataclass(frozen=True)
+class _PoolHolds:
+    """What the pool's own records say about the verbs that act on an offer.
+
+    Answered inside the reading rather than in the gate, for the reason the
+    lineage travels with it: the pool these re-validate the standing offer
+    against is this reading's own `EvolutionState`, and a second load could
+    answer over a pool the phase label above disagrees with.
+    """
+
+    freeze: str | None
+    moves: str | None
+
+
+def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage, _PoolHolds]:
     """The lifecycle as the artifacts now have it, without the gate or the token.
 
     Both of those are derived from this and from nothing else, which is why they
@@ -875,10 +896,7 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
 
     The lineage travels with the reading because the gate asks the operations
     themselves what a redo would find here, and their predicates take the records
-    rather than this projection of them. The freeze hold travels for the same
-    reason and is answered here rather than in the gate: the pool it re-validates
-    the standing offer against is this reading's own `EvolutionState`, and a
-    second load could answer over a pool the phase label above disagrees with.
+    rather than this projection of them.
     """
 
     state = load_state(config)
@@ -926,7 +944,19 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         release=_release(config, lineage, current),
         deployment=_deployment(config, promotion),
     )
-    return reading, lineage, freeze_refusal(config, state, decision, proposal)
+    return (
+        reading,
+        lineage,
+        _PoolHolds(
+            freeze=freeze_refusal(config, state, decision, proposal),
+            moves=moves_refusal(
+                config,
+                state,
+                proposal,
+                current_batch_id=current.batch_id if current else None,
+            ),
+        ),
+    )
 
 
 def _not_selected(proposal: BatchProposal) -> dict[str, int]:
@@ -1266,7 +1296,7 @@ def _actions(
     config: EvolutionConfig,
     status: LifecycleStatus,
     lineage: Lineage,
-    freeze_hold: str | None,
+    holds: _PoolHolds,
 ) -> tuple[Action, ...]:
     """Every verb, and what this state does with it.
 
@@ -1307,7 +1337,8 @@ def _actions(
     )
     return (
         _start_action(status),
-        _freeze_action(freeze_hold),
+        _freeze_action(holds.freeze),
+        *_move_actions(holds.moves),
         *_gate_actions(status, held),
         *_work_actions(config, status, held),
         *_replay_actions(status, held),
@@ -1352,6 +1383,26 @@ def _freeze_action(freeze_hold: str | None) -> Action:
     """
 
     return Action(ACTION_FREEZE, OBJECT_POOL, refusal=freeze_hold)
+
+
+def _move_actions(moves_hold: str | None) -> tuple[Action, ...]:
+    """Arguing with the offered membership, in both directions.
+
+    One condition for both (`batches.moves_refusal`), because the gate says
+    whether a verb may run at all and never which arguments it was given: which
+    tasks are already members and which are already out is a fact about the
+    offer's contents, not about whether the window is open. A gate that modelled
+    it would have to name a task, and there is no task in a menu.
+
+    Admission is not among the conditions on purpose. A short offer is precisely
+    the state these two exist to argue with, so refusing them on the thresholds
+    would close the window at the one moment invariant 1's exception is for.
+    """
+
+    return (
+        Action(ACTION_BATCH_INCLUDE, OBJECT_POOL, refusal=moves_hold),
+        Action(ACTION_BATCH_EXCLUDE, OBJECT_POOL, refusal=moves_hold),
+    )
 
 
 def _gate_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:

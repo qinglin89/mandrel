@@ -569,6 +569,7 @@ def test_an_off_base_rerun_keeps_its_task_out_of_the_batch(
             "task_id": "2026-08-01-task",
             "report_keys": ["first-pass", "second-pass"],
             "reason": manifests.REASON_IDENTITY_DIFFERS,
+            "justification": None,
             "actor": None,
             "moved_at": None,
         }
@@ -772,6 +773,7 @@ def test_a_frozen_manifest_states_its_own_denominator(
                 "task_id": "2026-08-01-task",
                 "report_keys": ["o1"],
                 "reason": manifests.REASON_IDENTITY_DIFFERS,
+                "justification": None,
                 "actor": None,
                 "moved_at": None,
             }
@@ -2088,6 +2090,7 @@ def excluded_task(**overrides) -> dict:
         "task_id": "2026-08-01-task",
         "report_keys": ["x1"],
         "reason": manifests.REASON_IDENTITY_DIFFERS,
+        "justification": None,
         "actor": None,
         "moved_at": None,
         **overrides,
@@ -2099,7 +2102,7 @@ def human_selection(**overrides) -> dict:
 
     return {
         "mode": manifests.MODE_HUMAN_INCLUDED,
-        "reason": "historical evidence, argued in",
+        "justification": "historical evidence, argued in",
         "actor": "operator",
         "moved_at": "2026-07-31T00:00:00Z",
         **overrides,
@@ -2730,7 +2733,7 @@ def offer(**overrides) -> dict:
                 "task_id": "2026-07-01-task",
                 "report_keys": ["r1"],
                 "mode": manifests.MODE_AUTO,
-                "reason": None,
+                "justification": None,
                 "actor": None,
                 "moved_at": None,
             }
@@ -2754,7 +2757,7 @@ def test_a_human_move_carries_its_actor_reason_and_moment(tmp_path: Path) -> Non
         "task_id": "2026-07-02-task",
         "report_keys": ["r2"],
         "mode": manifests.MODE_HUMAN_INCLUDED,
-        "reason": "historical evidence, produced before the identity was published",
+        "justification": "historical evidence, produced before the identity was published",
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
     }
@@ -2762,17 +2765,17 @@ def test_a_human_move_carries_its_actor_reason_and_moment(tmp_path: Path) -> Non
     parsed = read_offer(offer(selected=[included]))
 
     assert len(parsed.human_included) == 1
-    assert parsed.human_included[0].reason.startswith("historical evidence")
+    assert parsed.human_included[0].justification.startswith("historical evidence")
 
 
-@pytest.mark.parametrize("missing", ["reason", "actor", "moved_at"])
+@pytest.mark.parametrize("missing", ["justification", "actor", "moved_at"])
 def test_a_human_move_missing_any_of_the_three_is_refused(missing: str) -> None:
     included = {
         "repo_id": "repo-alpha",
         "task_id": "2026-07-02-task",
         "report_keys": ["r2"],
         "mode": manifests.MODE_HUMAN_INCLUDED,
-        "reason": "historical evidence",
+        "justification": "historical evidence",
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
         missing: None,
@@ -2797,6 +2800,7 @@ def test_a_human_exclusion_carries_its_actor_and_moment() -> None:
         "task_id": "2026-07-03-task",
         "report_keys": ["r3"],
         "reason": manifests.REASON_HUMAN_EXCLUDED,
+        "justification": "the target was mispatched during this evaluation",
         "actor": "operator@example.com",
         "moved_at": "2026-08-01T13:00:00Z",
     }
@@ -2814,6 +2818,7 @@ def test_an_automatic_non_selection_names_nobody() -> None:
         "task_id": "2026-07-03-task",
         "report_keys": ["r3"],
         "reason": manifests.REASON_IDENTITY_DIFFERS,
+        "justification": None,
         "actor": None,
         "moved_at": None,
     }
@@ -2832,6 +2837,7 @@ def test_a_task_cannot_be_both_selected_and_left_out() -> None:
         "task_id": "2026-07-01-task",
         "report_keys": ["r1"],
         "reason": manifests.REASON_IDENTITY_DIFFERS,
+        "justification": None,
         "actor": None,
         "moved_at": None,
     }
@@ -2887,7 +2893,7 @@ def test_a_writer_cannot_publish_a_proposal_its_own_reader_refuses(
                 task_id="2026-07-01-task",
                 report_keys=("r1",),
                 mode=manifests.MODE_HUMAN_INCLUDED,
-                reason="historical evidence",
+                justification="historical evidence",
             ),
         ),
     )
@@ -2945,3 +2951,389 @@ def test_a_damaged_offer_is_rebuilt_by_the_poll_and_refused_by_the_freeze(
 
     assert rebuilt is not None and rebuilt.task_count == TARGET
     assert proposals.load_proposal(config) == rebuilt
+
+
+# --- the human window: batch-include and batch-exclude ------------------------
+#
+# Invariant 1's sanctioned exception, and the only door for evidence the
+# identity test refuses. Every test here is about the record the move leaves,
+# because nothing else bounds it: the exception is legible or it is silent.
+
+ACTOR = "operator@example.com"
+WHY_IN = "historical evidence, produced before the publisher stated identity"
+WHY_OUT = "the evaluated target was mispatched during this run"
+
+
+def off_base_pool(
+    config: evolution.EvolutionConfig, feed_root: Path, *, count: int = 1, pool: int = 1
+) -> list[str]:
+    """`count` pooled tasks the identity test refuses, beside `pool` it selects.
+
+    Their provenance states no revision at all, which is the state four of the
+    five reports in this repository's own pool are in — the case the human
+    window exists for, rather than a corner of it.
+
+    The on-base tasks are imported first and at lower sequences on purpose: the
+    feed cursor never goes back, so a later `fill_pool` would be read past
+    rather than imported.
+    """
+
+    fill_pool(config, feed_root, pool)
+    task_ids = [f"2026-08-{index:02d}-absent" for index in range(1, count + 1)]
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            [
+                make_record(key=f"x{index}", sequence=50 + index, task_id=task_id, effective_revision=None)
+                for index, task_id in enumerate(task_ids, start=1)
+            ],
+        ),
+    )
+    return task_ids
+
+
+def standing_offer(config: evolution.EvolutionConfig) -> proposals.BatchProposal:
+    offered = proposals.load_proposal(config)
+    assert offered is not None
+    return offered
+
+
+def test_a_human_inclusion_makes_a_refused_report_a_member(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The one door past the identity test, and it records who opened it.
+
+    A report stating no effective revision has nothing to derive an identity
+    from, so no fetch and no rebuild will ever select it. Either a person argues
+    it in, with their name on the argument, or that evidence never enters a
+    batch at all."""
+    absent, = off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+
+    result = evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+
+    assert result.changed and not result.restated
+    moved = {member.task_id: member for member in result.proposal.selected}[absent]
+    assert moved.mode == manifests.MODE_HUMAN_INCLUDED
+    assert moved.justification == WHY_IN and moved.actor == ACTOR and moved.moved_at == "2026-08-01T12:00:00Z"
+    assert absent not in {item.task_id for item in result.proposal.not_selected}
+    # And it is on disk, through the parser that will read it at the freeze.
+    assert standing_offer(config) == result.proposal
+
+
+def test_a_human_inclusion_counts_toward_the_threshold(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Settled policy: a human-included member is a member like any other, with
+    no auto-qualifying floor beneath it. The judgement that a report belongs in
+    this batch is the human's to make, and the minimum is a default for the
+    automatic path."""
+    absent = off_base_pool(config, feed_root, count=TARGET - 1)
+    built = evolution.build_proposal(config, now=NOW)
+    assert not built.decision.freeze and built.decision.task_count == 1
+
+    for task_id in absent:
+        result = evolution.include(config, "repo-alpha", task_id, justification=WHY_IN, actor=ACTOR, now=NOW)
+
+    assert result.decision.freeze and result.decision.trigger == batches.TRIGGER_TARGET
+    assert result.decision.task_count == TARGET
+    assert evolution.freeze(config, now=NOW).frozen
+
+
+def test_a_human_exclusion_takes_a_selected_member_out(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The direction that most needs its reason recorded: it removes evidence
+    the identity test had already selected, so it is the move able to shape what
+    a cohort says."""
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    result = evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
+
+    assert result.changed and result.proposal.task_count == TARGET - 1
+    assert result.proposal.considered == TARGET
+    left_out, = result.proposal.not_selected
+    assert left_out.reason == manifests.REASON_HUMAN_EXCLUDED
+    assert left_out.justification == WHY_OUT and left_out.actor == ACTOR
+
+
+@pytest.mark.parametrize(
+    "verb, task_id, message",
+    [
+        ("include", "2026-07-01-task", "is already a member"),
+        ("exclude", "2026-08-01-absent", "is already left out"),
+    ],
+    ids=["include-a-member", "exclude-a-non-member"],
+)
+def test_a_move_that_would_change_no_answer_is_refused(
+    config: evolution.EvolutionConfig, feed_root: Path, verb: str, task_id: str, message: str
+) -> None:
+    """A human judgement that changes nothing is not one the record should
+    carry: it would tell a reader somebody decided what the machine had already
+    decided. The same rule drops one a rebuild finds redundant."""
+    off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    before = config.proposal_path.read_bytes()
+
+    with pytest.raises(evolution.BatchError, match=message):
+        getattr(evolution, verb)(config, "repo-alpha", task_id, justification="why", actor=ACTOR, now=NOW)
+
+    assert config.proposal_path.read_bytes() == before
+
+
+def test_a_move_naming_a_task_the_offer_never_answered_for_is_refused(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    fill_pool(config, feed_root, TARGET)
+    evolution.build_proposal(config, now=NOW)
+
+    with pytest.raises(evolution.BatchError, match="answers for no task called"):
+        evolution.include(config, "repo-alpha", "2026-01-01-never-imported", justification=WHY_IN, actor=ACTOR)
+
+
+@pytest.mark.parametrize("blank", ["justification", "actor"])
+def test_a_move_nobody_is_named_for_is_refused_before_the_lock(
+    config: evolution.EvolutionConfig, feed_root: Path, blank: str
+) -> None:
+    """A move with no words and no name is not a judgement anybody can read
+    back, and it survives into the frozen manifest — so it is refused before
+    anything is read, let alone written."""
+    absent, = off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    stated = {"justification": WHY_IN, "actor": ACTOR, blank: "   "}
+
+    with pytest.raises(evolution.BatchError, match="a human move must state"):
+        evolution.include(config, "repo-alpha", absent, now=NOW, **stated)
+
+
+def test_the_same_move_twice_writes_nothing(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The redo every operation here has. It matters more than usual because the
+    offer is in the state digest: restamping an identical record would refuse an
+    operator's outstanding token over a decision nobody made."""
+    absent, = off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+    before = config.proposal_path.read_bytes()
+
+    again = evolution.include(
+        config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW + timedelta(days=2)
+    )
+
+    assert not again.changed and again.restated
+    assert config.proposal_path.read_bytes() == before
+
+
+def test_a_restated_move_replaces_the_one_on_record(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """A correction, not a second judgement: one task carries one move, and the
+    moment is the moment it was last argued."""
+    absent, = off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+
+    again = evolution.include(
+        config, "repo-alpha", absent, justification="a better reason", actor=ACTOR, now=NOW + timedelta(days=2)
+    )
+
+    assert again.changed and again.restated
+    moved, = [member for member in again.proposal.selected if member.task_id == absent]
+    assert moved.justification == "a better reason"
+    assert moved.moved_at == "2026-08-03T12:00:00Z"
+    assert len(again.proposal.selected) == 2
+
+
+def test_a_recorded_move_survives_the_rebuild_that_would_discard_it(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The ordinary poll overwrites the offer, and a judgement is not a reading
+    to be retaken: an operator who argued a report in on Monday and synced on
+    Tuesday would otherwise find their decision gone with nothing said."""
+    absent, = off_base_pool(config, feed_root)
+    feed = evolution.build_proposal(config, now=NOW) and write_feed(feed_root, [])
+    evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+    moved = config.proposal_path.read_bytes()
+
+    # A poll that changes nothing re-derives the same offer, carried move
+    # included, so it writes nothing and no outstanding token is refused.
+    evolution.start(config, feed, now=NOW + timedelta(days=1))
+    assert config.proposal_path.read_bytes() == moved
+
+    write_feed(feed_root, [make_record(key="late", sequence=99, task_id="2026-07-99-task")])
+    rebuilt = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
+
+    assert rebuilt is not None
+    carried, = [member for member in rebuilt.selected if member.task_id == absent]
+    assert carried.mode == manifests.MODE_HUMAN_INCLUDED
+    assert carried.justification == WHY_IN and carried.moved_at == "2026-08-01T12:00:00Z"
+    # And the poll did its own job around it.
+    assert rebuilt.considered == 3
+
+
+def test_a_rebuild_drops_an_inclusion_the_base_now_selects(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """A move is a person overriding the identity test, so where the test no
+    longer needs overriding there is no judgement left to record.
+
+    Keeping it would report a qualifying report as a curated one and misstate
+    the denominator invariant 1's exception exists to keep legible."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, 1)
+    evolution.sync(
+        config,
+        write_feed(feed_root, at_line(config, [make_record(key="x1", sequence=50, task_id="2026-09-01-task")],
+                                     revision=elsewhere)),
+    )
+    feed = write_feed(feed_root, [])
+    evolution.build_proposal(config, now=NOW)
+    evolution.include(config, "repo-alpha", "2026-09-01-task", justification=WHY_IN, actor=ACTOR, now=NOW)
+
+    # The line moves to the protocol that report was produced under.
+    git_update_ref(repo, RELEASE_REF, elsewhere)
+    rebuilt = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
+
+    assert rebuilt is not None
+    restored, = [member for member in rebuilt.selected if member.task_id == "2026-09-01-task"]
+    assert restored.mode == manifests.MODE_AUTO
+    assert (restored.justification, restored.actor, restored.moved_at) == (None, None, None)
+
+
+def test_a_rebuild_drops_an_exclusion_the_base_now_refuses(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The mirror, and it is the same rule: a task the identity test now refuses
+    on its own is recorded with the machine's reason, because `human-excluded`
+    has to mean "a member somebody removed" for a reader to be able to count the
+    judgements in a denominator."""
+    fill_pool(config, feed_root, TARGET)
+    feed = write_feed(feed_root, [])
+    evolution.build_proposal(config, now=NOW)
+    evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
+
+    git_update_ref(repo, RELEASE_REF, git_canonical_commit(repo, "a different dev contract"))
+    rebuilt = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
+
+    assert rebuilt is not None and rebuilt.task_count == 0
+    reasons = {item.task_id: item.reason for item in rebuilt.not_selected}
+    assert reasons["2026-07-01-task"] == manifests.REASON_IDENTITY_DIFFERS
+    assert all(item.actor is None for item in rebuilt.not_selected)
+
+
+def test_a_move_is_refused_once_the_batch_is_frozen(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The window closes at the manifest, not at the end of the cycle: a frozen
+    manifest is immutable (invariant 3), so there is nothing here a move could
+    act on."""
+    off_base_pool(config, feed_root, count=TARGET - 1)
+    evolution.build_proposal(config, now=NOW)
+    for index in range(1, TARGET):
+        evolution.include(config, "repo-alpha", f"2026-08-{index:02d}-absent", justification=WHY_IN, actor=ACTOR, now=NOW)
+    frozen = evolution.freeze(config, now=NOW)
+    assert frozen.frozen
+
+    with pytest.raises(evolution.BatchError, match="was fixed when it was frozen"):
+        evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
+
+
+def test_a_move_on_an_offer_the_line_outran_names_the_rebuild(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Arguing with an offer the freeze would refuse as stale is work the
+    rebuild discards — and the rebuild carries every recorded move forward, so
+    being sent there costs nothing."""
+    absent, = off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "the line moves"))
+
+    with pytest.raises(evolution.BatchError, match="refused rather than re-based"):
+        evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+
+
+def test_both_moves_reach_the_frozen_manifest_with_their_denominator(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """What the whole window is for: the batch's own account of how it was
+    formed, readable from the immutable record alone — two counts and never one
+    total, and every human move carrying the words and the name behind it."""
+    absent, = off_base_pool(config, feed_root, count=1, pool=TARGET)
+    evolution.build_proposal(config, now=NOW)
+    evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
+    evolution.exclude(config, "repo-alpha", "2026-07-02-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
+
+    manifest = read_manifest(evolution.freeze(config, now=NOW))
+
+    selection = manifest["selection"]
+    assert selection == {
+        "considered": TARGET + 1,
+        "auto_selected": TARGET - 1,
+        "human_included": 1,
+        "not_selected": [
+            {
+                "repo_id": "repo-alpha",
+                "task_id": "2026-07-02-task",
+                "report_keys": ["r2"],
+                "reason": manifests.REASON_HUMAN_EXCLUDED,
+                "justification": WHY_OUT,
+                "actor": ACTOR,
+                "moved_at": "2026-08-01T12:00:00Z",
+            }
+        ],
+    }
+    stamped = {report["task_id"]: report["selection"] for report in manifest["reports"]}
+    assert stamped[absent] == {
+        "mode": manifests.MODE_HUMAN_INCLUDED,
+        "justification": WHY_IN,
+        "actor": ACTOR,
+        "moved_at": "2026-08-01T12:00:00Z",
+    }
+    assert stamped["2026-07-01-task"]["mode"] == manifests.MODE_AUTO
+    assert "2026-07-02-task" not in stamped
+
+
+def test_a_damaged_offer_refuses_a_move_the_way_it_refuses_a_freeze(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """"There is nothing here" and "what is here cannot be read" send an
+    operator to different places, so the write side of the window raises the
+    same `ProposalError` the freeze does rather than reading a damaged offer as
+    no offer at all."""
+    off_base_pool(config, feed_root)
+    evolution.build_proposal(config, now=NOW)
+    config.proposal_path.write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(evolution.ProposalError, match="delete it and run `mandrel evolution start`"):
+        evolution.include(config, "repo-alpha", "2026-08-01-absent", justification=WHY_IN, actor=ACTOR, now=NOW)
+
+
+def test_a_task_whose_evaluations_disagree_comes_in_through_the_same_door(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The claim the whole-entry membership rule left to this window: a task
+    whose reports disagree about the protocol they were produced under is not a
+    member, and a human is what puts it in.
+
+    Every report it owns is then stamped with that one answer, which is the same
+    rule the automatic side follows — membership is the task's (invariant 1) and
+    a rerun is that task's evidence."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, TARGET)
+    two_evaluations(config, feed_root, task_id="2026-08-05-split", first=elsewhere, second=None)
+    offered = evolution.build_proposal(config, now=NOW).proposal
+    assert offered is not None
+    assert [item.task_id for item in offered.not_selected] == ["2026-08-05-split"]
+
+    evolution.include(config, "repo-alpha", "2026-08-05-split", justification=WHY_IN, actor=ACTOR, now=NOW)
+    manifest = read_manifest(evolution.freeze(config, now=NOW))
+
+    stamped = [report["selection"] for report in manifest["reports"] if report["task_id"] == "2026-08-05-split"]
+    assert len(stamped) == 2
+    assert {item["mode"] for item in stamped} == {manifests.MODE_HUMAN_INCLUDED}
+    assert {item["justification"] for item in stamped} == {WHY_IN}
+    assert manifest["selection"]["human_included"] == 1
+    assert manifest["selection"]["not_selected"] == []

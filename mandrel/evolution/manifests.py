@@ -131,15 +131,18 @@ EXCLUSION_REASONS = frozenset(
 # and only one of them is fixed by a fetch. `assessment.py` splits its cohort
 # exclusions on the same line for the same reason.
 
-# The reasons a human owns. Both carry an actor and a moment, because a move
-# nobody is named for is not a recorded judgement.
+# The reasons a human owns. They carry the same attribution a human-included
+# member does, because a move nobody is named for is not a recorded judgement.
 HUMAN_REASONS = frozenset({REASON_HUMAN_EXCLUDED})
 
-# The fields that name a human move, on both records: a member states why it was
-# argued in, an exclusion states only who and when, because its `reason` is
-# already the judgement.
-MEMBER_ATTRIBUTION = ("reason", "actor", "moved_at")
-EXCLUSION_ATTRIBUTION = ("actor", "moved_at")
+# The fields that name a human move — one shape for both records, because both
+# answer the same three questions and the two directions are equally in need of
+# an answer. A member was argued in past the identity test; an exclusion took out
+# evidence the test had selected, which is the move most able to shape what a
+# cohort says and so the one least able to go unexplained. The bounded field
+# stays where it is on each record (`mode` on a member, `reason` on an
+# exclusion): that is what a machine reads, and this is what a person wrote.
+HUMAN_MOVE_FIELDS = ("justification", "actor", "moved_at")
 
 
 @dataclass(frozen=True)
@@ -520,14 +523,12 @@ def read_batch_record(
     return record
 
 
-def attribution_problem(
-    values: Mapping[str, Any],
-    *,
-    names: tuple[str, ...],
-    stated: bool,
-    what: str,
-) -> str | None:
+def attribution_problem(values: Mapping[str, Any], *, stated: bool, what: str) -> str | None:
     """What is wrong with the fields naming a human move, or None where nothing is.
+
+    Always `HUMAN_MOVE_FIELDS`, and not a parameter: a member and an exclusion
+    answer the same three questions, so a caller able to name a different set
+    would be able to hold the two records to different rules.
 
     A human move is a recorded judgement or it is not one: an actor without a
     reason is an unexplained override, and a reason without an actor is an
@@ -541,7 +542,7 @@ def attribution_problem(
     manifest that contradicts itself is a batch nobody can read.
     """
 
-    stated_fields = {name: values.get(name) for name in names}
+    stated_fields = {name: values.get(name) for name in HUMAN_MOVE_FIELDS}
     for name, value in stated_fields.items():
         if value is not None and (not isinstance(value, str) or not value.strip()):
             return f"{name} must be a non-empty string or null"
@@ -596,7 +597,6 @@ def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> No
     for (repo_id, task_id), answer in sorted(answers.items()):
         problem = attribution_problem(
             answer,
-            names=MEMBER_ATTRIBUTION,
             stated=answer["mode"] == MODE_HUMAN_INCLUDED,
             what=f"the human-included member {repo_id}/{task_id}",
         )
@@ -619,7 +619,6 @@ def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> No
         excluded.add(task)
         problem = attribution_problem(
             item,
-            names=EXCLUSION_ATTRIBUTION,
             stated=item["reason"] in HUMAN_REASONS,
             what=f"the {item['reason']} exclusion of {task[0]}/{task[1]}",
         )

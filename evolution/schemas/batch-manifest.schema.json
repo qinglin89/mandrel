@@ -71,7 +71,7 @@
           "minimum": 0
         },
         "human_included": {
-          "description": "Members a human argued in past the identity test — invariant 1's sanctioned exception, which counts toward the batch thresholds like any other member and is recorded with its reason and actor on each of its reports.",
+          "description": "Members a human argued in past the identity test — invariant 1's sanctioned exception, which counts toward the batch thresholds like any other member and is recorded with its justification and actor on each of its reports.",
           "type": "integer",
           "minimum": 0
         },
@@ -152,7 +152,7 @@
       "type": "object",
       "required": [
         "mode",
-        "reason",
+        "justification",
         "actor",
         "moved_at"
       ],
@@ -163,8 +163,8 @@
             "human-included"
           ]
         },
-        "reason": {
-          "description": "Why a human moved this task in. Null for `auto`: an automatic member records no judgement, and a reason there would read as one that was never made.",
+        "justification": {
+          "description": "Why a human moved this task in, in their own words. Null for `auto`: an automatic member records no judgement, and words there would read as one that was never made. The same field names a human exclusion's reason, so the two directions of one window are read the same way.",
           "type": [
             "string",
             "null"
@@ -193,6 +193,7 @@
         "task_id",
         "report_keys",
         "reason",
+        "justification",
         "actor",
         "moved_at"
       ],
@@ -220,6 +221,13 @@
             "revision-malformed",
             "revision-unresolvable",
             "human-excluded"
+          ]
+        },
+        "justification": {
+          "description": "Why a human took this task out, in their own words. Null for every machine reason, which is already its own explanation. Stated because an exclusion removes evidence the identity test had selected — the move most able to shape what a cohort says, and so the one least able to go unexplained.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "actor": {

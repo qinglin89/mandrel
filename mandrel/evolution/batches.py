@@ -76,7 +76,11 @@ from .manifests import (
     CLOSURE_FILENAME,
     CLOSURE_SCHEMA_VERSION,
     FINDINGS_FILENAME,
+    HUMAN_REASONS,
     MANIFEST_FILENAME,
+    MODE_AUTO,
+    MODE_HUMAN_INCLUDED,
+    REASON_HUMAN_EXCLUDED,
     REASON_IDENTITY_DIFFERS,
     REASON_REVISION_ABSENT,
     REASON_REVISION_MALFORMED,
@@ -227,6 +231,30 @@ class ProposalResult:
     @property
     def proposed(self) -> bool:
         return self.proposal is not None
+
+
+@dataclass(frozen=True)
+class MoveResult:
+    """One human move on the standing offer, and what the offer now measures.
+
+    `changed` is false where the move was already recorded exactly as asked and
+    nothing was written — the redo form every operation here has. It matters more
+    than usual because this file is in the state digest: a move that rewrote an
+    identical record would move an operator's outstanding token for no decision.
+    """
+
+    proposal: BatchProposal
+    proposal_path: Path
+    decision: AdmissionDecision
+    repo_id: str
+    task_id: str
+    # `MODE_HUMAN_INCLUDED` or `REASON_HUMAN_EXCLUDED` — the two directions of
+    # the window, named as the record names them.
+    move: str
+    changed: bool
+    # True where the task already carried a move of this direction and this call
+    # restated it, which is a correction rather than a first judgement.
+    restated: bool = False
 
 
 @dataclass(frozen=True)
@@ -576,6 +604,258 @@ def freeze(
         return freeze_locked(config, now=now, forced=forced, justification=justification)
 
 
+def include(
+    config: EvolutionConfig,
+    repo_id: str,
+    task_id: str,
+    *,
+    justification: str,
+    actor: str,
+    now: datetime | None = None,
+    expect: str | None = None,
+) -> MoveResult:
+    """Argue one pooled task into the standing offer past the identity test.
+
+    The only door for evidence the automatic test refuses, and invariant 1's
+    sanctioned exception: a human-included member counts toward the batch
+    thresholds like any other, because the judgement that a report belongs in
+    this cohort is the human's to make and the configured minimum is a default
+    for the automatic path. What bounds it is the record rather than a rule —
+    the manifest states the two counts apart, and every inclusion carries the
+    words and the name of whoever made it.
+
+    That is also why the pool's four automatic non-selections are not treated
+    differently here. A revision this clone cannot resolve is answered by a
+    fetch and a rebuild, and an operator who instead argues the report in is
+    making a claim about the evidence rather than about the clone — recorded,
+    with their name on it, which is what the exception is for.
+    """
+
+    return _move(
+        config,
+        repo_id,
+        task_id,
+        into=True,
+        justification=justification,
+        actor=actor,
+        now=now,
+        expect=expect,
+    )
+
+
+def exclude(
+    config: EvolutionConfig,
+    repo_id: str,
+    task_id: str,
+    *,
+    justification: str,
+    actor: str,
+    now: datetime | None = None,
+    expect: str | None = None,
+) -> MoveResult:
+    """Take one task out of the standing offer, on a stated human judgement.
+
+    The direction that most needs its reason recorded: an exclusion removes
+    evidence the identity test had already selected, so it is the move able to
+    shape what a cohort says. `human-excluded` is its own non-selection reason
+    for that — a reader of the frozen manifest can tell a judgement from a fact
+    about the record or the clone — and the words go beside it.
+
+    Refused where the task is already out. A human judgement that changes no
+    answer is not one the record should carry: it would tell a reader somebody
+    decided what the machine had already decided, and the same rule drops one a
+    rebuild finds redundant (`_select`).
+    """
+
+    return _move(
+        config,
+        repo_id,
+        task_id,
+        into=False,
+        justification=justification,
+        actor=actor,
+        now=now,
+        expect=expect,
+    )
+
+
+def _move(
+    config: EvolutionConfig,
+    repo_id: str,
+    task_id: str,
+    *,
+    into: bool,
+    justification: str,
+    actor: str,
+    now: datetime | None,
+    expect: str | None,
+) -> MoveResult:
+    """Both directions of the human window, under one lock and one preflight.
+
+    The lock is short and the window is not: this is one command in the middle
+    of an unbounded human pause, so `expect` is checked first under it exactly
+    as every other guarded operation checks its own.
+    """
+
+    from .guards import require_expected
+
+    _require_stated(justification, actor)
+    moment = _require_aware(now) if now is not None else datetime.now(timezone.utc)
+    with single_writer_lock(config):
+        require_expected(config, expect)
+        return _move_locked(
+            config,
+            repo_id,
+            task_id,
+            into=into,
+            justification=justification.strip(),
+            actor=actor.strip(),
+            now=moment,
+        )
+
+
+def _move_locked(
+    config: EvolutionConfig,
+    repo_id: str,
+    task_id: str,
+    *,
+    into: bool,
+    justification: str,
+    actor: str,
+    now: datetime,
+) -> MoveResult:
+    """Apply one move to the offer on disk, or say why this state takes none.
+
+    The preflight is the two rules `moves_refusal` reads, in its order and from
+    the same functions: a frozen batch first — membership stops being arguable
+    the moment a manifest exists (invariant 3) — then the offer, re-read against
+    the live line and pool the way the freeze re-reads it. Arguing with an offer
+    the freeze would refuse as stale is work the rebuild discards, and the
+    rebuild carries every recorded move forward, so the operator loses nothing by
+    being sent there first.
+
+    A damaged offer raises out of `_require_current_proposal` exactly as it does
+    for the freeze, rather than reading as no offer at all: this is the write
+    side, and "there is nothing here" and "what is here cannot be read" send an
+    operator to different places.
+    """
+
+    running = current_batch(config, batches=load_batches(config))
+    if running is not None:
+        raise BatchError(frozen_membership_refusal(running.batch_id))
+    state = load_state(config)
+    proposal = _require_current_proposal(config, state)
+
+    key = (repo_id, task_id)
+    member = next((item for item in proposal.selected if item.dedup_key == key), None)
+    exclusion = next((item for item in proposal.not_selected if item.dedup_key == key), None)
+    # One answer per task, which the offer's own parser guarantees: whichever
+    # list holds it, that entry names the reports the move is about.
+    answered = member if member is not None else exclusion
+    if answered is None:
+        raise BatchError(_unanswered_refusal(config, repo_id, task_id))
+
+    moved: Member | Exclusion
+    if into:
+        if member is not None and member.mode == MODE_AUTO:
+            raise BatchError(
+                f"{repo_id}/{task_id} is already a member of the offered batch, selected by the identity test; "
+                "an inclusion records a human overriding that test, and one recorded here would tell a reader of "
+                "the manifest that a judgement was needed where none was"
+            )
+        moved = Member(
+            repo_id=repo_id,
+            task_id=task_id,
+            report_keys=answered.report_keys,
+            mode=MODE_HUMAN_INCLUDED,
+            justification=justification,
+            actor=actor,
+            moved_at=format_rfc3339(now),
+        )
+        # The move already on record for this task, in this direction — never
+        # the automatic answer, which both branches have just refused.
+        recorded: Member | Exclusion | None = member
+    else:
+        if exclusion is not None and exclusion.reason not in HUMAN_REASONS:
+            raise BatchError(
+                f"{repo_id}/{task_id} is already left out of the offered batch ({exclusion.reason}); a human "
+                "exclusion takes out evidence the identity test selected, and recording one over a report the "
+                "test already refuses would report a judgement as the reason a fact is"
+            )
+        moved = Exclusion(
+            repo_id=repo_id,
+            task_id=task_id,
+            report_keys=answered.report_keys,
+            reason=REASON_HUMAN_EXCLUDED,
+            justification=justification,
+            actor=actor,
+            moved_at=format_rfc3339(now),
+        )
+        recorded = exclusion
+
+    # The redo: the same move, already recorded. Compared without its moment,
+    # because restamping the clock is the whole of what a redo would change —
+    # and this file is in the state digest, so it would refuse an outstanding
+    # token over a decision nobody made.
+    restated = recorded is not None
+    unchanged = restated and replace(moved, moved_at=recorded.moved_at) == recorded
+    updated = proposal if unchanged else _with_move(proposal, moved)
+    path = config.proposal_path if unchanged else save_proposal(config, updated)
+    return MoveResult(
+        proposal=updated,
+        proposal_path=path,
+        decision=evaluate_admission(config, state, proposal=updated, now=now),
+        repo_id=repo_id,
+        task_id=task_id,
+        move=MODE_HUMAN_INCLUDED if into else REASON_HUMAN_EXCLUDED,
+        changed=not unchanged,
+        restated=restated,
+    )
+
+
+def _with_move(proposal: BatchProposal, moved: Member | Exclusion) -> BatchProposal:
+    """The offer with one task answered the other way.
+
+    Dropped from both lists and re-added to one, so a move is a single decision
+    rather than an insert beside a stale answer: the two lists together are the
+    denominator, and a task in both is the contradiction the parser refuses.
+    """
+
+    key = moved.dedup_key
+    selected = tuple(item for item in proposal.selected if item.dedup_key != key)
+    not_selected = tuple(item for item in proposal.not_selected if item.dedup_key != key)
+    if isinstance(moved, Member):
+        return replace(proposal, selected=(*selected, moved), not_selected=not_selected)
+    return replace(proposal, selected=selected, not_selected=(*not_selected, moved))
+
+
+def _require_stated(justification: str, actor: str) -> None:
+    """A move nobody is named for records no judgement.
+
+    Refused before the lock, and before anything is read: the record enforces
+    the same rule on the way to disk (`manifests.attribution_problem`), and
+    holding the writer's lock to discover a caller stated neither is a refusal
+    taken in the wrong place.
+    """
+
+    missing = sorted(
+        name for name, value in (("justification", justification), ("actor", actor)) if not (value or "").strip()
+    )
+    if missing:
+        raise BatchError(
+            f"a human move must state {missing}; it is invariant 1's recorded exception and it survives into the "
+            "frozen manifest, so a move with no words and no name is not a judgement anybody can read back"
+        )
+
+
+def _unanswered_refusal(config: EvolutionConfig, repo_id: str, task_id: str) -> str:
+    return (
+        f"the standing offer in {config.proposal_path} answers for no task called {repo_id}/{task_id}; a move "
+        "argues with a membership somebody was offered, so check the names in that file — or run "
+        "`mandrel evolution start` if the report has yet to be imported"
+    )
+
+
 def start(
     config: EvolutionConfig,
     feed: ReportFeed,
@@ -773,6 +1053,24 @@ def _select(
     nine, and the two the reader cannot see are exactly where a cohort's
     coherence claim would go wrong.
 
+    **A human move survives the rebuild that would otherwise discard it.** The
+    ordinary poll overwrites the standing offer, and a recorded judgement is not
+    a reading: an operator who argued a report in on Monday and synced on
+    Tuesday would find their decision gone with nothing said. So every move the
+    standing offer carries is re-applied here (`_carried`), and the one thing
+    that drops one is the automatic answer already agreeing with it — a move is
+    the human overriding the identity test, and where the test no longer needs
+    overriding there is no judgement left to record. Both directions, both for
+    that reason: a report the base now selects is `auto` and not
+    `human-included`, and a report the base now refuses is refused with the
+    machine's own reason rather than a person's.
+
+    The alternative — refusing to rebuild over an offer that carries a move —
+    was rejected because it strands the workspace: `start` is the only rebuild
+    every refusal names, the freeze refuses an offer the pool has outgrown, and
+    a poll that would not overwrite leaves nothing that can be frozen and no
+    verb to clear the way.
+
     An offer that selects what the standing one selected, at the same base, *is*
     the standing one and keeps its `built_at`. Stamping the clock on it would
     move `state_revision` on every poll that changed nothing — and this file is
@@ -791,12 +1089,18 @@ def _select(
             "(invariants 8, 15)"
         )
 
+    moves = _carried(standing)
     selected: list[Member] = []
     not_selected: list[Exclusion] = []
     for entry in _batched_entries(state):
         keys = tuple(sorted(entry.report_keys()))
         reason = _non_selection(config, entry, base=base, identities=identities)
-        if reason is None:
+        move = moves.get(entry.dedup_key)
+        if isinstance(move, Member) and reason is not None:
+            selected.append(replace(move, report_keys=keys))
+        elif isinstance(move, Exclusion) and reason is None:
+            not_selected.append(replace(move, report_keys=keys))
+        elif reason is None:
             selected.append(Member(repo_id=entry.repo_id, task_id=entry.task_id, report_keys=keys))
         else:
             not_selected.append(
@@ -813,6 +1117,31 @@ def _select(
     if standing is not None and replace(offered, built_at=standing.built_at) == standing:
         return standing
     return offered
+
+
+def _carried(standing: BatchProposal | None) -> dict[tuple[str, str], Member | Exclusion]:
+    """The human moves the standing offer records, by the task they were made about.
+
+    Only the moves: an automatic answer is re-derived from the base and the pool
+    every time, so carrying one would pin an answer to the reading that produced
+    it rather than to the evidence.
+
+    Keyed by `(repo_id, task_id)` and not by the reports the task owned, because
+    a judgement is about the task. A rerun arriving under a member a human
+    argued in does not un-make the argument — the offer's own reports are
+    refreshed from the pool when the move is re-applied, which is the same set
+    the freeze would put in the manifest.
+    """
+
+    if standing is None:
+        return {}
+    moves: dict[tuple[str, str], Member | Exclusion] = {
+        member.dedup_key: member for member in standing.selected if member.mode == MODE_HUMAN_INCLUDED
+    }
+    moves.update(
+        {item.dedup_key: item for item in standing.not_selected if item.reason in HUMAN_REASONS}
+    )
+    return moves
 
 
 def _non_selection(
@@ -1325,6 +1654,47 @@ def proposal_refusal(
     return None
 
 
+def frozen_membership_refusal(batch_id: str) -> str:
+    """Why the human window is closed once a manifest exists.
+
+    A different fact from `current_batch_refusal`, which is about forming the
+    *next* cohort: this one is about the batch that already exists. Its
+    membership was fixed by the freeze and a frozen manifest is immutable
+    (invariant 3), so there is nothing here a move could act on — not a policy
+    that will relent when the cycle ends.
+    """
+
+    return (
+        f"the membership of {batch_id} was fixed when it was frozen and its manifest is immutable (invariant 3); "
+        "a report is argued in or out before the freeze, so the next window opens with the offer that follows "
+        "this batch's outcome"
+    )
+
+
+def moves_refusal(
+    config: EvolutionConfig,
+    state: EvolutionState,
+    proposal: BatchProposal | None,
+    *,
+    current_batch_id: str | None,
+) -> str | None:
+    """Why this state accepts no human move, or None where it does.
+
+    Two questions and in this order, which is `_move_locked`'s own: a frozen
+    batch first, because a manifest closes the window rather than delaying it,
+    then the offer against the live line and pool.
+
+    Admission is deliberately not asked. The thresholds measure what a freeze
+    would form, and a short offer is exactly the state a human move exists to
+    argue with — gating the window on them would refuse the operator at the one
+    moment the exception is for.
+    """
+
+    if current_batch_id is not None:
+        return frozen_membership_refusal(current_batch_id)
+    return proposal_refusal(config, state, proposal)
+
+
 def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) -> BatchProposal:
     """The standing proposal, or the refusal `proposal_refusal` states, raised.
 
@@ -1478,7 +1848,7 @@ def _manifest_report(
         "provenance": record.get("provenance"),
         "selection": {
             "mode": member.mode,
-            "reason": member.reason,
+            "justification": member.justification,
             "actor": member.actor,
             "moved_at": member.moved_at,
         },

@@ -32,6 +32,7 @@ from .batches import (
     REASON_POOL_OFF_BASE,
     AdmissionDecision,
     FreezeResult,
+    MoveResult,
     ProposalResult,
     StartResult,
 )
@@ -54,8 +55,11 @@ from .experiments import (
 )
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate, PreparedPromotion
+from .manifests import MODE_HUMAN_INCLUDED
 from .proposals import BatchProposal
 from .phase import (
+    ACTION_BATCH_EXCLUDE,
+    ACTION_BATCH_INCLUDE,
     COUNTERFACTUAL_COMPLETED,
     COUNTERFACTUAL_FAILED,
     COUNTERFACTUAL_NONE,
@@ -262,6 +266,43 @@ def format_proposal(result: ProposalResult, repo_root: Path) -> str:
 
 def format_start(result: StartResult, repo_root: Path) -> str:
     return f"{format_sync(result.sync)}\n{format_proposal(result.proposal, repo_root)}"
+
+
+def format_move(result: MoveResult, repo_root: Path) -> str:
+    """One human move on the offered membership, and what the offer now measures.
+
+    Says what the move costs as well as what it did. An inclusion is invariant
+    1's sanctioned exception and counts toward the thresholds like any other
+    member, so the numbers move underneath it — an operator who read `status`
+    before the move needs to see the batch it now forms, not just that a record
+    was written.
+    """
+
+    included = result.move == MODE_HUMAN_INCLUDED
+    verb = ACTION_BATCH_INCLUDE if included else ACTION_BATCH_EXCLUDE
+    where = "in" if included else "out of"
+    stood = "is now" if result.changed else "was already"
+    lines = [f"{verb}: {result.repo_id}/{result.task_id} {stood} {where} the offered batch"]
+    proposal = result.proposal
+    lines.append(
+        _field(
+            "proposal",
+            f"{proposal.task_count} of {proposal.considered} considered task(s), "
+            f"{len(proposal.human_included)} included by a human",
+        )
+    )
+    decision = result.decision
+    if decision.freeze:
+        lines.append(_field("admission", f"ready to freeze — {decision.trigger}"))
+    else:
+        lines.append(_field("admission", f"not yet — {decision.reason} ({_counts(decision)})"))
+    lines.append(_field("offer", _relative(result.proposal_path, repo_root)))
+    if not result.changed:
+        lines.append(_field("", "this run wrote nothing: the same move was already on record"))
+    elif result.restated:
+        lines.append(_field("", "this restates a move already recorded for that task"))
+    lines.append(_field("", "nothing is fixed until `freeze`; the next `start` carries this move forward"))
+    return "\n".join(lines)
 
 
 # --- what a lifecycle verb did -----------------------------------------------

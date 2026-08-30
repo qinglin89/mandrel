@@ -48,10 +48,9 @@ from typing import Any, Iterable, Mapping
 from .config import EvolutionConfig
 from .errors import ProposalError
 from .manifests import (
-    EXCLUSION_ATTRIBUTION,
     EXCLUSION_REASONS,
+    HUMAN_MOVE_FIELDS,
     HUMAN_REASONS,
-    MEMBER_ATTRIBUTION,
     MODE_AUTO,
     MODE_HUMAN_INCLUDED,
     SELECTION_MODES,
@@ -70,8 +69,8 @@ _PROPOSAL_FIELDS = {
     1: ("built_at", "source_line_ref", "base_revision", "selected", "not_selected"),
 }
 _PROPOSAL_KEYS = {version: frozenset(fields) | {"schema_version"} for version, fields in _PROPOSAL_FIELDS.items()}
-_MEMBER_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "mode", "reason", "actor", "moved_at"})
-_EXCLUSION_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "reason", "actor", "moved_at"})
+_MEMBER_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "mode", *HUMAN_MOVE_FIELDS})
+_EXCLUSION_FIELDS = frozenset({"repo_id", "task_id", "report_keys", "reason", *HUMAN_MOVE_FIELDS})
 
 _REVISION = re.compile(r"\A[0-9a-f]{40}\Z", re.ASCII)
 _REF = re.compile(r"\Arefs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+\Z", re.ASCII)
@@ -85,8 +84,9 @@ class Member:
     task_id: str
     report_keys: tuple[str, ...]
     mode: str = MODE_AUTO
-    # Set only for `human-included`: who moved this report in, when, and why.
-    reason: str | None = None
+    # Set only for `human-included`: why this task was argued in, by whom, and
+    # when. The same three fields name a human exclusion (`HUMAN_MOVE_FIELDS`).
+    justification: str | None = None
     actor: str | None = None
     moved_at: str | None = None
 
@@ -100,7 +100,7 @@ class Member:
             "task_id": self.task_id,
             "report_keys": list(self.report_keys),
             "mode": self.mode,
-            "reason": self.reason,
+            "justification": self.justification,
             "actor": self.actor,
             "moved_at": self.moved_at,
         }
@@ -117,7 +117,6 @@ class Member:
             **_require_attribution(
                 data,
                 where,
-                names=MEMBER_ATTRIBUTION,
                 stated=mode == MODE_HUMAN_INCLUDED,
                 what="a human-included member",
             ),
@@ -137,6 +136,9 @@ class Exclusion:
     task_id: str
     report_keys: tuple[str, ...]
     reason: str
+    # Set only for the reasons a human owns. A machine reason explains itself;
+    # a person taking out evidence the identity test selected does not.
+    justification: str | None = None
     actor: str | None = None
     moved_at: str | None = None
 
@@ -150,6 +152,7 @@ class Exclusion:
             "task_id": self.task_id,
             "report_keys": list(self.report_keys),
             "reason": self.reason,
+            "justification": self.justification,
             "actor": self.actor,
             "moved_at": self.moved_at,
         }
@@ -168,7 +171,6 @@ class Exclusion:
             **_require_attribution(
                 data,
                 where,
-                names=EXCLUSION_ATTRIBUTION,
                 stated=reason in HUMAN_REASONS,
                 what=f"a {reason} exclusion",
             ),
@@ -350,7 +352,6 @@ def _require_attribution(
     data: Mapping[str, Any],
     where: str,
     *,
-    names: tuple[str, ...],
     stated: bool,
     what: str,
 ) -> dict[str, Any]:
@@ -362,10 +363,10 @@ def _require_attribution(
     rebuilt, a bad manifest is a batch nobody can read).
     """
 
-    problem = attribution_problem(data, names=names, stated=stated, what=what)
+    problem = attribution_problem(data, stated=stated, what=what)
     if problem is not None:
         raise ProposalError(f"{where}: {problem}")
-    return {name: data.get(name) for name in names}
+    return {name: data.get(name) for name in HUMAN_MOVE_FIELDS}
 
 
 def _require_one_decision(
