@@ -104,6 +104,13 @@ class AnalysisTaskSpec:
     artifacts_root: str
     task_count: int
     report_count: int
+    # The batch's denominator, as its manifest's `selection` block records it:
+    # what the formation answered for, and how the membership split. Stated to
+    # the analysing session because recurrence is a claim about a set, and a
+    # curated membership is a different set from a pool.
+    considered: int
+    auto_selected: int
+    human_included: int
     # This batch's base: where the configured source line stood when the batch
     # was formed (`batches._source_line_revision`) — the revision governing the
     # task, not a tag some checkout described as. Always stated: a checkout that
@@ -117,6 +124,26 @@ class AnalysisTaskSpec:
     # predecessor changed nothing — a `no-change` conclusion fabricates no
     # revision (invariant 7), so there is no upgrade effect to look for.
     release: ReleaseAssessment | None = None
+
+    @property
+    def composition(self) -> str:
+        """How this batch's membership was arrived at, in one sentence.
+
+        Both counts and never one total (invariant 1's exception is recorded, not
+        summed), and the majority case said out loud where the counts are: a
+        batch most of whose members a person argued in is one whose recurrence
+        the analysing session must read as curated rather than observed.
+        """
+
+        parts = [f"{self.auto_selected} of {self.considered} considered task(s) selected automatically"]
+        if self.human_included:
+            majority = (
+                " — a majority of this batch"
+                if self.human_included * 2 > self.auto_selected + self.human_included
+                else ""
+            )
+            parts.append(f"{self.human_included} included by a human past that test{majority}")
+        return ", ".join(parts)
 
     @property
     def summary(self) -> str:
@@ -475,6 +502,13 @@ justified is a valid outcome (invariant 7).
   evidence came from — each member keeps its own production revision in the
   manifest (`provenance.effective_revision`), and that is what a claim about
   where a finding was produced names.
+- Membership: {spec.composition}. A member is a pooled report whose evaluated
+  target was running the protocol the base above carries — equality of
+  deployable canonical identity, never commit equality. The manifest's
+  `selection` block names every considered task that is not a member and why.
+  Count recurrence against that denominator and say which member(s) each
+  cluster came from; the pending pool is machine-local, has moved since, and is
+  not this batch's denominator.
 - Admission policy that formed this batch: `evolution/config.toml` at sha256
   `{spec.config_sha256}`.
 {force_line}- Raw evaluation bundles are machine-local runtime data under

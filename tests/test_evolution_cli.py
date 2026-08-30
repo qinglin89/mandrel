@@ -36,6 +36,8 @@ from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
+    line_tip,
+    at_line,
     ARTIFACT_BODIES,
     HUB_ARTIFACT_NAMES,
     HUB_LOCK_HASH,
@@ -152,15 +154,21 @@ def no_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ORCH_HUB_TOKEN", raising=False)
 
 
-def records(count: int) -> list[dict]:
-    return [
-        make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
-        for index in range(1, count + 1)
-    ]
+def records(config: evolution.EvolutionConfig, count: int) -> list[dict]:
+    """`count` distinct completed tasks, every one produced at this repository's
+    source-line tip — the base a batch formed now selects its members by."""
+
+    return at_line(
+        config,
+        [
+            make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
+            for index in range(1, count + 1)
+        ],
+    )
 
 
 def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, count: int):
-    feed = write_feed(feed_root, records(count))
+    feed = write_feed(feed_root, records(config, count))
     evolution.sync(config, feed)
     return feed
 
@@ -291,7 +299,7 @@ def test_a_pool_left_as_a_prefix_reports_completeness_unproven(
     """A page bound makes the count a prefix of the feed, not a denominator
     (invariants 1 and 2) — and the phase has to say so, because the number alone
     looks the same."""
-    feed = write_feed(feed_root, records(3))
+    feed = write_feed(feed_root, records(config, 3))
     evolution.sync(config, feed, page_size=1, max_pages=1)
 
     status = phase.describe(config, now=NOW)
@@ -316,6 +324,7 @@ def test_a_standing_offer_reports_the_batch_proposed_phase(
     assert status.proposal is not None
     assert status.to_json()["proposal"]["task_count"] == TARGET
     assert status.to_json()["proposal"]["considered"] == TARGET
+    assert status.to_json()["proposal"]["not_selected"] == {}
     text = render.format_status(status)
     assert "proposal" in text and f"{TARGET} of {TARGET} considered task(s) at base" in text
 
@@ -407,7 +416,7 @@ def test_a_pool_that_outgrew_the_offer_is_refused_by_the_gate_too(
 
     fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
-    evolution.sync(config, write_feed(feed_root, records(TARGET + 1)))
+    evolution.sync(config, write_feed(feed_root, records(config, TARGET + 1)))
 
     action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
 
@@ -864,17 +873,28 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 8
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 9
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
         "target": 20,
         "minimum": 10,
         "complete": True,
-        "oldest_pending_at": payload["pool"]["oldest_pending_at"],
-        "waited_days": payload["pool"]["waited_days"],
+    }
+    # The age rule and the count admission applied sit with the decision, not
+    # with the pool: they measure the batch on offer, and no batch is offered
+    # here — `fill_pool` imports, it does not propose.
+    assert payload["admission"] == {
+        "freeze": False,
+        "trigger": None,
+        "reason": batches.REASON_NO_PROPOSAL,
+        "current_batch": None,
+        "task_count": 0,
+        "oldest_pending_at": None,
+        "waited_days": None,
         "max_wait_days": 30,
     }
+    assert payload["proposal"] is None
     assert payload["batches"] == {"total": 0, "current": None, "history": []}
     assert payload["gate"] is None
     assert payload["experiments"] == {"open": None, "history": [], "pending_successor": None}
@@ -1282,8 +1302,16 @@ def test_a_published_identity_reaches_the_frozen_cohort_unchanged(
     assessment reads it: the pool stages the record whole and the freeze copies
     its provenance into the immutable manifest, so what places a report in a
     cohort is the pair its own feed stated."""
+    # Published at this repository's base, so the reports are selected into the
+    # batch at all: membership is what that same field decides.
+    produced = line_tip(config)
     entries = [
-        make_hub_entry(key=f"r{index}", seq=index, task_id=f"2026-07-0{index}-task", protocol=hub_protocol())
+        make_hub_entry(
+            key=f"r{index}",
+            seq=index,
+            task_id=f"2026-07-0{index}-task",
+            protocol=hub_protocol(revision=produced),
+        )
         for index in (1, 2)
     ]
     routes: dict[str, object] = {page_url(limit="50"): hub_page(entries)}
@@ -1296,7 +1324,7 @@ def test_a_published_identity_reaches_the_frozen_cohort_unchanged(
     assert result.manifest_path is not None
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     provenance = [report["provenance"] for report in manifest["reports"]]
-    assert [item["effective_revision"] for item in provenance] == [HUB_REVISION, HUB_REVISION]
+    assert [item["effective_revision"] for item in provenance] == [produced, produced]
     assert [item["deploy_lock_hash"] for item in provenance] == [HUB_LOCK_HASH, HUB_LOCK_HASH]
 
 
@@ -1557,7 +1585,7 @@ def test_status_json_is_the_same_shape(repo: Path, capsys: pytest.CaptureFixture
 def test_list_inspects_the_feed_and_writes_nothing(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    write_feed(feed_root, records(2))
+    write_feed(feed_root, records(evolution.load_config(repo), 2))
     before = snapshot(repo)
 
     code, out, _ = run(["evolution", "list", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
@@ -1571,7 +1599,7 @@ def test_list_inspects_the_feed_and_writes_nothing(
 def test_sync_imports_and_reports_the_pool(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    write_feed(feed_root, records(2))
+    write_feed(feed_root, records(evolution.load_config(repo), 2))
 
     code, out, _ = run(["evolution", "sync", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
@@ -1586,11 +1614,11 @@ def test_start_runs_the_whole_flow_to_one_pending_analysis_task(
     """The acceptance end to end: an empty repository, a fixture feed, and the
     two commands a formation takes — the poll that offers a batch, and the
     freeze that fixes it as a cohort with its pending analysis task."""
-    write_feed(feed_root, records(TARGET))
+    config = evolution.load_config(repo)
+    write_feed(feed_root, records(evolution.load_config(repo), TARGET))
 
     offered, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
-    config = evolution.load_config(repo)
     assert offered == 0
     assert "nothing was frozen" in out
     assert evolution.load_batches(config) == [], "the poll writes nothing durable"
@@ -1616,7 +1644,7 @@ def test_a_second_start_offers_no_second_batch(
 ) -> None:
     """The pool goes on accumulating while a cycle runs; what it may not do is
     offer a second cohort beside it (invariant 14)."""
-    write_feed(feed_root, records(TARGET))
+    write_feed(feed_root, records(evolution.load_config(repo), TARGET))
     run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
     run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
@@ -1634,7 +1662,7 @@ def test_start_below_the_target_offers_a_batch_nothing_may_freeze_yet(
     """Too little evidence is the contract's normal outcome, so the run
     succeeds and reports the reason. The offer still stands: what admission
     refuses is forming a cohort out of it, not selecting it."""
-    write_feed(feed_root, records(1))
+    write_feed(feed_root, records(evolution.load_config(repo), 1))
 
     code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
@@ -1648,7 +1676,7 @@ def test_start_below_the_target_offers_a_batch_nothing_may_freeze_yet(
 def test_force_without_a_justification_is_refused(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    write_feed(feed_root, records(1))
+    write_feed(feed_root, records(evolution.load_config(repo), 1))
     run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo), "--force"], capsys)
@@ -1663,7 +1691,7 @@ def test_a_justified_force_freezes_a_below_target_batch(
 ) -> None:
     """`--force` belongs to the freeze, not the poll: waiving the configured
     target is a decision about forming a batch, and `start` forms none."""
-    write_feed(feed_root, records(1))
+    write_feed(feed_root, records(evolution.load_config(repo), 1))
     run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     code, out, _ = run(
@@ -1700,7 +1728,7 @@ def test_a_freeze_with_nothing_offered_is_actionable(
     """
 
     config = evolution.load_config(repo)
-    evolution.sync(config, write_feed(feed_root, records(TARGET)))
+    evolution.sync(config, write_feed(feed_root, records(config, TARGET)))
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
@@ -1712,15 +1740,40 @@ def test_a_freeze_with_nothing_offered_is_actionable(
 def test_a_freeze_below_the_target_reports_no_batch_rather_than_refusing(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Too little evidence stays the contract's normal outcome, not an error."""
+    """Too little evidence stays the contract's normal outcome, not an error.
+
+    Measured over the batch on offer, which is why the offer is built first: the
+    thresholds count what a freeze would form, so a freeze asked before anybody
+    has been offered a membership has nothing to apply them to.
+    """
 
     config = evolution.load_config(repo)
-    evolution.sync(config, write_feed(feed_root, records(1)))
+    write_feed(feed_root, records(config, 1))
+    run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
     code, out, _ = run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
     assert code == 0
     assert batches.REASON_BELOW_TARGET in out
+    assert "1 selected of 1 pooled" in out
+    assert evolution.load_batches(config) == []
+
+
+def test_a_freeze_before_anything_was_offered_sends_the_operator_to_the_poll(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A freeze fixes an offer somebody has seen. With no offer standing there is
+    no membership to measure and no batch to answer about, so the refusal names
+    the command that makes one rather than reporting a batch of nothing."""
+
+    config = evolution.load_config(repo)
+    evolution.sync(config, write_feed(feed_root, records(config, 1)))
+
+    code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+
+    assert code == 2
+    assert "no batch proposal stands" in err
+    assert "mandrel evolution start" in err
     assert evolution.load_batches(config) == []
 
 
@@ -1795,7 +1848,7 @@ def test_lock_contention_is_reported_with_its_holder(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config = evolution.load_config(repo)
-    write_feed(feed_root, records(1))
+    write_feed(feed_root, records(config, 1))
     config.lock_path.parent.mkdir(parents=True, exist_ok=True)
     config.lock_path.write_text(
         json.dumps({"pid": 4242, "host": "another-host", "acquired_at": "2026-08-01T11:00:00Z"}), encoding="utf-8"
@@ -2030,7 +2083,7 @@ def test_a_commit_moving_no_watched_ref_leaves_an_outstanding_token_usable(
     """
 
     config = evolution.load_config(lineage_repo)
-    write_feed(feed_root, records(TARGET))
+    write_feed(feed_root, records(config, TARGET))
     where = ["--repo", str(lineage_repo), "--feed-dir", str(feed_root)]
     outstanding = token(config)
 
@@ -2052,7 +2105,7 @@ def test_a_freeze_is_refused_on_a_token_taken_before_the_offer_was_built(
     person and unbounded time in between."""
 
     config = evolution.load_config(lineage_repo)
-    write_feed(feed_root, records(TARGET))
+    write_feed(feed_root, records(config, TARGET))
     where = ["--repo", str(lineage_repo), "--feed-dir", str(feed_root)]
     before = token(config)
 

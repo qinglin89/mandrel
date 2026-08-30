@@ -507,10 +507,12 @@ corrupt local state, lock contention, or an unusable feed.
 
 ```text
 $ ./bin/mandrel evolution status
-evolution: pool 4/20
-  pool         4 unique completed task(s); target 20, minimum 10
-               oldest pending report imported 5 day(s) ago, max wait 30
-  admission    no batch — pool-below-minimum
+evolution: batch-proposed 4/20
+  pool         6 unique completed task(s); target 20, minimum 10
+               oldest member imported 5 day(s) ago, max wait 30
+  proposal     4 of 6 considered task(s) at base 3ed93a7a0c1f (refs/heads/dev)
+               2 not selected: identity-differs
+  admission    no batch — pool-below-minimum (4 selected of 6 pooled, target 20, minimum 10)
   batches      0 frozen, none current
   revisions    none in play — no batch is current
   actions      start
@@ -739,7 +741,7 @@ deployment is not lifecycle state.
 ### The JSON and action contract
 
 `status --json` is the machine shape of everything above, at
-`schema_version: 8`. Alongside the pool, proposal, admission, batches, gate,
+`schema_version: 9`. Alongside the pool, proposal, admission, batches, gate,
 experiments, revisions, replay, release, `last_promotion` and `deployment` blocks
 it carries
 the two fields a surface acts on:
@@ -932,6 +934,13 @@ cannot observe that transition.
 - **`pool-incomplete`.** No discovery pass has reported the feed drained, so
   the pool may be a prefix and no batch may form from it. Run `sync` until it
   reports the feed drained.
+- **`no-proposal`.** Nothing has been offered out of this pool, so there is no
+  membership for admission to measure. Run `start`; `freeze` refuses with the
+  same sentence.
+- **`pool-off-base`.** The pool holds evidence and none of it was produced at
+  the base the batch would be formed at. Not the same as an empty pool: the
+  evaluations exist, they are just about another protocol. It waits for reports
+  produced at the configured source line.
 - **A generated analysis task that no longer looks like one.** The controller
   identifies it by its id line, its `# Batch analysis — <batch-id>` heading, and
   the manifest path it cites, then reads its lifecycle. Keep those three intact

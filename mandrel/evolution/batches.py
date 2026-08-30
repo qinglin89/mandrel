@@ -58,7 +58,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..deploy import deploys_canonical_path
 from ..hashing import sha256_bytes
+from ..lockfile import CanonicalIdentities, is_object_id
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
 from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
@@ -81,7 +83,12 @@ from .manifests import (
     read_closure,
 )
 from .proposals import (
+    REASON_IDENTITY_DIFFERS,
+    REASON_REVISION_ABSENT,
+    REASON_REVISION_MALFORMED,
+    REASON_REVISION_UNRESOLVABLE,
     BatchProposal,
+    Exclusion,
     Member,
     clear_proposal,
     load_proposal,
@@ -123,8 +130,25 @@ TRIGGER_FORCED = "human-forced-below-target"
 REASON_CURRENT_BATCH = "current-batch"
 REASON_POOL_INCOMPLETE = "pool-incomplete"
 REASON_POOL_EMPTY = "pool-empty"
+# The pool holds evidence and none of it is this base's. Deliberately not the
+# same answer as an empty pool, because the operator's next move differs: an
+# empty pool waits for evaluations, while an off-base pool holds evidence about
+# some other protocol and waits for reports produced at this line — or for a
+# human to argue one of them in.
+REASON_POOL_OFF_BASE = "pool-off-base"
+# No batch has been offered, so there is no membership to measure. Distinct from
+# every count below: those are answers about a batch, and this says there is no
+# batch to answer about yet. Only a reading ever sees it — `freeze` requires the
+# offer before it measures anything (`_require_current_proposal`).
+REASON_NO_PROPOSAL = "no-proposal"
 REASON_BELOW_MINIMUM = "pool-below-minimum"
 REASON_BELOW_TARGET = "pool-below-target"
+
+# The reasons that answer before any membership is selected. They are facts
+# about the cycle and the pool rather than about a batch's members, which is
+# what lets a caller ask whether it needs a proposal at all before requiring one
+# (`_pool_reason`).
+POOL_ONLY_REASONS = frozenset({REASON_CURRENT_BATCH, REASON_POOL_INCOMPLETE, REASON_POOL_EMPTY})
 
 # What a reconciling `start` completed, for the operator's benefit.
 COMPLETED_STATE = "state-transition"
@@ -135,10 +159,21 @@ COMPLETED_PROPOSAL = "proposal-cleared"
 
 @dataclass(frozen=True)
 class AdmissionDecision:
-    """Whether the pool may be frozen, and the numbers behind the answer."""
+    """Whether a batch may be formed, and the numbers behind the answer.
+
+    `task_count` is the *proposal's* membership and never the pool's, because
+    that is what a freeze would form. The two are different numbers the moment
+    the base selects anything (R1), and measuring the thresholds against the
+    pool would pass a target of 20 on a pool of 20 of which 2 belong to this
+    base — then freeze the 2. `pool_count` is carried beside it so the
+    difference is readable rather than implied: what a reader needs is both, and
+    a single count cannot say whether a short batch is short of evidence or
+    short of evidence *at this base*.
+    """
 
     freeze: bool
     task_count: int
+    pool_count: int
     target: int
     minimum: int
     trigger: str | None = None
@@ -386,15 +421,35 @@ def _still_awaiting(config: EvolutionConfig, current: Batch | None) -> Batch | N
     return current
 
 
+def _pool_reason(state: EvolutionState, *, current_batch_id: str | None) -> str | None:
+    """Why no batch forms, asked before any membership is selected.
+
+    The tests that are about the change cycle and the pool rather than about a
+    batch's members, split out so the two callers that must know whether they
+    need a proposal at all can ask the same rule the policy applies. A second
+    spelling here is how a freeze comes to demand an offer for a pool that has
+    nothing in it.
+    """
+
+    if current_batch_id is not None:
+        return REASON_CURRENT_BATCH
+    if not state.feed_exhausted:
+        return REASON_POOL_INCOMPLETE
+    if not state.pending:
+        return REASON_POOL_EMPTY
+    return None
+
+
 def evaluate_admission(
     config: EvolutionConfig,
     state: EvolutionState,
     *,
+    proposal: BatchProposal | None = None,
     now: datetime,
     forced: bool = False,
     current_batch_id: str | None = None,
 ) -> AdmissionDecision:
-    """Apply the configured admission policy to the pending pool.
+    """Apply the configured admission policy to the batch on offer.
 
     Pure, and the only place that decides. The order of the tests is the policy:
 
@@ -407,33 +462,58 @@ def evaluate_admission(
        the count is then a prefix, and every threshold below would be measured
        against a number a page limit chose. Not an error — the next run
        continues from the cursor and admits the complete pool.
-    3. The target forms a batch on its own — a `--force` alongside it changes
+    3. An empty pool has no evidence at all.
+    4. With no batch offered there is no membership to measure, and saying so is
+       not the same as saying the offer would be empty.
+    5. A pool none of whose reports belong to this base is a different answer
+       from an empty one, and stating it as `pool-empty` would send an operator
+       looking for evaluations they already have.
+    6. The target forms a batch on its own — a `--force` alongside it changes
        nothing, so the batch is not recorded as forced.
-    4. The configured minimum is a floor no path crosses. `--force` waives the
+    7. The configured minimum is a floor no path crosses. `--force` waives the
        *target*, never the minimum (contract: normal workflow).
-    5. `max_wait_days` since the oldest pending report releases a batch that
-       has met the minimum, so evidence does not age out waiting for a target
-       that may never arrive. At `max_wait_days = 0` the minimum alone is
+    8. `max_wait_days` since the oldest *member* was imported releases a batch
+       that has met the minimum, so evidence does not age out waiting for a
+       target that may never arrive. At `max_wait_days = 0` the minimum alone is
        enough, provided the oldest timestamp is not in the future: a source
        clock ahead of this one leaves the age rule no honest answer, and
        `waited_days` stays negative so the skew is visible rather than assumed
        away.
-    6. Otherwise a human may force it, with a justification.
+    9. Otherwise a human may force it, with a justification.
 
-    Read from the state rather than passed in by the caller, because the caller
-    may not be the run that discovered anything: `sync` and `freeze` are
-    separate commands, and a `freeze` told nothing would have to assume the
+    **The proposal arrives as data.** Tests 5 to 9 are about what a freeze would
+    form, so they measure the offer's membership and not the pool it was
+    selected out of. The offer is handed in rather than loaded here, which is
+    what keeps this the pure single decision point: a caller with no offer to
+    measure is answered by tests 1 to 4 and requires one for itself
+    (`_pool_reason`, `POOL_ONLY_REASONS`).
+
+    The age rule moves with the count for the same reason. A report that is not
+    a member of this batch cannot age *this* batch out — under the pool's oldest
+    timestamp, one long-pooled off-base report would release every later cohort
+    on the day it arrived.
+
+    The pool is read from the state rather than passed in by the caller, because
+    the caller may not be the run that discovered anything: `sync` and `freeze`
+    are separate commands, and a `freeze` told nothing would have to assume the
     pool is whole — which is exactly the assumption a bounded sync invalidates.
     """
 
-    task_count = len(state.pending)
-    oldest = min((entry.first_imported_at for entry in state.pending), default=None)
+    selected = proposal.selected if proposal is not None else ()
+    task_count = len(selected)
+    pool_count = len(state.pending)
+    pooled = {entry.dedup_key: entry for entry in state.pending}
+    oldest = min(
+        (pooled[member.dedup_key].first_imported_at for member in selected if member.dedup_key in pooled),
+        default=None,
+    )
     waited = (now - parse_rfc3339(oldest)).days if oldest is not None else None
 
     def decision(*, freeze: bool, trigger: str | None = None, reason: str | None = None) -> AdmissionDecision:
         return AdmissionDecision(
             freeze=freeze,
             task_count=task_count,
+            pool_count=pool_count,
             target=config.batch.target_task_count,
             minimum=config.batch.minimum_task_count,
             trigger=trigger,
@@ -445,12 +525,13 @@ def evaluate_admission(
             current_batch_id=current_batch_id,
         )
 
-    if current_batch_id is not None:
-        return decision(freeze=False, reason=REASON_CURRENT_BATCH)
-    if not state.feed_exhausted:
-        return decision(freeze=False, reason=REASON_POOL_INCOMPLETE)
+    unformable = _pool_reason(state, current_batch_id=current_batch_id)
+    if unformable is not None:
+        return decision(freeze=False, reason=unformable)
+    if proposal is None:
+        return decision(freeze=False, reason=REASON_NO_PROPOSAL)
     if task_count == 0:
-        return decision(freeze=False, reason=REASON_POOL_EMPTY)
+        return decision(freeze=False, reason=REASON_POOL_OFF_BASE)
     if task_count >= config.batch.target_task_count:
         return decision(freeze=True, trigger=TRIGGER_TARGET)
     if task_count < config.batch.minimum_task_count:
@@ -617,27 +698,29 @@ def _propose_locked(config: EvolutionConfig, prepared: _Prepared, *, now: dateti
         )
 
     state = load_state(config)
-    decision = evaluate_admission(
-        config,
-        state,
-        now=now,
-        current_batch_id=running.batch_id if running else None,
-    )
+    running_id = running.batch_id if running else None
     if running is not None or not state.pending:
         # Nothing to offer, and nothing left standing that says otherwise: a
         # proposal outliving the pool it selected over would be frozen against
-        # reports the freeze then could not find.
+        # reports the freeze then could not find. An *incomplete* pool is not
+        # in this set on purpose — its reports are real and selecting over them
+        # is a useful preview, and admission refuses the freeze on completeness
+        # whatever the offer says.
         cleared = clear_proposal(config)
         return ProposalResult(
-            decision=decision,
-            current_batch_id=running.batch_id if running else None,
+            decision=evaluate_admission(config, state, now=now, current_batch_id=running_id),
+            current_batch_id=running_id,
             analysis_task_id=running.analysis_task_id if running else None,
             manifest_path=running.manifest_path if running else None,
             completed=(COMPLETED_PROPOSAL,) if cleared else (),
             closed_batch_ids=closed,
         )
 
+    # Selected first, then measured: the thresholds are about the batch this
+    # offer would form, so the offer has to exist before there is anything to
+    # apply them to.
     proposal = _select(config, state, now=now, standing=_standing(config))
+    decision = evaluate_admission(config, state, proposal=proposal, now=now, current_batch_id=running_id)
     path = save_proposal(config, proposal)
     return ProposalResult(decision=decision, proposal=proposal, proposal_path=path, closed_batch_ids=closed)
 
@@ -672,12 +755,22 @@ def _select(
     during the human window has to be visible as a mismatch, never as a quietly
     different selection (invariants 8 and 15).
 
-    Every pooled task is selected. The membership test — a report's deployable
-    canonical identity equalling the base's — is not implemented yet, and the
-    absence is deliberate rather than forgotten: this is the operation that
-    carries it, and `not_selected` is the record it fills. Until it lands, the
-    proposal offers what the freeze took before the split, which keeps the two
-    commands together a behaviour-preserving change of *when* a human answers.
+    **Membership is the base's deployable canonical identity, and nothing else.**
+    A pooled task is a member when the protocol its evaluated target was running
+    is the protocol this base carries — `lockfile.canonical_identity`, the one
+    derivation this repository has for *are these two commits the same protocol*,
+    shared with deploy placement and release assessment so a report and a target
+    are never judged by two different rules. Commit equality would be the wrong
+    test and a much narrower one: the source line moves for work under
+    `mandrel/`, `tests/` and `docs/` that no target ever receives, so a report
+    produced one ordinary commit later than the base would be excluded from a
+    cohort it belongs to.
+
+    Every task the pool holds is answered, and the ones that are not members are
+    recorded with why (`not_selected`). That record is the batch's denominator:
+    a manifest saying nine of eleven is a different document from one saying
+    nine, and the two the reader cannot see are exactly where a cohort's
+    coherence claim would go wrong.
 
     An offer that selects what the standing one selected, at the same base, *is*
     the standing one and keeps its `built_at`. Stamping the clock on it would
@@ -687,22 +780,129 @@ def _select(
     set was trimmed to avoid, and it would be reintroduced here.
     """
 
+    base = _source_line_revision(config)
+    identities = CanonicalIdentities(config.repo_root, deploys=deploys_canonical_path)
+    if identities.of(base) is None:
+        raise BatchError(
+            f"this checkout resolves {config.source_line.ref} to {base} but cannot read that commit's canonical "
+            "tree, so it cannot say which protocol the batch would be formed at; every membership test compares "
+            "against it, and an unreadable base would answer 'different protocol' for every pooled report "
+            "(invariants 8, 15)"
+        )
+
+    selected: list[Member] = []
+    not_selected: list[Exclusion] = []
+    for entry in _batched_entries(state):
+        keys = tuple(sorted(entry.report_keys()))
+        reason = _non_selection(config, entry, base=base, identities=identities)
+        if reason is None:
+            selected.append(Member(repo_id=entry.repo_id, task_id=entry.task_id, report_keys=keys))
+        else:
+            not_selected.append(
+                Exclusion(repo_id=entry.repo_id, task_id=entry.task_id, report_keys=keys, reason=reason)
+            )
+
     offered = BatchProposal(
         built_at=format_rfc3339(now),
         source_line_ref=config.source_line.ref,
-        base_revision=_source_line_revision(config),
-        selected=tuple(
-            Member(
-                repo_id=entry.repo_id,
-                task_id=entry.task_id,
-                report_keys=tuple(sorted(entry.report_keys())),
-            )
-            for entry in _batched_entries(state)
-        ),
+        base_revision=base,
+        selected=tuple(selected),
+        not_selected=tuple(not_selected),
     )
     if standing is not None and replace(offered, built_at=standing.built_at) == standing:
         return standing
     return offered
+
+
+def _non_selection(
+    config: EvolutionConfig,
+    entry: PoolEntry,
+    *,
+    base: str,
+    identities: CanonicalIdentities,
+) -> str | None:
+    """Why this pooled task is not a member of a batch formed at `base`, or None
+    where it is.
+
+    The revision asked about is the entry's **primary** report's
+    `provenance.effective_revision` — the evaluated target's own deploy-lock
+    commit, which is what says which protocol produced the work. `primary` is
+    the latest evaluation of that task, and a rerun is a second reading of the
+    same run rather than a second run (invariant 4), so the task has one
+    production revision and this is where it is stated. Whether a rerun's
+    provenance agrees with it is a cohort-coherence question about recorded
+    facts and not a membership test.
+
+    The four ways to fail, kept apart because an operator's next move differs
+    for each:
+
+    - **absent** — the report states no effective revision, so there is nothing
+      to derive an identity from. Four of the five reports in this repository's
+      live pool are in exactly this state, which is why it is a first-class
+      answer rather than a corner: it is the case a human inclusion exists for.
+    - **malformed** — a revision is stated and it is not a commit id. A fact
+      about the record: Git would resolve `HEAD`, a branch or an abbreviation
+      just as readily, and that answer would be a reading of where *this*
+      checkout stands rather than of what that target held.
+    - **unresolvable** — a commit id this checkout cannot read the canonical
+      tree of. A fact about the clone, which a fetch fixes and which another
+      clone would not report at all.
+    - **differs** — read, and carrying some other protocol than the base's.
+
+    Both sides are known readable before anything is compared: the base is
+    refused outright above, and an unresolvable member is answered before this
+    gets here. That is what `CanonicalIdentities.same` guards against on its own
+    — two revisions nobody can read are not thereby the same protocol — and
+    asking it here rather than comparing the mappings by hand keeps one spelling
+    of the equality.
+    """
+
+    stated = _staged_effective_revision(config, entry)
+    if stated is None:
+        return REASON_REVISION_ABSENT
+    if not is_object_id(stated):
+        return REASON_REVISION_MALFORMED
+    if identities.of(stated) is None:
+        return REASON_REVISION_UNRESOLVABLE
+    return None if identities.same(base, stated) else REASON_IDENTITY_DIFFERS
+
+
+def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry) -> str | None:
+    """The protocol revision the entry's primary report was produced at, as its
+    staged bundle states it — or None where the report states none.
+
+    Read from the staged record rather than from the pool, because the pool
+    keeps identity and hashes and no report content: duplicating provenance into
+    it would give the same fact two homes that can disagree, and the bundle is
+    where every other reader (`_manifest_report`, the assessment cohorts) takes
+    it from.
+
+    **Read here, verified at the freeze.** This is a selection over ignored
+    runtime state and nothing durable stands on it, so it does not re-hash the
+    bundle or re-check the artifact bodies — `_verified_bundle` does that at the
+    freeze, which is the last moment before the membership becomes immutable and
+    the only moment where catching it matters.
+
+    A bundle this machine cannot read at all is refused rather than excluded. It
+    is damage in machine-local state — the pool asserts evidence that is not
+    there — and the freeze already refuses it for every selected report; letting
+    the poll quietly record it as a non-member would turn a broken workspace
+    into a smaller batch nobody was told about.
+    """
+
+    ref = entry.primary
+    path = config.repo_root / ref.artifacts_path / REPORT_JSON_FILENAME
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BatchError(
+            f"cannot read the staged bundle for report {ref.report_key} at {path}: {exc}; the pool names it as "
+            f"the evidence for {entry.repo_id}/{entry.task_id}, and a batch cannot be selected around a report "
+            "whose provenance this machine no longer holds"
+        ) from exc
+    provenance = record.get("provenance") if isinstance(record, dict) else None
+    stated = provenance.get("effective_revision") if isinstance(provenance, dict) else None
+    return stated if isinstance(stated, str) and stated.strip() else None
 
 
 def freeze_locked(
@@ -714,12 +914,15 @@ def freeze_locked(
 ) -> FreezeResult:
     """`freeze` without acquiring the lock, for a caller that already holds it.
 
-    The order below is the safety argument. Admission is asked first, because
-    "not enough evidence yet" is the contract's normal outcome and answering it
-    needs no offer at all; the proposal is required only once policy would
-    release a cohort. Everything the offer claimed is then re-checked against
-    what is actually here — the line, the pool, and every staged bundle — before
-    the first durable byte is written.
+    The order below is the safety argument. The questions that need no
+    membership are asked first — a running cycle, an undrained feed, an empty
+    pool — because "not enough evidence yet" is the contract's normal outcome
+    and answering it needs no offer at all. The offer is then required and
+    re-checked against what is actually here (the line and the pool), because
+    everything below it measures the offer: the thresholds count the batch this
+    freeze would form, so a membership nobody may freeze is not a membership
+    they can be applied to. Every staged bundle is re-verified last, on the way
+    into the manifest, before the first durable byte is written.
     """
 
     _require_justified(forced, justification)
@@ -744,23 +947,25 @@ def freeze_locked(
         return replace(repaired, closed_batch_ids=closed)
 
     state = load_state(config)
-    decision = evaluate_admission(
-        config,
-        state,
-        now=moment,
-        forced=forced,
-        current_batch_id=running.batch_id if running else None,
-    )
-    if not decision.freeze:
+    running_id = running.batch_id if running else None
+
+    def no_batch(decision: AdmissionDecision) -> FreezeResult:
         return FreezeResult(
             decision=decision,
-            current_batch_id=running.batch_id if running else None,
+            current_batch_id=running_id,
             analysis_task_id=running.analysis_task_id if running else None,
             manifest_path=running.manifest_path if running else None,
             closed_batch_ids=closed,
         )
 
+    if _pool_reason(state, current_batch_id=running_id) is not None:
+        return no_batch(evaluate_admission(config, state, now=moment, forced=forced, current_batch_id=running_id))
+
     proposal = _require_current_proposal(config, state)
+    decision = evaluate_admission(config, state, proposal=proposal, now=moment, forced=forced)
+    if not decision.freeze:
+        return no_batch(decision)
+
     revision = proposal.base_revision
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
@@ -775,6 +980,7 @@ def freeze_locked(
         config,
         batch_id=batch_id,
         entries=entries,
+        proposal=proposal,
         created_at=moment,
         decision=decision,
         justification=justification,
@@ -844,6 +1050,8 @@ def _reconcile_locked(config: EvolutionConfig, *, now: datetime, current: Batch 
     state = load_state(config)
     completed = _complete_freeze(config, unfinished, state, now=now, state_present=present)
     return FreezeResult(
+        # No offer is measured here: a repair belongs to the batch that is
+        # already current, and invariant 14 answers before any membership does.
         decision=evaluate_admission(config, state, now=now, current_batch_id=unfinished.batch_id),
         current_batch_id=unfinished.batch_id,
         analysis_task_id=unfinished.analysis_task_id,
@@ -949,30 +1157,54 @@ def freeze_refusal(
 
     The read-only form of `freeze_locked`'s preflight, asked by the console's
     gate (`phase.allowed_actions`) with the same records the operation is handed,
-    and in the operation's own order — admission first, then the offer. Order is
-    the whole point: the two fail for different people, and a gate that asked
-    them the other way round names a missing offer where the operation answers
-    "not enough evidence yet", or predicts a refusal a freeze never reaches.
+    and in the operation's own order: the questions no membership answers, then
+    the offer, then the thresholds over it. Order is the whole point — the three
+    fail for different people, and a gate that asked them in another order names
+    a missing offer where the operation answers "not enough evidence yet", or
+    predicts a refusal a freeze never reaches.
 
-    **A short pool is a refusal only where no argument lifts it.** `--force`
+    `decision` must be the one measured over `proposal`, which is what the
+    operation applies the thresholds to. A decision measured over the pool would
+    make this gate advertise a freeze that admission then refuses, on a pool
+    whose evidence belongs to another protocol.
+
+    **A short batch is a refusal only where no argument lifts it.** `--force`
     waives the configured target and nothing else (`evaluate_admission`), so
     `pool-below-target` beside a standing offer is a state `freeze` accepts —
     with a justification, which is the operator's to write and not a fact about
     this state. Every other unreleased reason (an undrained feed, an empty pool,
-    the minimum) holds against every argument, and is refused here. Which is why
-    the force flag is not modelled: the gate says whether the verb may run at
-    all, never which arguments it was given (contract: The gate).
+    a pool holding nothing at this base, the minimum) holds against every
+    argument, and is refused here. Which is why the force flag is not modelled:
+    the gate says whether the verb may run at all, never which arguments it was
+    given (contract: The gate).
     """
 
     if decision.reason == REASON_CURRENT_BATCH:
         return current_batch_refusal(decision.current_batch_id)
+    if decision.reason in POOL_ONLY_REASONS:
+        return _admission_refusal(decision)
+    refusal = proposal_refusal(config, state, proposal)
+    if refusal is not None:
+        return refusal
     if not decision.freeze and decision.reason != REASON_BELOW_TARGET:
-        return (
-            f"admission does not release the pool ({decision.reason}: {decision.task_count} pooled, target "
-            f"{decision.target}, minimum {decision.minimum}); a freeze forms a cohort only once policy releases "
-            "one, and `--force` waives the configured target rather than any of this"
-        )
-    return proposal_refusal(config, state, proposal)
+        return _admission_refusal(decision)
+    return None
+
+
+def _admission_refusal(decision: AdmissionDecision) -> str:
+    """Admission's own numbers, as the sentence a refused freeze gives.
+
+    Both counts, never one. `task_count` is what the thresholds measured and
+    `pool_count` is what it was selected out of, and the difference between them
+    is the whole of an operator's next move: a short *batch* out of a full pool
+    is evidence about another protocol, which no amount of waiting fixes.
+    """
+
+    return (
+        f"admission does not release a batch ({decision.reason}: {decision.task_count} selected of "
+        f"{decision.pool_count} pooled, target {decision.target}, minimum {decision.minimum}); a freeze forms a "
+        "cohort only once policy releases one, and `--force` waives the configured target rather than any of this"
+    )
 
 
 def proposal_refusal(
@@ -997,11 +1229,15 @@ def proposal_refusal(
       nobody read against a base nobody chose. (`guards.read_inputs` watches the
       same ref, so a caller passing `--expect` is already refused one step
       earlier; this covers the operator who passed none.)
-    - **The pool still holds what was offered.** A member claimed by another
-      freeze, dropped, or re-imported under different reports is a member this
-      freeze would silently substitute for, and a task that entered the pool
-      after the build was never considered — so the denominator the proposal
-      records would be wrong about what it was selected out of.
+    - **The pool still holds exactly what was answered for.** Every task the
+      offer answered for — members and non-members alike — has to still be
+      pooled with the same reports, and every pooled task has to have been
+      answered for. A member claimed by another freeze, dropped, or re-imported
+      under different reports is one this freeze would silently substitute for;
+      a task that entered the pool after the build was never considered. Both
+      sides matter because the manifest records the whole denominator, not just
+      the membership: an exclusion naming reports that have since changed is a
+      denominator stating something that was not so at the freeze.
 
     Every refusal a stale offer earns names the rebuild, because that is the only
     repair: a proposal is a reading, and a stale reading is retaken rather than
@@ -1031,21 +1267,22 @@ def proposal_refusal(
             "review the batch it now proposes"
         )
 
-    offered = {member.dedup_key for member in proposal.selected}
-    for member in proposal.selected:
-        entry = state.find(member.repo_id, member.task_id)
+    considered = {item.dedup_key: item for item in (*proposal.selected, *proposal.not_selected)}
+    for key in sorted(considered):
+        item = considered[key]
+        entry = state.find(item.repo_id, item.task_id)
         if entry is None:
             return (
-                f"the proposal offers {member.repo_id}/{member.task_id}, which is no longer in the pending pool; "
-                "rebuild the proposal with `mandrel evolution start` and review what it now offers"
+                f"the proposal answered for {item.repo_id}/{item.task_id}, which is no longer in the pending "
+                "pool; rebuild the proposal with `mandrel evolution start` and review what it now offers"
             )
-        if set(entry.report_keys()) != set(member.report_keys):
+        if set(entry.report_keys()) != set(item.report_keys):
             return (
-                f"{member.repo_id}/{member.task_id} holds different reports than the proposal offered; a later "
+                f"{item.repo_id}/{item.task_id} holds different reports than the proposal offered; a later "
                 "evaluation arrived after it was built, so rebuild it with `mandrel evolution start` and review "
                 "the batch that reads"
             )
-    arrived = [entry for entry in state.pending if entry.dedup_key not in offered]
+    arrived = [entry for entry in state.pending if entry.dedup_key not in considered]
     if arrived:
         names = ", ".join(f"{entry.repo_id}/{entry.task_id}" for entry in sorted(arrived, key=lambda e: e.dedup_key))
         return (
@@ -1103,6 +1340,7 @@ def _build_manifest(
     *,
     batch_id: str,
     entries: list[PoolEntry],
+    proposal: BatchProposal,
     created_at: datetime,
     decision: AdmissionDecision,
     justification: str | None,
@@ -1114,13 +1352,20 @@ def _build_manifest(
     Every report the batched tasks own goes in, reruns included: they are
     provenance (invariant 4) and they do not raise the task count (invariant 1),
     which is derived from the distinct `(repo_id, task_id)` pairs.
+
+    The offer's whole answer is copied in, not just the half that was selected.
+    A frozen batch has to state its own denominator — what was considered, what
+    was left out and why — because a cohort's coherence claim is about the set
+    it was drawn from, and a manifest listing only members reads as if the pool
+    held exactly them (invariant 5).
     """
 
+    members = {member.dedup_key: member for member in proposal.selected}
     schema = load_import_schema(config)
     reports: list[dict[str, Any]] = []
     for entry in entries:
         for ref in (entry.primary, *entry.reruns):
-            reports.append(_manifest_report(config, entry, ref, schema))
+            reports.append(_manifest_report(config, entry, ref, schema, members[entry.dedup_key]))
     reports.sort(key=lambda report: (report["sequence"], report["report_key"]))
 
     manifest = {
@@ -1132,6 +1377,7 @@ def _build_manifest(
         "force_justification": justification.strip() if decision.forced and justification else None,
         "runner_protocol_revision": runner_revision,
         "analysis_task_id": analysis_task_id,
+        "selection": _manifest_selection(proposal),
         "reports": reports,
     }
     validate_or_raise(
@@ -1142,14 +1388,43 @@ def _build_manifest(
     return manifest
 
 
+def _manifest_selection(proposal: BatchProposal) -> dict[str, Any]:
+    """The batch's denominator, as the immutable record states it.
+
+    **Two counts and never one total.** A batch of ten that is nine automatic
+    members and one a human argued in is a different document from a batch of
+    ten, and a reader has to be able to see which they are holding: the human
+    inclusion is invariant 1's sanctioned exception, and an exception that
+    disappears into a sum is not an accounted-for judgement. `considered` is the
+    third number, and it is what makes the other two a denominator rather than
+    two more sizes.
+    """
+
+    included = proposal.human_included
+    return {
+        "considered": proposal.considered,
+        "auto_selected": len(proposal.selected) - len(included),
+        "human_included": len(included),
+        "not_selected": [item.to_json() for item in proposal.not_selected],
+    }
+
+
 def _manifest_report(
     config: EvolutionConfig,
     entry: PoolEntry,
     ref: ReportRef,
     schema: Mapping[str, Any],
+    member: Member,
 ) -> dict[str, Any]:
     """One report's membership entry, with its cohort provenance read back from
-    the staged bundle and the whole bundle re-verified against the pool."""
+    the staged bundle and the whole bundle re-verified against the pool.
+
+    `selection` is the task's, repeated on each of its reports: membership is
+    decided per completed task (invariant 1) and a rerun is the same task's
+    evidence, so every report of a member carries the same answer. Carried on
+    the report rather than derived from a lookup elsewhere in the manifest so
+    that a reader holding one entry can see why it is here at all.
+    """
 
     record = _verified_bundle(config, entry, ref, schema)
     return {
@@ -1162,6 +1437,12 @@ def _manifest_report(
         "generated_at": ref.generated_at,
         "evaluator": record.get("evaluator"),
         "provenance": record.get("provenance"),
+        "selection": {
+            "mode": member.mode,
+            "reason": member.reason,
+            "actor": member.actor,
+            "moved_at": member.moved_at,
+        },
     }
 
 
@@ -1452,6 +1733,12 @@ def _task_spec(
     reports = tuple(manifest.get("reports") or ())
     directory = f"{config.storage.batches}/{batch_id}"
     justification = manifest.get("force_justification")
+    # The manifest's own denominator, read back rather than recomputed: the pool
+    # it was selected out of is machine-local and has moved, so a repaired task
+    # reconstructed from a live reading would state a composition the frozen
+    # batch never had.
+    selection = manifest.get("selection")
+    selection = selection if isinstance(selection, Mapping) else {}
     return AnalysisTaskSpec(
         task_id=task_id,
         batch_id=batch_id,
@@ -1462,12 +1749,20 @@ def _task_spec(
         artifacts_root=config.storage.imported_artifacts,
         task_count=len({(report["repo_id"], report["task_id"]) for report in reports}),
         report_count=len(reports),
+        considered=_count(selection, "considered"),
+        auto_selected=_count(selection, "auto_selected"),
+        human_included=_count(selection, "human_included"),
         runner_protocol_revision=str(manifest["runner_protocol_revision"]),
         config_sha256=str(manifest.get("config_sha256") or ""),
         forced=bool(manifest.get("forced")),
         force_justification=_optional_string(justification),
         release=_release_spec(config, batch_id, directory=directory),
     )
+
+
+def _count(selection: Mapping[str, Any], key: str) -> int:
+    value = selection.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _release_spec(

@@ -26,7 +26,15 @@ from .assessment import (
     Subject,
     Withdrawn,
 )
-from .batches import REASON_POOL_INCOMPLETE, FreezeResult, ProposalResult, StartResult
+from .batches import (
+    REASON_NO_PROPOSAL,
+    REASON_POOL_INCOMPLETE,
+    REASON_POOL_OFF_BASE,
+    AdmissionDecision,
+    FreezeResult,
+    ProposalResult,
+    StartResult,
+)
 from .deployment import (
     HOLDING_BEHIND,
     HOLDING_CARRIES,
@@ -46,6 +54,7 @@ from .experiments import (
 )
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate, PreparedPromotion
+from .proposals import BatchProposal
 from .phase import (
     COUNTERFACTUAL_COMPLETED,
     COUNTERFACTUAL_FAILED,
@@ -117,6 +126,67 @@ def format_sync(result: SyncResult) -> str:
     return "\n".join(lines)
 
 
+def _not_selected(proposal: BatchProposal) -> list[tuple[str, int]]:
+    """The offer's non-selections, one line per reason, in a stable order.
+
+    Counted rather than listed: an operator reading `status` needs to know that
+    eight reports were left out and on what grounds, and the eight names are in
+    the offer file. The reasons themselves are what carry the next move — an
+    unresolvable revision is a fetch, an absent one is a human judgement or
+    nothing.
+    """
+
+    tally: dict[str, int] = {}
+    for item in proposal.not_selected:
+        tally[item.reason] = tally.get(item.reason, 0) + 1
+    return sorted(tally.items())
+
+
+def _counts(decision: AdmissionDecision) -> str:
+    """What admission measured and what it was measured out of.
+
+    Two numbers, always. `task_count` is the batch a freeze would form and
+    `pool_count` is everything pending, and only the pair distinguishes a pool
+    that is short of evidence from a pool whose evidence belongs to another
+    protocol — which are different problems with different next moves.
+    """
+
+    if decision.reason == REASON_NO_PROPOSAL:
+        # No selection was measured, so stating one as zero would read as an
+        # identity test that rejected everything.
+        return f"{decision.pool_count} pooled, target {decision.target}, minimum {decision.minimum}"
+    return (
+        f"{decision.task_count} selected of {decision.pool_count} pooled, "
+        f"target {decision.target}, minimum {decision.minimum}"
+    )
+
+
+def _admission_notes(decision: AdmissionDecision) -> list[str]:
+    """The line that says what to do about this reason, when there is one.
+
+    Only the two reasons whose next move is not obvious from the counts: an
+    undrained feed looks like a small pool, and a pool holding nothing at this
+    base looks like an empty one.
+    """
+
+    if decision.reason == REASON_POOL_INCOMPLETE:
+        return [_field("", "no discovery pass has reported the feed drained; run sync until it does")]
+    if decision.reason == REASON_NO_PROPOSAL:
+        return [
+            _field("", "no batch has been offered out of this pool; `mandrel evolution start` proposes one")
+        ]
+    if decision.reason == REASON_POOL_OFF_BASE:
+        return [
+            _field(
+                "",
+                f"the pool holds {decision.pool_count} task(s) and none of them is a member of a batch formed "
+                "at this base; a batch is the reports produced under the protocol it is formed at, and the "
+                "offer records the reason for each",
+            )
+        ]
+    return []
+
+
 def format_freeze(result: FreezeResult, repo_root: Path) -> str:
     lines: list[str] = []
     for batch_id in result.closed_batch_ids:
@@ -139,9 +209,8 @@ def format_freeze(result: FreezeResult, repo_root: Path) -> str:
         if result.analysis_task_id:
             lines.append(_field("analysis", result.analysis_task_id))
     else:
-        lines.append(f"freeze: no batch — {decision.reason} ({decision.task_count}/{decision.target}, minimum {decision.minimum})")
-        if decision.reason == REASON_POOL_INCOMPLETE:
-            lines.append(_field("", "no discovery pass has reported the feed drained; run sync until it does"))
+        lines.append(f"freeze: no batch — {decision.reason} ({_counts(decision)})")
+        lines.extend(_admission_notes(decision))
     if result.completed:
         lines.append(_field("repaired", ", ".join(result.completed)))
     return "\n".join(lines)
@@ -166,17 +235,16 @@ def format_proposal(result: ProposalResult, repo_root: Path) -> str:
             f"proposal: {proposal.task_count} of {proposal.considered} considered task(s) selected at base "
             f"{proposal.base_revision[:12]} ({proposal.source_line_ref})"
         )
-        lines.append(_field("pool", f"{decision.task_count} unique completed task(s) pending"))
+        lines.append(_field("pool", f"{decision.pool_count} unique completed task(s) pending"))
+        for reason, count in _not_selected(proposal):
+            lines.append(_field("", f"{count} not selected: {reason}"))
         if result.proposal_path is not None:
             lines.append(_field("offer", _relative(result.proposal_path, repo_root)))
         if decision.freeze:
             lines.append(_field("admission", f"ready to freeze — {decision.trigger}"))
         else:
-            lines.append(
-                _field("admission", f"not yet — {decision.reason} ({decision.task_count}/{decision.target}, minimum {decision.minimum})")
-            )
-            if decision.reason == REASON_POOL_INCOMPLETE:
-                lines.append(_field("", "no discovery pass has reported the feed drained; run sync until it does"))
+            lines.append(_field("admission", f"not yet — {decision.reason} ({_counts(decision)})"))
+            lines.extend(_admission_notes(decision))
         lines.append("nothing was frozen: review the membership, then `freeze` fixes it as a batch")
     elif result.current_batch_id:
         lines.append(
@@ -185,9 +253,8 @@ def format_proposal(result: ProposalResult, repo_root: Path) -> str:
         if result.analysis_task_id:
             lines.append(_field("analysis", result.analysis_task_id))
     else:
-        lines.append(f"proposal: none — {decision.reason} ({decision.task_count}/{decision.target}, minimum {decision.minimum})")
-        if decision.reason == REASON_POOL_INCOMPLETE:
-            lines.append(_field("", "no discovery pass has reported the feed drained; run sync until it does"))
+        lines.append(f"proposal: none — {decision.reason} ({_counts(decision)})")
+        lines.extend(_admission_notes(decision))
     if result.completed:
         lines.append(_field("repaired", ", ".join(result.completed)))
     return "\n".join(lines)
@@ -833,12 +900,20 @@ def format_status(status: LifecycleStatus) -> str:
     decision = status.decision
     lines = [f"evolution: {status.summary}"]
 
-    pool = f"{decision.task_count} unique completed task(s); target {decision.target}, minimum {decision.minimum}"
+    pool = f"{decision.pool_count} unique completed task(s); target {decision.target}, minimum {decision.minimum}"
     lines.append(_field("pool", pool))
     if not status.pool_complete:
         lines.append(_field("", "pool completeness unproven — no discovery pass has reported the feed drained"))
     elif decision.waited_days is not None:
-        lines.append(_field("", f"oldest pending report imported {decision.waited_days} day(s) ago, max wait {decision.max_wait_days}"))
+        # The oldest *member*, not the oldest pooled report: the age rule
+        # releases the batch on offer, and a report this base does not select
+        # cannot age it out (`batches.evaluate_admission`).
+        lines.append(
+            _field(
+                "",
+                f"oldest member imported {decision.waited_days} day(s) ago, max wait {decision.max_wait_days}",
+            )
+        )
 
     proposal = status.proposal
     if proposal is not None:
@@ -853,16 +928,31 @@ def format_status(status: LifecycleStatus) -> str:
         if included:
             majority = " — a majority of this batch" if included * 2 > proposal.task_count else ""
             lines.append(_field("", f"{included} of them included by a human{majority}"))
+        for reason, count in _not_selected(proposal):
+            lines.append(_field("", f"{count} not selected: {reason}"))
 
     if decision.freeze:
         lines.append(_field("admission", f"ready to freeze — {decision.trigger}"))
     else:
-        lines.append(_field("admission", f"no batch — {decision.reason}"))
+        lines.append(_field("admission", f"no batch — {decision.reason} ({_counts(decision)})"))
+        lines.extend(_admission_notes(decision))
 
     current = status.current_batch
     note = f"current {current.batch_id}" if current else "none current"
     lines.append(_field("batches", f"{status.batch_count} frozen, {note}"))
     if current is not None:
+        # The cohort's denominator, from its own manifest: what its formation
+        # answered for, and how many members a person argued in past the
+        # identity test (invariants 1 and 5).
+        curated = (
+            f", {current.human_included} included by a human"
+            f"{' — a majority of this batch' if current.human_included * 2 > current.task_count else ''}"
+            if current.human_included
+            else ""
+        )
+        lines.append(
+            _field("", f"{current.task_count} of {current.considered} considered task(s) selected{curated}")
+        )
         lines.append(_field("", f"analysis task {current.analysis_task_id or '<none named>'}"))
         lines.append(_field("", _analysis_note(current.analysis_complete, current.findings_recorded)))
         if not current.evidence_complete:

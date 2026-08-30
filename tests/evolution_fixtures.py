@@ -211,6 +211,41 @@ def make_repo(tmp_path: Path) -> Path:
     return root
 
 
+def line_tip(config) -> str:
+    """Where `[source_line].ref` stands in this temporary repository.
+
+    The base a batch formed now is fixed at (invariants 8 and 15), and therefore
+    the revision a report has to state as its own `provenance.effective_revision`
+    to be selected into that batch: membership is equality of deployable
+    canonical identity against the base, and a temporary repository's tip is a
+    commit no constant can name.
+    """
+
+    from mandrel.evolution.revisions import ref_tip
+
+    tip = ref_tip(config.repo_root, config.source_line.ref)
+    assert tip is not None, f"the fixture repository does not hold {config.source_line.ref}"
+    return tip
+
+
+def at_line(config, records: list[dict], *, revision: str | None = None) -> list[dict]:
+    """Say every one of these reports was produced at this repository's base.
+
+    Applied by the pool-filling helpers rather than by `make_record`, which has
+    no repository to resolve against. A record that says nothing about where it
+    ran is a real state with tests of its own (`revision-absent`), and it is the
+    wrong default for a suite whose subject is admission, repair or the CLI:
+    those need a pool a batch can actually be formed out of.
+
+    `revision` names some other commit — for the tests that need a member
+    produced at a commit which is not the base but carries the same deployable
+    canonical tree, which is what membership actually tests.
+    """
+
+    at = revision or line_tip(config)
+    return [{**record, "provenance": {**record["provenance"], "effective_revision": at}} for record in records]
+
+
 def make_record(
     *,
     key: str,
@@ -275,6 +310,7 @@ def make_manifest_report(
     task_id: str = "2026-07-01-task",
     repo_id: str = "repo-alpha",
     version: int = 2,
+    selection: dict | None = None,
     **record_overrides,
 ) -> dict:
     """One membership entry, in the shape the given manifest version requires.
@@ -300,6 +336,11 @@ def make_manifest_report(
         "generated_at": record["generated_at"],
         "evaluator": record["evaluator"],
         "provenance": record["provenance"],
+        # The default is an automatic member, which is what a hand-written
+        # manifest means unless it says otherwise: a human inclusion is a
+        # recorded judgement and a fixture that produced one silently would
+        # make every reader of these manifests read a decision nobody made.
+        "selection": selection or {"mode": "auto", "reason": None, "actor": None, "moved_at": None},
     }
 
 
@@ -336,6 +377,20 @@ def write_manifest(
         ],
         **overrides,
     }
+    # A batch that considered exactly its members and selected all of them: the
+    # denominator a hand-written manifest states unless the test is about one
+    # that left something out. Derived after the overrides so a test that
+    # supplies its own `reports` gets a denominator describing them, and counted
+    # over tasks rather than reports because that is what membership is.
+    manifest.setdefault(
+        "selection",
+        {
+            "considered": len({(item["repo_id"], item["task_id"]) for item in manifest["reports"]}),
+            "auto_selected": len({(item["repo_id"], item["task_id"]) for item in manifest["reports"]}),
+            "human_included": 0,
+            "not_selected": [],
+        },
+    )
     directory = batches_root / batch_id
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1193,6 +1248,27 @@ def git_canonical_commit(root: Path, message: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"dev contract, {message}\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(root), "add", "--", "canonical/protocols/dev.md"], check=True)
+    subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
+    return git_rev(root, "HEAD")
+
+
+def git_unreadable_canonical_commit(root: Path, message: str) -> str:
+    """One more commit whose canonical tree no reader here can turn into a
+    protocol identity, and its sha.
+
+    A symlink under `canonical/`: `ls-tree` reports it as a blob at mode
+    `120000`, which `lockfile.canonical_identity` refuses because it is not a
+    file a target could receive. The commit resolves perfectly — this is the
+    state where the ref is held and the identity still cannot be derived, which
+    is the only way to reach a reader's unreadable-revision arm without deleting
+    objects out from under Git.
+    """
+
+    path = root / "canonical" / "protocols" / "link.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to("dev.md")
+    relative = "canonical/protocols/link.md"
+    subprocess.run(["git", "-C", str(root), "add", "--", relative], check=True)
     subprocess.run(["git", "-C", str(root), *GIT_IDENTITY, "commit", "-q", "-m", message], check=True)
     return git_rev(root, "HEAD")
 

@@ -178,7 +178,7 @@ from .revisions import Revision
 from .proposals import BatchProposal, load_proposal
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -269,6 +269,13 @@ class BatchView:
 
     batch_id: str
     task_count: int
+    # What the formation answered for, and how many members a human argued in
+    # past the identity test. Two numbers beside the count and never folded into
+    # it: a batch of ten drawn from eleven is a different cohort from one drawn
+    # from thirty, and a batch most of whose members were curated is a different
+    # one again (invariants 1 and 5).
+    considered: int
+    human_included: int
     report_count: int
     analysis_task_id: str | None
     findings_recorded: bool
@@ -290,6 +297,8 @@ class BatchView:
         return {
             "batch_id": self.batch_id,
             "task_count": self.task_count,
+            "considered": self.considered,
+            "human_included": self.human_included,
             "report_count": self.report_count,
             "analysis_task_id": self.analysis_task_id,
             "findings_recorded": self.findings_recorded,
@@ -705,7 +714,10 @@ class LifecycleStatus:
         included."""
 
         if self.phase == PHASE_POOL:
-            return f"{PHASE_POOL} {self.decision.task_count}/{self.decision.target}"
+            # The pool's own count: this phase is reached only when no offer
+            # stands, so there is no membership to measure and the number an
+            # operator needs is how much evidence is waiting.
+            return f"{PHASE_POOL} {self.decision.pool_count}/{self.decision.target}"
         if self.phase == PHASE_BATCH_PROPOSED and self.proposal is not None:
             return f"{PHASE_BATCH_PROPOSED} {self.proposal.task_count}/{self.decision.target}"
         if self.phase in (PHASE_IMPLEMENTING, PHASE_CANDIDATE_READY) and self.experiment is not None:
@@ -728,15 +740,14 @@ class LifecycleStatus:
             "phase": self.phase,
             "summary": self.summary,
             "pool": {
-                "task_count": self.decision.task_count,
+                # Everything pending, which is the denominator and not what a
+                # freeze would form; the batch on offer is counted below.
+                "task_count": self.decision.pool_count,
                 "target": self.decision.target,
                 "minimum": self.decision.minimum,
                 # False also means "never synced": completeness has to be shown,
                 # not assumed (invariants 1 and 2).
                 "complete": self.pool_complete,
-                "oldest_pending_at": self.decision.oldest_pending_at,
-                "waited_days": self.decision.waited_days,
-                "max_wait_days": self.decision.max_wait_days,
             },
             # The batch on offer, beside the pool it was selected out of. Two
             # numbers and never one: what a freeze would form is not what the
@@ -751,12 +762,26 @@ class LifecycleStatus:
                 "task_count": self.proposal.task_count,
                 "considered": self.proposal.considered,
                 "human_included": len(self.proposal.human_included),
+                # Why the considered tasks that are not members were left out,
+                # counted per reason. A surface offering the human window needs
+                # the grounds and not only the shortfall: a fetch answers an
+                # unresolvable revision and nothing answers an absent one but a
+                # person.
+                "not_selected": _not_selected(self.proposal),
             },
             "admission": {
                 "freeze": self.decision.freeze,
                 "trigger": self.decision.trigger,
                 "reason": self.decision.reason,
                 "current_batch": self.decision.current_batch_id,
+                # What the policy measured, which is the offer's membership and
+                # not the pool (`batches.evaluate_admission`). The age rule sits
+                # here for that reason: it is the oldest *member's* import, and
+                # a report this base does not select cannot age this batch out.
+                "task_count": self.decision.task_count,
+                "oldest_pending_at": self.decision.oldest_pending_at,
+                "waited_days": self.decision.waited_days,
+                "max_wait_days": self.decision.max_wait_days,
             },
             "batches": {
                 "total": self.batch_count,
@@ -866,20 +891,23 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
     # a concluded one's stage is history rather than something being waited on.
     stage_open = current is not None and awaiting_analysis(config, current.batch)
 
-    decision = evaluate_admission(
-        config,
-        state,
-        now=moment,
-        current_batch_id=current.batch_id if current else None,
-    )
-
     # Only meaningful while no batch is current: a proposal is an offer of the
     # *next* cohort, and one standing beside a running change cycle is a leftover
     # the next build drops rather than a state to report.
     proposal = load_proposal(config) if current is None else None
+    # Read before admission, because admission measures it: the thresholds count
+    # the batch a freeze would form, so a reading that applied them to the pool
+    # would report a cohort as ready that the freeze then refuses.
+    decision = evaluate_admission(
+        config,
+        state,
+        proposal=proposal,
+        now=moment,
+        current_batch_id=current.batch_id if current else None,
+    )
     promotion = _promotion(lineage.last_promoted)
     reading = LifecycleStatus(
-        phase=_phase(current=current, stage_open=stage_open, pool=decision.task_count, proposal=proposal),
+        phase=_phase(current=current, stage_open=stage_open, pool=decision.pool_count, proposal=proposal),
         decision=decision,
         pool_complete=state.feed_exhausted,
         batch_count=len(known),
@@ -899,6 +927,19 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
         deployment=_deployment(config, promotion),
     )
     return reading, lineage, freeze_refusal(config, state, decision, proposal)
+
+
+def _not_selected(proposal: BatchProposal) -> dict[str, int]:
+    """The offer's non-selections by reason, as counts.
+
+    Counts rather than records: the names are in the offer file, and what a
+    machine surface decides from is which grounds are in play and how many.
+    """
+
+    tally: dict[str, int] = {}
+    for item in proposal.not_selected:
+        tally[item.reason] = tally.get(item.reason, 0) + 1
+    return dict(sorted(tally.items()))
 
 
 def _round_tail(round_: Round) -> str:
@@ -945,6 +986,8 @@ def _view(config: EvolutionConfig, current: BatchLineage, *, analysis_complete: 
     return BatchView(
         batch_id=batch.batch_id,
         task_count=batch.task_count,
+        considered=batch.considered,
+        human_included=batch.human_included,
         report_count=len(batch.reports),
         analysis_task_id=batch.analysis_task_id,
         findings_recorded=batch.findings_recorded,

@@ -69,16 +69,29 @@ SELECTION_MODES = frozenset({MODE_AUTO, MODE_HUMAN_INCLUDED})
 # could not place, and both from a judgement somebody made.
 REASON_IDENTITY_DIFFERS = "identity-differs"
 REASON_REVISION_ABSENT = "revision-absent"
+REASON_REVISION_MALFORMED = "revision-malformed"
 REASON_REVISION_UNRESOLVABLE = "revision-unresolvable"
 REASON_HUMAN_EXCLUDED = "human-excluded"
 EXCLUSION_REASONS = frozenset(
     {
         REASON_IDENTITY_DIFFERS,
         REASON_REVISION_ABSENT,
+        REASON_REVISION_MALFORMED,
         REASON_REVISION_UNRESOLVABLE,
         REASON_HUMAN_EXCLUDED,
     }
 )
+
+# `revision-malformed` and `revision-unresolvable` are two facts about different
+# things, and separating them is what makes the denominator portable. A stated
+# revision that is not a commit id is a fact about the *record*: every clone
+# reads the same string and refuses it identically, from committed content
+# alone. A revision this checkout cannot read the canonical tree of is a fact
+# about the *clone*, and another clone holding the object would select the very
+# same report. Recording both as one reason would tell a reader of a frozen
+# manifest that an unfetched object and a corrupt field are the same problem,
+# and only one of them is fixed by a fetch. `assessment.py` splits its cohort
+# exclusions on the same line for the same reason.
 
 # The reasons a human owns. Both carry an actor and a moment, because a move
 # nobody is named for is not a recorded judgement.

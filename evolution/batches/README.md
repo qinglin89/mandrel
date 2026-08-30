@@ -33,10 +33,19 @@ from any fresh checkout. A machine that holds an unfinished task keeps the
 analysis stage open even against the record — local lifecycle may only be more
 conservative than the committed answer, never less.
 
+A manifest states its own denominator as well as its membership. `selection`
+records how many unique completed tasks the formation answered for, how the
+members split between the identity test and human judgement, and why each
+considered task that is not a member was left out; each report restates its own
+task's answer. That is what makes a cohort's recurrence claim checkable from
+committed content: the pool it was selected out of is ignored machine-local
+state and has moved by the time anyone reads the batch.
+
 Manifests are versioned and never rewritten, so once a batch exists its version
 keeps the schema it was written against. Only `batch-manifest.schema.json`
 (version 2) is read today: it carries the per-report evaluator and provenance
-blocks cohort coherence needs, and the base the batch was formed at. Version 1
+blocks cohort coherence needs, the base the batch was formed at, and the
+selection above. Version 1
 was dropped with its schema rather than kept as a reader arm, because no batch
 has ever been frozen here — that window closes at the first freeze.
 

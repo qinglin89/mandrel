@@ -22,13 +22,17 @@ import pytest
 from evolution_fixtures import (
     ARTIFACT_BODIES,
     RELEASE_REF,
+    at_line,
     complete_task,
     experiment_decision,
     experiment_round,
+    git_canonical_commit,
     git_commit,
     git_release_commit,
     git_repo,
     git_rev,
+    git_unreadable_canonical_commit,
+    git_update_ref,
     make_record,
     make_repo,
     releasing_from,
@@ -41,7 +45,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import evolution
-from mandrel.evolution import analysis_task, batches, ledger, manifests, proposals, revisions, state
+from mandrel.evolution import analysis_task, batches, ledger, manifests, proposals, render, revisions, state
 
 TARGET = 3
 MINIMUM = 2
@@ -91,14 +95,28 @@ def feed_root(tmp_path: Path) -> Path:
     return tmp_path / "feed"
 
 
-def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, count: int, *, extra: list[dict] | None = None):
-    """Import `count` distinct completed tasks, plus any extra records given."""
+def fill_pool(
+    config: evolution.EvolutionConfig,
+    feed_root: Path,
+    count: int,
+    *,
+    extra: list[dict] | None = None,
+    at: str | None = None,
+):
+    """Import `count` distinct completed tasks, plus any extra records given.
+
+    Every record states this repository's source-line tip as the revision it was
+    produced at, so the pool is one a batch can be formed out of: membership is
+    equality of deployable canonical identity against the base
+    (`at_line`). A suite about the identity test itself says otherwise
+    explicitly.
+    """
 
     records = [
         make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
         for index in range(1, count + 1)
     ]
-    feed = write_feed(feed_root, records + (extra or []))
+    feed = write_feed(feed_root, at_line(config, records + (extra or []), revision=at))
     evolution.sync(config, feed)
     return feed
 
@@ -417,6 +435,283 @@ def test_a_target_sized_pool_is_not_recorded_as_forced(
 # --- batch membership --------------------------------------------------------
 
 
+def test_a_report_produced_at_the_same_protocol_is_a_member_whatever_its_commit(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """Membership is the deployable canonical identity the base carries, never
+    commit equality.
+
+    The source line moves for work under `mandrel/`, `tests/` and `docs/` that no
+    target ever receives, so a report produced one ordinary commit off the base
+    was produced under the same protocol — and a test on commit strings would
+    throw away evidence that belongs to the cohort.
+    """
+    produced = git_commit(repo, "work no target receives")
+    assert produced != runner_revision(config)
+    fill_pool(config, feed_root, TARGET, at=produced)
+
+    offered = evolution.build_proposal(config, now=NOW).proposal
+
+    assert offered is not None
+    assert offered.task_count == TARGET
+    assert offered.not_selected == ()
+    assert {member.mode for member in offered.selected} == {proposals.MODE_AUTO}
+
+
+def test_a_report_produced_at_another_protocol_is_left_out_with_that_reason(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """A commit whose deployed canonical tree differs is a different protocol, so
+    the reports produced under it are evidence about something else."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, 1)
+    fill_pool(config, feed_root, 1, extra=[], at=elsewhere)
+    other = make_record(key="other", sequence=90, task_id="2026-09-01-task")
+    evolution.sync(config, write_feed(feed_root, at_line(config, [other], revision=elsewhere)))
+
+    offered = evolution.build_proposal(config, now=NOW).proposal
+
+    assert offered is not None
+    assert [item.task_id for item in offered.not_selected] == ["2026-09-01-task"]
+    assert offered.not_selected[0].reason == proposals.REASON_IDENTITY_DIFFERS
+    assert offered.considered == offered.task_count + 1
+
+
+def test_the_three_ways_a_revision_fails_are_three_different_records(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """An absent revision, a stated non-commit and a commit this clone cannot
+    read are different facts with different next moves: nothing to derive from, a
+    record every clone refuses identically, and a fetch away.
+    """
+    stated = {
+        "2026-08-01-absent": None,
+        "2026-08-02-malformed": "HEAD",
+        "2026-08-03-unresolvable": "f" * 40,
+    }
+    records = [
+        make_record(key=f"x{index}", sequence=50 + index, task_id=task_id)
+        for index, task_id in enumerate(stated, start=1)
+    ]
+    fill_pool(config, feed_root, 1)
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            [
+                {**record, "provenance": {**record["provenance"], "effective_revision": revision}}
+                for record, revision in zip(records, stated.values())
+            ],
+        ),
+    )
+
+    offered = evolution.build_proposal(config, now=NOW).proposal
+
+    assert offered is not None
+    assert {item.task_id: item.reason for item in offered.not_selected} == {
+        "2026-08-01-absent": proposals.REASON_REVISION_ABSENT,
+        "2026-08-02-malformed": proposals.REASON_REVISION_MALFORMED,
+        "2026-08-03-unresolvable": proposals.REASON_REVISION_UNRESOLVABLE,
+    }
+    assert [member.task_id for member in offered.selected] == ["2026-07-01-task"]
+
+
+def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The pool names evidence that is not there, which is damage rather than a
+    smaller batch: recording it as a non-member would turn a broken workspace
+    into a cohort nobody was told was short."""
+    fill_pool(config, feed_root, TARGET)
+    entry = evolution.load_state(config).pending[0]
+    (config.repo_root / entry.primary.artifacts_path / "report.json").unlink()
+
+    with pytest.raises(evolution.BatchError, match="cannot read the staged bundle"):
+        evolution.build_proposal(config, now=NOW)
+
+
+def test_a_base_whose_canonical_tree_cannot_be_read_forms_no_batch(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """Every membership test compares against the base, so a base this checkout
+    cannot read would answer "different protocol" for every pooled report — a
+    batch of nothing, formed for a reason that is about the clone."""
+    fill_pool(config, feed_root, TARGET)
+    git_update_ref(config.repo_root, RELEASE_REF, git_unreadable_canonical_commit(repo, "a symlinked contract"))
+
+    with pytest.raises(evolution.BatchError, match="cannot read that commit's canonical tree"):
+        evolution.build_proposal(config, now=NOW)
+
+
+def test_the_thresholds_measure_the_batch_on_offer_and_not_the_pool(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """A pool of TARGET of which one qualifies does not reach the target.
+
+    Measuring the pool instead would pass the threshold on evidence about another
+    protocol and then freeze the one report that belongs — a cohort whose size
+    was decided by reports it does not contain.
+    """
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, 1)
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [
+                    make_record(key=f"o{index}", sequence=50 + index, task_id=f"2026-08-{index:02d}-task")
+                    for index in range(1, TARGET)
+                ],
+                revision=elsewhere,
+            ),
+        ),
+    )
+
+    offer = evolution.build_proposal(config, now=NOW)
+
+    assert offer.decision.pool_count == TARGET
+    assert offer.decision.task_count == 1
+    assert offer.decision.freeze is False
+    assert offer.decision.reason == batches.REASON_BELOW_MINIMUM
+    assert not freeze_only(config).frozen
+
+
+def test_the_age_rule_is_about_the_members_and_not_the_pool(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """A report this base does not select cannot age this batch out.
+
+    Taken over the pool, one long-pooled off-base report would release every
+    later cohort the day it arrived, whatever the evidence at the base.
+    """
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [make_record(key="old", sequence=1, task_id="2026-01-01-task")],
+                revision=elsewhere,
+            ),
+        ),
+    )
+    backdate(config, "2026-01-01T00:00:00Z")
+    fill_pool(config, feed_root, MINIMUM)
+
+    offer = evolution.build_proposal(config, now=NOW)
+
+    assert offer.decision.oldest_pending_at != "2026-01-01T00:00:00Z"
+    assert offer.decision.freeze is False, "the aged report is not a member, so it releases nothing"
+    assert offer.decision.reason == batches.REASON_BELOW_TARGET
+
+
+def test_an_empty_pool_and_an_off_base_pool_are_different_answers(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """One says there is no evidence and the other says the evidence is about
+    another protocol; an operator's next move differs, so the reasons do."""
+    evolution.sync(config, write_feed(feed_root, []))
+    assert evolution.build_proposal(config, now=NOW).decision.reason == batches.REASON_POOL_EMPTY
+
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [make_record(key="o1", sequence=50, task_id="2026-08-01-task")],
+                revision=elsewhere,
+            ),
+        ),
+    )
+
+    offer = evolution.build_proposal(config, now=NOW)
+
+    assert offer.decision.reason == batches.REASON_POOL_OFF_BASE
+    assert offer.proposal is not None and offer.proposal.task_count == 0
+    printed = render.format_proposal(offer, config.repo_root)
+    assert "none of them is a member of a batch formed at this base" in printed
+    assert f"1 not selected: {proposals.REASON_IDENTITY_DIFFERS}" in printed
+
+
+def test_a_frozen_manifest_states_its_own_denominator(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """What was considered, how the membership split, and why each considered
+    task is not a member — readable from the manifest alone, because the pool it
+    was selected out of is machine-local and moves."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, TARGET)
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [make_record(key="o1", sequence=50, task_id="2026-08-01-task")],
+                revision=elsewhere,
+            ),
+        ),
+    )
+
+    manifest = read_manifest(freeze(config))
+
+    assert manifest["selection"] == {
+        "considered": TARGET + 1,
+        "auto_selected": TARGET,
+        "human_included": 0,
+        "not_selected": [
+            {
+                "repo_id": "repo-alpha",
+                "task_id": "2026-08-01-task",
+                "report_keys": ["o1"],
+                "reason": proposals.REASON_IDENTITY_DIFFERS,
+                "actor": None,
+                "moved_at": None,
+            }
+        ],
+    }
+    assert {report["task_id"] for report in manifest["reports"]} == {
+        f"2026-07-{index:02d}-task" for index in range(1, TARGET + 1)
+    }
+    assert all(report["selection"]["mode"] == proposals.MODE_AUTO for report in manifest["reports"])
+    assert all(report["selection"]["actor"] is None for report in manifest["reports"])
+
+
+def test_the_generated_task_states_the_membership_it_reads_recurrence_against(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The analysing session counts recurrence over a set, so it has to be told
+    which set — and that the pool it can see today is not it."""
+    elsewhere = git_canonical_commit(repo, "a different dev contract")
+    fill_pool(config, feed_root, TARGET)
+    evolution.sync(
+        config,
+        write_feed(
+            feed_root,
+            at_line(
+                config,
+                [make_record(key="o1", sequence=50, task_id="2026-08-01-task")],
+                revision=elsewhere,
+            ),
+        ),
+    )
+
+    result = freeze(config)
+
+    assert result.analysis_task_path is not None
+    flat = " ".join(result.analysis_task_path.read_text(encoding="utf-8").split())
+    assert f"Membership: {TARGET} of {TARGET + 1} considered task(s) selected automatically." in flat
+    assert "equality of deployable canonical identity, never commit equality" in flat
+    assert "the pending pool is machine-local, has moved since, and is not this batch's denominator" in flat
+
+
+
+
 def test_membership_counts_unique_tasks_and_keeps_reruns_as_provenance(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
@@ -485,7 +780,7 @@ def test_a_report_with_no_findings_still_joins_the_batch(
         make_record(key=f"clean{index}", sequence=index, task_id=f"2026-07-{index:02d}-task", bodies=bodies)
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, records, bodies=bodies))
+    evolution.sync(config, write_feed(feed_root, at_line(config, records), bodies=bodies))
 
     manifest = read_manifest(freeze(config))
 
@@ -503,7 +798,7 @@ def test_no_report_body_reaches_a_frozen_manifest(
         make_record(key=f"s{index}", sequence=index, task_id=f"2026-07-{index:02d}-task", bodies=bodies)
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, records, bodies=bodies))
+    evolution.sync(config, write_feed(feed_root, at_line(config, records), bodies=bodies))
 
     result = freeze(config)
 
@@ -688,7 +983,7 @@ def test_a_clone_still_imports_a_later_evaluation_of_an_already_batched_task(
     shutil.rmtree(analysis_task.tasks_root(config))
 
     late = make_record(key="late", sequence=200, task_id="2026-07-01-task", evaluation_id="eval-late")
-    again = evolution.sync(config, write_feed(feed_root, [late]))
+    again = evolution.sync(config, write_feed(feed_root, at_line(config, [late])))
 
     assert again.imported == ("late",)
 
@@ -718,7 +1013,7 @@ def test_a_later_report_for_a_batched_task_starts_a_new_pool_entry(
     manifest_before = read_manifest(result)
 
     late = make_record(key="late", sequence=200, task_id="2026-07-01-task", evaluation_id="eval-late")
-    evolution.sync(config, write_feed(feed_root, [late]))
+    evolution.sync(config, write_feed(feed_root, at_line(config, [late])))
 
     persisted = evolution.load_state(config)
     assert [entry.dedup_key for entry in persisted.pending] == [("repo-alpha", "2026-07-01-task")]
@@ -835,7 +1130,7 @@ def test_a_restart_keeps_a_report_that_arrived_after_the_manifest_pending(
     monkeypatch.undo()
 
     late = make_record(key="late", sequence=200, task_id="2026-07-01-task", evaluation_id="eval-late")
-    write_feed(feed_root, [late])
+    write_feed(feed_root, at_line(config, [late]))
     resumed = evolution.start(config, feed, now=NOW)
 
     assert batches.COMPLETED_STATE in resumed.proposal.completed
@@ -858,7 +1153,7 @@ def test_a_bounded_partial_drain_freezes_nothing(
         make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
         for index in range(1, TARGET + 2)
     ]
-    feed = write_feed(feed_root, records)
+    feed = write_feed(feed_root, at_line(config, records))
 
     bounded = evolution.start(config, feed, now=NOW, page_size=TARGET, max_pages=1)
 
@@ -894,7 +1189,7 @@ def test_a_bounded_sync_still_blocks_a_separate_freeze(
         make_record(key=f"r{index}", sequence=index, task_id=f"2026-07-{index:02d}-task")
         for index in range(1, TARGET + 2)
     ]
-    feed = write_feed(feed_root, records)
+    feed = write_feed(feed_root, at_line(config, records))
 
     bounded = evolution.sync(config, feed, page_size=TARGET, max_pages=1)
 
@@ -948,7 +1243,7 @@ def test_a_sync_that_fails_after_a_drain_leaves_no_stale_exhaustion(
             return self.inner.fetch_artifacts(record)
 
     with pytest.raises(evolution.FeedError):
-        evolution.sync(config, ArtifactsUnreachable(write_feed(feed_root, records)))
+        evolution.sync(config, ArtifactsUnreachable(write_feed(feed_root, at_line(config, records))))
 
     assert json.loads(config.state_path.read_text(encoding="utf-8"))["feed_exhausted"] is False
 
@@ -960,7 +1255,7 @@ def test_a_sync_that_fails_after_a_drain_leaves_no_stale_exhaustion(
 
     # Nothing is stuck: the next healthy sync drains the feed, restores the
     # flag, and the batch forms over the whole eligible set.
-    healthy = evolution.sync(config, write_feed(feed_root, records))
+    healthy = evolution.sync(config, write_feed(feed_root, at_line(config, records)))
 
     assert healthy.exhausted and evolution.load_state(config).feed_exhausted is True
     admitted = freeze(config)
@@ -1162,7 +1457,7 @@ def test_draft_findings_do_not_close_a_batch_still_being_analyzed(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
     blocked = freeze(config, now=NOW + timedelta(days=1))
 
@@ -1390,7 +1685,7 @@ def test_a_new_batch_waits_for_the_current_one_to_record_its_outcome(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
     second = freeze(config, now=NOW + timedelta(days=1))
 
     assert second.frozen
@@ -1436,7 +1731,7 @@ def test_a_second_current_batch_stops_the_repair_before_it_is_selected(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
     # A second current batch whose freeze stopped before its analysis task
     # landed — exactly the state the repair exists to finish.
     interrupted = "evolution-batch-0002"
@@ -1499,7 +1794,7 @@ def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
     with pytest.raises(evolution.BatchError, match=message):
         freeze(config, now=NOW + timedelta(days=1))
@@ -1534,7 +1829,7 @@ def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
     with pytest.raises(evolution.BatchError, match="which does not exist"):
         freeze(config, now=NOW + timedelta(days=1))
@@ -1555,7 +1850,7 @@ def test_allocation_counts_from_the_highest_id_ever_used(
         make_record(key=f"n{index}", sequence=100 + index, task_id=f"2026-08-{index:02d}-task")
         for index in range(1, TARGET + 1)
     ]
-    evolution.sync(config, write_feed(feed_root, later))
+    evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
     second = freeze(config, now=NOW + timedelta(days=1))
 
@@ -1742,7 +2037,7 @@ def test_the_generated_task_cites_the_contract_batch_revision_and_boundaries(
 
 
 def test_the_generated_task_keeps_the_base_apart_from_where_the_evidence_came_from(
-    config: evolution.EvolutionConfig, feed_root: Path
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
     """The base governs the analysis and every experiment of the batch; it is not
     a claim about where the members were produced.
@@ -1754,7 +2049,11 @@ def test_the_generated_task_keeps_the_base_apart_from_where_the_evidence_came_fr
     under" would have the analysing session state cohort provenance no report
     actually says.
     """
-    fill_pool(config, feed_root, TARGET)
+    # A member produced one commit past the base, changing nothing a target
+    # receives: the same protocol by the membership test, a different commit by
+    # its sha. That is exactly the pair the two facts have to stay apart for.
+    produced = git_commit(repo, "work no target receives")
+    fill_pool(config, feed_root, TARGET, at=produced)
 
     result = freeze(config)
     manifest = read_manifest(result)
@@ -2113,7 +2412,7 @@ def test_a_freeze_refuses_a_proposal_the_pool_has_outgrown(
     otherwise the frozen denominator is wrong about its own population."""
     feed = fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
-    write_feed(feed_root, [make_record(key="late", sequence=99, task_id="2026-07-99-task")])
+    write_feed(feed_root, at_line(config, [make_record(key="late", sequence=99, task_id="2026-07-99-task")]))
     evolution.sync(config, feed)
 
     with pytest.raises(evolution.BatchError, match="never considered"):
@@ -2129,7 +2428,7 @@ def test_a_freeze_refuses_a_member_whose_reports_changed(
     freezing the stale offer would silently substitute one pack for another."""
     feed = fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
-    write_feed(feed_root, [make_record(key="rerun", sequence=99, task_id="2026-07-01-task")])
+    write_feed(feed_root, at_line(config, [make_record(key="rerun", sequence=99, task_id="2026-07-01-task")]))
     evolution.sync(config, feed)
 
     with pytest.raises(evolution.BatchError, match="different reports than the proposal offered"):
@@ -2410,7 +2709,7 @@ def test_a_pool_that_grew_gets_a_fresh_offer(
     feed = fill_pool(config, feed_root, TARGET)
     first = evolution.start(config, feed, now=NOW).proposal.proposal
     assert first is not None
-    write_feed(feed_root, [make_record(key="late", sequence=99, task_id="2026-07-99-task")])
+    write_feed(feed_root, at_line(config, [make_record(key="late", sequence=99, task_id="2026-07-99-task")]))
 
     again = evolution.start(config, feed, now=NOW + timedelta(days=2)).proposal.proposal
 

@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
+    at_line,
     RELEASE_REF,
     FakeHarness,
     completed_report,
@@ -55,7 +56,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import deploy, evolution, lockfile
-from mandrel.evolution import assessment, batches, experiments, lineage, replay, rollback
+from mandrel.evolution import assessment, batches, experiments, lineage, proposals, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -186,10 +187,13 @@ def fill_pool(config: evolution.EvolutionConfig, feed_root: Path) -> None:
         config,
         write_feed(
             feed_root,
-            [
-                make_record(key=f"k{index}", sequence=index, task_id=f"2026-08-0{index}-task")
-                for index in (1, 2, 3)
-            ],
+            at_line(
+                config,
+                [
+                    make_record(key=f"k{index}", sequence=index, task_id=f"2026-08-0{index}-task")
+                    for index in (1, 2, 3)
+                ],
+            ),
         ),
     )
 
@@ -774,19 +778,23 @@ def test_a_revision_that_is_not_a_commit_id_is_excluded_rather_than_placed(
     assert frame.cohorts_support_direction is False
 
 
-def test_a_symbolic_revision_a_feed_published_reaches_the_freeze_and_is_excluded(
+def test_a_symbolic_revision_a_feed_published_never_reaches_a_frozen_manifest(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
     tmp_path: Path,
 ) -> None:
-    """The other half of the same rule, over a real import rather than a manifest
-    written by hand.
+    """Nothing on the way in touches the string, and the formation is where it is
+    answered.
 
-    Nothing on the way in touches the string: the client copies what the feed
-    published, the pool stages the record whole, and the freeze copies its
-    provenance into the immutable manifest (invariant 4 keeps it unrepaired). So
-    the fresh-import path and a cohort frozen before the rule existed arrive at
-    the same place carrying the same string, and are answered there.
+    The client copies what the feed published and the pool stages the record
+    whole, unrepaired (invariant 4). What used to happen next was a freeze that
+    carried `HEAD` into an immutable manifest for a release assessment to
+    exclude; membership now asks the same question earlier, so the report is left
+    out of the batch with `revision-malformed` and no manifest ever states it.
+    The assessment's own arm still stands for the two ways such a member can
+    exist — a cohort frozen by another build, and (once the human window lands) a
+    report somebody argued in — and is pinned by the hand-written manifest beside
+    this test.
     """
 
     evolution.sync(
@@ -804,19 +812,17 @@ def test_a_symbolic_revision_a_feed_published_reaches_the_freeze_and_is_excluded
             ],
         ),
     )
+    offer = evolution.build_proposal(config, now=FROZEN_AT)
+
+    assert offer.proposal is not None
+    assert offer.proposal.task_count == 0
+    assert {item.reason for item in offer.proposal.not_selected} == {proposals.REASON_REVISION_MALFORMED}
+    assert offer.decision.reason == batches.REASON_POOL_OFF_BASE
+
     result = form_batch(config, now=FROZEN_AT)
 
-    assert result.manifest_path is not None
-    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-    assert {report["provenance"]["effective_revision"] for report in manifest["reports"]} == {"HEAD"}
-
-    second = next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
-    frame = assessment.describe(config, second)
-
-    assert frame is not None
-    assert frame.after.report_keys == ()
-    assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_MALFORMED}
-    assert "'HEAD'" in frame.exclusion("k1").detail
+    assert result.manifest_path is None
+    assert [batch.batch_id for batch in evolution.load_batches(config)] == [FIRST]
 
 
 def test_a_record_placing_a_revision_that_is_not_a_commit_id_is_refused(

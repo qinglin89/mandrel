@@ -38,6 +38,17 @@ complete an evaluation.
    revision, timestamps, artifact hashes, and explicit missing fields.
 5. **Compare coherent cohorts.** Protocol, evaluator/rubric, and materially
    different model revisions must be separated or explicitly accounted for.
+   Protocol coherence is the batch's membership rule and is enforced at
+   formation: a pooled report is a member when its evaluated target was running
+   the protocol the batch's base carries — equality of deployable canonical
+   identity (`lockfile.canonical_identity`), never commit equality, because the
+   source line moves for work no target receives. The other two are recorded
+   per report and read by the analysis. Every frozen manifest states its own
+   denominator in `selection`: how many tasks the formation considered, how the
+   membership split between the identity test and human judgement, and why each
+   considered task that is not a member was left out. A cohort's recurrence
+   claim is about the set it was drawn from, so a manifest listing only its
+   members would read as if the pool held exactly them.
 6. **Analysis is not implementation.** A batch-analysis task classifies and
    disposes findings. It does not edit `canonical/`. Accepted recommendations
    become separate protocol-improvement tasks.
@@ -217,7 +228,7 @@ evolution/
   config.toml                       versioned policy defaults
   ledger.jsonl                      append-only sanitized audit
   schemas/                          every versioned data contract below
-  batches/<batch-id>/manifest.json  immutable report membership
+  batches/<batch-id>/manifest.json  immutable report membership, its base, and the denominator it was selected out of
   batches/<batch-id>/findings.md    analysis disposition record
   batches/<batch-id>/analysis-complete.json  reviewed-completion record; ends the analysis stage
   batches/<batch-id>/proposed-tasks/<draft-id>.md  change-task drafts; kept after admission
@@ -283,8 +294,9 @@ completed archived-task L1+L2 evaluations
   -> orch-hub global completed-report feed
   -> human `mandrel evolution start`
   -> discover, validate, hash, deduplicate, stage
-  -> batch proposal: the configured source line's tip as the base, and the
-     pooled reports selected against it
+  -> batch proposal: the configured source line's tip as the base, and every
+     pooled report whose canonical identity equals it — the rest recorded with
+     why they were left out
   -> human review of that proposal
   -> threshold/age admission check
   -> human `mandrel evolution freeze`
@@ -307,6 +319,15 @@ completed archived-task L1+L2 evaluations
 one admission will not release. The default threshold is in `config.toml`;
 forced sub-threshold batches require a human justification and must still meet
 the configured minimum.
+
+**The thresholds measure the batch on offer, not the pool.** They count what a
+freeze would form, so a pool of twenty of which two were produced at the base
+does not reach a target of twenty — it offers a batch of two and reports both
+numbers. The age rule moves with the count: it is the oldest *member's* import,
+because a report this base does not select cannot age this batch out. A pool
+holding evidence none of which belongs to the base is therefore a different
+answer from an empty pool, and the two are reported apart: one waits for
+evaluations, the other for evaluations produced at this line.
 
 **Forming a batch is two operations, and that is what makes the human window
 real.** `start` writes a proposal to ignored runtime state and nothing else: no
@@ -1934,7 +1955,9 @@ Every evolution task must:
 - State its batch's base revision, which is also that batch's runner protocol
   revision; change tasks also state the experiment and draft id they were
   admitted from.
-- Use only reports named by the batch manifest for batch-level claims.
+- Use only reports named by the batch manifest for batch-level claims, and count
+  recurrence against the denominator that manifest states (`selection`) rather
+  than against the pending pool, which is machine-local and has moved since.
 - Record, when it analyzes the first batch frozen after a promotion, one reading
   of that release from its own frozen provenance and the promoted batch's
   (Release assessment).

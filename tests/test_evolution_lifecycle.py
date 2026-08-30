@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 from evolution_fixtures import (
+    at_line,
     complete_task,
     form_batch,
     git_checkout,
@@ -91,20 +92,28 @@ def feed_root(tmp_path: Path) -> Path:
 
 
 def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, *, prefix: str, sequence: int) -> None:
-    """Import one cohort's worth of distinct completed tasks."""
+    """Import one cohort's worth of distinct completed tasks.
+
+    Every record says it was produced at the source line's current tip, which is
+    what a batch formed now selects by (`at_line`): a cohort's members are the
+    reports produced under the protocol its base carries.
+    """
 
     evolution.sync(
         config,
         write_feed(
             feed_root,
-            [
-                make_record(
-                    key=f"{prefix}{index}",
-                    sequence=sequence + index,
-                    task_id=f"2026-07-{sequence + index:02d}-task",
-                )
-                for index in range(1, TARGET + 1)
-            ],
+            at_line(
+                config,
+                [
+                    make_record(
+                        key=f"{prefix}{index}",
+                        sequence=sequence + index,
+                        task_id=f"2026-07-{sequence + index:02d}-task",
+                    )
+                    for index in range(1, TARGET + 1)
+                ],
+            ),
         ),
     )
 

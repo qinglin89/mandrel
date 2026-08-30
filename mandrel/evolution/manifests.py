@@ -164,6 +164,31 @@ class Batch:
 
         return len({(report["repo_id"], report["task_id"]) for report in self.reports})
 
+    @property
+    def considered(self) -> int:
+        """Unique completed tasks this batch's formation answered for.
+
+        The denominator invariant 5 requires a frozen batch to state: its
+        members plus every considered task left out. Read off the manifest and
+        never recomputed from the pool, which is machine-local and has moved.
+        """
+
+        return _selection_count(self.manifest, "considered")
+
+    @property
+    def human_included(self) -> int:
+        """Members a human argued in past the identity test — invariant 1's
+        recorded exception, counted apart from the automatic ones so a reader can
+        tell a curated batch from an observed one."""
+
+        return _selection_count(self.manifest, "human_included")
+
+
+def _selection_count(manifest: Mapping[str, Any], key: str) -> int:
+    selection = manifest.get("selection")
+    value = selection.get(key) if isinstance(selection, Mapping) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
 
 def load_batches(config: EvolutionConfig) -> list[Batch]:
     """Every frozen batch, validated against the schema of its own version.
