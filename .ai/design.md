@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # Design Principles and Decisions
@@ -51,12 +51,16 @@ verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
   ref; promotion and deployment remain distinct facts.
 - Rollback preserves the promoted outcome and Git ancestry: it records and lands
   a three-way inverse commit against the current line, never resets history, and
-  refuses when later candidate lineage stands on the promotion.
+  refuses when later candidate lineage stands on the promotion. The landed
+  inverse also ends the zero-attempt current batch whose base carries that
+  promotion but not its inverse; its claimed reports remain spent.
 - A release assessment belongs to the first cohort after a promotion. Its
-  manifest-derived denominator/exclusions stay visible; mixed or missing
-  provenance is inconclusive, never negative evidence. Because manifests carry
-  no task-shape provenance, directional claims rest on a completed pinned
-  counterfactual whose goal metrics agree.
+  manifest-derived denominator/exclusions stay visible; facet failures separate
+  `unstated` evidence gaps from `differing` side values, and either remains
+  inconclusive rather than negative evidence. Because manifests carry no
+  task-shape provenance, directional claims rest on a completed pinned
+  counterfactual whose goal metrics agree. The reading recommends retain or
+  rollback, but the human settlement remains the distinct answer.
 - Release-assessment sides use the deployment layer's canonical identity, not
   ancestry. `before` wins equal identities; an unreadable `before` fails closed
   before any `after` match, while a readable `before` remains usable when only
@@ -65,10 +69,11 @@ verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
   exclusions identically in every clone; durable assessment validation requires
   exact agreement for those reasons. Only Git-dependent placement outcomes may
   treat an unresolvable revision from another reader as portable uncertainty.
-- The assessment gate answers once with retain or rollback and chooses the line
-  every first experiment base must contain. Its obligation survives an owning
-  cohort's no-change conclusion; identical settlement retries remain idempotent,
-  while evidence mutation closes after the answer.
+- The assessment gate answers once with retain or rollback. Retain releases the
+  frozen base for first admission; rollback ends the batch standing on the
+  reversed release. Its obligation survives an owning cohort's no-change
+  conclusion; identical settlement retries remain idempotent, while evidence
+  mutation closes after the answer.
 
 ## Key Tradeoffs
 

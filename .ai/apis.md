@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # APIs and Interfaces
@@ -17,7 +17,7 @@ verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
 | `registry remove <name-or-path>` | Remove local tracking only |
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
-| `evolution status [--json]` | Derive schema-v10 pool/proposal/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result |
+| `evolution status [--json]` | Derive schema-v11 pool/proposal/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result; release comparability separates unstated facets from genuine side differences and exposes the reading's recommendation |
 | `evolution start` | Reconcile, sync, and write a machine-local base-keyed batch proposal; creates no manifest, report claim, analysis task, or batch audit line |
 | `evolution batch-include|batch-exclude <repo-id> <task-id> --reason ... --actor ...` | Record an attributed human override of the proposal's automatic canonical-identity membership; identities remain two arguments because either half may contain `/` |
 | `evolution freeze [--force --justification <text>]` | Revalidate and immutably publish the standing proposal, claim its reports, and generate its analysis task; force may waive the target but never the minimum |
@@ -44,7 +44,7 @@ evolution write resolves the operator's checkout.
 | `assessment.settle` | Idempotently retain the release or compose its audited rollback under one writer lock; the decision gates and constrains the next first experiment base |
 | `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |
 | `experiments.promote` | Prepare and record the exact replayed merge, compare-and-swap the source ref, and publish agreeing experiment/batch outcomes without implying deployment |
-| `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it |
+| `rollback.rollback` | Add and record a three-way inverse commit for the latest effective promotion when no later candidate lineage depends on it; end the zero-attempt current batch whose frozen base carries that promotion but not its inverse |
 | `harness.StatedHarness` | Operator-stated implementation of replay/counterfactual start and poll; enforces completed-attempt reproduction while permitting a new handle |
 | `deployment.describe` | Read each planned target through the machine-local registry and its validated deploy lock; return placement/absence/error states without gating lifecycle status |
 | `lockfile.canonical_identity` / `CanonicalIdentities` | Derive the mode-aware deployed-canonical path/blob identity from a commit with an injected deployment filter; cache per revision and never equate unreadable revisions |
@@ -69,11 +69,11 @@ evolution write resolves the operator's checkout.
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
 | `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |
 | `evolution/batches/<id>/rejected-drafts.json` | Durable terminal decisions for declined draft identities and bytes |
-| `evolution/batches/<id>/release-assessment.json` | First post-promotion cohort's derived frame, visible exclusions/denominators, counterfactual request/run/withdrawals, verdict, and retain/rollback decision |
+| `evolution/batches/<id>/release-assessment.json` | First post-promotion batch's derived frame, visible exclusions/denominators, persisted `unstated`/`differing` comparability split, counterfactual request/run/withdrawals, verdict, retain/rollback recommendation, and human decision |
 | `evolution/experiments/<id>/experiment.json` | Versioned experiment identity/rounds/decision record; v2 explicitly carries nullable prepared-promotion state while frozen v1 remains readable |
 | `evolution/experiments/<id>/replays.json` | Versioned per-experiment replay history: allocated withdrawals, optional pending request, and durable running/failed/completed attempts |
 | `refs/evolution/experiments/<id>` | Durable fast-forward candidate ref; independent of the checked-out branch |
-| `evolution/batches/<id>/outcome.json` | Terminal promoted/no-change batch outcome; a promotion carries the exact replayed merge unit and planned target names, never deployment state |
+| `evolution/batches/<id>/outcome.json` | Terminal promoted/no-change/rolled-back batch outcome; a promotion carries the exact replayed merge unit and planned target names, while a reversal ends the zero-attempt batch standing on that release without returning its claimed reports to the pool |
 | `evolution/batches/<id>/rollback.json` | Prepared/completed inverse commit for the batch's promotion; leaves the outcome and experiment history unchanged |
 | `evolution/ledger.jsonl` | Versioned sanitized append-only evolution audit |
 

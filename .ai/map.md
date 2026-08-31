@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # Project Map
@@ -20,10 +20,10 @@ verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v10 status, state revision and allowed/refused/recovery actions |
+| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v11 status, state revision and allowed/refused/recovery actions |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
-| Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, batch rollback, source-line commits, phase JSON v10 |
-| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity cohorts/exclusions, CLI-visible assessment record, pinned counterfactual, retain/rollback settlement, settlement-selected experiment base |
+| Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, source-line inverse commits, rollback interruption recovery, and base-keyed `rolled-back` batch ending; phase JSON v11 |
+| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity cohorts/exclusions with unstated/differing facet failures, CLI-visible assessment recommendation, pinned counterfactual, human retain/rollback settlement, retained-base admission or rollback ending |
 | Evolution deployment visibility | deployment/lockfile/registry/revision services | planned target names beside validated machine-local deploy-lock placement states; observation is outside lifecycle state |
 | Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |
 

@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # Features
@@ -20,10 +20,10 @@ verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
 | Evolution report feed | published; client reconciled; complete protocol identity live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, atomic pair translation in `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch proposal, human membership window, freeze and analysis-task creation | implemented | canonical-identity selection, proposal-based admission, attributed include/exclude decisions, immutable manifest denominator, closure records, generated task/index |
-| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v10 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
-| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promotion/no-change outcomes; public shared refusals align operations with the console gate, and a promotion decision awaiting its batch outcome blocks every other lineage write while its evidence-readable `promote` redo remains available |
+| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
+| Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promoted/no-change/rolled-back outcomes; a landed rollback ends the zero-attempt batch whose base carries the reversed release, with public shared refusals aligning operations and console recovery |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
-| Cross-batch release assessment | implemented | canonical-identity before/after cohorts and clone-dependent exclusions, CLI-visible durable assessment/counterfactual, retain/rollback settlement, next-base gate |
+| Cross-batch release assessment | implemented | canonical-identity before/after cohorts and clone-dependent exclusions; persisted/JSON `unstated` versus `differing` facet failures; CLI-visible durable assessment/counterfactual with retain/rollback recommendation; human settlement and next-base gate |
 | Evolution deployment visibility | implemented | planned target names kept separate from validated machine-local deploy-lock placement states; observation gates no lifecycle verb |
 
 ## Evolution Behavior Chain
@@ -37,8 +37,8 @@ archived tasks acquire complete L1+L2 evaluation artifacts
   → optional attributed include/exclude window
   → threshold/age rule over the proposal → human freezes immutable batch
   → pending analysis task cites evolution contract + batch and reads the prior release
-  → optional pinned before/after counterfactual → human retain/rollback settlement
-  → reviewed dispositions create inert change-task drafts
+  → optional pinned before/after counterfactual → human retain releases admission | rollback ends the standing batch and spends its evidence
+  → retained batch's reviewed dispositions create inert change-task drafts
   → human admission creates an experiment on the settlement-selected base
   → append-only task rounds seal an exact candidate revision
   → exact integration replay → human exact-tree promotion or no-change

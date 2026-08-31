@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # Project Overview
@@ -27,7 +27,8 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
   pool, base-keyed batch proposal and recorded human membership window,
   immutable batches, guarded draft/round/experiment decisions, operator-stated
   exact-integration replay, exact-tree promotion and inverse rollback,
-  cross-batch assessment/settlement, and schema-v10 status with stale-state
+  cross-batch assessment/recommendation/settlement, base-keyed rollback endings,
+  and schema-v11 status with stale-state
   tokens, allowed actions, recovery forms, and per-target deployment readings.
 - One deterministic regression entrypoint shared by local runs, CI, and the
   optional pre-push hook; credentialed live probes remain manual.

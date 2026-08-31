@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
+verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 ---
 
 # Architecture
@@ -109,11 +109,14 @@ experiment ref and record, admit task copies, append and seal candidate rounds,
 run durable replays of the exact candidate/source integration tree, record
 terminal experiment decisions, promote only that measured tree, and conclude a
 batch with an outcome. A rollback adds an inverse commit to the latest effective
-promotion without editing the terminal experiment or batch outcome. The first
-cohort after a promotion owns a release-assessment record derived from frozen
-manifests, per-target effective revisions, and lineage; a pinned counterfactual
-can settle its direction, then a human retain/rollback decision selects the line
-the next experiment base must contain. The obligation remains with that cohort
+promotion without editing that promotion's terminal experiment or batch outcome;
+it also writes a `rolled-back` outcome for the zero-attempt current batch whose
+base carries the reversed release, spending that batch's claimed reports. The
+first cohort after a promotion owns a release-assessment record derived from
+frozen manifests, per-target effective revisions, and lineage; a pinned
+counterfactual can settle its direction, and the reading records a retain/rollback
+recommendation before a human decision either releases admission or rolls back
+and ends the standing batch. The obligation remains with that cohort
 if it concludes before answering and stays repeatable for recovery. Replay and
 counterfactual harness crossings are operator-stated, durable two-step
 request/run exchanges; promotion remains separate from deployment.
@@ -127,12 +130,14 @@ and a revision matching neither side is excluded rather than ancestry-sorted.
 `.ai-tasks/` supplies local completion observations, never historical identity;
 the audit ledger is not flow state. Per-experiment replay histories and prepared
 promotions, batch outcomes/rollbacks, release assessments, durable refs, and Git
-commits are the release-decision state. Schema-v10 status adds a digest of those
+commits are the release-decision state. Schema-v11 status adds a digest of those
 authoritative inputs and their named ref tips, including the configured source
 line and batch proposal but excluding the operator's `HEAD`, plus per-verb
 allowed/refused/recovery actions and a machine-local reading of planned targets'
 validated deploy locks; the deployment reading neither enters the digest nor
-gates lifecycle actions. Versioned `evolution/` holds safe policy, schemas,
+gates lifecycle actions. Its release block distinguishes missing facet evidence
+from genuine side differences and exposes the reading's recommendation.
+Versioned `evolution/` holds safe policy, schemas,
 manifests, lineage, sanitized cases, and audit while raw report content and
 credentials stay ignored. Analysis, canonical implementation, replay,
 promotion, deployment, and rollback remain separate reviewed/human-gated steps.
