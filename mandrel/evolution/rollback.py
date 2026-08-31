@@ -46,9 +46,13 @@ comes off the line that base is a commit nobody decided on, and the batch has no
 move left. So a landed reversal writes that batch's terminal outcome
 (`end_batch`), keyed on the base rather than on whose reading was settled —
 which is what reaches the cohort holding the stale base when the obligation sits
-with an earlier one. A checkout that cannot place the base writes nothing and
-leaves the ending finishable, while the admission gate refuses on the same
-unanswered question (`experiments._require_base_on_the_line`).
+with an earlier one. Landed is the line's own answer and not this controller's
+record of it: the release comes off the moment the ref takes the inverse, one
+write before `reverted_at` says so and two before the ending, and each of those
+gaps is a durable state something has to hold (`standing_on_reversal`). A
+checkout that cannot place the base writes nothing and leaves the ending
+finishable, while the admission gate refuses on the same unanswered question
+(`experiments._require_base_on_the_line`).
 """
 
 from __future__ import annotations
@@ -348,6 +352,15 @@ def standing_on_reversal(
     A batch left standing on an older one is exactly the state an interrupted
     ending leaves, and the newest reversal would not name it.
 
+    A reversal counts from the moment the line takes it, not from the moment this
+    controller records that it did (`_reversal_landed`). Those two are one write
+    apart, and that gap is durable: an interrupted run leaves the inverse commit
+    on the source line and `reverted_at` null. Read off
+    the record alone, that window says the release is still on the line and the
+    base is fine — so a batch would admit an attempt onto a base standing on
+    nothing, and the reversal redone would then owe an ending its own reader
+    refuses (`lineage._require_one_promotion`).
+
     What this checkout cannot answer is returned rather than raised, the way the
     lineage reports a rollback it could not confirm: the two callers owe different
     things to an unanswered question. The ending writes nothing — the batch stays
@@ -361,7 +374,7 @@ def standing_on_reversal(
     unanswered: str | None = None
     for item in lineage.batches:
         record = item.rollback
-        if record is None or record["reverted_at"] is None:
+        if record is None:
             continue
         # Present: the reader refuses a rollback record standing beside anything
         # but its own batch's promotion (`lineage.require_rollback`).
@@ -379,9 +392,79 @@ def standing_on_reversal(
                 current, record["revision"], item, "the inverse commit that took it back"
             )
             continue
-        if not reverted:
+        if reverted:
+            continue
+        landed, cannot_say = _reversal_landed(config, item, record)
+        if landed is None:
+            unanswered = unanswered or cannot_say
+            continue
+        if landed:
             return item, None
     return None, unanswered
+
+
+def _reversal_landed(
+    config: EvolutionConfig, promoted: BatchLineage, record: Mapping[str, Any]
+) -> tuple[bool | None, str | None]:
+    """Whether the inverse commit this record names has reached the source line.
+
+    `reverted_at` is this controller having held that line and found it carrying
+    the commit, so a finished record answers on its own and keeps answering: a
+    line reset afterwards does not put the release back on it, which is the
+    reading `promotion_effective` takes of the same field.
+
+    An unfinished record is the window between the ref moving and the write that
+    says so (`_finish`), and there the ref is the only evidence there is. Asking
+    it is what closes that window for every reader of this rule: a release is off
+    the line the moment the inverse lands, whatever this controller has recorded
+    of it. A rollback that only prepared its commit has taken nothing off any
+    line, and the batch formed there is still standing on a release nobody
+    reversed — which is the same question answered the other way.
+
+    Reported rather than raised, for the caller's own reason: a clone without the
+    line is a fact about the clone, and the two callers owe it different things.
+    """
+
+    if record["reverted_at"] is not None:
+        return True, None
+    ref = record["source_ref"]
+    tip = ref_tip(config.repo_root, ref)
+    if tip is None:
+        return None, (
+            f"whether the {promoted.batch_id} release has come off {ref} cannot be answered in this checkout, "
+            f"which does not hold that ref; its inverse commit {record['revision'][:12]} was made and the record "
+            "was interrupted before it said the line had taken it"
+        )
+    landed = contains(config.repo_root, record["revision"], tip)
+    if landed is None:
+        return None, (
+            f"whether the {promoted.batch_id} release has come off {ref} (now at {tip[:12]}) cannot be answered "
+            f"in this checkout, which does not hold both that tip and the inverse commit "
+            f"{record['revision'][:12]}; the record was interrupted before it said the line had taken it"
+        )
+    return landed, None
+
+
+def unfinished_reversal(config: EvolutionConfig, promoted: BatchLineage) -> Mapping[str, Any] | None:
+    """The reversal the source line has taken and this repository has not recorded.
+
+    The other half of `redone_reversal`, and the half no record answers on its
+    own: between the ref moving and the write that says so, `reverted_at` is null
+    and the promotion still reads as effective — so the record alone says "a
+    rollback to make" where the line says the change is already off it.
+
+    Stated here for `redone_reversal`'s reason. A gate reading the record would
+    offer this state as an ordinary reversal, when what running the verb again
+    does is finish the one already on the line and end the batch standing on it
+    (`standing_on_reversal`). None where this checkout cannot say, which is the
+    state the record's own reading already describes.
+    """
+
+    record = promoted.rollback
+    if record is None or record["reverted_at"] is not None:
+        return None
+    landed, _cannot_say = _reversal_landed(config, promoted, record)
+    return record if landed else None
 
 
 def _unanswered(current: BatchLineage, revision: str, promoted: BatchLineage, what: str) -> str:
@@ -422,6 +505,10 @@ def end_batch(
     a promotion an older cohort already ended over, or one where the batch that
     was standing on it has since concluded.
 
+    A batch that admitted work on that base is refused rather than ended
+    (`_require_nothing_admitted`), because the ending its own reader would refuse
+    is not an ending.
+
     Idempotent by the same reading every operation here is recognised by: the
     outcome record is what makes a batch no longer current, so a run repeated
     after it landed finds nothing current standing on the reversal and writes
@@ -440,10 +527,11 @@ def end_batch(
         # meantime — a reversal that landed and then failed on a fact about
         # somebody's checkout would be the worse of the two.
         return None
+    _require_nothing_admitted(current, promoted)
 
     outcome = promoted.outcome or {}
-    # Both present: this batch is only reachable through a completed rollback
-    # record, which the reader holds to the promotion its own outcome states.
+    # Both present: this batch is named by a rollback record, and the reader
+    # holds each of those to the promotion its own batch's outcome states.
     record = promoted.rollback or {}
     revision = outcome["promotion_revision"]
     stamp = format_rfc3339(_moment(now))
@@ -486,6 +574,39 @@ def end_batch(
         reason=reason,
         decided_at=stamp,
         record_path=current.batch.outcome_path,
+    )
+
+
+def _require_nothing_admitted(current: BatchLineage, promoted: BatchLineage) -> None:
+    """The batch a reversal ends admitted nothing on the base it is ending over.
+
+    The reader refuses that pairing outright — a `rolled-back` outcome standing
+    beside an admitted attempt says both that the reversal happened and that it
+    was refused (`lineage._require_one_promotion`) — so writing it would leave
+    every later read of this repository failing on a record this operation made.
+    Refusing here says the same thing while the records still load.
+
+    Not reachable from an ordinary reversal: `_require_nothing_built_on` refuses
+    the move itself while any later attempt stands on the promotion, and every
+    experiment of this batch starts from a base that carries it (invariant 15).
+    What reaches here is the finishing path, which does not move the line and so
+    does not ask that guard — a run that landed the inverse, was interrupted
+    before its record, and had an attempt admitted in the window before this
+    reading was closed. The admission now refuses throughout that window
+    (`experiments.base_on_the_line_refusal`), so what this catches is a
+    repository that entered it earlier; the reversal is on the line and on
+    record, and what those attempts were built on is a decision for a person.
+    """
+
+    admitted = [experiment.experiment_id for experiment in current.experiments]
+    if not admitted:
+        return
+    raise BatchError(
+        f"{current.batch_id} was formed at {current.base_revision[:12]}, which carries the "
+        f"{promoted.batch_id} release that has since come off the source line, and it has admitted {admitted}; "
+        "a rollback ends the batch standing on the release it reverses, and a batch holding work built on that "
+        "base cannot be ended that way — the reversal stands, and what those attempts were developed against "
+        "is a question for a person rather than a record this writes"
     )
 
 
@@ -960,4 +1081,11 @@ def _json(record: Mapping[str, Any]) -> str:
     return json.dumps(record, indent=2, sort_keys=True) + "\n"
 
 
-__all__ = ["BatchEnded", "RollbackResult", "end_batch", "rollback", "standing_on_reversal"]
+__all__ = [
+    "BatchEnded",
+    "RollbackResult",
+    "end_batch",
+    "rollback",
+    "standing_on_reversal",
+    "unfinished_reversal",
+]

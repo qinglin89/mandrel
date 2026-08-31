@@ -973,16 +973,7 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     nothing.
     """
 
-    directory = write_manifest(
-        config.batches_root,
-        SECOND_BATCH,
-        ["r3"],
-        analysis_task_id=f"2026-08-09-{SECOND_BATCH}",
-        runner_protocol_revision=promoted.promotion_revision,
-    )
-    (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
-    write_closure(config.batches_root, SECOND_BATCH, analysis_task_id=f"2026-08-09-{SECOND_BATCH}")
-    write_draft(config.batches_root, SECOND_BATCH, "second-idea")
+    analyzed_cohort(config, promoted.promotion_revision)
     assert settle_release(config, at=LATER) is True
 
     reversal = rollback.reverse(config, reason=WHY, now=LATER)
@@ -992,6 +983,11 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
         experiments.create(config, ["second-idea"], now=LATER)
     assert reversal.revision[:12] in str(error.value)
     assert "mandrel evolution rollback" in str(error.value)
+
+    named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
+    assert named["create"]["allowed"] is False
+    assert reversal.revision[:12] in named["create"]["reason"]
+    assert named["rollback"]["recovers"] is not None
 
     finished = rollback.rollback(config, reason=WHY, now=LATER)
 
@@ -1009,6 +1005,126 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     written = (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes()
     assert rollback.rollback(config, reason=WHY, now=LATER).ended_batch is None
     assert (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes() == written
+
+
+def analyzed_cohort(config: evolution.EvolutionConfig, base: str, draft_id: str = "second-idea") -> None:
+    """The cohort that assesses a release, standing where an operator leaves it.
+
+    Frozen at the source line while the release was on it (invariant 15), its
+    analysis over, and one disposition waiting at the admission gate — which is
+    the state every question about what a landed reversal does to that batch is
+    asked in.
+    """
+
+    directory = write_manifest(
+        config.batches_root,
+        SECOND_BATCH,
+        ["r3"],
+        analysis_task_id=f"2026-08-09-{SECOND_BATCH}",
+        runner_protocol_revision=base,
+    )
+    (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, SECOND_BATCH, analysis_task_id=f"2026-08-09-{SECOND_BATCH}")
+    write_draft(config.batches_root, SECOND_BATCH, draft_id)
+
+
+def test_a_reversal_the_line_took_and_no_record_names_still_holds_the_base(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The earlier half of the same window, and the half no record can see.
+
+    A `retain` answered the reading, so nothing is owed; then a standalone
+    rollback moves the source line and is interrupted before the write that says
+    so. `reverted_at` is null and the promotion still reads as effective, while
+    the release is off the line all the same — so a gate reading the record alone
+    would find this batch's base fine and admit an attempt onto a commit standing
+    on nothing. The reversal redone would then owe an ending its own reader
+    refuses, which is where an admission in this window ends up.
+
+    So the base is held on what the line carries rather than on what has been
+    written about it, the console says the same thing and points at the verb that
+    repairs it, and the redo finishes both writes at once.
+    """
+
+    analyzed_cohort(config, promoted.promotion_revision)
+    assert settle_release(config, at=REVERSED) is True
+
+    stop_after(monkeypatch, "_finish")
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+    monkeypatch.undo()
+
+    prepared = rollback_record(config)
+    assert prepared["reverted_at"] is None
+    assert git_rev(config.repo_root, RELEASE_REF) == prepared["revision"]
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, ["second-idea"], now=LATER)
+    assert prepared["revision"][:12] in str(error.value)
+    assert "mandrel evolution rollback" in str(error.value)
+
+    named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
+    assert named["create"]["allowed"] is False
+    assert prepared["revision"][:12] in named["create"]["reason"]
+    assert named["rollback"]["allowed"] is True
+    assert prepared["revision"][:12] in named["rollback"]["recovers"]
+
+    finished = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert finished.reverted is False and finished.recorded is True
+    assert rollback_record(config)["reverted_at"] == LATER_AT
+    assert finished.ended_batch is not None
+    assert finished.ended_batch.batch_id == SECOND_BATCH
+    known = lineage.describe(config)
+    assert known.current is None
+    assert [item.batch_id for item in known.batches] == [BATCH_ID, SECOND_BATCH]
+
+
+def test_a_batch_that_admitted_work_on_that_base_is_refused_rather_than_ended(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ending its own reader would refuse is not an ending.
+
+    A `rolled-back` outcome beside an admitted attempt says both that the
+    reversal happened and that it was refused, and the lineage reader turns that
+    pairing away (`_require_one_promotion`) — so writing it would leave every
+    later read of the repository failing on a record this operation made.
+
+    Only the finishing path reaches it: that path moves no line and so never asks
+    the guard that refuses work built on the promotion, and the admission is now
+    held throughout the window the attempt would have to arrive in. What is left
+    is a repository that entered that window before this reading was closed,
+    which is what the experiment written here is. It refuses, the records still
+    load, and what those attempts were built on is a person's to unpick.
+    """
+
+    analyzed_cohort(config, promoted.promotion_revision)
+    assert settle_release(config, at=REVERSED) is True
+
+    stop_after(monkeypatch, "_finish")
+    with pytest.raises(KeyboardInterrupt):
+        rollback.rollback(config, reason=WHY, now=REVERSED)
+    monkeypatch.undo()
+
+    admitted = f"{SECOND_BATCH}-exp-01"
+    write_experiment(
+        config.experiments_root,
+        admitted,
+        base_revision=promoted.promotion_revision,
+        rounds=[experiment_round(1)],
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        rollback.rollback(config, reason=WHY, now=LATER)
+    assert admitted in str(error.value)
+
+    assert not (config.batches_root / SECOND_BATCH / "outcome.json").exists()
+    assert lineage.describe(config).current.batch_id == SECOND_BATCH
+    assert ledger_types(config).count("batch-concluded") == 1
 
 
 def test_only_the_latest_promotion_is_rolled_back(

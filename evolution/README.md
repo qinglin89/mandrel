@@ -1324,6 +1324,16 @@ assessing batch" would never reach. A reversal no current batch is standing on
 ends nothing, which is the ordinary case for one run before any cohort followed
 it.
 
+Landed is what the source line carries and not what this controller has recorded
+of it. The release comes off the moment the ref takes the inverse commit, two
+writes before the record says so, and the base is held from that moment: a run
+interrupted in between leaves a base standing on nothing while every record still
+reads as though the release were on the line. A batch that admitted work inside
+that window is refused rather than ended — a terminal `rolled-back` outcome
+beside an admitted attempt says both that the reversal happened and that it was
+refused, and an ending the reader turns away is not an ending. What those
+attempts were developed against is then a person's to unpick.
+
 **A rolled-back batch's evidence is spent.** Its member reports were claimed by
 its frozen manifest, and a claim is what takes a report out of discovery; every
 claim is resolved against the manifest naming it, so a claim exists exactly as

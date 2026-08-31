@@ -3172,12 +3172,12 @@ def _require_release_settled(
         raise BatchError(refusal)
 
 
-def _require_base_on_the_line(
+def base_on_the_line_refusal(
     config: EvolutionConfig,
     known: Lineage,
     current: BatchLineage,
-) -> None:
-    """This batch's base is the source line as the release before it left it.
+) -> str | None:
+    """Why this batch's base is not the source line as the release before it left it.
 
     The other half of invariant 17, and without it the gate only asks that
     somebody answered. What the two answers select is a commit: `retain` says the
@@ -3202,12 +3202,20 @@ def _require_base_on_the_line(
       rule keyed on whose obligation it is reaches the first of those two and
       never the second.
 
-    That refusal is reached at all only in the window between a reversal landing
-    and the record that ends the batch: the ending is the reversal's own last
-    write, and after it no batch is current for anything to be admitted to. The
-    window is durable, so it is refused rather than assumed away — and what the
-    refusal says is which command finishes the ending, since the reversal redone
-    writes it.
+    That refusal is reached at all only in the window between a reversal reaching
+    the source line and the record that ends the batch: the ending is the
+    reversal's own last write, and after it no batch is current for anything to be
+    admitted to. Three writes stand in that window — the ref move, `reverted_at`,
+    the outcome — and it is open across all of them, because what takes the
+    release off the line is the ref taking the inverse and not this controller's
+    note of it (`rollback._reversal_landed`). Every one of them is durable, so
+    they are refused rather than assumed away — and what the refusal says is which
+    command finishes the ending, since the reversal redone writes it.
+
+    Stated as a refusal rather than raised, so the console's gate asks the
+    operation this question instead of keeping a second spelling of it in step by
+    hand (`phase._base_refusal`): a menu offering `create` here would advertise a
+    verb whose own refusal is already written.
 
     The other direction is the same question asked of a release still standing:
     the base has to carry it. A formation reads the configured line, so this
@@ -3233,18 +3241,18 @@ def _require_base_on_the_line(
 
     promoted, unanswered = rollback_ops.standing_on_reversal(config, known, current)
     if unanswered is not None:
-        raise BatchError(
+        return (
             f"{unanswered}; that answer is what says whether {current.batch_id} is standing on a release that "
             "came off the source line, so this refuses rather than admit on a base it cannot place "
             "(invariant 17)"
         )
     if promoted is not None:
         # Both present: `standing_on_reversal` only ever names a batch whose
-        # promotion a completed rollback reversed, and the reader holds each of
+        # promotion a rollback record reverses, and the reader holds each of
         # those records to the other.
         revision = (promoted.outcome or {})["promotion_revision"]
         reversal = (promoted.rollback or {})["revision"]
-        raise BatchError(
+        return (
             f"{current.batch_id} was formed at {current.base_revision[:12]}, which carries the "
             f"{promoted.batch_id} release {revision[:12]} that {reversal[:12]} has since taken back off the "
             "source line; nothing is admitted on a base carrying a promotion nobody kept (invariant 17), and a "
@@ -3254,10 +3262,10 @@ def _require_base_on_the_line(
 
     release = assessment.subject(known, current.batch)
     if release is None:
-        return
+        return None
     carried = contains(config.repo_root, release.revision, current.base_revision)
     if carried is None:
-        raise BatchError(
+        return (
             f"whether {current.batch_id}'s base {current.base_revision[:12]} carries the {release.batch_id} "
             f"release {release.revision[:12]} cannot be answered in this checkout, which does not hold both "
             "commits; that answer is what says whether every alternative in this batch would start from the "
@@ -3265,12 +3273,25 @@ def _require_base_on_the_line(
             "(invariant 17)"
         )
     if not carried:
-        raise BatchError(
+        return (
             f"{current.batch_id}'s base {current.base_revision[:12]} does not carry the {release.batch_id} "
             f"release {release.revision[:12]}; every alternative in this batch starts from that base "
             "(invariant 15), and one off the line the release is on makes each of them an attempt against a "
             "protocol nobody decided on (invariant 17) — a cohort is formed at the source line as it stands"
         )
+    return None
+
+
+def _require_base_on_the_line(
+    config: EvolutionConfig,
+    known: Lineage,
+    current: BatchLineage,
+) -> None:
+    """`base_on_the_line_refusal` as the admission asks it."""
+
+    refusal = base_on_the_line_refusal(config, known, current)
+    if refusal is not None:
+        raise BatchError(refusal)
 
 
 def _require_requested_base(

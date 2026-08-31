@@ -1341,11 +1341,11 @@ def _actions(
         _start_action(status),
         _freeze_action(holds.freeze),
         *_move_actions(holds.moves),
-        *_gate_actions(status, held),
+        *_gate_actions(config, status, held, lineage),
         *_work_actions(config, status, held),
         *_replay_actions(status, held),
         *_decision_actions(status, held, lineage),
-        _rollback_action(status, lineage),
+        _rollback_action(config, status, lineage),
         *_release_actions(status),
     )
 
@@ -1407,12 +1407,14 @@ def _move_actions(moves_hold: str | None) -> tuple[Action, ...]:
     )
 
 
-def _gate_actions(status: LifecycleStatus, held: _Held) -> tuple[Action, ...]:
+def _gate_actions(
+    config: EvolutionConfig, status: LifecycleStatus, held: _Held, lineage: Lineage
+) -> tuple[Action, ...]:
     """The two terminal answers a draft at the admission gate can be given."""
 
     batch_id = status.current_batch.batch_id if status.current_batch else None
     return (
-        _create_action(status, held, batch_id),
+        _create_action(config, status, held, lineage, batch_id),
         _reject_action(status, held, batch_id),
     )
 
@@ -1438,7 +1440,13 @@ def _reject_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -
     return Action(ACTION_REJECT, *_on(OBJECT_BATCH, batch_id), refusal=_reject_refusal(status, held))
 
 
-def _create_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -> Action:
+def _create_action(
+    config: EvolutionConfig,
+    status: LifecycleStatus,
+    held: _Held,
+    lineage: Lineage,
+    batch_id: str | None,
+) -> Action:
     """A grouped admission, or the copies one already recorded still owes.
 
     The redo acts on the open experiment rather than on the batch: what it
@@ -1460,10 +1468,14 @@ def _create_action(status: LifecycleStatus, held: _Held, batch_id: str | None) -
                     "that admission still owes and records nothing twice"
                 ),
             )
-    return Action(ACTION_CREATE, *_on(OBJECT_BATCH, batch_id), refusal=_create_refusal(status, held))
+    return Action(
+        ACTION_CREATE, *_on(OBJECT_BATCH, batch_id), refusal=_create_refusal(config, status, held, lineage)
+    )
 
 
-def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+def _create_refusal(
+    config: EvolutionConfig, status: LifecycleStatus, held: _Held, lineage: Lineage
+) -> str | None:
     if held.lineage or held.current is None:
         return held.lineage
     experiment = status.experiment
@@ -1476,21 +1488,38 @@ def _create_refusal(status: LifecycleStatus, held: _Held) -> str | None:
             "no draft is waiting at the admission gate; what an experiment admits is a proposal this batch's own "
             "analysis made and nobody has decided yet"
         )
-    return _base_refusal(status, held)
+    return _base_refusal(config, status, held, lineage)
 
 
-def _base_refusal(status: LifecycleStatus, held: _Held) -> str | None:
+def _base_refusal(
+    config: EvolutionConfig, status: LifecycleStatus, held: _Held, lineage: Lineage
+) -> str | None:
     """Invariant 17, asked only where the batch's base is about to be built on.
 
-    The obligation is derived once for the whole reading (`_release`) and handed
-    to the operation's own predicate, which is also what says which line the base
-    is then expected on — a refusal an operator can act on rather than discover.
+    Both halves of it, in the order the admission asks them: that the release
+    behind this batch has been judged, and that the frozen base is the line that
+    answer chose (`experiments.admission_release_refusal`,
+    `experiments.base_on_the_line_refusal`). The obligation is derived once for
+    the whole reading (`_release`) and handed to the first; the second is asked of
+    the records, which is why the lineage travels this far.
+
+    The second is what a landed reversal puts here, and it is the half no reading
+    of the obligation can supply: a `retain` answered long ago leaves nothing
+    owing while a standalone rollback takes the release off the line under this
+    batch's feet. Offering `create` there would advertise a verb whose own
+    refusal is already written — and in the window before that reversal's records
+    are complete, one that would admit onto a base standing on nothing.
     """
 
     if held.current is None:
         return None
     release = status.release
-    return experiments.admission_release_refusal(held.current, None if release is None else release.obligation)
+    refusal = experiments.admission_release_refusal(
+        held.current, None if release is None else release.obligation
+    )
+    if refusal is not None:
+        return refusal
+    return experiments.base_on_the_line_refusal(config, lineage, held.current)
 
 
 def _reject_refusal(status: LifecycleStatus, held: _Held) -> str | None:
@@ -2019,12 +2048,21 @@ def _conclude_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     return experiments.conclusion_refusal(held.current)
 
 
-def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
+def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: Lineage) -> Action:
     """Taking the newest promotion back off the line it was put on.
 
     Not gated on the analysis stage or on anything about the current batch: what
     it acts on is a promotion an earlier cohort recorded, and the batch running
     now is where the reading of that promotion lives rather than what it reverses.
+
+    Two interrupted states reach this verb as a repair rather than as a fresh
+    reversal, and they are two of the three writes a rollback makes: the record
+    finished and its batch-ending outcome missing (`redone_reversal`), and the
+    line already carrying the inverse with the record not saying so
+    (`unfinished_reversal`). The second is invisible to the records alone — the
+    promotion still reads as effective — and it is the one the admission gate is
+    refusing on meanwhile, so a menu that offered it as an ordinary reversal
+    would leave the operator with a refusal and no verb pointing at it.
     """
 
     promotion = status.last_promotion
@@ -2056,6 +2094,26 @@ def _rollback_action(status: LifecycleStatus, lineage: Lineage) -> Action:
             f"the inverse commit {record.revision[:12]} on record cannot be confirmed here — {record.unconfirmed}; "
             f"that record is what moves {promotion.merge_input_ref} and what says the promotion came off it, so it "
             "is acted on from a checkout holding the commits it names"
+        )
+    unfinished = (
+        None
+        if refusal is not None or promoted is None
+        else rollback_ops.unfinished_reversal(config, promoted)
+    )
+    if unfinished is not None and record is not None:
+        # After the confirmation hold rather than before it, which is the order
+        # the operation asks them in: a record it cannot recompute refuses at
+        # `_require_confirmed_inverse` before it reaches the line at all, so a
+        # redo offered over one would be a repair that does not run.
+        return Action(
+            ACTION_ROLLBACK,
+            OBJECT_PROMOTION,
+            promotion.revision,
+            recovery=(
+                f"{promotion.merge_input_ref} already carries {record.revision[:12]}, which took "
+                f"{promotion.revision[:12]} off it, and no record here says the line took it; run again for the "
+                "reason on record this finishes that rollback and ends the batch standing on the release"
+            ),
         )
     return Action(ACTION_ROLLBACK, OBJECT_PROMOTION, promotion.revision, refusal)
 
