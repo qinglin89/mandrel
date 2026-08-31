@@ -136,7 +136,7 @@ class DriftPlacement:
     identity only some repository can resolve.
 
     `reason` discriminates the four ways a deployment places nothing, which are
-    one kind and four next steps (`_placement_drifts`). None on `off the source
+    one kind and four next steps (`_placement_reading`). None on `off the source
     line`, where the revision placed perfectly well and simply carries neither
     line's protocol.
     """
@@ -163,10 +163,44 @@ class Drift:
 
 
 @dataclass(frozen=True)
+class PlacementReading:
+    """Where one target stands among the lines being released, read once.
+
+    Two faces of a single comparison. `line` is the positive answer — the name
+    of the line whose protocol the receipt carries — and `drifts` is what that
+    same comparison becomes when there is no line to name. Both come out of one
+    `placement.SourceLines.place` call (`_placement_reading`), because a
+    surface that derived them separately could publish a target standing on
+    `base` beside a finding that it is off the line, and a consumer reading two
+    answers to one question has no way to pick.
+
+    `line` set and a finding, or `line` None and none of them, are the two
+    states this cannot be in. Every non-placed branch returns exactly one
+    finding and the placed branch returns none, which is what makes a passing
+    target imply a named line at the surface (`_target_json`).
+    """
+
+    line: str | None
+    drifts: tuple[Drift, ...]
+
+
+@dataclass(frozen=True)
 class StatusResult:
     target_root: Path
     total_files: int
     drifts: tuple[Drift, ...]
+    # Which of the lines being released this target's receipt places it on
+    # (`placement.LINE_BASE`, `placement.LINE_CANDIDATE`), and None for every
+    # way it places on neither. Stated rather than defaulted so that every path
+    # out of `check_status` answers: a reading that returned before the
+    # placement was asked is one that named no line, and it says so.
+    #
+    # A reading and not a finding, which is why it is here rather than among
+    # the drifts. A target standing on a sealed candidate is exactly as correct
+    # as one standing on base, and the difference between them is the whole
+    # question a scheduler attributing evaluation reports has to answer; under
+    # `drifts` alone both are `in_sync: true, drifts: []` and indistinguishable.
+    placed_line: str | None
 
     @property
     def in_sync(self) -> bool:
@@ -942,7 +976,21 @@ UNPLACEABLE_REASONS: tuple[str, ...] = (
 # moved. `evolution/schemas/` versions persisted lifecycle records; this versions
 # one CLI reading of two receipts and holds no schema file, because nothing
 # persists it.
-STATUS_SCHEMA_VERSION = 1
+#
+# What a bump means, decided here rather than left to each change: this integer
+# is the promise of the payload's key set, so every key added, removed, or
+# repurposed moves it — an addition included. There is no minor half to put an
+# additive change in, and leaving one out would put payloads with and without a
+# key into circulation under one number, which stops the version describing a
+# shape at all and leaves a consumer probing for keys to find out what it has.
+# Probing is the cost this pays to avoid: a field tested for presence is one a
+# consumer has to treat as optional forever, and this payload's fields are
+# uniformly present by design (`_placement_facts`). The bump is cheap for the
+# same reason the counter is separate — nothing persists a status payload, so
+# no stored document is ever read at an older version.
+#
+# 2 added `targets[].placed_line`.
+STATUS_SCHEMA_VERSION = 2
 
 
 def _uncontained_record(target_rel: str) -> str | None:
@@ -1035,7 +1083,18 @@ def check_status(
     try:
         deployed_manifest = manifest.read_manifest(target_root)
     except manifest.ManifestError as exc:
-        return StatusResult(target_root=target_root, total_files=0, drifts=(Drift("missing manifest", MANIFEST_FILENAME, str(exc)),))
+        # No line, because none was asked for. The lock may well place this
+        # target perfectly, but the reading stopped here: publishing a line
+        # beside a receipt whose other half could not be read would say a target
+        # is running a protocol nothing checked it still holds. The field stays
+        # stated so a consumer reads one shape from every path, and the finding
+        # is what says why it is null.
+        return StatusResult(
+            target_root=target_root,
+            total_files=0,
+            drifts=(Drift("missing manifest", MANIFEST_FILENAME, str(exc)),),
+            placed_line=None,
+        )
 
     manifest_files = deployed_manifest["files"]
     assert isinstance(manifest_files, dict)
@@ -1094,7 +1153,8 @@ def check_status(
             )
         )
 
-    drifts.extend(_placement_drifts(target_root, lines))
+    standing = _placement_reading(target_root, lines)
+    drifts.extend(standing.drifts)
     drifts.extend(eager_import_drifts(target_root))
     drifts.extend(
         shadowed_skill_drifts(
@@ -1103,10 +1163,15 @@ def check_status(
         )
     )
 
-    return StatusResult(target_root=target_root, total_files=len(manifest_files), drifts=tuple(drifts))
+    return StatusResult(
+        target_root=target_root,
+        total_files=len(manifest_files),
+        drifts=tuple(drifts),
+        placed_line=standing.line,
+    )
 
 
-def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[Drift, ...]:
+def _placement_reading(target_root: Path, lines: placement.SourceLines) -> PlacementReading:
     """Where this target's payload stands among the lines being released.
 
     The receipt is read, never the target's files: a lock states a commit only
@@ -1126,6 +1191,11 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
     this repository's state and not the target's — saying so is what stops an
     unreadable policy from quietly clearing every target it should have refused to
     judge, and stops a target being blamed for a reading nobody could make.
+
+    The line comes back with them, from this one comparison. It is not a fifth
+    finding — a target standing on a line is the reading coming out right — but
+    it is the same `place` call the four findings are the other outcomes of, so
+    naming it anywhere else would be asking the question twice.
     """
 
     reading = placement.stated_revision(target_root)
@@ -1133,12 +1203,15 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
         # Never both and never neither (`placement.TargetRevision`), so the
         # reading's own word for this receipt is the whole finding.
         assert reading.state is not None
-        return (
-            Drift(
-                "unplaceable deployment",
-                LOCK_FILENAME,
-                reading.detail or reading.state,
-                placement=_placement_facts(lines, reason=reading.state, holds=None),
+        return PlacementReading(
+            line=None,
+            drifts=(
+                Drift(
+                    "unplaceable deployment",
+                    LOCK_FILENAME,
+                    reading.detail or reading.state,
+                    placement=_placement_facts(lines, reason=reading.state, holds=None),
+                ),
             ),
         )
     standing = lines.place(reading.revision)
@@ -1147,39 +1220,48 @@ def _placement_drifts(target_root: Path, lines: placement.SourceLines) -> tuple[
         # checkout could not name can only ever have added an acceptance, so it
         # cannot have produced this verdict, and reporting it would take a target
         # out of service over a reading that is not about it.
-        return ()
+        return PlacementReading(line=standing.line, drifts=())
     if standing.unreadable is not None:
         # A revision this clone holds no tree for. Reported against the receipt
         # like the other unanswered questions and never as "off the line": the
         # target may well be standing on one, and nothing here established
         # otherwise. The revision is kept on the finding — it is the one
         # unplaceable cause that read one, and the thing to go and fetch.
-        return (
-            Drift(
-                "unplaceable deployment",
-                LOCK_FILENAME,
-                standing.unreadable,
-                placement=_placement_facts(
-                    lines,
-                    reason=UNPLACEABLE_UNREADABLE_PROTOCOL,
-                    holds=reading.revision,
+        return PlacementReading(
+            line=None,
+            drifts=(
+                Drift(
+                    "unplaceable deployment",
+                    LOCK_FILENAME,
+                    standing.unreadable,
+                    placement=_placement_facts(
+                        lines,
+                        reason=UNPLACEABLE_UNREADABLE_PROTOCOL,
+                        holds=reading.revision,
+                    ),
                 ),
             ),
         )
     if not lines.known:
-        return (
-            Drift(
-                "unresolved source line",
-                lines.ref or UNNAMED_SOURCE_LINE,
-                "; ".join(lines.unresolved) or "this checkout names no line to place a deployment against",
+        return PlacementReading(
+            line=None,
+            drifts=(
+                Drift(
+                    "unresolved source line",
+                    lines.ref or UNNAMED_SOURCE_LINE,
+                    "; ".join(lines.unresolved) or "this checkout names no line to place a deployment against",
+                ),
             ),
         )
-    return (
-        Drift(
-            "off the source line",
-            LOCK_FILENAME,
-            _placement_detail(reading.revision, lines),
-            placement=_placement_facts(lines, reason=None, holds=reading.revision),
+    return PlacementReading(
+        line=None,
+        drifts=(
+            Drift(
+                "off the source line",
+                LOCK_FILENAME,
+                _placement_detail(reading.revision, lines),
+                placement=_placement_facts(lines, reason=None, holds=reading.revision),
+            ),
         ),
     )
 
@@ -1262,6 +1344,19 @@ def _target_json(name: str | None, result: StatusResult) -> dict[str, object]:
     `name` is the machine-local registry name a sweep walked this target under,
     and null for a target the operator named by path — the path is what was
     read either way, so the name is the extra fact and not the identity.
+
+    `placed_line` sits beside `drifts` rather than inside one because it is not
+    a finding: it names the line whose protocol this target is running, which is
+    the answer for a target with nothing wrong with it. Base and a sealed
+    candidate are both `in_sync: true, drifts: []`, so under findings alone the
+    two are one payload — and which of them a target is on is the whole question
+    for anyone attributing an evaluation report to the protocol that produced it.
+
+    Null is every way there is no line, and it never stands alone: each of those
+    ways emits its own finding (`_placement_reading`), and the reading that
+    returns before placement is asked carries the finding that stopped it
+    (`check_status`). So `in_sync: true` implies a named line, and a payload
+    passing with none is a bug in this surface rather than a state of a target.
     """
 
     return {
@@ -1269,6 +1364,7 @@ def _target_json(name: str | None, result: StatusResult) -> dict[str, object]:
         "target_root": str(result.target_root),
         "in_sync": result.in_sync,
         "total_files": result.total_files,
+        "placed_line": result.placed_line,
         "drifts": [_drift_json(drift) for drift in _ordered_drifts(result)],
     }
 

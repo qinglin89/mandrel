@@ -288,7 +288,7 @@ name a sweep walked the target under, and null for a target named by path.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_lines": {
     "ref": "refs/heads/main",
     "base": "<full commit>",
@@ -301,6 +301,7 @@ name a sweep walked the target under, and null for a target named by path.
       "target_root": "/abs/path",
       "in_sync": false,
       "total_files": 42,
+      "placed_line": null,
       "drifts": [
         {
           "kind": "off the source line",
@@ -333,6 +334,9 @@ it names the line this checkout could not resolve. `placement` is null on every
 kind but the two placement ones. Exit codes are unchanged: 0 in sync, 1 drift,
 2 error — the flag changes what is printed and nothing about what was found.
 Failures still print prose on stderr.
+
+`placed_line` sits beside `drifts` rather than inside one, because a target
+standing on a line is a reading and not a finding.
 
 #### Origin — what diverged
 
@@ -378,6 +382,33 @@ the objects are absent here, or the id names no commit at all, since a tree or a
 blob passes the receipt's lexical shape check and is refused only when Git is
 asked. Neither is a redeploy.
 
+#### `placed_line` — which line a target is standing on
+
+A target passes on one of two lines, and passing looks identical either way:
+`in_sync: true` with no findings. Which line it is is the fact an evaluation
+report has to be attributed to, so it is stated per target rather than left to
+be inferred from an absence of drift.
+
+| Value | The target's receipt | What it means |
+|---|---|---|
+| `base` | carries the protocol at the configured source line | running the current release |
+| `candidate` | carries the protocol of the latest sealed round | running the change under measurement |
+
+Null is every way there is no line, and it never arrives alone: each of them
+also emits its own finding — the four `placement.reason` cases above,
+`off the source line`, `unresolved source line`, or the `missing manifest`
+reading that stops before the placement is asked. So `in_sync: true` implies a
+named line, and null with no finding is a bug in this surface rather than a
+state a target can be in.
+
+It is the same comparison `drifts[].placement` reports the negative side of,
+read once. A target naming a line carries no placement finding, and a target
+carrying one names no line; the two cannot disagree.
+
+Sealed is the only candidate that appears. An open round's ref tip moves, so a
+target deployed from it produces reports naming a tree nothing can afterwards
+identify.
+
 #### Versioning
 
 `schema_version` versions this payload and only this payload. It is deliberately
@@ -386,6 +417,20 @@ either direction: those version persisted lifecycle records under
 `evolution/schemas/`, this versions one CLI reading of two receipts and persists
 nothing. A shared counter would make every lifecycle change announce a breaking
 change to a deployment surface that did not move.
+
+The number is the promise of the payload's key set: every key added, removed, or
+repurposed moves it, an addition included. There is no minor half to file an
+addition in, and leaving one out would put payloads with and without a key into
+circulation under one number — which stops the version describing a shape at all
+and leaves a consumer probing for keys to learn what it has. Read the version;
+the fields it names are always present. Bumping costs nothing here because
+nothing persists a status payload, so no stored document is ever read back at an
+older version.
+
+| Version | Change |
+|---|---|
+| 2 | added `targets[].placed_line` |
+| 1 | the initial payload |
 
 ## Registry
 

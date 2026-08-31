@@ -2205,6 +2205,160 @@ def test_a_target_at_a_sealed_candidate_is_no_finding_at_all(tmp_path: Path) -> 
     assert sole_target(payload)["in_sync"] is True
 
 
+def test_base_and_a_sealed_candidate_are_told_apart_by_the_payload(tmp_path: Path) -> None:
+    """The whole subject. Both targets pass — a sealed candidate is as correct a
+    place to stand as base is — so under findings alone the two are one payload:
+    `in_sync: true, drifts: []` twice, and no consumer can tell which protocol
+    either target is running. That is the fact an evaluation report has to be
+    attributed to, so folding the two loses the measurement rather than a
+    label."""
+
+    source = make_source(tmp_path)
+    base = commit_source(source)
+    at_base = tmp_path / "at-base"
+    at_base.mkdir()
+    deploy.deploy_canonical(at_base, root=source, registry_file=tmp_path / "registry.json")
+    candidate = branch_commit(source, "candidate", "the change under measurement")
+    at_candidate = tmp_path / "at-candidate"
+    at_candidate.mkdir()
+    deploy.deploy_canonical(at_candidate, root=source, registry_file=tmp_path / "registry.json")
+    assert base != candidate
+    lines = lines_of(source, candidate=candidate)
+
+    readings = [
+        (name, deploy.check_status(root, lines=lines))
+        for name, root in (("at-base", at_base), ("at-candidate", at_candidate))
+    ]
+    swept = deploy.status_payload(readings, lines=lines)
+
+    assert [item["in_sync"] for item in swept["targets"]] == [True, True]
+    assert [item["drifts"] for item in swept["targets"]] == [[], []]
+    assert [item["placed_line"] for item in swept["targets"]] == [placement.LINE_BASE, placement.LINE_CANDIDATE]
+    # And the single-target form is a sweep of one, so it says the same of each
+    # target down to the name — the one field that moves between the two forms.
+    for (_name, result), item in zip(readings, swept["targets"]):
+        assert sole_target(deploy.status_payload([(None, result)], lines=lines)) == {**item, "name": None}
+
+
+def test_a_target_with_no_manifest_states_a_line_like_every_other(tmp_path: Path) -> None:
+    """The reading that returns before the placement is asked, and the one path
+    that would otherwise publish no key at all. It is null rather than absent
+    because a field that appears and vanishes by case is one every consumer
+    branches on before it can read anything — and null rather than the line the
+    lock would have placed, because nothing here checked this target still holds
+    what that receipt describes."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    (target / paths.MANIFEST_FILENAME).unlink()
+
+    reading = sole_target(payload_of(target, source))
+
+    assert [drift["kind"] for drift in reading["drifts"]] == ["missing manifest"]
+    assert "placed_line" in reading
+    assert reading["placed_line"] is None
+
+
+def test_no_target_passes_without_naming_the_line_it_passed_on(tmp_path: Path) -> None:
+    """The invariant the surface already holds, stated where the new field could
+    break it. Every way a target places on no line emits its own finding, so a
+    null line always arrives with the reason beside it and `in_sync: true`
+    implies a named line. A payload that could pass with no line would be this
+    field's own bug: the state it exists to end, back under a new key."""
+
+    def deployed(case: str) -> tuple[Path, Path]:
+        """A source and a target of its own, so one case cannot disturb another."""
+
+        room = tmp_path / case
+        room.mkdir()
+        source = make_source(room)
+        commit_source(source)
+        target = room / "target"
+        target.mkdir()
+        deploy.deploy_canonical(target, root=source, registry_file=room / "registry.json")
+        return source, target
+
+    cases: list[tuple[str, Path, placement.SourceLines]] = []
+
+    source, target = deployed("no-receipt")
+    (target / paths.LOCK_FILENAME).unlink()
+    cases.append(("no receipt", target, lines_of(source)))
+
+    source, target = deployed("unreadable-receipt")
+    (target / paths.LOCK_FILENAME).write_text("not a receipt\n", encoding="utf-8")
+    cases.append(("unreadable receipt", target, lines_of(source)))
+
+    source, target = deployed("unread-protocol")
+    lockfile.write_lock(target, {**lockfile.read_lock(target), "source_git_commit": "f" * 40})
+    cases.append(("unread protocol", target, lines_of(source)))
+
+    source, target = deployed("missing-manifest")
+    (target / paths.MANIFEST_FILENAME).unlink()
+    cases.append(("missing manifest", target, lines_of(source)))
+
+    source, target = deployed("unresolved-line")
+    cases.append(
+        (
+            "unresolved line",
+            target,
+            placement.source_lines(source, ref="refs/heads/nowhere", deploys=deploy.deploys_canonical_path),
+        )
+    )
+
+    room = tmp_path / "unstated"
+    room.mkdir()
+    source = make_source(room)
+    commit_source(source)
+    write(source / "canonical" / "protocols" / "dev.md", "dev contract, edited and never committed\n")
+    target = room / "target"
+    target.mkdir()
+    deploy.deploy_canonical(target, root=source, registry_file=room / "registry.json")
+    cases.append(("unstated receipt", target, lines_of(source)))
+
+    room = tmp_path / "off-the-line"
+    room.mkdir()
+    source = make_source(room)
+    commit_source(source)
+    branch_commit(source, "elsewhere", "work that was never released")
+    target = room / "target"
+    target.mkdir()
+    deploy.deploy_canonical(target, root=source, registry_file=room / "registry.json")
+    cases.append(("off the line", target, lines_of(source)))
+
+    for case, target, lines in cases:
+        reading = sole_target(deploy.status_payload([(None, deploy.check_status(target, lines=lines))], lines=lines))
+        assert reading["placed_line"] is None, f"{case} named a line it was not placed on"
+        assert reading["drifts"], f"{case} states no line and no reason for it"
+        assert reading["in_sync"] is False, f"{case} passed without naming a line"
+
+
+def test_the_line_and_the_placement_findings_are_one_answer(tmp_path: Path) -> None:
+    """`drifts[].placement` already spells every negative case; this field is the
+    same comparison read from the positive end, out of the same `place` call. So
+    a target naming a line carries no placement finding and one carrying a
+    placement finding names no line — two derivations of one comparison are two
+    that can disagree, and a payload asserting both is one a consumer has no way
+    to act on.
+
+    Asserted on a target whose *files* diverged, because that is where the two
+    halves come apart: integrity is the manifest against the target and currency
+    is the lock against the lines, so a modified target is still placed exactly
+    where it was deployed from."""
+
+    source, target, _deployed = deploy_to_tmp(tmp_path)
+    write(target / ".claude" / "settings.json", '{"edited": true}\n')
+
+    reading = sole_target(payload_of(target, source))
+
+    assert reading["in_sync"] is False
+    assert [drift["kind"] for drift in reading["drifts"]] == ["target modified"]
+    assert reading["placed_line"] == placement.LINE_BASE
+    assert not [
+        drift
+        for drift in reading["drifts"]
+        if drift["origin"] in (deploy.ORIGIN_PLACEMENT, deploy.ORIGIN_SOURCE)
+    ]
+
+
 def test_an_unresolved_line_is_this_repository_and_never_the_target(tmp_path: Path) -> None:
     """The one kind whose subject is not the target. Filed under the target's
     faults it sends somebody to redeploy a repository nothing was found wrong
@@ -2346,6 +2500,7 @@ def test_status_json_prints_a_deterministic_payload_and_the_same_exit_code(
     assert payload["targets"][0]["target_root"] == str(target.resolve())
     assert [drift["kind"] for drift in payload["targets"][0]["drifts"]] == ["target modified"]
     assert payload["targets"][0]["drifts"][0]["origin"] == deploy.ORIGIN_TARGET
+    assert payload["targets"][0]["placed_line"] == placement.LINE_BASE
 
 
 def test_status_prose_and_exit_code_are_unchanged_without_the_flag(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -2391,6 +2546,7 @@ def test_the_sweep_and_one_target_share_one_envelope(tmp_path: Path, monkeypatch
     assert swept["source_lines"] == single["source_lines"]
     # The registry's own order, which is the order the prose walks too.
     assert [item["name"] for item in swept["targets"]] == ["second-target", "target"]
+    assert [item["placed_line"] for item in swept["targets"]] == [placement.LINE_BASE, placement.LINE_BASE]
     assert [item["target_root"] for item in swept["targets"]] == [str(second.resolve()), str(first.resolve())]
     assert swept["targets"][1] == {**single["targets"][0], "name": "target"}
 

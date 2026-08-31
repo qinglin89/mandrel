@@ -22,7 +22,7 @@ import re
 from fnmatch import fnmatch
 from pathlib import Path
 
-from mandrel import deploy, paths
+from mandrel import deploy, paths, placement
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -196,6 +196,32 @@ def test_operations_lists_every_reason_a_deployment_places_nothing() -> None:
     assert documented == set(deploy.UNPLACEABLE_REASONS), (
         f"{OPERATIONS.relative_to(REPO_ROOT)} presents the unplaceable reasons "
         "as an exhaustive set and disagrees with deploy.UNPLACEABLE_REASONS"
+    )
+
+
+def test_operations_names_both_lines_a_target_can_be_placed_on() -> None:
+    """`placed_line` is the payload's positive answer, and the document is where
+    a consumer learns what its values mean. A line the surface can publish and
+    the reference does not name is one a reader treats as an unexpected value."""
+
+    documented = set(
+        re.findall(r"^\| `([\w-]+)` \|", _operations_section("#### `placed_line`"), re.MULTILINE)
+    )
+    assert documented == {placement.LINE_BASE, placement.LINE_CANDIDATE}, (
+        f"{OPERATIONS.relative_to(REPO_ROOT)} presents the lines a target can stand on "
+        "as an exhaustive set and disagrees with placement's own names for them"
+    )
+
+
+def test_operations_shows_the_payload_version_it_documents() -> None:
+    """The example is what a consumer reads the shape off. Shown at a version
+    other than the one the surface emits, it describes a payload nobody gets —
+    and the version is the promise of the key set, so the two move together."""
+
+    shown = re.findall(r'^  "schema_version": (\d+),$', _operations_section("### The machine shape"), re.MULTILINE)
+    assert shown == [str(deploy.STATUS_SCHEMA_VERSION)], (
+        f"{OPERATIONS.relative_to(REPO_ROOT)} shows schema_version {shown} where "
+        f"the payload emits {deploy.STATUS_SCHEMA_VERSION}"
     )
 
 
