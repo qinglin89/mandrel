@@ -3989,6 +3989,10 @@ def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
     assert SECOND in str(error.value) and "nobody has settled it" in str(error.value)
+    # The rule it is refusing under, named for an operator who is holding a batch
+    # that owes nothing and is being told it may not admit: the gate is the base
+    # this batch was formed at, not this batch's own reading.
+    assert "invariant 17" in str(error.value)
     assert lineage.describe(config).current.experiments == ()
 
     answered = assessment.settle(
@@ -4021,6 +4025,8 @@ def test_a_cohort_that_ended_unread_still_gates_the_next_base(
     with pytest.raises(evolution.BatchError) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
     assert SECOND in str(error.value) and "has recorded no reading" in str(error.value)
+    assert "invariant 17" in str(error.value)
+    assert lineage.describe(config).current.experiments == ()
 
     formed = form_reading(config)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT)

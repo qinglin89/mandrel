@@ -887,9 +887,22 @@ def test_a_later_batch_that_admitted_nothing_does_not_stop_it(
 ) -> None:
     """A frozen cohort has pinned no candidate and holds no work, so it is not
     lineage built on the promotion — the guard is about attempts, not about
-    time."""
+    time.
 
-    write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
+    Formed at the promoted commit, which is what an assessing cohort's base
+    actually is: it was frozen at the source line while the release was on it
+    (invariant 15), so its base carries the promotion before it has admitted
+    anything. That is the state a rollback composed by this cohort's own
+    settlement runs in, and a guard asked about the base rather than about
+    admitted work would refuse it here.
+    """
+
+    write_manifest(
+        config.batches_root,
+        SECOND_BATCH,
+        ["r3"],
+        runner_protocol_revision=promoted.promotion_revision,
+    )
 
     result = rollback.rollback(config, reason=WHY, now=LATER)
 

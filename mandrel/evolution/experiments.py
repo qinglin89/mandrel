@@ -705,7 +705,7 @@ def promotable_refusal(experiment: Experiment, evidence: Evidence | None) -> str
     )
 
 
-def base_release_refusal(current: BatchLineage, owed: assessment.Obligation | None) -> str | None:
+def admission_release_refusal(current: BatchLineage, owed: assessment.Obligation | None) -> str | None:
     """Why a batch's base is not built on before the release behind it is judged.
 
     Invariant 17. The reading it waits on is the *owning* cohort's, which is the
@@ -3152,7 +3152,7 @@ def _require_release_settled(
     would find nothing to wait for and admit on a line nobody decided about — the
     obligation stays where it was, and so does what waits on it.
 
-    Only at the batch's first experiment, for `base_release_refusal`'s reason:
+    Only at the batch's first experiment, for `admission_release_refusal`'s reason:
     a later attempt of the same batch is already standing on the base, so asking
     again would hold work against a decision that can no longer change what it
     starts from.
@@ -3168,7 +3168,7 @@ def _require_release_settled(
     if current.experiments:
         return None
     owed = assessment.obligation(config, current.batch, lineage=known)
-    refusal = base_release_refusal(current, owed)
+    refusal = admission_release_refusal(current, owed)
     if refusal is not None:
         raise BatchError(refusal)
     return owed

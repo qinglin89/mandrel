@@ -362,6 +362,16 @@ Everything a human may argue with about membership therefore happens *before*
 the manifest exists, which is what invariant 3 requires of it: an immutable
 membership record cannot also be the thing being adjusted.
 
+**Neither operation waits on a release verdict.** A batch is proposed and frozen
+whether or not the promotion before it has been read or settled, and that is not
+an omission to be repaired by moving the gate earlier: the batch being formed
+*is* the evidence about that release, so a gate here would hold the reading
+behind the reports it is taken from. What waits is that batch's first admission,
+the last moment before every alternative in it stands on the base the freeze
+already fixed (invariant 17). Formation and admission are separate events on a
+strictly ordered chain, which is why the gate sits at the second and never at
+the first.
+
 A proposal is a reading and never evidence. It is machine-local, it is rebuilt
 by the next `start`, and losing one costs a poll. The freeze re-reads the source
 line, re-validates every member against the live pool, and re-verifies every
@@ -1224,9 +1234,16 @@ The content is computed, not taken from a record. Reverting is applying the
 promotion's change backwards *to the line as it now stands*, so every commit that
 landed after the promotion is carried through — that is the difference between a
 revert and a rewind, and pinning the tree the line had before the promotion would
-silently discard them. A change that cannot be taken back out without deciding
-something conflicts, and a conflict refuses: what the line should hold instead is
-a person's judgement with a working tree in front of them.
+silently discard them. That reverting against the tip nonetheless leaves the line
+carrying what it carried before the release — the outcome a rewind would have
+aimed at — is a property of the source line rather than anything this operation
+arranges: nothing but evolution lands on it (invariant 18), so there is
+ordinarily nothing in between to be carried through. A commit made there by hand
+is carried through like any other, and the line afterwards holds neither the
+state before the release nor a state anything measured. A change that cannot be
+taken back out without deciding something conflicts, and a conflict refuses: what
+the line should hold instead is a person's judgement with a working tree in front
+of them.
 
 Then the writes, in the order a promotion uses and for the same reason — the Git
 half cannot be undone by this controller, so it has to be recognisable

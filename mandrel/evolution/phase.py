@@ -1488,7 +1488,7 @@ def _base_refusal(status: LifecycleStatus, held: _Held) -> str | None:
     if held.current is None:
         return None
     release = status.release
-    return experiments.base_release_refusal(held.current, None if release is None else release.obligation)
+    return experiments.admission_release_refusal(held.current, None if release is None else release.obligation)
 
 
 def _reject_refusal(status: LifecycleStatus, held: _Held) -> str | None:

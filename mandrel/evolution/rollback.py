@@ -358,6 +358,16 @@ def _require_nothing_built_on(config: EvolutionConfig, lineage: Lineage, promote
     is measured against a merge input, and moving the line is exactly the drift
     the replay reader already reports and refuses a promotion on.
 
+    Read off admitted work — experiment bases and pinned candidates — and never
+    off the later batch's own base, which reads like the same question and is
+    not. A batch is formed at the source line as it then stands (invariant 15),
+    so the cohort that assesses a release was formed at the promoted commit and
+    its base carries the promotion by construction, before it has admitted
+    anything at all. Asked of that base, this guard would refuse the reversal
+    composed by that cohort's own settlement every time — which is the only path
+    a `rolled-back` decision has (contract: Release assessment), so the rule
+    would make the settlement's two answers one.
+
     Unanswerable refuses. Everywhere else here a Git question this checkout
     cannot answer is a fact about the clone and is reported rather than raised;
     this one stands between an irreversible move and somebody's work, so a clone
