@@ -25,6 +25,7 @@ import contextlib
 import io
 import json
 import re
+import shlex
 import shutil
 import threading
 import urllib.error
@@ -2405,6 +2406,74 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
     assert "state_revision" in text and "allowed_actions" in text
     assert f"`{phase.STATE_REVISION_VERSION}-<16 hex>`" in text
     assert f"`schema_version: {phase.SCHEMA_VERSION}`" in text
+
+
+def _documented_cycle() -> list[list[str]]:
+    """`operations.md`'s end-to-end cycle, one argv per documented command.
+
+    Read as shell rather than as prose: continuations joined, `&&` split at the
+    token level so a quoted one could not be mistaken for a separator, and
+    comments dropped by the same lexer the reader's shell would use. Only
+    `./bin/mandrel` lines are returned — the rest of the block is narration.
+    """
+
+    text = (REPO_ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    section = text.split("#### One cycle, end to end", 1)[1].split("\n#### ", 1)[0]
+    commands: list[list[str]] = []
+    for block in re.findall(r"```bash\n(.*?)```", section, flags=re.S):
+        for line in block.replace("\\\n", " ").splitlines():
+            argv: list[str] = []
+            for token in [*shlex.split(line, comments=True), "&&"]:
+                if token != "&&":
+                    argv.append(token)
+                    continue
+                if argv[:1] == ["./bin/mandrel"]:
+                    commands.append(argv[1:])
+                argv = []
+    return commands
+
+
+def test_the_documented_cycle_is_a_sequence_this_build_still_runs() -> None:
+    """The one place an operator is handed commands to type, held to the parser.
+
+    Documented against a build that has moved on, a cycle fails at the first
+    verb whose arguments changed under it — and a required argument added to one
+    of these verbs is exactly the change that leaves the sentence around it
+    reading correctly. So every documented line is parsed rather than matched.
+
+    Its reading half is held to more than that, because a command can parse and
+    still be refused: a directional verdict rests on evidence that can carry one,
+    and the cohorts never can while `task-shape` goes unstated on every manifest
+    version (`test_placed_cohorts_name_the_facet_no_manifest_states`). A cycle
+    documenting `assess --verdict improved` therefore hands an operator a command
+    the controller refuses, which is what this asserts against: the direction
+    arrives on `assess-resolve`, after the counterfactual it rests on.
+    """
+
+    commands = _documented_cycle()
+    parser = cli.build_parser()
+
+    by_verb: dict[str, list[argparse.Namespace]] = {}
+    for argv in commands:
+        try:
+            parsed = parser.parse_args(argv)
+        except SystemExit as refused:  # argparse reports a bad command line by exiting
+            raise AssertionError(f"documented command does not parse: ./bin/mandrel {' '.join(argv)}") from refused
+        if argv[:1] == ["evolution"]:
+            by_verb.setdefault(parsed.evolution_command, []).append(parsed)
+
+    # The cycle is the whole of one, so the verbs that end each half are in it.
+    assert {"freeze", "seal-round", "promote", "assess", "assess-resolve", "settle"} <= set(by_verb)
+
+    assert all(parsed.verdict not in assessment.DIRECTIONAL_VERDICTS for parsed in by_verb["assess"])
+    assert any(parsed.verdict in assessment.DIRECTIONAL_VERDICTS for parsed in by_verb["assess-resolve"])
+    # Why the first reading cannot be directional, from the predicate rather than
+    # from this test's opinion: incomparable cohorts carry no direction whatever
+    # else they came to.
+    assert (
+        assessment.directional_admissible(coherent=False, before_task_count=99, after_task_count=99, minimum=1)
+        is False
+    )
 
 
 # --- the release, as commands ------------------------------------------------

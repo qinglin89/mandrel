@@ -743,13 +743,25 @@ experiment is admitted until the reading is settled (invariant 17):
 
 ```bash
 ./bin/mandrel evolution start && ./bin/mandrel evolution freeze
-./bin/mandrel evolution assess --verdict improved --confidence medium \
+# what the cohorts came to, and inconclusive: no manifest states the shape of
+# the work, so they carry no direction of their own to record here
+./bin/mandrel evolution assess --verdict inconclusive --confidence low \
     --rationale "..." --recommend retain \
     --metric "remediation rounds" rounds 2.1 1.4 lower
 ./bin/mandrel evolution assess-measure --expectation "..."   # the pinned counterfactual
-# ...run it, state it, `assess-conclude` it, then `assess-resolve` the reading
+# ...run it, state it, and `assess-conclude` it — the same two-step as a replay
+./bin/mandrel evolution assess-resolve --verdict improved --confidence medium \
+    --rationale "..." --recommend retain
 ./bin/mandrel evolution settle --settlement retain --reason "the reading holds"
 ```
+
+The direction arrives on `assess-resolve` and not before it. A directional
+verdict rests on evidence that can carry one, and the cohorts cannot: the shape
+of the work is a facet no manifest version states, so the comparison is
+incoherent on every frame this build can form and `assess` refuses `improved`
+outright. What the first reading records is the cohorts' numbers and
+`inconclusive`; the pinned counterfactual is what settles a direction, and
+`assess-resolve` is where the reading is revised on it.
 
 Either path can end differently and both endings are verbs: `conclude-no-change`
 for a batch whose evidence justified nothing, `abandon` or `supersede` for an

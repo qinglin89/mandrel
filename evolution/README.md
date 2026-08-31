@@ -1638,16 +1638,19 @@ nothing and is worth everything to whoever reads it: reported together, a
 mismatch somebody could cohort their way out of reads like a gap nobody
 introduced, and a gap reads like broken provenance.
 
-Both rather than either, and that is the whole of what the split is for. One
-side stating a rubric revision while the other states none is not the two
-sides disagreeing about the rubric — nothing on the far side was there to
-disagree with. An empty cohort is the same answer taken to its limit: it fills
-in no facet, so every one of them is unstated and nothing could be compared at
-all, which is what the exclusions beside it say at length. Both lists are
-derived from the facets and checked against them on every read; they are
-recorded and emitted all the same, so that a consumer is not left to re-derive
-which kind each failure is, which means knowing that a value carried as null
-is a missing one.
+Both sides rather than either, and every report of a side rather than one of
+them; that is the whole of what the split is for. One side stating a rubric
+revision while the other states none is not the two sides disagreeing about the
+rubric — nothing on the far side was there to disagree with. A side only some of
+whose reports state it is the same gap made smaller: `r7` before against `r7`
+and a missing value after is one report the feed published no rubric for, and
+what both sides do state agrees exactly. An empty cohort is the same answer
+taken to its limit: it fills in no facet, so every one of them is unstated and
+nothing could be compared at all, which is what the exclusions beside it say at
+length. Both lists are derived from the facets and checked against them on every
+read; they are recorded and emitted all the same, so that a consumer is not left
+to re-derive which kind each failure is, which means knowing that a value
+carried as null is a missing one.
 
 The **counterfactual** carries one on its own: a completed run measuring a goal
 quantity on both the pre-promotion and the promoted revision is a comparison in

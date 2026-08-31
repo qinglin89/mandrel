@@ -970,6 +970,46 @@ def test_a_facet_only_one_side_fills_in_is_a_gap_and_not_a_difference(
     assert frame.comparability.differing == ()
 
 
+def test_a_side_only_some_of_whose_reports_state_a_facet_is_a_gap_too(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The same gap, smaller: one report of the after cohort states no rubric
+    revision and the other two state the one both sides share.
+
+    The values that are there agree exactly, so what makes the facet incoherent
+    is the missing one — and a side is not stated by one of its reports filling
+    it in. Read the other way this would name the cohorts as differing over a
+    rubric neither side disagrees about, which is absent evidence reported as a
+    difference between them: the claim this split exists to keep off the record,
+    the JSON and the render alike, all three of which read the one derivation.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id=f"2026-08-0{index}-task",
+                effective_revision=promoted.promotion_revision,
+                rubric_revision="r7" if index < 3 else None,
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.after.task_count == 3
+    facet = next(item for item in frame.comparability.facets if item.facet == assessment.FACET_EVALUATOR_RUBRIC)
+    assert facet.before == ("r7",) and facet.after == ("r7", None)
+    assert facet.coherent is False and facet.stated is False
+    assert assessment.FACET_EVALUATOR_RUBRIC in frame.comparability.unstated
+    assert frame.comparability.differing == ()
+
+
 def test_a_reversed_promotion_is_a_different_question(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,

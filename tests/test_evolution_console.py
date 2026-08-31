@@ -547,12 +547,16 @@ def test_placed_cohorts_name_the_facet_no_manifest_states(
     """Where reports can be placed, the cohorts still carry no direction — no
     manifest says what kind of work either side judged. Rendered bare that reads
     as broken provenance, so the facet is named and the counterfactual is where a
-    direction is said to rest."""
+    direction is said to rest.
+
+    The line says *not every* manifest because the same list also carries a facet
+    only some of a side's reports state, and the sharper sentence would be false
+    over that one."""
 
     freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
 
     text = rendered(config)
-    assert "no manifest states task-shape" in text
+    assert "not every manifest states task-shape" in text
     assert "one rests on the pinned counterfactual" in text
 
     # The same distinction the render draws, on the surface a machine drives:

@@ -378,26 +378,30 @@ class Facet:
 
     @property
     def stated(self) -> bool:
-        """Whether *both* sides fill this facet in.
+        """Whether *both* sides fill this facet in, and fill it in throughout.
 
         The question that separates the two ways a facet fails: a facet no
         manifest states is unknown, and a facet both sides state and disagree on
         is a difference. A missing value is carried as null rather than dropped
-        (`_values`), so this asks whether a value survives dropping them on each
-        side.
+        (`_values`), so a side states this facet when it carries values and none
+        of them is that null.
 
-        Both rather than either, and the difference is the whole of what the
-        split is for. One side stating a rubric revision while the other states
-        none is not the two sides disagreeing about the rubric — nothing on the
-        far side was there to disagree with — and calling it a difference would
-        report a gap in what the feed published as evidence that the release is
-        not the only thing separating the cohorts. An empty side is the same
-        answer taken to its limit: it fills in no facet, so nothing could be
-        compared in any of them, which is what the exclusions beside it say at
-        length.
+        Both sides rather than either, and every report of a side rather than one
+        of them; the difference is the whole of what the split is for. One side
+        stating a rubric revision while the other states none is not the two
+        sides disagreeing about the rubric — nothing on the far side was there to
+        disagree with — and calling it a difference would report a gap in what
+        the feed published as evidence that the release is not the only thing
+        separating the cohorts. A side only some of whose reports fill the facet
+        in says the same thing about a smaller gap: before `("r7",)` against
+        after `("r7", None)` is one after-side report whose rubric the feed never
+        published, and what the two sides do state agrees exactly. An empty side
+        is the same answer taken to its limit: it fills in no facet, so nothing
+        could be compared in any of them, which is what the exclusions beside it
+        say at length.
         """
 
-        return bool(set(self.before) - {None}) and bool(set(self.after) - {None})
+        return all(bool(side) and None not in side for side in (self.before, self.after))
 
 
 @dataclass(frozen=True)
@@ -427,8 +431,9 @@ class Comparability:
         the standing example — unknown on every manifest version, which is
         exactly why a direction rests on the counterfactual instead.
 
-        A facet only one side fills in lands here too, an empty cohort's facets
-        included: what is missing is the far half of the comparison, not an
+        A facet only one side fills in lands here too, as does one a side fills
+        in for some of its reports and not for the others, an empty cohort's
+        facets included: what is missing is a half of the comparison, not an
         agreement. See `Facet.stated`, which is where that rule is.
         """
 

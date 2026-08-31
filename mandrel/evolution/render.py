@@ -1398,11 +1398,16 @@ def _facet_lines(frame: Frame) -> list[str]:
     """Why the cohorts do or do not carry a direction on their own.
 
     The two ways a facet fails are separated because only one of them is about
-    the cohorts: a facet no manifest states is a gap in what the feed publishes,
-    and rendering it beside a real mismatch would read as broken provenance in
-    both directions. `task-shape` is the standing example — unknown on every
-    manifest version, which is exactly why a direction rests on the
+    the cohorts: a facet the manifests do not all state is a gap in what the feed
+    publishes, and rendering it beside a real mismatch would read as broken
+    provenance in both directions. `task-shape` is the standing example — unknown
+    on every manifest version, which is exactly why a direction rests on the
     counterfactual instead.
+
+    "Not every manifest" rather than "no manifest", because a side one report of
+    which leaves the facet missing is a gap too (`Facet.stated`) and the sharper
+    sentence would be false over it. An empty cohort never reaches here: the
+    caller answers that case with the exclusions instead.
 
     The split itself is `Comparability`'s, not this render's. Three surfaces say
     it now — this one, the JSON, and the persisted record — and a second
@@ -1422,7 +1427,7 @@ def _facet_lines(frame: Frame) -> list[str]:
         lines.append(
             _field(
                 "",
-                f"no manifest states {', '.join(unstated)}, so the cohorts alone carry no direction — "
+                f"not every manifest states {', '.join(unstated)}, so the cohorts alone carry no direction — "
                 "one rests on the pinned counterfactual",
             )
         )
