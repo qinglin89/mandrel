@@ -971,6 +971,10 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     refused at the admission naming the command that finishes it; running the
     rollback again writes the ending it never reached, and a third run writes
     nothing.
+
+    The console says which of those two a redo would be, because the same branch
+    reports both: a rollback still owing its ending names the batch it will end,
+    and one with nothing left standing says it writes nothing.
     """
 
     analyzed_cohort(config, promoted.promotion_revision)
@@ -987,7 +991,7 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
     assert named["create"]["allowed"] is False
     assert reversal.revision[:12] in named["create"]["reason"]
-    assert named["rollback"]["recovers"] is not None
+    assert f"writes the outcome that ends {SECOND_BATCH}" in named["rollback"]["recovers"]
 
     finished = rollback.rollback(config, reason=WHY, now=LATER)
 
@@ -1001,6 +1005,9 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
 
     text = render.format_rollback(finished, config.repo_root)
     assert f"{SECOND_BATCH} — its base carried the release taken back off the line" in text
+
+    named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
+    assert named["rollback"]["recovers"].endswith("reports that rollback and writes nothing")
 
     written = (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes()
     assert rollback.rollback(config, reason=WHY, now=LATER).ended_batch is None
@@ -1070,6 +1077,7 @@ def test_a_reversal_the_line_took_and_no_record_names_still_holds_the_base(
     assert prepared["revision"][:12] in named["create"]["reason"]
     assert named["rollback"]["allowed"] is True
     assert prepared["revision"][:12] in named["rollback"]["recovers"]
+    assert f"ends {SECOND_BATCH}, which is standing on that release" in named["rollback"]["recovers"]
 
     finished = rollback.rollback(config, reason=WHY, now=LATER)
 
@@ -1100,6 +1108,10 @@ def test_a_batch_that_admitted_work_on_that_base_is_refused_rather_than_ended(
     is a repository that entered that window before this reading was closed,
     which is what the experiment written here is. It refuses, the records still
     load, and what those attempts were built on is a person's to unpick.
+
+    And the console says the same: the repair this state would otherwise be
+    offered is the one the mutation raises on, so the verb carries the ending's
+    own refusal instead of a redo that does not run.
     """
 
     analyzed_cohort(config, promoted.promotion_revision)
@@ -1122,9 +1134,52 @@ def test_a_batch_that_admitted_work_on_that_base_is_refused_rather_than_ended(
         rollback.rollback(config, reason=WHY, now=LATER)
     assert admitted in str(error.value)
 
+    named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
+    assert named["rollback"]["allowed"] is False
+    assert named["rollback"]["reason"] == str(error.value)
+    assert named["rollback"]["recovers"] is None
+
     assert not (config.batches_root / SECOND_BATCH / "outcome.json").exists()
     assert lineage.describe(config).current.batch_id == SECOND_BATCH
     assert ledger_types(config).count("batch-concluded") == 1
+
+
+def test_the_same_refusal_stands_once_the_record_says_the_line_took_it(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The other interrupted state the ending is owed from, and the same answer.
+
+    A reversal whose record is complete and whose batch-ending outcome is missing
+    is the state `reverse` leaves — the entry point the settlement composes — and
+    running the verb again is how that ending is written. With an attempt admitted
+    on the base it would end over, that redo is refused too, and the console has
+    to say so on the branch that reports a finished reversal rather than only on
+    the one that finishes it: two states, one ending, one refusal.
+    """
+
+    analyzed_cohort(config, promoted.promotion_revision)
+    assert settle_release(config, at=REVERSED) is True
+    rollback.reverse(config, reason=WHY, now=REVERSED)
+
+    admitted = f"{SECOND_BATCH}-exp-01"
+    write_experiment(
+        config.experiments_root,
+        admitted,
+        base_revision=promoted.promotion_revision,
+        rounds=[experiment_round(1)],
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        rollback.rollback(config, reason=WHY, now=LATER)
+    assert admitted in str(error.value)
+
+    named = {item["action"]: item for item in phase.describe(config, now=LATER).to_json()["allowed_actions"]}
+    assert named["rollback"]["allowed"] is False
+    assert named["rollback"]["reason"] == str(error.value)
+    assert named["rollback"]["recovers"] is None
+
+    assert not (config.batches_root / SECOND_BATCH / "outcome.json").exists()
+    assert lineage.describe(config).current.batch_id == SECOND_BATCH
 
 
 def test_only_the_latest_promotion_is_rolled_back(

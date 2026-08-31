@@ -477,6 +477,57 @@ def _unanswered(current: BatchLineage, revision: str, promoted: BatchLineage, wh
     )
 
 
+@dataclass(frozen=True)
+class Ending:
+    """The last write of a rollback, as this state would have it.
+
+    `batch_id` is the batch a landed reversal would end here, and None where the
+    ending would write nothing — no batch is current, or none is standing on a
+    reversed release. `refusal` is why that write cannot be made at all.
+
+    Both, rather than the refusal alone, because the console's gate owes two
+    different sentences about the same write: whether the repair it offers runs,
+    and what running it would do. An offer of a redo that "writes nothing" over a
+    batch this would end is the second one wrong.
+    """
+
+    batch_id: str | None = None
+    refusal: str | None = None
+
+
+def ending(config: EvolutionConfig, lineage: Lineage) -> Ending:
+    """What ending the batch standing on a reversed release would do here.
+
+    The last of the three writes is that batch's terminal outcome (`end_batch`),
+    and the one way it is refused is a batch that admitted work on the base it
+    would end over (`_require_nothing_admitted`). Read from here for
+    `nothing_promoted_refusal`'s reason: the console's gate asks the operation
+    this question rather than keeping a second spelling of it in step by hand
+    (`phase._rollback_action`). Both states that reach that verb as a repair
+    finish with this write, so a menu describing either of them without it
+    describes a redo that is not the one an operator would get.
+
+    Nothing to end is every state an ordinary reversal is made from: the release
+    is still on the line, so no base is standing on its reversal. What turns
+    *that* move away is `_require_nothing_built_on`, asked of admitted work in the
+    later batches rather than of this ending — different guards about different
+    writes, and neither stands in for the other.
+
+    A checkout that cannot say refuses nothing and names nothing, which is what
+    `end_batch` does with the same answer: the ending is left finishable from a
+    clone holding the commits, and a surface that refused here would report a
+    repair as impossible on a fact about somebody's clone.
+    """
+
+    current = lineage.current
+    if current is None:
+        return Ending()
+    promoted, _cannot_say = standing_on_reversal(config, lineage, current)
+    if promoted is None:
+        return Ending()
+    return Ending(current.batch_id, _admitted_refusal(current, promoted))
+
+
 def end_batch(
     config: EvolutionConfig,
     *,
@@ -598,10 +649,18 @@ def _require_nothing_admitted(current: BatchLineage, promoted: BatchLineage) -> 
     record, and what those attempts were built on is a decision for a person.
     """
 
+    refusal = _admitted_refusal(current, promoted)
+    if refusal is not None:
+        raise BatchError(refusal)
+
+
+def _admitted_refusal(current: BatchLineage, promoted: BatchLineage) -> str | None:
+    """The sentence both the ending and the console's gate say, written once."""
+
     admitted = [experiment.experiment_id for experiment in current.experiments]
     if not admitted:
-        return
-    raise BatchError(
+        return None
+    return (
         f"{current.batch_id} was formed at {current.base_revision[:12]}, which carries the "
         f"{promoted.batch_id} release that has since come off the source line, and it has admitted {admitted}; "
         "a rollback ends the batch standing on the release it reverses, and a batch holding work built on that "

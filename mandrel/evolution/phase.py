@@ -2063,6 +2063,21 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
     promotion still reads as effective — and it is the one the admission gate is
     refusing on meanwhile, so a menu that offered it as an ordinary reversal
     would leave the operator with a refusal and no verb pointing at it.
+
+    Both of those repairs finish with the same write: the terminal outcome of the
+    batch standing on the release (`rollback.ending`). It decides both sentences
+    this verb says about them. Whether the repair is offered at all — a redo
+    advertised over an admitted attempt is one the mutation raises on — and what
+    running it would do, since a rollback whose ending is still owed writes that
+    outcome rather than nothing.
+
+    Asked per branch rather than once above them, because it is the last question
+    the operation asks: the confirmation hold below comes before it on the
+    unfinished path and not at all on the redone one, which is the order `reverse`
+    itself asks them in. The ordinary reversal below is not asked it — what turns
+    that one away is `_require_nothing_built_on`, refusing the *move* while later
+    work stands on the promotion, and the finishing path never reaching that guard
+    is why the ending needs a refusal of its own.
     """
 
     promotion = status.last_promotion
@@ -2070,6 +2085,7 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
         return Action(ACTION_ROLLBACK, refusal=rollback_ops.nothing_promoted_refusal())
     promoted = lineage.last_promoted
     record = promotion.rollback
+    ending = rollback_ops.ending(config, lineage)
     reversed_already = (
         rollback_ops.redone_reversal(promoted) if promoted is not None else None
     )
@@ -2077,15 +2093,26 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
         # The promotion is off the line and the record says so: this verb is how
         # a run interrupted between the two writes is finished, and run again for
         # the reason on record it reports the reversal rather than making a
-        # second one.
+        # second one — except for the ending, which is the write such a run is
+        # most likely to have stopped before.
         return Action(
             ACTION_ROLLBACK,
             OBJECT_PROMOTION,
             promotion.revision,
+            ending.refusal,
             recovery=(
-                f"{promotion.revision[:12]} was already taken off {promotion.merge_input_ref} by "
-                f"{record.revision[:12]} at {record.reverted_at}; run again for the reason on record this reports "
-                "that rollback and writes nothing"
+                None
+                if ending.refusal is not None
+                else (
+                    f"{promotion.revision[:12]} was already taken off {promotion.merge_input_ref} by "
+                    f"{record.revision[:12]} at {record.reverted_at}; run again for the reason on record this "
+                    "reports that rollback and "
+                    + (
+                        "writes nothing"
+                        if ending.batch_id is None
+                        else f"writes the outcome that ends {ending.batch_id}, which is standing on that release"
+                    )
+                )
             ),
         )
     refusal = None
@@ -2104,15 +2131,27 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
         # After the confirmation hold rather than before it, which is the order
         # the operation asks them in: a record it cannot recompute refuses at
         # `_require_confirmed_inverse` before it reaches the line at all, so a
-        # redo offered over one would be a repair that does not run.
+        # redo offered over one would be a repair that does not run. The ending
+        # is asked after both, for the same reason and from the other end: it is
+        # the last write, so it is the last thing that can turn the repair away.
         return Action(
             ACTION_ROLLBACK,
             OBJECT_PROMOTION,
             promotion.revision,
+            ending.refusal,
             recovery=(
-                f"{promotion.merge_input_ref} already carries {record.revision[:12]}, which took "
-                f"{promotion.revision[:12]} off it, and no record here says the line took it; run again for the "
-                "reason on record this finishes that rollback and ends the batch standing on the release"
+                None
+                if ending.refusal is not None
+                else (
+                    f"{promotion.merge_input_ref} already carries {record.revision[:12]}, which took "
+                    f"{promotion.revision[:12]} off it, and no record here says the line took it; run again for "
+                    "the reason on record this finishes that rollback"
+                    + (
+                        ""
+                        if ending.batch_id is None
+                        else f" and ends {ending.batch_id}, which is standing on that release"
+                    )
+                )
             ),
         )
     return Action(ACTION_ROLLBACK, OBJECT_PROMOTION, promotion.revision, refusal)
