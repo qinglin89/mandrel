@@ -1039,7 +1039,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
 
     payload = phase.describe(config, now=NOW).to_json()
 
-    assert payload["schema_version"] == phase.SCHEMA_VERSION == 10
+    assert payload["schema_version"] == phase.SCHEMA_VERSION == 11
     assert payload["phase"] == phase.PHASE_POOL
     assert payload["pool"] == {
         "task_count": 1,
@@ -2796,6 +2796,8 @@ def test_the_release_reading_and_its_gate_are_one_verb_each(
             assessment.CONFIDENCE_LOW,
             "--rationale",
             "no frozen manifest states what kind of work either cohort did",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             "--metric",
             "review-rounds",
             "rounds",
@@ -2848,6 +2850,8 @@ def test_a_rolled_back_settlement_runs_the_reversal_itself(
             assessment.CONFIDENCE_LOW,
             "--rationale",
             "the cohorts place nothing on either side",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             *where,
         ],
         capsys,
@@ -2924,6 +2928,8 @@ def test_a_settlement_finishes_a_reversal_the_line_had_already_taken(
             assessment.CONFIDENCE_LOW,
             "--rationale",
             "the cohorts place nothing on either side",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             *where,
         ],
         capsys,
@@ -2978,6 +2984,8 @@ def test_the_counterfactual_is_ended_given_up_and_read_from_the_command_line(
         assessment.CONFIDENCE_LOW,
         "--rationale",
         "the cohorts place nothing on either side",
+        "--recommend",
+        assessment.SETTLEMENT_RETAIN,
     ]
     run(["evolution", "assess", *reading, *where], capsys)
 
@@ -3014,6 +3022,8 @@ def test_the_counterfactual_is_ended_given_up_and_read_from_the_command_line(
             assessment.CONFIDENCE_HIGH,
             "--rationale",
             "the pinned run measured fewer rounds over one case set",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             *where,
         ],
         capsys,
@@ -3046,6 +3056,8 @@ def test_a_release_verb_refuses_the_reading_another_writer_moved_under(
             assessment.CONFIDENCE_LOW,
             "--rationale",
             "the cohorts place nothing on either side",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             *where,
         ],
         capsys,
@@ -3098,6 +3110,8 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
         assessment.CONFIDENCE_LOW,
         "--rationale",
         "the cohorts place nothing on either side",
+        "--recommend",
+        assessment.SETTLEMENT_RETAIN,
     ]
 
     # Last on the line, which is where the count is the whole of what is wrong:
@@ -3416,6 +3430,8 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
         assessment.CONFIDENCE_LOW,
         "--rationale",
         "the cohorts place nothing on either side",
+        "--recommend",
+        assessment.SETTLEMENT_RETAIN,
     ]
     run(["evolution", "assess", *read, *where], capsys)
 
@@ -3455,6 +3471,8 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
             assessment.CONFIDENCE_HIGH,
             "--rationale",
             "the counterfactual measured fewer remediation rounds on the release",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
             *where,
         ],
         capsys,
@@ -3490,7 +3508,16 @@ def _minimal(verb: str) -> list[str]:
         else []
     )
     reading = (
-        ["--verdict", assessment.VERDICT_INCONCLUSIVE, "--confidence", assessment.CONFIDENCE_LOW, "--rationale", "why"]
+        [
+            "--verdict",
+            assessment.VERDICT_INCONCLUSIVE,
+            "--confidence",
+            assessment.CONFIDENCE_LOW,
+            "--rationale",
+            "why",
+            "--recommend",
+            assessment.SETTLEMENT_RETAIN,
+        ]
         if verb in ("assess", "assess-resolve")
         else []
     )

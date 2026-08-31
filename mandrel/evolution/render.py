@@ -771,6 +771,7 @@ def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
         _field("release", f"{reading.subject.batch_id} ({reading.subject.experiment_id})"),
         _field("cohorts", f"{reading.before_task_count} task(s) before, {reading.after_task_count} after"),
         _field("rationale", reading.rationale),
+        _field("recommends", f"{reading.recommendation} — advice for the gate, which a human answers"),
         _field("record", _relative(result.record_path, repo_root)),
     ]
     for index, measurement in enumerate(reading.metrics):
@@ -1402,13 +1403,16 @@ def _facet_lines(frame: Frame) -> list[str]:
     both directions. `task-shape` is the standing example — unknown on every
     manifest version, which is exactly why a direction rests on the
     counterfactual instead.
+
+    The split itself is `Comparability`'s, not this render's. Three surfaces say
+    it now — this one, the JSON, and the persisted record — and a second
+    derivation here would be the same rule kept in step by hand.
     """
 
-    incoherent = [facet for facet in frame.comparability.facets if not facet.coherent]
-    if not incoherent:
+    if frame.comparability.coherent:
         return [_field("", "the cohorts are comparable in every stated facet")]
-    unstated = [facet.facet for facet in incoherent if not (set(facet.before) | set(facet.after)) - {None}]
-    differing = [facet.facet for facet in incoherent if facet.facet not in unstated]
+    unstated = frame.comparability.unstated
+    differing = frame.comparability.differing
     lines: list[str] = []
     if differing:
         lines.append(
@@ -1519,7 +1523,10 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
             )
         ]
     lines = [
-        _field("", f"reading: {reading.verdict} ({reading.confidence}) formed {reading.formed_at} — {reading.rationale}")
+        _field(
+            "", f"reading: {reading.verdict} ({reading.confidence}) formed {reading.formed_at} — {reading.rationale}"
+        ),
+        _field("", f"it recommends {reading.recommendation}"),
     ]
     if release.reversed_after_reading:
         lines.append(
@@ -1545,14 +1552,25 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
             )
         else:
             lines.append(
-                _field("", "not settled — retain the release or roll it back; the next first experiment waits")
+                _field(
+                    "",
+                    "not settled — retain the release or roll it back; the reading advises "
+                    f"{reading.recommendation} and the next first experiment waits on the answer",
+                )
             )
         return lines
 
     selected = (
         release.frame.subject.revision if decision.settlement == SETTLEMENT_RETAIN else (decision.rollback_revision or "")
     )
-    lines.append(_field("", f"settled {decision.settlement} at {decision.decided_at} — {decision.reason}"))
+    # Named only where the two disagree, which is the case the reason line above
+    # exists for: a human may keep a release the reading wanted reversed.
+    against = (
+        ""
+        if decision.settlement == reading.recommendation
+        else f", against the reading's {reading.recommendation!r} advice"
+    )
+    lines.append(_field("", f"settled {decision.settlement} at {decision.decided_at}{against} — {decision.reason}"))
     lines.append(_field("", f"the next first experiment base must contain {selected[:12]}"))
     return lines
 

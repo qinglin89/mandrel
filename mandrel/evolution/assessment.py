@@ -166,7 +166,13 @@ from .rollback import reverse as reverse_promotion
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
-ASSESSMENT_SCHEMA_VERSION = 2
+# 3: the reading gained the `recommendation` it ends in, and the comparability
+# block gained the two ways a facet fails split out of `incoherent`. Both move
+# the field set rather than widen a vocabulary, which is what the `outcome`
+# enum's rule (contract: Batch outcome) distinguishes: a version identifies the
+# shape a reader must parse. No record of version 1 or 2 has ever been written
+# in this repository's history.
+ASSESSMENT_SCHEMA_VERSION = 3
 
 RECORD_RELEASE_ASSESSED = "release-assessed"
 RECORD_COUNTERFACTUAL_COMPLETED = "release-counterfactual-completed"
@@ -197,6 +203,14 @@ SETTLEMENT_ROLLED_BACK = "rolled-back"
 # The two answers the gate has. There is no third: a release is either what the
 # next batch's alternatives are built on or it is taken back off the line first,
 # and "not yet" is the unsettled reading rather than a decision.
+#
+# They are also the two words a reading's `recommendation` speaks, deliberately.
+# The analysis of a post-release batch ends in two answers — its change-task
+# drafts, and what it thinks should happen to the release those drafts would be
+# built on — and the human gate is the choice between them. A recommendation in
+# some other vocabulary would leave a reader mapping it onto the decision it is
+# advice about; a batch that drafted nothing is the absence of anything to
+# choose (invariant 7's `no-change` conclusion) rather than a third word here.
 SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 
 # Why a frozen report is in neither cohort. All four are about what its
@@ -362,6 +376,29 @@ class Facet:
     before: tuple[str | None, ...]
     after: tuple[str | None, ...]
 
+    @property
+    def stated(self) -> bool:
+        """Whether *both* sides fill this facet in.
+
+        The question that separates the two ways a facet fails: a facet no
+        manifest states is unknown, and a facet both sides state and disagree on
+        is a difference. A missing value is carried as null rather than dropped
+        (`_values`), so this asks whether a value survives dropping them on each
+        side.
+
+        Both rather than either, and the difference is the whole of what the
+        split is for. One side stating a rubric revision while the other states
+        none is not the two sides disagreeing about the rubric — nothing on the
+        far side was there to disagree with — and calling it a difference would
+        report a gap in what the feed published as evidence that the release is
+        not the only thing separating the cohorts. An empty side is the same
+        answer taken to its limit: it fills in no facet, so nothing could be
+        compared in any of them, which is what the exclusions beside it say at
+        length.
+        """
+
+        return bool(set(self.before) - {None}) and bool(set(self.after) - {None})
+
 
 @dataclass(frozen=True)
 class Comparability:
@@ -379,6 +416,36 @@ class Comparability:
         something an operator or a rationale can act on."""
 
         return tuple(facet.facet for facet in self.facets if not facet.coherent)
+
+    @property
+    def unstated(self) -> tuple[str, ...]:
+        """The incoherent facets at least one side does not state.
+
+        The first of the two ways a facet fails, and the one that is not about
+        these cohorts at all: a facet no manifest fills in is a gap in what the
+        feed publishes, so the answer is unknown rather than no. `task-shape` is
+        the standing example — unknown on every manifest version, which is
+        exactly why a direction rests on the counterfactual instead.
+
+        A facet only one side fills in lands here too, an empty cohort's facets
+        included: what is missing is the far half of the comparison, not an
+        agreement. See `Facet.stated`, which is where that rule is.
+        """
+
+        return tuple(facet.facet for facet in self.facets if not facet.coherent and not facet.stated)
+
+    @property
+    def differing(self) -> tuple[str, ...]:
+        """The incoherent facets both sides state, and disagree on.
+
+        The other way a facet fails, and the only one that is evidence about
+        these cohorts: the release is not the only difference between them. Kept
+        apart from `unstated` because reporting the two together reads as broken
+        provenance in both directions — a mismatch nobody can fix beside a gap
+        nobody introduced.
+        """
+
+        return tuple(facet.facet for facet in self.facets if not facet.coherent and facet.stated)
 
 
 @dataclass(frozen=True)
@@ -663,6 +730,14 @@ class Assessment:
     verdict: str
     confidence: str
     rationale: str
+    # What this reading says should happen to the release: `retain`, or
+    # `rolled-back`. The analysis of a post-release batch produces two answers —
+    # the change-task drafts under its `proposed-tasks/`, and this — and the
+    # human gate is the choice between them, which is why the recommendation
+    # sits on the reading rather than in a fourth artifact beside it. It is
+    # advice and never the answer: `decision` below is what was actually done,
+    # and the two are allowed to disagree.
+    recommendation: str
     formed_at: str
     decision: Decision | None
     # The run asked for and not yet answered. The write that records the run a
@@ -719,6 +794,8 @@ class Assessment:
             },
             "comparability": {
                 "coherent": self.comparability.coherent,
+                "unstated": list(self.comparability.unstated),
+                "differing": list(self.comparability.differing),
                 "facets": [
                     {
                         "facet": facet.facet,
@@ -736,6 +813,7 @@ class Assessment:
             "verdict": self.verdict,
             "confidence": self.confidence,
             "rationale": self.rationale,
+            "recommendation": self.recommendation,
             "formed_at": self.formed_at,
             "decision": None
             if self.decision is None
@@ -1161,6 +1239,9 @@ def parse(
         metrics=metrics,
         counterfactual=counterfactual,
     )
+    _require_supported_recommendation(
+        path, recommendation=record["recommendation"], verdict=record["verdict"]
+    )
 
     return Assessment(
         batch_id=record["batch_id"],
@@ -1176,6 +1257,7 @@ def parse(
         verdict=record["verdict"],
         confidence=record["confidence"],
         rationale=record["rationale"],
+        recommendation=record["recommendation"],
         formed_at=record["formed_at"],
         decision=decision,
         requested=requested,
@@ -1190,6 +1272,7 @@ def form(
     verdict: str,
     confidence: str,
     rationale: str,
+    recommendation: str,
     metrics: Sequence[Measurement] = (),
     expect: str | None = None,
     now: datetime | None = None,
@@ -1220,7 +1303,9 @@ def form(
     carry no direction on their own, and the counterfactual that settles one has
     not run when this is written. That is the artifact working rather than a
     limitation of it — the cohorts raise the suspicion and the pinned run answers
-    it.
+    it. Which is also why a formation ordinarily advises `retain`: `rolled-back`
+    is held to a `regressed` reading, and that reading is what `resolve` is the
+    first place able to record.
 
     Run again after an interrupted formation, this reports the reading already on
     record rather than writing a second one, and does not re-append the audit line
@@ -1247,7 +1332,7 @@ def form(
 
         already = read(config, batch, frame=frame)
         if already is not None:
-            return _redone(frame, already, stated, verdict, confidence, text)
+            return _redone(frame, already, stated, verdict, confidence, text, recommendation)
 
         built = Assessment(
             batch_id=frame.batch_id,
@@ -1263,6 +1348,7 @@ def form(
             verdict=verdict,
             confidence=confidence,
             rationale=text,
+            recommendation=recommendation,
             formed_at=format_rfc3339(moment),
             decision=None,
         )
@@ -1404,6 +1490,7 @@ def _redone(
     verdict: str,
     confidence: str,
     rationale: str,
+    recommendation: str,
 ) -> Formed:
     """The same formation run again, or the refusal that this cohort has read
     this release already.
@@ -1415,12 +1502,13 @@ def _redone(
     landed rather than part of it.
     """
 
-    if (already.metrics, already.verdict, already.confidence, already.rationale) == (
-        metrics,
-        verdict,
-        confidence,
-        rationale,
-    ):
+    if (
+        already.metrics,
+        already.verdict,
+        already.confidence,
+        already.rationale,
+        already.recommendation,
+    ) == (metrics, verdict, confidence, rationale, recommendation):
         return Formed(
             batch_id=frame.batch_id,
             assessment=already,
@@ -1849,6 +1937,7 @@ def resolve(
     verdict: str,
     confidence: str,
     rationale: str,
+    recommendation: str,
     expect: str | None = None,
     now: datetime | None = None,
 ) -> Formed:
@@ -1864,6 +1953,12 @@ def resolve(
     the way every goal that moved points, all of them unmoved is `neutral`, and
     goals pointing both ways settle nothing. So a claim the only comparison
     supporting it contradicts never reaches the disk.
+
+    The recommendation is revised here for the same reason the verdict is, and it
+    is the revision that matters most: `rolled-back` may only be advised over a
+    `regressed` reading, and `regressed` is a verdict this operation is the first
+    place to be able to record. A formation therefore advises `retain` or
+    nothing, and the run is what can change that.
 
     This revises the reading rather than adding a second one, which is the
     difference from forming it: a formation happens once because two records of
@@ -1894,7 +1989,12 @@ def resolve(
         if refusal is not None:
             raise BatchError(refusal)
 
-        if (reading.verdict, reading.confidence, reading.rationale) == (verdict, confidence, text):
+        if (reading.verdict, reading.confidence, reading.rationale, reading.recommendation) == (
+            verdict,
+            confidence,
+            text,
+            recommendation,
+        ):
             return Formed(
                 batch_id=frame.batch_id,
                 assessment=reading,
@@ -1906,7 +2006,14 @@ def resolve(
         recorded = _write_assessment(
             config,
             batch,
-            replace(reading, verdict=verdict, confidence=confidence, rationale=text, formed_at=stamp),
+            replace(
+                reading,
+                verdict=verdict,
+                confidence=confidence,
+                rationale=text,
+                recommendation=recommendation,
+                formed_at=stamp,
+            ),
             frame,
         )
         append_records(
@@ -3615,6 +3722,19 @@ def _require_stated_comparability(
             f"{comparability.coherent!r}"
             + (f" ({', '.join(comparability.incoherent)} differ)" if comparability.incoherent else "")
         )
+    # The same check for the summary the two ways a facet fails are split into.
+    # It is a reading of the facet list rather than something the record chooses,
+    # and it is emitted precisely so a consumer does not have to know that a
+    # value carried as null is a missing one — a record stating it otherwise
+    # would put that consumer's answer beyond every other reader's.
+    for key, derived_split in (("unstated", comparability.unstated), ("differing", comparability.differing)):
+        if tuple(stated[key]) != derived_split:
+            raise BatchError(
+                f"{path}: comparability records {key} as {list(stated[key])} while its own facets give "
+                f"{list(derived_split)}; a facet at least one side does not state and a facet both sides "
+                "state and disagree on are the two ways a comparison fails, and which of them each one is "
+                "follows from the values recorded beside it"
+            )
 
 
 def _require_one_side(
@@ -3906,6 +4026,37 @@ def _require_supported_verdict(
         + f"; what this evidence allows is {VERDICT_INCONCLUSIVE!r}, or a direction settled by a "
         "completed counterfactual"
     )
+
+
+def _require_supported_recommendation(path: Path, *, recommendation: str, verdict: str) -> None:
+    """Advice to take a release back off the line needs the reading that says it
+    made the work worse.
+
+    The recommendation is the analysis's own conclusion and the human gate may
+    overrule it either way, so this is one rule and not a derivation of the field
+    from the verdict. `retain` is recommendable on every reading, `inconclusive`
+    included: knowing less is not grounds for reversing a change that is already
+    on the line, and a reading with no directional evidence is precisely the
+    ordinary state of one formed before the counterfactual runs.
+
+    `rolled-back` is held to `regressed` because that is the only reading which
+    says the release cost something, and it already rests on a completed
+    counterfactual (`_require_supported_verdict`) — so the advice inherits the
+    measurement rather than restating a threshold of its own. What the field
+    still carries where it is not forced is the case the rule leaves open: a
+    measured regression a session weighs against what else the release brought
+    and recommends keeping anyway.
+    """
+
+    if recommendation == SETTLEMENT_ROLLED_BACK and verdict != VERDICT_REGRESSED:
+        raise BatchError(
+            f"{path}: this reading recommends {SETTLEMENT_ROLLED_BACK!r} over a {verdict!r} verdict; taking a "
+            f"promoted change back off the source line is advised on the reading that measured it worse "
+            f"({VERDICT_REGRESSED!r}, which rests on a completed counterfactual), and every other reading — "
+            f"{VERDICT_INCONCLUSIVE!r} among them — is a reason to know less rather than evidence against the "
+            f"release. A session that wants the reversal anyway settles it at the gate, where a human answer "
+            "is what an irreversible operation is recorded against"
+        )
 
 
 def _direction(measurement: Measurement) -> str:

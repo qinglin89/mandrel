@@ -467,7 +467,7 @@ def render(spec: AnalysisTaskSpec) -> str:
     # manifest keeps the operator's text verbatim.
     justification = " ".join((spec.force_justification or "").split())
     force_line = f"- Below-target batch, frozen on human justification: {justification}\n" if spec.forced else ""
-    release_scope = _release_scope(spec.release)
+    release_scope = _release_scope(spec.release, spec.proposed_tasks_relative_path)
     release_acceptance = _release_acceptance(spec.release)
     return f"""---
 id: {spec.task_id}
@@ -568,7 +568,7 @@ justified is a valid outcome (invariant 7).
 """
 
 
-def _release_scope(release: ReleaseAssessment | None) -> str:
+def _release_scope(release: ReleaseAssessment | None, drafts: str) -> str:
     """What a post-release batch owes beyond its dispositions.
 
     Empty for a batch that follows no promotion, so the ordinary generated task
@@ -643,9 +643,24 @@ other.
   the rest as observations (invariant 13), or read it `inconclusive`.
 - Record the reading at
   `{release.assessment_relative_path}`, with the denominators and every exclusion
-  visible. Retaining or rolling back the release is a human decision recorded on
-  that artifact afterwards; this task produces the evidence and the verdict, not
-  the settlement.
+  visible, and state on it which of the two answers this analysis recommends:
+  `retain`, or `rolled-back`. That recommendation is this analysis's second
+  output and it goes on the reading, not into an artifact of its own — a reading
+  that says what it found and not what should follow from it leaves the gate to
+  re-derive the conclusion from the evidence. `rolled-back` is advisable only
+  over a `regressed` verdict, which rests on the completed counterfactual; every
+  other reading is a reason to know less, so it recommends `retain`. Retaining or
+  rolling back is still a human decision recorded on that artifact afterwards,
+  and it may go against this recommendation: this task produces the evidence, the
+  verdict and the advice, never the settlement.
+- So this analysis ends in two answers, and a human takes exactly one: the
+  change-task drafts under `{drafts}/`, or a rollback
+  of the release those drafts would be built on. Draft the accepted dispositions
+  either way — a recommendation to roll back is not a reason to leave the
+  findings unwritten, and the drafts outlive the batch as records of what this
+  evidence said. Where the analysis accepted nothing at all, there is no choice
+  to put: that batch concludes `no-change` (invariant 7), which is the absence of
+  anything to choose and not a third answer.
 - That settlement is what the next first experiment waits on (invariant 17):
   `retain` leaves the release on `{release.merge_input_ref}`, which is the line
   the base this batch was formed at already carries, while `rolled-back` puts an
@@ -679,4 +694,7 @@ def _release_acceptance(release: ReleaseAssessment | None) -> str:
   cohorts cannot carry is either settled by a completed counterfactual or read
   `inconclusive`, and a verdict a counterfactual settles is the direction that
   run measured.
+- That reading also states which settlement it recommends, and the rationale says
+  why the evidence points that way. A `rolled-back` recommendation carries a
+  `regressed` verdict behind it.
 """

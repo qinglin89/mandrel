@@ -528,6 +528,10 @@ def test_empty_cohorts_read_as_absent_evidence_and_not_as_a_verdict(
     assert block["cohorts"]["after"]["task_count"] == 0
     assert {item["reason"] for item in block["cohorts"]["excluded"]} == {"effective-revision-absent"}
     assert block["comparability"]["cohorts_support_direction"] is False
+    # Nothing could be compared: an empty side leaves every facet with nothing on
+    # it, which is unstated rather than the two sides disagreeing.
+    assert block["comparability"]["differing"] == []
+    assert set(block["comparability"]["unstated"]) == set(block["comparability"]["incoherent"])
 
     text = rendered(config)
     assert "3 of 6 report(s) excluded: effective-revision-absent (3)" in text
@@ -551,6 +555,13 @@ def test_placed_cohorts_name_the_facet_no_manifest_states(
     assert "no manifest states task-shape" in text
     assert "one rests on the pinned counterfactual" in text
 
+    # The same distinction the render draws, on the surface a machine drives:
+    # the sides state nothing here, so nothing about them differs.
+    comparability = payload(config)["release"]["comparability"]
+    assert comparability["unstated"] == ["task-shape"]
+    assert comparability["differing"] == []
+    assert comparability["incoherent"] == ["task-shape"]
+
 
 def test_a_settled_reading_names_the_commit_the_next_base_must_carry(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
@@ -565,12 +576,16 @@ def test_a_settled_reading_names_the_commit_the_next_base_must_carry(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
 
     unsettled = rendered(config)
     assert "reading: inconclusive (low) formed" in unsettled
+    assert "it recommends retain" in unsettled
     assert "not settled — retain the release or roll it back" in unsettled
+    assert "the reading advises retain and the next first experiment waits" in unsettled
+    assert payload(config)["release"]["reading"]["recommendation"] == assessment.SETTLEMENT_RETAIN
 
     assessment.settle(
         config,
@@ -612,6 +627,7 @@ def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
     standing = payload(config)["release"]["assessed"]
@@ -642,6 +658,65 @@ def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
     assert "(rolled back)" in rendered(config)
 
 
+def test_the_gate_may_answer_against_the_reading_it_answers_from(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The recommendation is advice and the settlement is the answer, so the
+    surface has to be able to say they disagreed.
+
+    A measured regression a human keeps anyway is the case: the reason line is
+    where that gets explained, and a reader who could not see what the reading
+    advised would have nothing to read it against. Where the two agree the
+    clause is absent — it is the disagreement that is worth a reader's attention.
+    """
+
+    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
+        now=NOW,
+    )
+    worse = completed_report(
+        metrics=(
+            replay.Measurement(
+                metric="remediation-rounds", unit="rounds", baseline=1.6, candidate=2.4, better="lower"
+            ),
+        )
+    )
+    harness = FakeHarness(report=worse)
+    assessment.measure(config, harness, expectation=EXPECTATION, now=NOW)
+    assessment.conclude(config, harness, now=NOW)
+    assessment.resolve(
+        config,
+        verdict=assessment.VERDICT_REGRESSED,
+        confidence=assessment.CONFIDENCE_HIGH,
+        rationale="the pinned run measured more remediation rounds on the release",
+        recommendation=assessment.SETTLEMENT_ROLLED_BACK,
+        now=NOW,
+    )
+
+    advised = rendered(config)
+    assert "it recommends rolled-back" in advised
+    assert payload(config)["release"]["reading"]["recommendation"] == assessment.SETTLEMENT_ROLLED_BACK
+
+    assessment.settle(
+        config,
+        settlement=assessment.SETTLEMENT_RETAIN,
+        reason="the regression is narrower than what the release brought with it",
+        now=NOW,
+    )
+
+    settled = rendered(config)
+    assert "settled retain at" in settled
+    assert "against the reading's 'rolled-back' advice" in settled
+    block = payload(config)["release"]
+    assert block["decision"]["settlement"] == assessment.SETTLEMENT_RETAIN
+    assert block["reading"]["recommendation"] == assessment.SETTLEMENT_ROLLED_BACK
+
+
 def test_the_counterfactual_is_four_states_and_a_request_is_the_first(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
@@ -658,6 +733,7 @@ def test_the_counterfactual_is_four_states_and_a_request_is_the_first(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
 
@@ -731,7 +807,7 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
     described = status(config)
     emitted = described.to_json()
 
-    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 10
+    assert emitted["schema_version"] == phase.SCHEMA_VERSION == 11
     assert json.loads(json.dumps(emitted)) == emitted
     text = render.format_status(described)
     assert emitted["summary"] in text.splitlines()[0]
@@ -967,6 +1043,7 @@ def test_a_first_admission_names_the_settlement_it_waits_on(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
     assert "nobody has settled it" in verbs(config)["create"]["reason"]
@@ -1136,6 +1213,7 @@ def test_a_settled_release_offers_the_answer_that_settled_it(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
     reason = "nothing measured against the release"
@@ -1160,6 +1238,7 @@ def test_a_settled_release_offers_the_answer_that_settled_it(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
     assert formed_again.recorded is False
@@ -1267,6 +1346,7 @@ def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
             verdict=assessment.VERDICT_IMPROVED,
             confidence=assessment.CONFIDENCE_LOW,
             rationale="the counterfactual moved the goal metric",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=NOW,
         )
     )
@@ -1277,6 +1357,7 @@ def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale="no frozen manifest states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
     # A reading with no run under it: the two that answer for one, and the
@@ -1290,6 +1371,7 @@ def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
             verdict=assessment.VERDICT_IMPROVED,
             confidence=assessment.CONFIDENCE_LOW,
             rationale="the counterfactual moved the goal metric",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=NOW,
         )
     )

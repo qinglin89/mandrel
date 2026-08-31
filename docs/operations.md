@@ -650,13 +650,21 @@ release is kept — all of it is a human judgement stated here and recorded
 
 | Verb | What it does |
 |---|---|
-| `assess --verdict ... --confidence ... --rationale ... [--metric NAME UNIT BEFORE AFTER BETTER]...` | record this cohort's reading of the release before it |
+| `assess --verdict ... --confidence ... --rationale ... --recommend ... [--metric NAME UNIT BEFORE AFTER BETTER]...` | record this cohort's reading of the release before it, and which settlement it advises |
 | `assess-measure --expectation ...` | request the pinned counterfactual, and record its run once one is stated |
 | `assess-conclude --outcome ... --detail ...` | record what the harness reported for it |
 | `assess-abandon --reason ...` | record why that run ended when its harness cannot say |
 | `assess-withdraw` | give up a counterfactual request the harness never answered for |
-| `assess-resolve --verdict ... --confidence ... --rationale ...` | revise the reading on the strength of the completed run |
+| `assess-resolve --verdict ... --confidence ... --rationale ... --recommend ...` | revise the reading on the strength of the completed run |
 | `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next batch's first experiment waits on; `rolled-back` runs the reversal itself and ends the batch with it |
+
+The reading states which settlement it advises as well as what it found,
+because the analysis of a post-release batch ends in two answers and a human
+takes one: the change-task drafts, or a rollback of the release those drafts
+would be built on. `--recommend` is that advice and `settle --settlement` is
+the answer; the two may disagree, and `status` says so when they do.
+`rolled-back` is advisable only over a `regressed` verdict, which rests on a
+completed counterfactual.
 
 `settle` is one verb and not a sequence: a `rolled-back` settlement performs the
 rollback, adopts an inverse already on the line, and finishes one left prepared.
@@ -736,7 +744,8 @@ experiment is admitted until the reading is settled (invariant 17):
 ```bash
 ./bin/mandrel evolution start && ./bin/mandrel evolution freeze
 ./bin/mandrel evolution assess --verdict improved --confidence medium \
-    --rationale "..." --metric "remediation rounds" rounds 2.1 1.4 lower
+    --rationale "..." --recommend retain \
+    --metric "remediation rounds" rounds 2.1 1.4 lower
 ./bin/mandrel evolution assess-measure --expectation "..."   # the pinned counterfactual
 # ...run it, state it, `assess-conclude` it, then `assess-resolve` the reading
 ./bin/mandrel evolution settle --settlement retain --reason "the reading holds"
@@ -823,7 +832,7 @@ deployment is not lifecycle state.
 ### The JSON and action contract
 
 `status --json` is the machine shape of everything above, at
-`schema_version: 10`. Alongside the pool, proposal, admission, batches, gate,
+`schema_version: 11`. Alongside the pool, proposal, admission, batches, gate,
 experiments, revisions, replay, release, `last_promotion` and `deployment` blocks
 it carries
 the two fields a surface acts on:

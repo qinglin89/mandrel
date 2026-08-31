@@ -584,9 +584,13 @@ def _add_reading_arguments(parser: argparse.ArgumentParser, assessment) -> None:
 
     The rationale is required for the reason every recorded reason here is: the
     evidence the judging session had in front of it is machine-local, and this
-    sentence is what a later reader has instead of it. The two vocabularies are
+    sentence is what a later reader has instead of it. The three vocabularies are
     the record's own, so a value this build does not know is refused at the
     command line rather than at the write.
+
+    The recommendation takes the settlement's vocabulary because it is advice
+    about that decision, and the gate that answers is a human's — so this states
+    what the reading concluded and never presses the button for them.
     """
 
     parser.add_argument(
@@ -605,6 +609,17 @@ def _add_reading_arguments(parser: argparse.ArgumentParser, assessment) -> None:
         "--rationale",
         required=True,
         help="why the verdict is that verdict (recorded, and required)",
+    )
+    parser.add_argument(
+        "--recommend",
+        required=True,
+        choices=list(assessment.SETTLEMENTS),
+        help=(
+            "what this reading says should happen to the release: the other answer the analysis of a "
+            f"post-release batch owes, beside its change-task drafts. {assessment.SETTLEMENT_ROLLED_BACK!r} is "
+            f"advisable only over a {assessment.VERDICT_REGRESSED!r} verdict. Required rather than defaulted to "
+            f"{assessment.SETTLEMENT_RETAIN!r}: a recommendation nobody gave would go on record as one somebody did"
+        ),
     )
 
 
@@ -888,6 +903,7 @@ def _release(config, args: argparse.Namespace) -> str:
                 verdict=args.verdict,
                 confidence=args.confidence,
                 rationale=args.rationale,
+                recommendation=args.recommend,
                 metrics=_measurements(assessment, args.metric),
                 expect=args.expect,
             )
@@ -897,6 +913,7 @@ def _release(config, args: argparse.Namespace) -> str:
                 verdict=args.verdict,
                 confidence=args.confidence,
                 rationale=args.rationale,
+                recommendation=args.recommend,
                 expect=args.expect,
             )
         )

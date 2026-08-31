@@ -179,7 +179,11 @@ from .revisions import Revision
 from .proposals import BatchProposal, load_proposal
 from .state import artifacts_dir_name, load_state
 
-SCHEMA_VERSION = 10
+# 11: the release block's `comparability` gained `unstated` / `differing` and its
+# `reading` gained `recommendation`. No field changed shape, but this payload
+# promises its exact key set to the surfaces that drive the lifecycle from it,
+# so an additive change announces itself the way two new verbs did at 10.
+SCHEMA_VERSION = 11
 
 PHASE_IDLE = "idle"
 PHASE_POOL = "pool"
@@ -2608,6 +2612,16 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
         "comparability": {
             "coherent": frame.comparability.coherent,
             "incoherent": list(frame.comparability.incoherent),
+            # The two ways a facet lands in `incoherent`, which are different
+            # answers to a surface: `differing` is evidence about these cohorts
+            # — the release is not the only difference between them — while
+            # `unstated` is a gap in what the feed publishes and says nothing
+            # about the release either way. Emitted rather than left to be
+            # re-derived from `facets`, because deriving it means knowing that a
+            # value carried as null is a missing one, which is this module's
+            # rule and not a consumer's.
+            "unstated": list(frame.comparability.unstated),
+            "differing": list(frame.comparability.differing),
             "facets": [
                 {
                     "facet": facet.facet,
@@ -2630,6 +2644,12 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
             "verdict": reading.verdict,
             "confidence": reading.confidence,
             "rationale": reading.rationale,
+            # What the reading says should happen to the release, in the words
+            # `decision.settlement` answers in. Advice and not the answer: a
+            # surface offering the gate shows this beside the two buttons rather
+            # than pre-pressing one, and an unsettled reading is where the
+            # difference between the two fields is the whole point.
+            "recommendation": reading.recommendation,
             "formed_at": reading.formed_at,
             "directional": reading.directional,
             "metrics": [

@@ -608,6 +608,7 @@ def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEM
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale="no frozen manifest states what kind of work either cohort did",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=at,
         )
     assessment.settle(

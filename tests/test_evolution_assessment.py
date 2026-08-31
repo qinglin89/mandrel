@@ -291,6 +291,7 @@ def build(frame: assessment.Frame, **overrides) -> assessment.Assessment:
         verdict=assessment.VERDICT_IMPROVED,
         confidence=assessment.CONFIDENCE_MEDIUM,
         rationale=WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
         formed_at=FORMED_AT,
         decision=None,
     )
@@ -860,6 +861,14 @@ def test_mixed_provenance_is_named_facet_by_facet(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
+    """And the two ways a facet fails are named apart.
+
+    A rubric the sides state and disagree on is evidence about these cohorts;
+    the shape of the work is a facet no manifest version fills in, which is
+    neither evidence for the release nor against it. Both make `coherent` false,
+    which is why the distinction has to be carried rather than derived from it.
+    """
+
     second = freeze_second(
         config,
         promoted,
@@ -882,10 +891,13 @@ def test_mixed_provenance_is_named_facet_by_facet(
         assessment.FACET_EVALUATOR_RUBRIC,
         assessment.FACET_TASK_SHAPE,
     )
+    assert frame.comparability.differing == (assessment.FACET_EVALUATOR_RUBRIC,)
+    assert frame.comparability.unstated == (assessment.FACET_TASK_SHAPE,)
     assert frame.cohorts_support_direction is False
     facet = next(item for item in frame.comparability.facets if item.facet == assessment.FACET_EVALUATOR_RUBRIC)
     assert facet.before == ("r7",)
     assert facet.after == ("r7", "r8")
+    assert facet.stated is True
 
 
 def test_a_repository_present_on_only_one_side_is_not_a_comparison(
@@ -913,7 +925,49 @@ def test_a_repository_present_on_only_one_side_is_not_a_comparison(
         assessment.FACET_TASK_SHAPE,
         assessment.FACET_REPOSITORY_COVERAGE,
     )
+    # Both sides name a repository and they are different ones, so this is the
+    # cohorts differing rather than a facet nobody stated.
+    assert frame.comparability.differing == (assessment.FACET_REPOSITORY_COVERAGE,)
+    assert frame.comparability.unstated == (assessment.FACET_TASK_SHAPE,)
     assert frame.cohorts_support_direction is False
+
+
+def test_a_facet_only_one_side_fills_in_is_a_gap_and_not_a_difference(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """Nothing on the far side was there to disagree with.
+
+    The after cohort states no rubric revision at all while the before cohort
+    states one. Both readings make the comparison incoherent, but only one of
+    them is a claim about these cohorts — and calling this one a difference
+    would report what the feed did not publish as evidence that the release is
+    not the only thing separating them.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id=f"2026-08-0{index}-task",
+                effective_revision=promoted.promotion_revision,
+                rubric_revision=None,
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    frame = assessment.describe(config, second)
+
+    assert frame is not None
+    assert frame.after.task_count == 3
+    facet = next(item for item in frame.comparability.facets if item.facet == assessment.FACET_EVALUATOR_RUBRIC)
+    assert facet.before == ("r7",) and facet.after == (None,)
+    assert facet.coherent is False and facet.stated is False
+    assert assessment.FACET_EVALUATOR_RUBRIC in frame.comparability.unstated
+    assert frame.comparability.differing == ()
 
 
 def test_a_reversed_promotion_is_a_different_question(
@@ -1159,6 +1213,8 @@ def test_invented_comparability_facets_are_refused(
     record = build(frame).to_json()
     record["comparability"] = {
         "coherent": True,
+        "unstated": [],
+        "differing": [],
         "facets": [
             {
                 "facet": assessment.FACET_EVALUATOR_RUBRIC,
@@ -2087,6 +2143,7 @@ def test_forming_derives_everything_but_the_judgement(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
         metrics=(measurement(),),
     )
 
@@ -2121,6 +2178,7 @@ def test_forming_audits_the_release_it_read(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
     lines = ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)
@@ -2160,6 +2218,7 @@ def test_forming_states_a_prepared_reversal_as_no_reversal_at_all(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
     assert formed.assessment.subject.standing is True
@@ -2183,6 +2242,7 @@ def test_a_verdict_the_evidence_cannot_carry_writes_nothing(
             verdict=assessment.VERDICT_IMPROVED,
             confidence=assessment.CONFIDENCE_HIGH,
             rationale="the cohort after the release converged faster",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             metrics=(measurement(),),
         )
 
@@ -2204,6 +2264,7 @@ def test_a_reading_with_no_reason_is_refused(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale="   ",
+            recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert "why its verdict is that verdict" in str(error.value)
 
@@ -2222,6 +2283,7 @@ def test_the_same_formation_run_again_reports_what_it_wrote(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
         metrics=(measurement(),),
     )
 
@@ -2232,11 +2294,151 @@ def test_the_same_formation_run_again_reports_what_it_wrote(
         # The same sentence, wrapped differently — a reason travels in a versioned
         # record and is compared there.
         rationale="no frozen manifest\n  states what kind of work either cohort did",
+        recommendation=assessment.SETTLEMENT_RETAIN,
         metrics=(measurement(),),
     )
 
     assert again.recorded is False
     assert again.assessment.to_json() == first.assessment.to_json()
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 1
+
+
+def test_the_two_ways_a_comparison_fails_are_recorded_apart(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """A consumer reads which kind each failure is rather than deriving it.
+
+    Deriving it means knowing that a value carried as null is a missing one,
+    which is this module's rule and not a consumer's — so the record and the
+    derivation both state the split, and the reader holds the record to it.
+    """
+
+    second = freeze_second(
+        config,
+        promoted,
+        reports=[
+            make_manifest_report(
+                key=f"a{index}",
+                sequence=index,
+                task_id=f"2026-08-0{index}-task",
+                effective_revision=promoted.promotion_revision,
+                rubric_revision="r7" if index < 3 else "r8",
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
+    )
+
+    record = json.loads(second.assessment_path.read_text(encoding="utf-8"))
+    stated = record["comparability"]
+    assert stated["differing"] == [assessment.FACET_EVALUATOR_RUBRIC]
+    assert stated["unstated"] == [assessment.FACET_TASK_SHAPE]
+    # The two together are the whole of what `coherent: false` is about.
+    reading = read_reading(config, second)
+    assert set(reading.comparability.incoherent) == set(stated["differing"]) | set(stated["unstated"])
+
+    # A record calling the gap a disagreement — the reading the split exists to
+    # prevent. `unstated` is left correct so the check that fires is the one
+    # about the claim being made.
+    stated["differing"] = [assessment.FACET_EVALUATOR_RUBRIC, assessment.FACET_TASK_SHAPE]
+    second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.read(config, second)
+    assert "comparability records differing as" in str(error.value)
+    assert "the two ways a comparison fails" in str(error.value)
+
+
+def test_a_reading_carries_the_settlement_it_recommends(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The second answer the analysis owes, on the reading rather than beside it.
+
+    Advice and not the answer: the gate is unanswered here, and `decision` is
+    where what a human did with it goes.
+    """
+
+    second = freeze_second(config, promoted)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
+    )
+
+    reading = read_reading(config, second)
+    assert reading.recommendation == assessment.SETTLEMENT_RETAIN
+    assert reading.decision is None and reading.settled is False
+    record = json.loads(second.assessment_path.read_text(encoding="utf-8"))
+    assert record["recommendation"] == assessment.SETTLEMENT_RETAIN
+
+
+def test_advising_a_reversal_over_a_reading_that_measured_nothing_is_refused(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """`rolled-back` is advisable on the one reading that says the release cost
+    something, and `inconclusive` is a reason to know less rather than evidence
+    against it.
+
+    Refused at the write, so nothing lands: the writer publishes through the
+    reader every later read uses.
+    """
+
+    second = freeze_second(config, promoted)
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_ROLLED_BACK,
+        )
+    assert "recommends 'rolled-back' over a 'inconclusive' verdict" in str(error.value)
+    assert second.assessment_path.exists() is False
+    assert ledger_records(config, assessment.RECORD_RELEASE_ASSESSED) == []
+
+
+def test_the_same_formation_advising_something_else_is_a_second_reading(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The recommendation is the caller's half of the record, so a redo that
+    changes it is not an interrupted formation being finished.
+
+    Refused before the pairing rule is reached, deliberately: what is wrong here
+    is that this cohort already read the release, not what the second request
+    advises.
+    """
+
+    freeze_second(config, promoted)
+    assessment.form(
+        config,
+        verdict=assessment.VERDICT_INCONCLUSIVE,
+        confidence=assessment.CONFIDENCE_LOW,
+        rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
+    )
+
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.form(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_ROLLED_BACK,
+        )
+    assert "reads a release once" in str(error.value)
     assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 1
 
 
@@ -2250,6 +2452,7 @@ def test_a_second_reading_of_one_release_is_refused(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
     with pytest.raises(evolution.BatchError) as error:
@@ -2258,6 +2461,7 @@ def test_a_second_reading_of_one_release_is_refused(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_MEDIUM,
             rationale="the after cohort was produced at a revision that carries the change",
+            recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert "reads a release once" in str(error.value)
 
@@ -2274,6 +2478,7 @@ def test_nothing_is_formed_where_there_is_no_release(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert "follows no promotion" in str(error.value)
     assert (config.batches_root / FIRST / "release-assessment.json").exists() is False
@@ -2305,6 +2510,7 @@ def test_a_later_cohort_may_not_reread_a_release_that_was_answered(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert f"the first batch frozen after that promotion is {SECOND}" in str(error.value)
     assert third.assessment_path.exists() is False
@@ -2324,6 +2530,7 @@ def test_no_current_cohort_reads_nothing(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert "no batch is current" in str(error.value)
 
@@ -2348,6 +2555,7 @@ def test_a_reading_is_formed_while_the_analysis_is_still_being_written(
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
     assert formed.recorded is True
@@ -2366,6 +2574,7 @@ def test_a_naive_moment_is_refused(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
             rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=datetime(2026, 8, 11, 9, 0, 0),
         )
     assert "timezone-aware" in str(error.value)
@@ -2395,6 +2604,7 @@ def form_reading(config: evolution.EvolutionConfig) -> assessment.Formed:
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
         rationale=INCONCLUSIVE_WHY,
+        recommendation=assessment.SETTLEMENT_RETAIN,
         metrics=(measurement(),),
     )
 
@@ -3034,12 +3244,17 @@ def test_the_verdict_the_run_settles_is_recorded(
         verdict=assessment.VERDICT_REGRESSED,
         confidence=assessment.CONFIDENCE_HIGH,
         rationale=WORSE,
+        # The run is what makes this advisable. A formation could not have said
+        # it: `rolled-back` is held to `regressed`, and `regressed` is held to a
+        # completed counterfactual that had not run when the reading was formed.
+        recommendation=assessment.SETTLEMENT_ROLLED_BACK,
         now=RESOLVED_AT,
     )
 
     assert settled.recorded is True
     recorded = read_reading(config, second)
     assert recorded.verdict == assessment.VERDICT_REGRESSED
+    assert recorded.recommendation == assessment.SETTLEMENT_ROLLED_BACK
     assert recorded.confidence == assessment.CONFIDENCE_HIGH and recorded.rationale == WORSE
     assert recorded.formed_at == "2026-08-11T13:00:00Z"
     # The cohort reading and the run both stand: the numbers the session judged
@@ -3057,10 +3272,28 @@ def test_the_verdict_the_run_settles_is_recorded(
         verdict=assessment.VERDICT_REGRESSED,
         confidence=assessment.CONFIDENCE_HIGH,
         rationale=WORSE,
+        recommendation=assessment.SETTLEMENT_ROLLED_BACK,
         now=FINISHED_AT,
     )
     assert again.recorded is False
     assert len(ledger_records(config, assessment.RECORD_RELEASE_ASSESSED)) == 2
+
+    # And the pairing is asked of the revision too, not only of the formation. A
+    # session that decides the run settles nothing for it may not keep the advice
+    # the measured regression carried — the reversal loses the reading it rested
+    # on. (`neutral` would not reach here: a direction the run contradicts is
+    # refused by the verdict rule first, which is the stricter of the two.)
+    with pytest.raises(evolution.BatchError) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_INCONCLUSIVE,
+            confidence=assessment.CONFIDENCE_LOW,
+            rationale="one case set is too narrow to judge the release on",
+            recommendation=assessment.SETTLEMENT_ROLLED_BACK,
+            now=FINISHED_AT,
+        )
+    assert "recommends 'rolled-back' over a 'inconclusive' verdict" in str(error.value)
+    assert read_reading(config, second).verdict == assessment.VERDICT_REGRESSED
 
 
 def test_a_verdict_the_run_contradicts_reaches_no_record(
@@ -3082,6 +3315,7 @@ def test_a_verdict_the_run_contradicts_reaches_no_record(
             verdict=assessment.VERDICT_IMPROVED,
             confidence=assessment.CONFIDENCE_HIGH,
             rationale="the release converged faster",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=RESOLVED_AT,
         )
 
@@ -3106,6 +3340,7 @@ def test_nothing_is_settled_by_a_run_that_measured_nothing(
             verdict=assessment.VERDICT_REGRESSED,
             confidence=assessment.CONFIDENCE_HIGH,
             rationale=WORSE,
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=RESOLVED_AT,
         )
     assert "none has been started" in str(error.value)
@@ -3119,6 +3354,7 @@ def test_nothing_is_settled_by_a_run_that_measured_nothing(
             verdict=assessment.VERDICT_REGRESSED,
             confidence=assessment.CONFIDENCE_HIGH,
             rationale=WORSE,
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=RESOLVED_AT,
         )
     assert f"ended {replay.RESULT_FAILED!r}" in str(error.value)
@@ -3162,6 +3398,7 @@ def test_nothing_is_added_to_a_reading_the_gate_has_answered(
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_MEDIUM,
             rationale="reread after the gate had answered",
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=RESOLVED_AT,
         )
     assert "was settled 'retain'" in str(error.value)
@@ -4119,6 +4356,7 @@ def test_an_answered_obligation_is_still_closed_to_everything_but_its_own_redo(
             verdict=assessment.VERDICT_NEUTRAL,
             confidence=assessment.CONFIDENCE_LOW,
             rationale=INCONCLUSIVE_WHY,
+            recommendation=assessment.SETTLEMENT_RETAIN,
             now=MEASURED_AT,
         ),
     ):
@@ -4467,6 +4705,33 @@ def test_the_first_cohort_after_a_release_is_asked_to_assess_it(
     assert "`improved`, `neutral`, `regressed`, or `inconclusive`" in text
     # One session for the reports, one for the second reading of the same cohort.
     assert "session-est: 0/2" in text
+
+
+def test_the_analysis_is_asked_for_both_answers_it_owes(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    tmp_path: Path,
+) -> None:
+    """The dispositions and what should happen to the release the drafts would be
+    built on, with the human gate as the choice between them.
+
+    The drafts are written either way — a recommendation to reverse is not a
+    reason to leave the findings unwritten — and a batch that drafted nothing is
+    the absence of anything to choose rather than a third answer.
+    """
+
+    fill_pool(config, tmp_path / "feed")
+    result = form_batch(config, now=FROZEN_AT)
+
+    assert result.analysis_task_id is not None
+    text = (config.repo_root / ".ai-tasks" / f"{result.analysis_task_id}.md").read_text(encoding="utf-8")
+    assert "state on it which of the two answers this analysis recommends" in text
+    assert "`rolled-back` is advisable only\n  over a `regressed` verdict" in text
+    assert "ends in two answers, and a human takes exactly one" in text
+    assert f"evolution/batches/{SECOND}/proposed-tasks/`, or a rollback" in text
+    assert "Draft the accepted dispositions\n  either way" in text
+    assert "concludes `no-change` (invariant 7), which is the absence of" in text
+    assert "A `rolled-back` recommendation carries a\n  `regressed` verdict behind it." in text
 
 
 def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(

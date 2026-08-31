@@ -17,12 +17,13 @@
     "verdict",
     "confidence",
     "rationale",
+    "recommendation",
     "formed_at",
     "decision"
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "const": 3
     },
     "batch_id": {
       "description": "The batch whose frozen reports produced this reading — the directory this record sits in, and never the batch being assessed.",
@@ -79,6 +80,13 @@
       "description": "Why the verdict is that verdict, in the session's own words: which quantities moved, what the exclusions cost, and — for `inconclusive` — what was missing. What a later reader has instead of the evidence the judging session had in front of it.",
       "type": "string",
       "minLength": 1
+    },
+    "recommendation": {
+      "description": "What this reading says should happen to the release. The analysis of a post-release batch ends in two answers — the change-task drafts under its `proposed-tasks/`, and this — and the human gate is the choice between them, which is why the recommendation is recorded on the reading rather than in a fourth artifact beside it. It speaks the same two words `decision.settlement` does, deliberately: advice in some other vocabulary would leave a reader mapping it onto the decision it is advice about. A batch whose analysis drafted nothing concludes `no-change` (invariant 7); that is the absence of anything to choose rather than a third word here.\n\nThis is advice and never the answer. `decision` below is what was actually done, and the two are allowed to disagree — a human may keep a release this reading wanted reversed, or reverse one it wanted kept, and what they answered is recorded there. `rolled-back` may only be advised over a `regressed` verdict, which is the only reading that says the release cost something and which already rests on a completed counterfactual; every other reading, `inconclusive` included, is a reason to know less rather than evidence against the release. The controller enforces that pairing, which the implemented JSON Schema subset cannot express.",
+      "enum": [
+        "retain",
+        "rolled-back"
+      ]
     },
     "formed_at": {
       "description": "When this reading was recorded. Not when the cohort was frozen and not when the promotion was made: an assessment is a later judgement against a later cohort, and the interval between the three is the thing that makes it one.",
@@ -247,12 +255,30 @@
       "type": "object",
       "required": [
         "coherent",
+        "unstated",
+        "differing",
         "facets"
       ],
       "properties": {
         "coherent": {
           "description": "True only when every facet is. What a directional verdict resting on the cohorts is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision, role model or the shape of the work explains a difference in the numbers at least as well as the release does. A direction may instead rest on a completed counterfactual, which is evidence about two revisions rather than about these cohorts.",
           "type": "boolean"
+        },
+        "unstated": {
+          "description": "The incoherent facets at least one side does not fill in, named. The first of the two ways a comparison fails, and the one that is not about these cohorts at all: what the feed publishes leaves the answer unknown, which is neither evidence for the release nor against it. `task-shape` is the standing example, unknown on every manifest version — which is exactly why a direction is ordinarily settled by the counterfactual. A facet only one side fills in lands here rather than under `differing`, an empty cohort's facets included: what is missing is the far half of the comparison, not an agreement — one side stating a rubric revision while the other states none is not the two disagreeing about the rubric.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          }
+        },
+        "differing": {
+          "description": "The incoherent facets both sides state and disagree on, named. The other way a comparison fails, and the only one that is evidence about these cohorts: the release is not the only difference between them. Recorded beside `unstated` rather than folded into one list because reporting a mismatch nobody can fix beside a gap nobody introduced reads as broken provenance in both directions. Both lists are derived from the facets below — the controller checks a record against its own facets rather than taking either on the record's word — and they are recorded all the same, so that a consumer is not left to re-derive which kind each failure is, which means knowing that a value carried as null is a missing one.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          }
         },
         "facets": {
           "type": "array",

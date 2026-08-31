@@ -1228,6 +1228,19 @@ inverse commit belongs on the line the change it takes back was put on, not
 wherever configuration points now. `--source-ref` asserts it and never selects
 it.
 
+Neither half of that merge unit is derived from the batch series, and the
+temptation to derive it is worth naming. Batches are serial (invariant 14), so
+the base of the batch before this one is *ordinarily* the commit the line
+stood at when the release was made — and ordinarily is the whole of it.
+Anything landing on the line between a batch's formation and its promotion
+separates the two, and a derived commit that is not the promotion's own first
+parent makes the reverse compute a different change, silently, on an operation
+Git cannot undo. The line could not be derived at all: a base is a commit and
+a ref is not, so it would have to come from configuration, which is the one
+place invariant 18 says it may not come from. What *is* read off the series is
+which batch a landed reversal ends, and that is read off that batch's base
+rather than off this merge unit.
+
 **Who runs it.** An operator, or the release-assessment gate: a settlement of
 `rolled-back` is this operation followed by the decision that names its commit
 (Release assessment). Composed rather than reproduced, so everything below is
@@ -1391,10 +1404,10 @@ immutable manifests, the promoted batch's outcome, its rollback record if it has
 one, and Git — so they are derived on every read like the rest of the lifecycle,
 and the record is checked against that derivation. What is committed is what
 cannot be re-derived: measurements taken from machine-local evaluation
-artifacts, the counterfactual a harness ran, and the verdict, confidence and
-rationale of the session that judged them. The cohorts are restated all the same,
-because evidence that names no denominator is a directional claim whose sample
-nobody can see.
+artifacts, the counterfactual a harness ran, and the verdict, confidence,
+rationale and recommendation of the session that judged them. The cohorts are
+restated all the same, because evidence that names no denominator is a
+directional claim whose sample nobody can see.
 
 Recording one runs that derivation as a write. The cohorts, denominators,
 exclusions and facets come from the manifests rather than from whoever is
@@ -1614,6 +1627,28 @@ is — invariant 4 — rather than approximated by repository coverage, which is
 coverage and not a match. The facet becomes answerable if a later manifest
 version carries durable task-shape provenance.
 
+A facet fails in one of two ways, and the record and the JSON name them apart.
+`differing` is *both* sides stating a value and disagreeing: the release is
+not the only difference between them, which is evidence about these cohorts.
+`unstated` is a facet at least one side does not fill in — a gap in what the
+feed publishes, which is neither evidence for the release nor against it, and
+which `task-shape` sits in on every manifest version. Both make `coherent`
+false and both stop a cohort-only direction, so the distinction costs the gate
+nothing and is worth everything to whoever reads it: reported together, a
+mismatch somebody could cohort their way out of reads like a gap nobody
+introduced, and a gap reads like broken provenance.
+
+Both rather than either, and that is the whole of what the split is for. One
+side stating a rubric revision while the other states none is not the two
+sides disagreeing about the rubric — nothing on the far side was there to
+disagree with. An empty cohort is the same answer taken to its limit: it fills
+in no facet, so every one of them is unstated and nothing could be compared at
+all, which is what the exclusions beside it say at length. Both lists are
+derived from the facets and checked against them on every read; they are
+recorded and emitted all the same, so that a consumer is not left to re-derive
+which kind each failure is, which means knowing that a value carried as null
+is a missing one.
+
 The **counterfactual** carries one on its own: a completed run measuring a goal
 quantity on both the pre-promotion and the promoted revision is a comparison in
 which the release *is* the only difference, so what the cohorts came to is
@@ -1712,6 +1747,34 @@ nothing is added once the gate answers, so numbers arriving after it could never
 be recorded, and the decision would rest on a measurement that is lost. Conclude
 the run, end it with a reason, or withdraw the request, and settle over what came
 back.
+
+**What the reading recommends.** A reading also states which settlement it
+advises: `retain`, or `rolled-back`. That is the second answer the analysis of
+a post-release batch owes — the first being its change-task drafts — and it is
+recorded on the reading rather than in an artifact of its own, because it is
+that reading's own conclusion, and a reading that says what it found but not
+what should follow from it leaves the gate to re-derive the conclusion from
+the evidence.
+
+It speaks the settlement's two words for the same reason it sits on the
+reading: advice in another vocabulary would leave a reader mapping it onto the
+decision it is advice about. `rolled-back` is advisable only over a
+`regressed` verdict — the only reading that says the release cost something,
+and one that already rests on a completed run — so the advice inherits that
+measurement instead of restating a threshold of its own. Every other reading,
+`inconclusive` included, is a reason to know less rather than evidence against
+the release, and recommends `retain`. A formation therefore ordinarily advises
+`retain` and the completed run is what can change it, which is the same shape
+the verdict has.
+
+It is advice and never the answer. The gate below may go either way against it,
+and what was answered is recorded there; the two are allowed to disagree, and a
+disagreement is exactly the case the decision's reason line exists for. So the
+analysis of a post-release batch ends in two answers and a human takes one: the
+change-task drafts, or a rollback of the release those drafts would be built on.
+The dispositions are drafted either way — a recommendation to reverse is not a
+reason to leave findings unwritten, and the drafts outlive the batch as the
+record of what this evidence said.
 
 **The settlement** is a human decision recorded on the assessment: `retain`
 leaves the release as the line later work builds on, and `rolled-back` names the
