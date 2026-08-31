@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
+verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
 ---
 
 # Modules
@@ -10,7 +10,7 @@ verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 | Module | Location | Responsibility |
 |---|---|---|
 | CLI | `mandrel/cli.py`, `mandrel` | Parse/dispatch deploy, status, registry, and evolution commands |
-| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; preview/bootstrap; target-receipt content/mode, entrypoint, skill-precedence, and source-line drift checks; schema-v1 status JSON projection with drift origins and placement reasons; removed-file orphan detection/pruning pending |
+| Deployment | `mandrel/deploy.py` | Map/filter/render/copy current canonical files; preview/bootstrap; target-receipt content/mode, entrypoint, skill-precedence, and source-line drift checks; schema-v2 status JSON projection with drift origins, placement reasons, and per-target placed line; removed-file orphan detection/pruning pending |
 | Manifest/lock | `manifest.py`, `lockfile.py`, `hashing.py` | Local rendered-content/mode receipt, portable canonical-revision receipt, hashes, and validated supported-schema/full-object-id reading |
 | Deployment placement | `mandrel/lockfile.py`, `mandrel/placement.py`, `mandrel/evolution/deployment.py` | One mode-aware canonical-tree identity and cached resolver; status compares lock/base/candidate identities with fail-closed degradation, while evolution's machine-local per-target observation keeps promotion/rollback ancestry |
 | Registry | `registry.py`, `paths.py` | Machine-local managed-repo inventory and path constants |

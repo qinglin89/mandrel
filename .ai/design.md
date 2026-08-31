@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-08-31
-verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
+verified-against: 9579ff3465d79329e3eb67248115fc0c9dcc7d01
 ---
 
 # Design Principles and Decisions
@@ -99,9 +99,14 @@ verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
 - Chose one schema-versioned envelope for single-target and registry-sweep
   status; the shared source-line reading sits above `targets`, and every drift
   carries an origin while placement drifts carry structured reasons/revisions.
+  Each target also states its placed base/candidate line from that same
+  comparison; null is total and accompanied by a finding, so `in_sync: true`
+  implies a named line.
 - The payload version is independent of evolution lifecycle schema versions:
   this is one read-only deployment observation, while evolution schemas version
   persisted lifecycle records.
+- The payload version promises its exact key set; adding, removing, or
+  repurposing a key bumps it, additive changes included.
 - Consequence: every status kind needs a `DRIFT_ORIGINS` label; every new
   unplaceable cause needs a documented `UNPLACEABLE_REASONS` value.
 
