@@ -647,10 +647,12 @@ other.
   that artifact afterwards; this task produces the evidence and the verdict, not
   the settlement.
 - That settlement is what the next first experiment waits on (invariant 17):
-  `retain` leaves the release on `{release.merge_input_ref}` and `rolled-back`
-  puts an inverse commit there first, so nothing is admitted until the reading is
-  answered, and the base the batch was formed at has to be on the line the answer
-  chose. The obligation is this cohort's and stays this cohort's: a batch
+  `retain` leaves the release on `{release.merge_input_ref}`, which is the line
+  the base this batch was formed at already carries, while `rolled-back` puts an
+  inverse commit there and ends the batch standing on that release with it —
+  its base carries a promotion nobody kept, so there is nothing left to admit on
+  and its claimed reports are spent with it. The obligation is this cohort's and
+  stays this cohort's: a batch
   concluding without answering does not pass it on, it leaves the next cohort's
   first experiment waiting on this record. Nothing else here waits on it — the dispositions, the
   drafts and this task's own completion are unaffected.

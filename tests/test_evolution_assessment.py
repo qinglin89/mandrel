@@ -56,7 +56,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import deploy, evolution, lockfile
-from mandrel.evolution import assessment, batches, experiments, lineage, manifests, replay, rollback
+from mandrel.evolution import assessment, batches, experiments, lineage, manifests, render, replay, rollback
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -3782,24 +3782,21 @@ def test_no_experiment_is_admitted_before_the_release_is_judged(
     assert admitted.base_revision == promoted.promotion_revision
 
 
-def test_a_rolled_back_release_is_not_the_base_the_batch_was_formed_at(
+def test_a_rolled_back_settlement_ends_the_batch_that_read_the_release(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The one place the frozen base and the settlement genuinely part company.
+    """The one place the frozen base and the settlement genuinely part company,
+    and what resolves it.
 
     A batch is formed at the line unconditionally, because the batch being formed
     is the evidence about the release. A `retain` leaves that base carrying the
-    release and the gate passes; a `rolled-back` lands the inverse commit
-    *after* the formation, so the base carries the promotion the human just took
-    back off — and the gate refuses rather than building every alternative in the
-    batch on a protocol nobody decided on.
-
-    The resolution is a rollback ending the batch it settles, which is not
-    implemented here: with it, there is no first experiment and this is never
-    reached with a `rolled-back` decision. Until then the refusal is the safe
-    half of the gap and this pins it, so a later session sees the state rather
-    than discovering it.
+    release and the first admission proceeds; a `rolled-back` lands the inverse
+    commit *after* the formation, so the base carries the promotion the human just
+    took back off and there is nothing left it can be admitted on. So the reversal
+    ends that batch: the outcome record says `rolled-back`, names no experiment
+    and no revision, and its analysis stage and the draft still waiting at the
+    gate are exactly what it ends holding.
     """
 
     second = freeze_second(config, promoted)
@@ -3810,13 +3807,26 @@ def test_a_rolled_back_release_is_not_the_base_the_batch_was_formed_at(
         config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
     )
     assert answered.reversal is not None
+    assert answered.ended_batch is not None
+    assert answered.ended_batch.batch_id == second.batch_id
+    assert answered.reversal.revision[:12] in answered.ended_batch.reason
 
-    with pytest.raises(evolution.BatchError) as error:
+    record = json.loads(second.outcome_path.read_text(encoding="utf-8"))
+    assert record["outcome"] == "rolled-back"
+    assert (record["experiment_id"], record["promotion_revision"], record["promotion"]) == (None, None, None)
+    assert ledger_records(config, "batch-concluded")[-1]["detail"] == "rolled-back"
+
+    derived = lineage.describe(config)
+    assert derived.current is None
+    # The draft it was holding stays a proposal nobody decided: this batch did not
+    # end because its work was finished.
+    assert derived.batches[-1].gate.waiting == tuple(drafts)
+    assert f"{second.batch_id} — its base carried the release taken back off the line" in (
+        render.format_settlement(answered, config.repo_root)
+    )
+
+    with pytest.raises(evolution.BatchError, match="no batch is current"):
         experiments.create(config, drafts, now=RESOLVED_AT)
-
-    assert "does not carry" in str(error.value)
-    assert answered.reversal.revision[:12] in str(error.value)
-    assert lineage.describe(config).current.experiments == ()
 
 
 def test_a_batch_that_owes_no_reading_admits_on_its_base_freely(
@@ -4214,6 +4224,9 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     was not carrying the release when the batch was formed: naming the line in
     configuration settles which ref a base comes off, not what that ref carried
     at the moment it was read.
+
+    Asked of the release the batch follows rather than of the settlement, which
+    is what lets one question cover this and the reversal case together.
     """
 
     second = freeze_second(config, promoted, base=promoted.merge_input_revision)
@@ -4229,28 +4242,31 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     assert lineage.describe(config).current.experiments == ()
 
 
-def test_a_batch_formed_on_the_reversed_line_satisfies_a_rolled_back_settlement(
+def test_the_cohort_after_a_reversal_admits_on_the_line_it_left(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
     """The other side of the same rule, and what the gate lets through.
 
-    `rolled-back` selects the line carrying the inverse commit, so a batch formed
-    at that line is exactly what the decision chose. Stated by re-forming the
-    cohort at the reversed tip, which is what a formation taken after the
-    reversal would have read.
+    A reversal ends the batch standing on the release, so what follows it is the
+    *next* cohort, formed at the line carrying the inverse commit. That base
+    carries the reversal, so it is not standing on a release that came off the
+    line — and it carries the promotion too, since a revert adds history rather
+    than removing it, which is why the reversal has to be asked about at all.
     """
 
     second = freeze_second(config, promoted)
     suspected(config, second)
-    drafts = open_second(config, second)
+    open_second(config, second)
     answered = assessment.settle(
         config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
     )
     assert answered.reversal is not None
     assert git_rev(config.repo_root, RELEASE_REF) == answered.reversal.revision
+    assert lineage.describe(config).current is None
 
-    freeze_second(config, promoted, base=answered.reversal.revision)
+    third = freeze_second(config, promoted, batch_id=THIRD)
+    drafts = open_second(config, third, "loader-timeout")
 
     admitted = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
 
@@ -4258,35 +4274,145 @@ def test_a_batch_formed_on_the_reversed_line_satisfies_a_rolled_back_settlement(
     assert admitted.base_revision != promoted.promotion_revision
 
 
-def test_a_rollback_after_a_retained_release_does_not_realign_the_base(
+def test_a_rollback_after_a_retained_release_ends_the_batch_anyway(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """A reversal nobody settled does not become the base by standing on the line.
+    """A reversal that answers no gate ends the batch standing on the release.
 
     The rollback operation is available on its own, and after a `retain` nothing
-    is yet built on the release to stop it. What must not follow is a batch formed
-    on the reversed line quietly taking it: the recorded decision says the release
-    stays, so a base carrying the inverse commit is a realignment no reading
-    justified.
-
-    The reversal lands after this cohort was formed, so the cohort is re-formed at
-    the reversed tip — which is what a formation taken after it would have read.
+    is yet built on the release to stop it. The rule is keyed on the base and not
+    on the settlement, so the reading saying `retain` does not shield the batch:
+    what its base carries is a promotion nobody kept either way, and the recorded
+    decision is left exactly as it was — the release was reversed after it, not
+    instead of it.
     """
 
     second = freeze_second(config, promoted)
     form_reading(config)
-    drafts = open_second(config, second)
+    open_second(config, second)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
+
     reversal = rollback.rollback(config, reason="reversed outside the gate", now=RESOLVED_AT)
-    freeze_second(config, promoted, base=reversal.revision)
 
-    with pytest.raises(evolution.BatchError) as error:
-        experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
-
-    assert reversal.revision[:12] in str(error.value)
-    assert "carries" in str(error.value) and "has not taken the inverse commit" in str(error.value)
+    assert reversal.ended_batch is not None
+    assert reversal.ended_batch.batch_id == second.batch_id
+    assert json.loads(second.outcome_path.read_text(encoding="utf-8"))["outcome"] == "rolled-back"
+    assert lineage.describe(config).current is None
     assert read_reading(config, second).decision.settlement == assessment.SETTLEMENT_RETAIN
+
+
+def test_a_reversal_ends_the_batch_holding_the_base_and_not_the_one_that_owes_it(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The deferred case, and why the ending is keyed on the base.
+
+    A cohort can end its own batch without answering the gate — `no-change` asks
+    only that nothing about *that* batch is still open — and the obligation stays
+    with it while the *next* cohort follows the same release and holds the base
+    carrying it. So the settlement is recorded in the owner's directory and the
+    batch it ends is a different one, which a rule phrased as "a rollback ends
+    the assessing batch" would never reach.
+    """
+
+    second = freeze_second(config, promoted)
+    suspected(config, second)
+    (config.batches_root / SECOND / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, SECOND, analysis_task_id=f"2026-08-10-{SECOND}")
+    experiments.conclude_no_change(config, reason="the reading is this batch's whole output", now=CONCLUDED_AT)
+
+    third = freeze_second(config, promoted, batch_id=THIRD)
+    drafts = open_second(config, third)
+
+    answered = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+    )
+
+    assert answered.batch_id == SECOND
+    assert answered.ended_batch is not None
+    assert answered.ended_batch.batch_id == THIRD
+    assert json.loads(second.outcome_path.read_text(encoding="utf-8"))["outcome"] == "no-change"
+    assert json.loads(third.outcome_path.read_text(encoding="utf-8"))["outcome"] == "rolled-back"
+    assert lineage.describe(config).current is None
+    with pytest.raises(evolution.BatchError, match="no batch is current"):
+        experiments.create(config, drafts, now=RESOLVED_AT)
+
+
+def test_a_settlement_that_ended_its_batch_still_reports_itself(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The redo path across the batch this answer ended.
+
+    Every operation here is repeatable, because losing the response and being
+    interrupted after the record landed look the same from outside. A
+    `rolled-back` settlement is the one that can leave no batch current at all, so
+    the frame is read from the batch its own answer ended rather than from a
+    current one — otherwise the confirmation path meets "no cohort is frozen",
+    which is a refusal about the wrong thing.
+    """
+
+    second = freeze_second(config, promoted)
+    suspected(config, second)
+    open_second(config, second)
+    first = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+    )
+    assert first.recorded is True and first.ended_batch is not None
+
+    again = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=CONCLUDED_AT
+    )
+
+    assert again.recorded is False
+    assert again.batch_id == SECOND
+    assert again.decision.decided_at == first.decision.decided_at
+    # Nothing to end a second time: the outcome record is what makes a batch no
+    # longer current, so the repeat finds none standing on the reversal.
+    assert again.ended_batch is None
+    assert len(ledger_records(config, assessment.RECORD_RELEASE_SETTLED)) == 1
+    assert len(ledger_records(config, "batch-concluded")) == 2
+
+    with pytest.raises(evolution.BatchError, match="was settled"):
+        assessment.settle(
+            config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
+        )
+
+
+def test_a_rolled_back_batch_keeps_the_reports_it_claimed(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+    tmp_path: Path,
+) -> None:
+    """A rolled-back batch's evidence is spent, not returned.
+
+    A claim is what takes a report out of discovery, and every claim is resolved
+    against the frozen manifest naming it — an immutable record. So there is no
+    processed-to-pending direction to exercise here and the package has none: the
+    ending writes the outcome and touches the runtime pool not at all, which is
+    what makes the next batch start its denominator over.
+    """
+
+    fill_pool(config, tmp_path / "feed")
+    formed = form_batch(config, now=FROZEN_AT)
+    assert formed.batch_id == SECOND
+    second = next(batch for batch in evolution.load_batches(config) if batch.batch_id == SECOND)
+    claimed = sorted(report["report_key"] for report in second.reports)
+    assert claimed
+
+    suspected(config, second)
+    pool = config.state_path.read_bytes()
+
+    answered = assessment.settle(
+        config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
+    )
+
+    assert answered.ended_batch is not None and answered.ended_batch.batch_id == SECOND
+    assert config.state_path.read_bytes() == pool
+    persisted = evolution.load_state(config)
+    assert [entry.report_key for entry in persisted.pending] == []
+    assert claimed == sorted(report["report_key"] for report in second.reports)
 
 
 def test_a_base_this_checkout_cannot_place_on_the_settled_line_is_refused(

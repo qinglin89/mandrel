@@ -1119,8 +1119,10 @@ def _release(
     nothing owed and offer an admission that refuses.
 
     None for a batch with no release before it at all, which is most of them:
-    only a promotion produces something to assess, and `no-change` produces
-    nothing (invariant 7).
+    only a promotion produces something to assess, and neither of the two
+    endings that promote nothing produces one — `no-change` fabricates no
+    revision (invariant 7), and `rolled-back` is a batch whose own base came off
+    the line rather than a release anybody could read.
     """
 
     if current is None:

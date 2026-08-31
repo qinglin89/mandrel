@@ -908,6 +908,107 @@ def test_a_later_batch_that_admitted_nothing_does_not_stop_it(
 
     assert result.reverted is True
     assert git_rev(config.repo_root, RELEASE_REF) == result.revision
+    # And that cohort is what the reversal ends: its base carries the release
+    # that just came off the line, so it has nothing left to admit on.
+    assert result.ended_batch is not None
+    assert result.ended_batch.batch_id == SECOND_BATCH
+
+
+# --- the batch a reversal ends ------------------------------------------------
+
+
+def test_a_reversal_no_cohort_is_standing_on_ends_nothing(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The ordinary case: the promotion was reversed before any cohort followed
+    it, so there is no batch whose base carries the release and nothing to end.
+    The promoted batch is not it — that one concluded by promoting, and a
+    rollback edits no history."""
+
+    before = outcome_bytes(config)
+
+    result = rollback.rollback(config, reason=WHY, now=REVERSED)
+
+    assert result.ended_batch is None
+    assert outcome_bytes(config) == before
+    assert ledger_types(config).count("batch-concluded") == 1
+
+
+def test_a_checkout_that_cannot_place_the_base_ends_nothing_and_still_reverses(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The one question here that is reported rather than raised.
+
+    Which batch a reversal ends is an ancestry question about that batch's base,
+    and a clone holding the evolution history without the commits cannot answer
+    it. Raising would make the reversal — already on the line by then — fail on a
+    fact about somebody's checkout. So the ending writes nothing, the batch stays
+    current, and a clone that holds the commits finishes it by running the
+    rollback again; in the meantime the admission gate is what refuses, on the
+    same unanswered question.
+    """
+
+    write_manifest(config.batches_root, SECOND_BATCH, ["r3"], runner_protocol_revision="9" * 40)
+
+    result = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert result.reverted is True
+    assert result.ended_batch is None
+    assert not (config.batches_root / SECOND_BATCH / "outcome.json").exists()
+    assert lineage.describe(config).current.batch_id == SECOND_BATCH
+    assert ledger_types(config).count("batch-concluded") == 1
+
+
+def test_the_ending_is_what_a_redone_rollback_finishes(
+    config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
+) -> None:
+    """The window between a landed reversal and the record that ends the batch.
+
+    `reverse` is the lock-free entry the settlement composes, and it stops where
+    the settlement still owes its own record — so it reaches exactly the durable
+    state a run interrupted before the ending leaves. In that window the batch is
+    still current with a base carrying a release that came off the line, which is
+    refused at the admission naming the command that finishes it; running the
+    rollback again writes the ending it never reached, and a third run writes
+    nothing.
+    """
+
+    directory = write_manifest(
+        config.batches_root,
+        SECOND_BATCH,
+        ["r3"],
+        analysis_task_id=f"2026-08-09-{SECOND_BATCH}",
+        runner_protocol_revision=promoted.promotion_revision,
+    )
+    (directory / "findings.md").write_text("# Findings\n", encoding="utf-8")
+    write_closure(config.batches_root, SECOND_BATCH, analysis_task_id=f"2026-08-09-{SECOND_BATCH}")
+    write_draft(config.batches_root, SECOND_BATCH, "second-idea")
+    assert settle_release(config, at=LATER) is True
+
+    reversal = rollback.reverse(config, reason=WHY, now=LATER)
+    assert lineage.describe(config).current.batch_id == SECOND_BATCH
+
+    with pytest.raises(evolution.BatchError) as error:
+        experiments.create(config, ["second-idea"], now=LATER)
+    assert reversal.revision[:12] in str(error.value)
+    assert "mandrel evolution rollback" in str(error.value)
+
+    finished = rollback.rollback(config, reason=WHY, now=LATER)
+
+    assert finished.reverted is False and finished.recorded is False
+    assert finished.ended_batch is not None
+    assert finished.ended_batch.batch_id == SECOND_BATCH
+    ended = json.loads((config.batches_root / SECOND_BATCH / "outcome.json").read_text(encoding="utf-8"))
+    assert ended["outcome"] == "rolled-back"
+    assert (ended["experiment_id"], ended["promotion_revision"], ended["promotion"]) == (None, None, None)
+    assert lineage.describe(config).current is None
+
+    text = render.format_rollback(finished, config.repo_root)
+    assert f"{SECOND_BATCH} — its base carried the release taken back off the line" in text
+
+    written = (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes()
+    assert rollback.rollback(config, reason=WHY, now=LATER).ended_batch is None
+    assert (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes() == written
 
 
 def test_only_the_latest_promotion_is_rolled_back(

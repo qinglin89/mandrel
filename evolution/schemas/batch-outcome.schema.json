@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/batch-outcome.schema.json",
   "title": "Evolution batch outcome",
-  "description": "The terminal record of one batch. Its presence is what ends the batch and releases the next cohort (contract invariant 14), which is why it is committed: `.ai-evolution/` is machine-local, so a batch whose conclusion lived only in runtime state would read as current on every other clone forever.",
+  "description": "The terminal record of one batch. Its presence is what ends the batch and releases the next cohort (contract invariant 14), which is why it is committed: `.ai-evolution/` is machine-local, so a batch whose conclusion lived only in runtime state would read as current on every other clone forever.\n\nThree ways a batch reaches it, and only one of them is a decision about this batch's own attempts: it promoted, it concluded that the evidence justified no change, or the release it was formed to judge was taken back off the source line under it.",
   "type": "object",
   "required": [
     "schema_version",
@@ -22,10 +22,11 @@
       "pattern": "^evolution-batch-[0-9]{4,}$"
     },
     "outcome": {
-      "description": "`promoted` names the experiment whose candidate reached the source line, the revision that carries it, and the merge unit it was promoted as. `no-change` is the valid conclusion of invariant 7 and fabricates nothing: with it, `experiment_id`, `promotion_revision`, and `promotion` are all null, and no candidate, merge, deployment, or revision change is invented to represent a change that was not made. The controller enforces that pairing; the implemented JSON Schema subset cannot express it.",
+      "description": "`promoted` names the experiment whose candidate reached the source line, the revision that carries it, and the merge unit it was promoted as. `no-change` is the valid conclusion of invariant 7 and fabricates nothing. `rolled-back` is the batch whose premise came off the line under it: a rollback of the release it was formed to judge landed, so the base every alternative in it would have started from carries a promotion nobody kept, and the batch ends with its claimed reports spent (contract: Rollback). With either of the two that promoted nothing, `experiment_id`, `promotion_revision`, and `promotion` are all null, and no candidate, merge, deployment, or revision change is invented to represent a change that was not made. The controller enforces that pairing; the implemented JSON Schema subset cannot express it.\n\nThis enum is a vocabulary this controller owns, and it is widened by the task that first writes a new member — the rule the ledger's `record_type` already states, and the reason `schema_version` stays 1 through the addition. A version identifies the shape a reader has to parse, and nothing about the field set or the types moved. An older reader therefore keeps reading every `promoted` and `no-change` record it always could and refuses exactly the one ending it cannot describe, naming the value; bumping would have made it refuse all three.",
       "enum": [
         "promoted",
-        "no-change"
+        "no-change",
+        "rolled-back"
       ]
     },
     "decided_at": {
@@ -38,7 +39,7 @@
       "minLength": 1
     },
     "experiment_id": {
-      "description": "The promoted experiment, which records the same promotion with the same revision. The controller checks the whole history against this, not only the named record: a `no-change` outcome over an experiment that says `promoted` is the same contradiction read from the other side.",
+      "description": "The promoted experiment, which records the same promotion with the same revision. The controller checks the whole history against this, not only the named record: an outcome that promoted nothing, over an experiment that says `promoted`, is the same contradiction read from the other side. A `rolled-back` batch is held to more than that — it admitted nothing at all, because the rollback that ended it refuses while any attempt of a later batch stands on the promotion being reversed.",
       "type": [
         "string",
         "null"
@@ -59,7 +60,7 @@
   },
   "$defs": {
     "promotion": {
-      "description": "The merge unit `promotion_revision` names, or null for a `no-change` outcome. A promotion revision on its own says a commit carries the change and nothing about what was measured to justify it: these are the round whose candidate was exercised, the source line it was integrated onto, and the tree the two produced — which is the identity of the thing replay measured, since two commits only imply a merge result. Together they are what makes the commit checkable against the evidence rather than merely recorded beside it, and the controller does check them — against the promoted experiment's own prepared promotion, the completed run that measured that integration, and the commit itself wherever the checkout holds it.\n\nOptional rather than required, and absent reads as null. It arrived after this schema version shipped, and every record written before it is a `no-change` conclusion that is exactly what it claims to be — promotion had no operation then. A version is bumped when a reader needs something old records cannot supply; requiring a field only newer records can carry would instead stop a conclusion loading that was valid when it ended its batch, on content nothing may edit. A `promoted` outcome states it all the same: the pairing rule the controller enforces asks for the experiment, the revision, and the merge unit together.",
+      "description": "The merge unit `promotion_revision` names, or null for an outcome that promoted nothing. A promotion revision on its own says a commit carries the change and nothing about what was measured to justify it: these are the round whose candidate was exercised, the source line it was integrated onto, and the tree the two produced — which is the identity of the thing replay measured, since two commits only imply a merge result. Together they are what makes the commit checkable against the evidence rather than merely recorded beside it, and the controller does check them — against the promoted experiment's own prepared promotion, the completed run that measured that integration, and the commit itself wherever the checkout holds it.\n\nOptional rather than required, and absent reads as null. It arrived after this schema version shipped, and every record written before it is a `no-change` conclusion that is exactly what it claims to be — promotion had no operation then. A version is bumped when a reader needs something old records cannot supply; requiring a field only newer records can carry would instead stop a conclusion loading that was valid when it ended its batch, on content nothing may edit. A `promoted` outcome states it all the same: the pairing rule the controller enforces asks for the experiment, the revision, and the merge unit together.",
       "type": [
         "object",
         "null"

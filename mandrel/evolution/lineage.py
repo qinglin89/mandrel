@@ -50,6 +50,7 @@ from .config import (
 from .errors import BatchError
 from .manifests import (
     OUTCOME_PROMOTED,
+    OUTCOME_ROLLED_BACK,
     Batch,
     load_batches,
     read_outcome,
@@ -560,7 +561,7 @@ def _require_one_current(current: list[BatchLineage]) -> None:
             "more than one current batch: "
             + ", ".join(lineage.batch_id for lineage in current)
             + " — invariant 14 allows one at a time; record the earlier batch's outcome "
-            "(promoted or no-change) before the next cohort continues"
+            "(promoted, no-change, or the rolled-back a reversal ends it with) before the next cohort continues"
         )
 
 
@@ -943,19 +944,27 @@ def _pending_successor(experiments: Sequence[Experiment]) -> str | None:
 def _require_one_promotion(
     config: EvolutionConfig,
     batch: Batch,
-    experiments: Iterable[Experiment],
+    experiments: Sequence[Experiment],
     outcome: Mapping[str, Any],
 ) -> None:
     """A concluded batch and every one of its experiments state one history.
 
     Two kinds of record, one event: the batch outcome ends the cycle and an
     experiment decision turns that attempt into history. The whole set has to
-    agree, not only the record the outcome happens to name. A `no-change` batch
-    over an experiment recording `promoted` says both that the source line moved
-    and that it did not — the contradiction read from the side with nothing to
-    name, which is why checking the named experiment alone never sees it. Two
-    promoted experiments under one outcome leave the promotion trail two answers
-    deep with no way to pick.
+    agree, not only the record the outcome happens to name. An ending that
+    promoted nothing, over an experiment recording `promoted`, says both that the
+    source line moved and that it did not — the contradiction read from the side
+    with nothing to name, which is why checking the named experiment alone never
+    sees it. Two promoted experiments under one outcome leave the promotion trail
+    two answers deep with no way to pick.
+
+    `rolled-back` is held to more: that batch admitted nothing at all. The
+    reversal that ends it refuses while any attempt of a later batch stands on
+    the promotion being reversed (`rollback._require_nothing_built_on`), and every
+    experiment of this batch starts from its base (invariant 15) — a base
+    carrying that promotion, which is the very reading that picks the batch to
+    end. So an admitted attempt and this ending cannot both have happened, and a
+    record saying they did describes a rollback that was refused.
     """
 
     recorded = [
@@ -968,8 +977,15 @@ def _require_one_promotion(
             raise BatchError(
                 f"{batch.outcome_path}: concludes {outcome['outcome']!r}, while "
                 f"{[experiment.experiment_id for experiment in recorded]} record a promotion; a batch whose "
-                "candidate reached the source line concluded by promoting it, and invariant 7's no-change "
-                "conclusion is for the batch that changed nothing"
+                "candidate reached the source line concluded by promoting it, and the endings that name no "
+                "promotion are for the batch that changed nothing and the batch whose release came off the line"
+            )
+        if outcome["outcome"] == OUTCOME_ROLLED_BACK and experiments:
+            raise BatchError(
+                f"{batch.outcome_path}: ends {OUTCOME_ROLLED_BACK!r}, while {batch.batch_id} admitted "
+                f"{[experiment.experiment_id for experiment in experiments]}; a rollback ends the batch whose "
+                "base carries the promotion it reverses, and it refuses outright while any attempt stands on "
+                "that commit — so this record and those admissions cannot both have happened"
             )
         return
     if len(recorded) > 1:

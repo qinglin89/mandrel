@@ -142,7 +142,7 @@ from .guards import require_expected, settled
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Lineage
 from .lineage import describe as describe_lineage
-from .manifests import OUTCOME_PROMOTED, Batch, read_batch_record
+from .manifests import OUTCOME_PROMOTED, OUTCOME_ROLLED_BACK, Batch, read_batch_record
 from .replay import (
     BETTER_LOWER,
     BETTER_NEITHER,
@@ -160,7 +160,8 @@ from .replay import (
     ReplayRequest,
 )
 from .revisions import resolve_commit
-from .rollback import RollbackResult
+from .rollback import BatchEnded, RollbackResult
+from .rollback import end_batch as end_rolled_back_batch
 from .rollback import reverse as reverse_promotion
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
@@ -1333,6 +1334,52 @@ def _owing_frame(
     raise BatchError(_not_the_owner(frame.batch_id, frame.subject, owed))
 
 
+def _settling_frame(config: EvolutionConfig, known: Lineage) -> Frame:
+    """The frame a settlement writes on, following a batch its own answer ended.
+
+    `_owing_frame` starts from the batch that is current, which is the right
+    place for every operation that adds to a reading. A settlement is the one
+    that can leave no batch current at all: `rolled-back` takes the release out
+    from under the cohort standing on it, and ending that cohort is this
+    operation's last write. Repeating the settlement afterwards would then meet
+    "no cohort is frozen" — a refusal about the wrong thing, on the one path a
+    caller has for confirming an answer whose response it lost.
+
+    So where nothing is current, the batch a reversal ended is what this reads
+    from, and the obligation is followed from there exactly as it would have been
+    followed from a current one: the reading may belong to an earlier cohort, and
+    it is still that cohort's record.
+
+    Only for reporting. What follows is `_redone_settlement`, which either states
+    the decision on record or refuses a different one; a gate that has not been
+    answered cannot be reached this way, because a batch ends `rolled-back` only
+    after the answer that ended it.
+    """
+
+    if known.current is not None:
+        return _owing_frame(config, known, follow_answered=True)
+    ended = _ended_by_reversal(known)
+    if ended is None:
+        raise BatchError(no_cohort_refusal())
+    owed = obligation(config, ended.batch, lineage=known)
+    if owed is None:
+        # Unreachable: a batch ends `rolled-back` only where a release it stood
+        # on came off the line, so there is a promotion before it.
+        raise BatchError(no_release_refusal(ended.batch_id))
+    return owed.frame
+
+
+def _ended_by_reversal(known: Lineage) -> BatchLineage | None:
+    """The newest batch a landed reversal ended, or None if none ever was."""
+
+    ended = [
+        item
+        for item in known.batches
+        if item.outcome is not None and item.outcome["outcome"] == OUTCOME_ROLLED_BACK
+    ]
+    return ended[-1] if ended else None
+
+
 def _as_assessed(subject: Subject) -> Subject:
     """The release as the record states it, which is not quite as the lineage
     reads it now.
@@ -1894,6 +1941,12 @@ class Settled:
     # retained release, a rollback that had already landed when the gate came to
     # record it, and a settlement reported back rather than written again.
     reversal: RollbackResult | None = None
+    # The batch this answer ended, and None where it ended none. A `rolled-back`
+    # settlement takes the release out from under the cohort that read it, which
+    # is a batch with no move left (contract: Rollback) — but the cohort standing
+    # on that base is not always the one that owed the reading, so what is ended
+    # is read from the base rather than from this decision's owner.
+    ended_batch: BatchEnded | None = None
     # False when this reports the settlement already on record — the same
     # decision run again after an interruption, recognised by what it says.
     recorded: bool = True
@@ -1976,11 +2029,19 @@ def settle(
         # The one operation that follows an obligation to an owner that already
         # answered: what it has to do with a decision on record is report it, and
         # a redo that could not reach the record could not report it either.
-        frame = _owing_frame(config, known, follow_answered=True)
+        frame = _settling_frame(config, known)
         reading = _recorded(config, frame, "settle")
         decided = reading.decision
         if decided is not None:
-            return _redone_settlement(frame, reading, decided, settlement, text)
+            report = _redone_settlement(frame, reading, decided, settlement, text)
+            # The ending is this operation's last write, so its own redo is what
+            # finishes one interrupted before it; it writes nothing where the
+            # batch is already over. A `retain` on record does not reach it: what
+            # ends a batch after that answer is a standalone rollback, and
+            # finishing that one is that operation's redo rather than this one's.
+            if decided.settlement != SETTLEMENT_ROLLED_BACK:
+                return report
+            return _ended(config, known, report, moment)
         _require_settleable(frame, reading)
         if settlement == SETTLEMENT_RETAIN:
             _require_standing(frame)
@@ -1991,7 +2052,9 @@ def settle(
         # themselves and a run of this that stopped before its record are the same
         # state, and making a second inverse would reverse the reversal.
         if frame.subject.reversed_promotion:
-            return _record_settlement(config, frame, reading, settlement, text, None, moment)
+            return _ended(
+                config, known, _record_settlement(config, frame, reading, settlement, text, None, moment), moment
+            )
         _require_reversible(known, frame)
 
         # Inside the lock this operation already holds, through the rollback's
@@ -2014,7 +2077,34 @@ def settle(
         known = settled(config, now=moment)
         frame = _owing_frame(config, known, follow_answered=True)
         reading = _recorded(config, frame, "settle")
-        return _record_settlement(config, frame, reading, settlement, text, reversal, moment)
+        return _ended(
+            config, known, _record_settlement(config, frame, reading, settlement, text, reversal, moment), moment
+        )
+
+
+def _ended(config: EvolutionConfig, known: Lineage, recorded: Settled, moment: datetime) -> Settled:
+    """End the batch this answer left standing on a release that came off the
+    line, and say on the result which batch that was.
+
+    After the decision rather than before it, and after the reversal rather than
+    inside it: the answer goes onto the reading of the cohort that took it, and a
+    cohort ended on the way past would leave this gate with no current batch to
+    record it on (`_owing_frame`). The one write that has to be last is therefore
+    last, and it is idempotent — the outcome record is what makes a batch no
+    longer current, so a settlement repeated after it landed finds nothing to end
+    (`rollback.end_batch`).
+
+    Which batch is read from the base rather than from this decision's owner. A
+    cohort that concluded without answering keeps the obligation while the *next*
+    one holds the base carrying the release, so a rule keyed on who answered
+    would end a batch that is already over and leave the one standing on nothing
+    (contract: Release assessment).
+
+    `retain` never reaches here: it leaves the release on the line, which is the
+    base every alternative in the batch was going to be built on anyway.
+    """
+
+    return replace(recorded, ended_batch=end_rolled_back_batch(config, lineage=known, now=moment))
 
 
 def _record_settlement(

@@ -597,7 +597,14 @@ def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
     because settling `rolled-back` lands the inverse commit after the record is
     written. Reporting the line's state as the reading's would say this cohort
     assessed a reversal it never saw, and it is the ordinary end of a regression
-    finding rather than a corner."""
+    finding rather than a corner.
+
+    While the gate is unanswered the two are both on the release block, which is
+    where an operator meets them. Answering `rolled-back` ends the cohort along
+    with the release (contract: Rollback), so that block goes with it — for the
+    reason every concluded batch's does — and what the surface carries afterwards
+    is the promotion with its reversal, and the batch's own ending.
+    """
 
     freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
@@ -618,19 +625,21 @@ def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
     )
     inverse = settled.decision.rollback_revision
     assert inverse is not None
+    assert settled.ended_batch is not None and settled.ended_batch.batch_id == SECOND
 
-    block = payload(config)["release"]
-    # The release as the record is about it: standing, with no reversal named.
-    assert block["assessed"]["standing"] is True
-    assert block["assessed"]["rollback_revision"] is None
-    # The same release as the line now holds it, which the settlement changed.
-    assert block["assessed"]["source_line"]["standing"] is False
-    assert block["assessed"]["source_line"]["rollback_revision"] == inverse
+    # The record keeps the question it answered whatever the line did afterwards.
+    assert settled.assessment.subject.standing is True
+    assert settled.assessment.subject.rollback_revision is None
 
-    text = rendered(config)
-    assert f"reversed by {inverse[:12]}" in text
-    assert "read while the release was still on the source line" in text
-    assert f"the next first experiment base must contain {inverse[:12]}" in text
+    block = payload(config)
+    assert block["release"] is None
+    assert block["last_promotion"]["revision"] == promoted.promotion_revision
+    assert block["last_promotion"]["rollback"]["revision"] == inverse
+    ended = next(entry for entry in block["batches"]["history"] if entry["batch_id"] == SECOND)
+    assert ended["outcome"] == "rolled-back"
+    assert inverse[:12] in ended["reason"]
+
+    assert "(rolled back)" in rendered(config)
 
 
 def test_the_counterfactual_is_four_states_and_a_request_is_the_first(

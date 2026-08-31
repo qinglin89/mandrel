@@ -90,7 +90,7 @@ from .replay import (
     WithdrawnRequest,
 )
 from .replay import Measurement as RunMeasurement
-from .rollback import RollbackResult
+from .rollback import BatchEnded, RollbackResult
 
 FIELD_WIDTH = 13
 HEX_DIGITS = "0123456789abcdef"
@@ -482,9 +482,14 @@ def format_rollback(result: RollbackResult, repo_root: Path) -> str:
 
     Both facts are stated because both are true afterwards: the promotion is
     still what it was, and the line no longer carries it. Nothing about the
-    experiment or the batch outcome changes here, which is the sentence at the
-    end — an operator reading "rolled back" as "un-promoted" would look for a
-    reopened experiment that does not exist.
+    *promoted* batch's outcome changes here, which is the sentence at the end —
+    an operator reading "rolled back" as "un-promoted" would look for a reopened
+    experiment that does not exist.
+
+    What does end is the batch that was standing on the release, and it is stated
+    separately for the same reason: it is a second batch, ending for the first
+    time, and an operator who reads only the first line would go looking for a
+    cohort that is over (contract: Rollback).
     """
 
     state = "is off" if result.recorded else "was already off"
@@ -504,7 +509,23 @@ def format_rollback(result: RollbackResult, repo_root: Path) -> str:
     lines.append(
         _field("", f"{result.experiment_id} stays promoted and the batch stays concluded — history is not edited")
     )
+    lines.extend(_ended_batch_lines(result.ended_batch, repo_root))
     return "\n".join(lines)
+
+
+def _ended_batch_lines(ended: BatchEnded | None, repo_root: Path) -> list[str]:
+    """The batch a reversal ended, or nothing where it ended none.
+
+    Silence is the ordinary answer: a rollback of a release no current cohort was
+    standing on ends nothing, and so does one repeated after the ending landed.
+    """
+
+    if ended is None:
+        return []
+    return [
+        _field("ended", f"{ended.batch_id} — its base carried the release taken back off the line"),
+        _field("outcome", _relative(ended.record_path, repo_root)),
+    ]
 
 
 def format_request_made(request: ReplayRequest) -> str:
@@ -932,6 +953,7 @@ def format_settlement(result: Settled, repo_root: Path) -> str:
         )
     if not result.recorded:
         lines.append(_field("", "this run wrote nothing: the same answer was already on record"))
+    lines.extend(_ended_batch_lines(result.ended_batch, repo_root))
     return "\n".join(lines)
 
 

@@ -652,6 +652,20 @@ def test_a_conclusion_written_before_the_merge_unit_existed_still_validates() ->
     assert errors(record, "batch-outcome.schema.json") == []
 
 
+def test_the_ending_a_reversal_writes_validates_at_the_same_schema_version() -> None:
+    """The `outcome` enum is a vocabulary this controller owns, widened by the
+    task that first writes a new member — the rule the ledger's own `record_type`
+    states. `schema_version` is unchanged by that: a version identifies the shape
+    a reader must parse, and neither the field set nor the types moved, so an
+    older reader keeps reading every record it always could and refuses exactly
+    the one ending it cannot describe."""
+
+    record = outcome(outcome="rolled-back", reason="the release it stood on came off the line")
+
+    assert record["schema_version"] == 1
+    assert errors(record, "batch-outcome.schema.json") == []
+
+
 # --- drafts declined at the gate ---------------------------------------------
 
 
@@ -1528,15 +1542,27 @@ def test_a_batch_cannot_conclude_over_a_successor_nobody_created(
         {"outcome": "no-change", "experiment_id": EXP_01},
         {"outcome": "promoted", "experiment_id": EXP_01},
         {"outcome": "promoted", "promotion_revision": PROMOTION},
+        {"outcome": "rolled-back", "promotion_revision": PROMOTION},
+        {"outcome": "rolled-back", "experiment_id": EXP_01},
     ],
-    ids=["no-change-with-a-revision", "no-change-with-an-experiment", "promoted-with-no-revision", "promoted-with-no-experiment"],
+    ids=[
+        "no-change-with-a-revision",
+        "no-change-with-an-experiment",
+        "promoted-with-no-revision",
+        "promoted-with-no-experiment",
+        "rolled-back-with-a-revision",
+        "rolled-back-with-an-experiment",
+    ],
 )
 def test_an_outcome_pairs_its_fields_with_what_it_concluded(
     config: evolution.EvolutionConfig, batch: Path, overrides: dict
 ) -> None:
-    """A `no-change` record naming a promotion is the fabrication invariant 7
-    forbids; a `promoted` record naming nothing ends the batch while saying
-    nothing about what reached the source line."""
+    """Only `promoted` names anything. A record that promoted nothing and states
+    a revision invents the change it says was not made — invariant 7's
+    fabrication in a `no-change` conclusion, and the same one in a `rolled-back`
+    ending whose whole content is that the release under it came off the line. A
+    `promoted` record naming nothing ends the batch while saying nothing about
+    what reached the source line."""
 
     write_outcome(config.batches_root, BATCH_ID, reason="recorded", **overrides)
     with pytest.raises(evolution.BatchError):
@@ -1599,6 +1625,35 @@ def test_a_no_change_batch_over_a_promoted_experiment_is_refused(
     )
     write_outcome(config.batches_root, BATCH_ID, reason="the evidence justified no change")
     with pytest.raises(evolution.BatchError, match="record a promotion"):
+        lineage.describe(config)
+
+
+def test_a_rolled_back_batch_admitted_nothing(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """The extra thing that ending is held to, and it is not about promotions.
+
+    A rollback ends the batch whose base carries the release it reverses, and it
+    refuses outright while any attempt of a later batch stands on that commit.
+    Every experiment of a batch starts from its base (invariant 15), and that
+    base is the very reading that picked the batch to end — so an admitted
+    attempt and this ending cannot both have happened, and a record saying they
+    did describes a rollback that was refused.
+    """
+
+    write_experiment(
+        config.experiments_root,
+        EXP_01,
+        rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
+        decision=experiment_decision("abandoned"),
+    )
+    write_outcome(
+        config.batches_root,
+        BATCH_ID,
+        outcome="rolled-back",
+        reason="the release it stood on came off the source line",
+    )
+    with pytest.raises(evolution.BatchError, match="cannot both have happened"):
         lineage.describe(config)
 
 

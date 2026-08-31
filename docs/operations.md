@@ -644,7 +644,7 @@ release is kept — all of it is a human judgement stated here and recorded
 | `replay-abandon --reason ...` | record why a run ended when its harness cannot say |
 | `replay-withdraw` | give up a request the harness never answered for |
 | `promote --reason ... [--target <name>]... [--source-ref <ref>]` | carry the replayed candidate onto the line its replay integrated onto, and end the batch with it |
-| `rollback --reason ... [--source-ref <ref>]` | add and record the inverse commit for the latest promotion, on the line that promotion reached |
+| `rollback --reason ... [--source-ref <ref>]` | add and record the inverse commit for the latest promotion, on the line that promotion reached, and end the batch standing on that release |
 
 **The release the next cohort owes a reading of**
 
@@ -656,11 +656,18 @@ release is kept — all of it is a human judgement stated here and recorded
 | `assess-abandon --reason ...` | record why that run ended when its harness cannot say |
 | `assess-withdraw` | give up a counterfactual request the harness never answered for |
 | `assess-resolve --verdict ... --confidence ... --rationale ...` | revise the reading on the strength of the completed run |
-| `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next batch's first experiment waits on; `rolled-back` runs the reversal itself |
+| `settle --settlement retain\|rolled-back --reason ...` | answer the gate the next batch's first experiment waits on; `rolled-back` runs the reversal itself and ends the batch with it |
 
 `settle` is one verb and not a sequence: a `rolled-back` settlement performs the
 rollback, adopts an inverse already on the line, and finishes one left prepared.
 `rollback` is for a reversal that answers no gate.
+
+Either way the reversal ends the batch standing on the release it took back. That
+batch was formed at the line while the release was on it, so its base carries a
+promotion nobody kept and there is nothing left to admit on it — the outcome
+record says `rolled-back`, and the reports it claimed stay claimed. Which batch
+ends is read off the base rather than off who answered the gate, so a cohort that
+concluded without reading the release does not shield the one after it.
 
 Where the source line comes from differs by verb, and `--source-ref` never
 changes it. A batch freeze and a replay *resolve* the line, from
@@ -738,7 +745,8 @@ experiment is admitted until the reading is settled (invariant 17):
 Either path can end differently and both endings are verbs: `conclude-no-change`
 for a batch whose evidence justified nothing, `abandon` or `supersede` for an
 attempt that did not work out, and `settle --settlement rolled-back` for a
-release the next cohort read as a regression.
+release the next cohort read as a regression — which reverses the release and
+ends that cohort's own batch with it.
 
 #### The harness is you
 

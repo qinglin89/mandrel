@@ -106,7 +106,11 @@ complete an evaluation.
     accumulating in the pending pool throughout; they are a later batch's
     evidence, not a reason to cut this one short. Terminal experiments are
     history and never block anything: abandoning or superseding one frees the
-    batch for another alternative, and only a promotion ends the batch.
+    batch for another alternative, and no decision about an experiment ends the
+    batch but a promotion. The other two endings come from outside the
+    experiments: the conclusion that nothing was justified (invariant 7), and a
+    landed rollback taking the release this batch stands on back off the line
+    (Rollback).
 15. **One frozen base per batch, and rounds only add.** A batch is created at
     the configured source line's tip, and that commit — recorded in its
     manifest — is the source revision every experiment of that batch starts
@@ -142,9 +146,11 @@ complete an evaluation.
     the batch was formed at the line while the release was on it. `rolled-back`
     is where the two genuinely part company, since the reversal lands after the
     formation — that cohort's base still carries the promotion just taken back,
-    and its first admission refuses rather than building every alternative on a
-    protocol nobody decided on. What resolves that is a rollback ending the
-    batch it settles, which this contract does not yet describe. The obligation
+    so there is nothing that base can be admitted on. What resolves it is that a
+    landed rollback *ends* the batch standing on the release (Rollback), which
+    is keyed on the base rather than on whose reading was settled. The refusal
+    stays as the answer for the window between the reversal landing and the
+    record that ends the batch, and it says which command finishes that record. The obligation
     stays with the first cohort frozen after the promotion and does not lapse
     when that cohort ends: a batch that concluded `no-change` promoted nothing,
     so the batch after it still follows the same release and still waits on
@@ -200,7 +206,7 @@ having its files moved away; each state below names the artifact that ends it.
 
 | Unit | Non-terminal while | Terminal when |
 |---|---|---|
-| Batch | its manifest is frozen and no outcome is recorded | `batches/<batch-id>/outcome.json` records `promoted` or `no-change` |
+| Batch | its manifest is frozen and no outcome is recorded | `batches/<batch-id>/outcome.json` records `promoted`, `no-change`, or `rolled-back` |
 | Experiment | its record carries no decision | `experiment.json` records `abandoned`, `superseded`, or `promoted` |
 | Round | it is the experiment's last round and carries no seal | its `seal` pins a candidate revision — the round is **candidate-ready** |
 | Replay run | its record carries no result | its `result` records `completed` or `failed` |
@@ -1133,8 +1139,8 @@ from its own `.ai-deploy-lock.json`.
 
 A batch is current until `batches/<batch-id>/outcome.json`
 (`schemas/batch-outcome.schema.json`) records a conclusion the rest of its
-lineage agrees with, and that record is what releases the next cohort. Two ways
-reach it:
+lineage agrees with, and that record is what releases the next cohort. Three ways
+reach it, and only the first two are decisions about this batch's own attempts:
 
 - `promoted` — an experiment was promoted; the outcome names it, the promotion
   revision, and the merge unit it went as (the round, the candidate, the source
@@ -1154,6 +1160,20 @@ reach it:
 - `no-change` — the evidence justified no change to anything (invariant 7). The
   record carries the reason and nothing else: no experiment, no promotion
   revision, and no commit invented to represent a change that was not made.
+- `rolled-back` — the release this batch was formed to judge came off the source
+  line under it (Rollback). It is not a decision about this batch's attempts and
+  it is not written by an operator: the reversal writes it, as its own last
+  write. The record carries the same nothing a `no-change` conclusion does, for
+  the same reason — this batch promoted nothing either — and its reason names the
+  release, the inverse commit, and the sentence the reversal was recorded for.
+
+The vocabulary of the `outcome` field is this controller's, and it is widened by
+the task that first writes a new member — the rule the ledger's own `record_type`
+states. `schema_version` is unchanged by such a widening: a version identifies
+the shape a reader must parse, and neither the field set nor the types moved. An
+older reader therefore goes on reading every record it always could and refuses
+exactly the one ending it cannot describe, naming the value; bumping would have
+made it refuse all three.
 
 The outcome and the experiments state one history between them, and it is the
 whole set that has to agree rather than the record the outcome happens to name.
@@ -1170,7 +1190,11 @@ the next cohort released over it.
 
 `no-change` is therefore written over a batch with nothing left open: its
 analysis stage has ended, no experiment is open, no attempt records a promotion,
-and no proposal is still waiting at the admission gate. The last one is the same
+and no proposal is still waiting at the admission gate. None of the four is asked
+of a `rolled-back` ending, and asking them would be the wrong question: that batch
+is not ending because its work is finished but because the premise the work was
+about is gone, so an unfinished analysis and a draft nobody decided are exactly
+what it ends holding. The last one is the same
 agreement read from the gate's side — a draft nobody decided is this batch's own
 analysis saying a change was warranted, so admit it or decline it, both of which
 are terminal for a proposal. It is the one condition the two outcomes share:
@@ -1277,6 +1301,40 @@ as a prepared promotion is: a promotion's merge carries a tree that evidence
 exists about, and a moved line makes that evidence describe something else, while
 a rollback's content is computed from the line and nothing measured is
 invalidated by the line moving.
+
+**A rollback is also how a batch ends.** The cohort frozen after a promotion was
+formed at the source line while the release was on it, so that release is in the
+base every alternative in the batch would start from (invariant 15). Take the
+release back off the line and there is no move that batch can still make: its
+base carries a promotion nobody kept, admitting on it would build every
+alternative on a protocol nobody decided (invariant 17), and the base is not a
+thing a batch may re-resolve. So a landed reversal writes that batch's terminal
+outcome — `rolled-back` (Batch outcome) — as its own last write, and the batch is
+over.
+
+Which batch is read off the base, not off whose reading was settled. A base
+carrying the promotion and *not* carrying the inverse commit is the line as the
+release left it; both halves are asked, because a revert adds history rather than
+removing it and every batch formed after the reversal carries the promotion too.
+Keyed that way, one rule covers every way a reversal arrives: the settlement that
+composes it, a `retain` followed later by a standalone rollback, and the case
+where the reading belongs to an earlier cohort that concluded without answering
+while the *next* one holds the base — which a rule phrased as "a rollback ends the
+assessing batch" would never reach. A reversal no current batch is standing on
+ends nothing, which is the ordinary case for one run before any cohort followed
+it.
+
+**A rolled-back batch's evidence is spent.** Its member reports were claimed by
+its frozen manifest, and a claim is what takes a report out of discovery; every
+claim is resolved against the manifest naming it, so a claim exists exactly as
+long as that membership record does — and the manifest is immutable. Nothing
+returns to the pending pool, and there is no operation here that would put it
+there. That is a real cost and it is named rather than left as a silence:
+evidence produced at a canonical revision that has been reverted describes a
+protocol the project no longer has, the batch's denominator goes with it, and the
+next cohort starts counting from the reports that arrive afterwards. It is also
+the ordinary consequence of the judgement — a release worth reversing is a
+release whose cohort was measuring the wrong line.
 
 A rollback is not a judgement the promotion's own evidence contains. A replay
 measures a tree; whether the promotion argued from it should stand is a later
@@ -1660,15 +1718,22 @@ rollback is a judgement the promotion's own evidence never contained (Rollback).
 
 What waits on it is the next first experiment and nothing else (invariant 17).
 That admission is what puts every alternative in the batch on the base its
-formation fixed, and the two settlements give two different commits: the line
+formation fixed, and the two answers give two different commits: the line
 carrying the release, or the line with the inverse commit on it. So the gate sits
 between the reading and that admission, and nowhere else — the analysis, its
 drafts, its rejections and its closure are all unaffected, and a batch with no
-release before it waits for nothing. The admission is held to the commit as well
-as to the answer: a base that carries neither the release nor the reversal would
-settle by accident what the human was asked, so it is refused whether the batch
-was formed at a line that had not taken the reversal yet or at one that moved
-after the decision.
+release before it waits for nothing.
+
+The two answers therefore leave the batch in two different places. `retain`
+releases the admission onto the base the formation fixed, which is the line
+carrying the release. `rolled-back` takes that release off the line and with it
+the only base the batch had, so it *ends* the batch instead (Rollback) — the
+settlement's last write, after the decision it is recorded from. The batch ended
+is read from the base rather than from this decision's owner, which is what
+reaches the cohort holding the stale base when the reading belongs to an earlier
+one. A batch whose analysis produced no drafts at all is not a third answer here:
+it concludes `no-change` (invariant 7), which is the absence of anything to
+choose between rather than a decision about the release.
 
 Recording the settlement composes the reversal rather than repeating it.
 `rolled-back` runs the rollback operation, which takes the reason and nothing
@@ -1708,8 +1773,9 @@ supersession recorded and did not create, the drafts still
 waiting at the gate, what the current round has been replayed by, the last
 promotion this repository recorded and whether the source line still carries it,
 which release the current cohort follows, which cohort owes the reading of it,
-which of that cohort's reports can contribute to one, and whether that reading
-has been settled
+which of that cohort's reports can contribute to one, whether that reading
+has been settled, and whether the current batch's base still stands on a release
+that came off the line
 are
 re-derived on every read from the committed manifests, closure records,
 experiment records, replay records, rejection records, rollback records,

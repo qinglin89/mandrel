@@ -77,6 +77,16 @@ ROLLBACK_SCHEMA_VERSION = 1
 
 OUTCOME_PROMOTED = "promoted"
 OUTCOME_NO_CHANGE = "no-change"
+# The batch a landed rollback ended: the release it was formed to judge came off
+# the source line, so the base it fixed at its formation carries a promotion
+# nobody kept and nothing may be admitted on it (contract: Rollback).
+OUTCOME_ROLLED_BACK = "rolled-back"
+
+# The audit line every one of the three writes, named here rather than beside any
+# one of them: two operations end batches — the conclusion in `experiments` and
+# the rollback in `rollback` — and a second spelling of this string is how one of
+# them comes to write an event the other's readers do not recognise.
+RECORD_BATCH_CONCLUDED = "batch-concluded"
 
 # What a freeze writes, and the only version this build reads. Version 1 was
 # dropped rather than kept as a reader arm: no batch has ever been frozen in this
@@ -367,13 +377,16 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     (`lineage.current_batch`). What this reader owes that one is a record it can
     read as one unambiguous conclusion, so it refuses anything else.
 
-    The two outcomes carry different fields, and the pairing is checked here
-    because the implemented JSON Schema subset cannot express it. A `no-change`
-    record naming a promotion revision is the fabrication invariant 7 forbids,
-    and a `promoted` record missing any of the experiment, the revision, or the
-    merge unit ends the batch while saying less than it must about what reached
-    the source line — either way the batch is over and the trail is wrong, which
-    is exactly the state that must not load.
+    The endings carry different fields, and the pairing is checked here because
+    the implemented JSON Schema subset cannot express it. Only `promoted` names
+    anything: a record that promoted nothing and names a promotion revision
+    invents the change it says was not made — the fabrication invariant 7 forbids
+    of a `no-change` conclusion, and the same fabrication in a `rolled-back` one,
+    whose whole content is that the release under it came off the line. A
+    `promoted` record missing any of the experiment, the revision, or the merge
+    unit ends the batch while saying less than it must about what reached the
+    source line. Either way the batch is over and the trail is wrong, which is
+    exactly the state that must not load.
 
     The merge unit is part of that pairing rather than an ornament on it. A
     promotion revision alone says a commit exists; what makes it checkable
@@ -414,8 +427,8 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
         )
     if not promoted and named:
         raise BatchError(
-            f"{path}: a {record['outcome']!r} outcome fabricates no candidate, promotion, or revision "
-            f"(invariant 7), but this one names {sorted(named)}"
+            f"{path}: a {record['outcome']!r} outcome promoted nothing and so fabricates no candidate, "
+            f"promotion, or revision, but this one names {sorted(named)}"
         )
     return record
 
