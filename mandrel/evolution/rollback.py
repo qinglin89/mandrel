@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import OUTCOME_SCHEMA_FILENAME, ROLLBACK_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, ToolchainError
 from .guards import held
 from .guards import reason as require_reason
 from .guards import require_expected, require_line_not_checked_out, require_readable_evidence, settled
@@ -839,6 +839,13 @@ def _prepare(
         parent=merge["merge_input_revision"],
         tip=tip,
     )
+    if reverted.too_old:
+        raise ToolchainError(
+            f"{promoted.batch_id}: the inverse of {revision[:12]} cannot be computed here: "
+            f"{reverted.complaint}. Nothing was written and the promotion still stands — a revert this checkout "
+            "cannot compute says nothing about whether it applies cleanly, so the rollback is run where the "
+            "tooling can answer rather than left recorded as impossible"
+        )
     tree = reverted.tree
     if tree is None:
         raise BatchError(

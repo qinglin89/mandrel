@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .errors import BatchError, EvolutionError
+from .errors import KIND_UNANSWERED, BatchError, EvolutionError
 from .replay import CaseSet, Evaluator, Harness, ReplayPlan, ReplayReport, ReplayRequest
 
 
@@ -59,8 +59,14 @@ class Unanswered(EvolutionError):
     written, and no reading recomputes it.
 
     An `EvolutionError` so that a caller who does not expect it still reports it
-    as the refusal it is, rather than as a traceback.
+    rather than showing a traceback — but a family of its own, and the one that
+    is not a failure. The write happened; what did not is the statement only a
+    person makes. A caller that read this as a refusal would report a request it
+    is holding as one it never made, and go on to make it a second time.
     """
+
+    kind = KIND_UNANSWERED
+    code = "run-unstated"
 
     def __init__(self, request: ReplayRequest) -> None:
         super().__init__(

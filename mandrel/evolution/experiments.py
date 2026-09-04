@@ -103,7 +103,7 @@ from ..hashing import sha256_bytes
 from . import analysis_task, assessment
 from . import rollback as rollback_ops
 from .config import EvolutionConfig
-from .errors import BatchError
+from .errors import BatchError, ToolchainError
 from .guards import (
     current_cycle,
     held,
@@ -1967,6 +1967,13 @@ def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, inte
     )
     if merged.tree == integration.tree:
         return
+    if merged.too_old:
+        raise ToolchainError(
+            f"{experiment.experiment_id}: this checkout cannot recompute the integration the run measured: "
+            f"{merged.complaint}. The evidence is untouched and the candidate is not in question — what is "
+            "missing is the check that these two commits still merge to the measured tree, and a promotion is "
+            "not made on a check that could not be run"
+        )
     found = merged.tree[:12] if merged.tree is not None else f"no tree at all ({merged.complaint})"
     raise BatchError(
         f"{experiment.experiment_id}: integrating {integration.candidate_revision[:12]} onto "

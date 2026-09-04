@@ -58,6 +58,22 @@ from .errors import RefHoldError
 
 RELEASE_TAG_GLOB = "v[0-9]*"
 
+# The Git this package needs, per call rather than as one number, because the
+# difference is a whole verb: everything up to and including a promotion works
+# on 2.38, and only a rollback needs 2.40. An operator on 2.38 told the floor is
+# 2.40 would upgrade to fix a replay that was never broken; one told nothing at
+# all reads a promotion refusal about a candidate that merges perfectly well.
+#
+# Stated here, next to the calls that need them, and repeated where an operator
+# looks before installing anything (`docs/operations.md`, Development).
+MERGE_TREE_FLOOR = (2, 38)
+"""`git merge-tree --write-tree`, which computes an integration without a
+checkout — the tree a replay measures and a promotion carries."""
+
+REVERT_TREE_FLOOR = (2, 40)
+"""`git merge-tree --merge-base`, which computes a revert against the line as it
+now stands — the tree a rollback's inverse commit carries."""
+
 # `git update-ref`'s spelling of "this ref must not exist yet". Passing it as the
 # expected old value makes creation a compare-and-swap Git performs under its own
 # ref lock, rather than a check this process makes and then acts on.
@@ -284,6 +300,16 @@ class MergeAnswer:
     tree: str | None
     complaint: str
     conflicted: bool = False
+    too_old: bool = False
+    """Whether the reason there is no answer is this checkout's Git.
+
+    The third value's third value, and set only on the failure branch: a Git
+    below the floor the call needed is not "these revisions do not integrate",
+    and a caller raising the two alike retires a candidate on the strength of
+    which version somebody happened to have installed. `complaint` says which
+    version is here and which would answer, so the sentence is actionable
+    wherever it comes out.
+    """
 
 
 def merge_tree(repo_root: Path, ours: str, theirs: str) -> MergeAnswer:
@@ -308,13 +334,15 @@ def merge_tree(repo_root: Path, ours: str, theirs: str) -> MergeAnswer:
     tree even though Git prints one: that tree holds the conflict markers, so
     taking it would measure a state no promotion could produce. It is still
     marked as the answer it is (`MergeAnswer.conflicted`) rather than left
-    indistinguishable from a failure to compute — a Git too old for
-    `--write-tree` (2.38) also lands here, saying so in its own usage error, for
-    the reason a Git too old for ref transactions does in `_prepare`, and the two
-    say opposite things about the revisions themselves.
+    indistinguishable from a failure to compute — a Git older than
+    `MERGE_TREE_FLOOR` lands in the failure branch instead, saying so in its own
+    usage error, for the reason a Git too old for ref transactions does in
+    `_prepare`, and the two say opposite things about the revisions themselves.
+    That branch marks it too (`MergeAnswer.too_old`), so the distinction survives
+    the caller: a conflict retires a candidate and an old Git retires nothing.
     """
 
-    return _written_tree(repo_root, "--write-tree", ours, theirs)
+    return _written_tree(repo_root, MERGE_TREE_FLOOR, "--write-tree", ours, theirs)
 
 
 def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> MergeAnswer:
@@ -339,14 +367,17 @@ def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> Mer
     is a person's job with a working tree in front of them. It is nevertheless
     Git's *answer* about these three commits rather than a question this checkout
     could not put, which is the distinction a record claiming to be the revert is
-    held to. `--merge-base` needs Git 2.40, and one too old for it says so in its
-    own usage error rather than being probed for.
+    held to. `--merge-base` needs `REVERT_TREE_FLOOR`, and a Git without it says
+    so in its own usage error — which names an option and not a release, so the
+    failure branch reads the version back and states the floor
+    (`MergeAnswer.too_old`). Nothing is probed to decide whether to ask; the
+    probe explains an answer already given.
     """
 
-    return _written_tree(repo_root, "--write-tree", f"--merge-base={revision}", tip, parent)
+    return _written_tree(repo_root, REVERT_TREE_FLOOR, "--write-tree", f"--merge-base={revision}", tip, parent)
 
 
-def _written_tree(repo_root: Path, *arguments: str) -> MergeAnswer:
+def _written_tree(repo_root: Path, floor: tuple[int, int], *arguments: str) -> MergeAnswer:
     """One `git merge-tree` run and one reading of what it answered.
 
     Shared so that a tree computed for an integration and a tree computed for a
@@ -363,6 +394,12 @@ def _written_tree(repo_root: Path, *arguments: str) -> MergeAnswer:
     line, and its messages; the first two say what the merge *would* have been,
     which for a conflict is the one thing no caller may use. Reading that layout
     is what the success path already does in taking the first line as the tree.
+
+    The version is asked for on the failure branch and nowhere else, which keeps
+    the property the two callers' docstrings claim: nothing is probed to decide
+    whether to ask Git a question. It is probed to explain an answer — a run
+    that already failed for something other than a conflict, where Git's own
+    usage error names an option and never the release that grew it.
     """
 
     if not _is_repository_root(repo_root):
@@ -378,8 +415,64 @@ def _written_tree(repo_root: Path, *arguments: str) -> MergeAnswer:
     if result.returncode == 1:
         said = _said(_after_blank_line(result.stdout)) or _said(result.stderr)
         return MergeAnswer(None, said or "git merge-tree reports a conflict", conflicted=True)
-    complaint = _said(result.stderr) or _said(result.stdout)
-    return MergeAnswer(None, complaint or f"git merge-tree exited {result.returncode}")
+    complaint = _said(result.stderr) or _said(result.stdout) or f"git merge-tree exited {result.returncode}"
+    short = _below_floor(repo_root, floor)
+    if short is not None:
+        return MergeAnswer(None, f"{complaint}; {short}", too_old=True)
+    return MergeAnswer(None, complaint)
+
+
+def _below_floor(repo_root: Path, floor: tuple[int, int]) -> str | None:
+    """Why this checkout's Git could not put the question, when that is the
+    reason — and None when it is not, including when the version cannot be read.
+
+    Silent about a Git it cannot identify on purpose. A failure this cannot
+    explain stays the failure Git described; guessing "probably too old" at an
+    unreadable version would put a machine's own fact where a repository's
+    belongs, which is the confusion the whole family exists to end.
+
+    Where it does answer it answers over whatever else went wrong, and that is
+    the right order: a Git below the floor could not have computed this tree for
+    any of the arguments, so its version is the first thing to fix and Git's own
+    words are kept beside it either way.
+    """
+
+    found = git_version(repo_root)
+    if found is None or found >= floor:
+        return None
+    return (
+        f"this is git {_version_text(found)} and {_version_text(floor)} or newer computes it — the option this "
+        "needs was added there, so what stopped the run is the version installed here rather than anything "
+        "about these revisions"
+    )
+
+
+def git_version(repo_root: Path) -> tuple[int, ...] | None:
+    """The Git running here as its leading numbers, or None where they cannot be
+    read.
+
+    Leading numbers only: distributions suffix their builds (`2.39.5 (Apple Git-154)`,
+    `2.43.0.windows.1`) and a comparison that tripped over the suffix would
+    report every packaged Git as unreadable. Non-numeric parts end the tuple
+    rather than failing it, so a version says as much as it can spell.
+    """
+
+    described = _git(repo_root, "--version")
+    if not described:
+        return None
+    fields = described.split()
+    if len(fields) < 3 or fields[0] != "git" or fields[1] != "version":
+        return None
+    numbers = []
+    for part in fields[2].split("."):
+        if not part.isdigit():
+            break
+        numbers.append(int(part))
+    return tuple(numbers) or None
+
+
+def _version_text(version: Sequence[int]) -> str:
+    return ".".join(str(part) for part in version)
 
 
 def _after_blank_line(output: str) -> str:

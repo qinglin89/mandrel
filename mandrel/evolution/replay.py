@@ -88,7 +88,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, ValidationError
+from .errors import BatchError, ToolchainError, ValidationError
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Experiment
 from .revisions import merge_tree, ref_tip
@@ -1424,6 +1424,13 @@ def _pin(
         )
 
     merged = merge_tree(config.repo_root, merge_input, candidate)
+    if merged.too_old:
+        raise ToolchainError(
+            f"the integration for {described} of {experiment.experiment_id} cannot be computed here: "
+            f"{merged.complaint}. Nothing was established about {candidate[:12]} — a candidate this checkout "
+            f"cannot merge onto {source_ref} is not one it can say anything about, so the round stands where it "
+            "was and the replay is run where the tooling can answer"
+        )
     if merged.tree is None:
         raise BatchError(
             f"{described} of {experiment.experiment_id} has no integration to measure: {merged.complaint}; a "

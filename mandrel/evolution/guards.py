@@ -56,7 +56,7 @@ from typing import Any, Iterator
 
 from .batches import awaiting_analysis, record_closures
 from .config import EvolutionConfig
-from .errors import BatchError, EvolutionError, RefHoldError
+from .errors import BatchError, EvolutionError, InputError, RefHoldError, StaleStateError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
 from .revisions import checked_out_refs, held_at, ref_tip
@@ -452,10 +452,10 @@ def require_expected(config: EvolutionConfig, expected: str | None) -> None:
 
     refusal = expectation_refusal(config, expected)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise refusal
 
 
-def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | None:
+def expectation_refusal(config: EvolutionConfig, expected: str | None) -> EvolutionError | None:
     """Why the state a caller read is not the state this operation would act on.
 
     None where no expectation was given, which is the ordinary terminal path: an
@@ -467,7 +467,14 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
     A token from another scheme is refused rather than compared, and said so:
     "this does not describe this repository" and "this repository moved" are
     different facts, and a caller that reads them as one will retry the wrong
-    thing forever.
+    thing forever. Which is also why they come back as two classes rather than
+    two sentences (`errors.py`): one is the command, answered by taking a token
+    from this checkout, and the other is the lifecycle, answered by reading it
+    again — and the caller reading them as one is the automated caller this
+    argument exists for, which does not read sentences at all.
+
+    Returns the refusal rather than raising it, the shape `no_open_experiment`
+    has, so the one caller that must raise does and a reader can ask.
     """
 
     if expected is None:
@@ -475,7 +482,7 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
     token = expected.strip()
     version, separator, digest = token.partition("-")
     if not separator or version != str(STATE_REVISION_VERSION) or not digest:
-        return (
+        return InputError(
             f"'{expected}' is not a state revision this build computes; the scheme is "
             f"{STATE_REVISION_VERSION}-<digest>, and a token from another one says nothing about whether this "
             "lifecycle moved — so it is refused rather than compared. Take the current one from the `state` line "
@@ -484,7 +491,7 @@ def expectation_refusal(config: EvolutionConfig, expected: str | None) -> str | 
     current = state_revision(read_inputs(config))
     if token == current:
         return None
-    return (
+    return StaleStateError(
         f"the evolution records moved since {token} was read: they now stand at {current}. This verb was asked "
         "for the state that token describes, and what it would act on is a different one — read the lifecycle "
         "again with `mandrel evolution status` and decide over what is there now"

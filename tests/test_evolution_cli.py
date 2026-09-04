@@ -27,6 +27,7 @@ import json
 import re
 import shlex
 import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -84,8 +85,10 @@ from mandrel.evolution import (
     assessment,
     batches,
     deployment,
+    errors,
     experiments,
     guards,
+    harness,
     hub,
     importer,
     lineage,
@@ -94,6 +97,7 @@ from mandrel.evolution import (
     render,
     reports,
     replay,
+    revisions,
     rollback,
 )
 
@@ -263,6 +267,20 @@ def run(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str, 
     code = cli.main(argv)
     captured = capsys.readouterr()
     return code, captured.out, captured.err
+
+
+def exits(failure: type[evolution.EvolutionError]) -> int:
+    """The status a failure of this class leaves the process at.
+
+    Named through the class rather than written as a number, which is the whole
+    point of the taxonomy: what a test pins is that this refusal is *this kind
+    of thing*, and the number it exits with is the map's business. A family
+    renumbered here moves every assertion with it; a refusal that quietly
+    becomes a corrupt-state report does not, and that is the failure worth
+    catching (`mandrel/evolution/errors.py`).
+    """
+
+    return cli.EVOLUTION_EXIT_CODES[failure.kind]
 
 
 # --- lifecycle phase ---------------------------------------------------------
@@ -587,7 +605,7 @@ def test_a_move_refuses_a_token_taken_before_it(
     token = phase.describe(config, now=NOW).state_revision
     evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification="why", actor="operator", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="the evolution records moved since"):
+    with pytest.raises(evolution.StaleStateError, match="the evolution records moved since"):
         evolution.include(
             config, "repo-alpha", "2026-07-01-task", justification="on second thought", actor="operator",
             now=NOW, expect=token,
@@ -1848,7 +1866,7 @@ def test_force_without_a_justification_is_refused(
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo), "--force"], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "justification" in err
     assert evolution.load_batches(evolution.load_config(repo)) == []
 
@@ -1899,7 +1917,7 @@ def test_a_freeze_with_nothing_offered_is_actionable(
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "no batch proposal stands" in err and "mandrel evolution start" in err
     assert evolution.load_batches(config) == []
 
@@ -1938,7 +1956,7 @@ def test_a_freeze_before_anything_was_offered_sends_the_operator_to_the_poll(
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "no batch proposal stands" in err
     assert "mandrel evolution start" in err
     assert evolution.load_batches(config) == []
@@ -1949,7 +1967,7 @@ def test_a_run_without_a_feed_or_credentials_is_actionable(
 ) -> None:
     code, _, err = run(["evolution", "sync", "--repo", str(repo)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.FeedError)
     assert "ORCH_HUB_URL" in err and "--feed-dir" in err
 
 
@@ -1959,7 +1977,7 @@ def test_a_missing_workspace_config_is_actionable(tmp_path: Path, capsys: pytest
 
     code, _, err = run(["evolution", "status", "--repo", str(empty)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.ConfigError)
     assert "missing evolution config" in err
 
 
@@ -1975,7 +1993,7 @@ def test_an_unavailable_feed_is_reported_without_touching_the_pool(
         ["evolution", "sync", "--repo", str(repo), "--feed-dir", str(tmp_path / "absent")], capsys
     )
 
-    assert code == 2
+    assert code == exits(evolution.FeedError)
     assert "reports/" in err
     assert snapshot(repo) == before
     assert not config.state_path.exists()
@@ -1994,7 +2012,7 @@ def test_a_cursor_the_feed_never_issued_is_refused(
 
     code, _, err = run(["evolution", "sync", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.FeedError)
     assert "invalid cursor" in err
 
 
@@ -2007,7 +2025,7 @@ def test_corrupt_runtime_state_is_reported_not_reset(
 
     code, _, err = run(["evolution", "status", "--repo", str(repo)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.StateError)
     assert "incomplete state" in err
 
 
@@ -2023,9 +2041,200 @@ def test_lock_contention_is_reported_with_its_holder(
 
     code, _, err = run(["evolution", "sync", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.LockError)
     assert "4242" in err and "another-host" in err
     assert "remove it if no run is active" in err
+
+
+# --- the failure taxonomy ----------------------------------------------------
+#
+# Every evolution failure carries a `kind` and a `code` (`evolution/errors.py`),
+# and the console turns the first into a process exit status. What is under test
+# is that the classification is real: that the families are complete and
+# distinct, that three failures an operator answers three different ways come
+# back as three different answers, and that the one response which is neither a
+# success nor a failure is neither.
+#
+# Nothing here reads a message. That is the property being bought — a sentence
+# is written for a person and gets rewritten as the operation it explains gets
+# sharper, and anything keying on its words reclassifies itself when it does.
+
+
+def test_every_family_has_its_own_number_and_every_failure_has_a_family() -> None:
+    """The map is complete, one-to-one, and does not collide with what the
+    process already says.
+
+    Structural rather than behavioral because that is where this can rot: a
+    family added to `errors.py` and not to the map exits as the unclassified
+    failure it is not, and nothing else would ever notice.
+    """
+
+    numbers = [cli.EVOLUTION_EXIT_CODES[kind] for kind in errors.ERROR_KINDS]
+
+    assert set(cli.EVOLUTION_EXIT_CODES) == set(errors.ERROR_KINDS)
+    assert len(set(numbers)) == len(numbers), "two families an operator answers differently share a number"
+    # 0 is a completed run, 1 is a read whose answer is no, 2 is a command that
+    # was not understood or a failure with no family at all.
+    assert not {0, 1, cli.UNCLASSIFIED_EXIT} & set(numbers)
+
+    found = {}
+    pending = [errors.EvolutionError]
+    while pending:
+        failure = pending.pop()
+        pending.extend(failure.__subclasses__())
+        assert failure.kind in errors.ERROR_KINDS, f"{failure.__name__} has no family"
+        assert found.setdefault(failure.code, failure) is failure, f"{failure.code} names two classes"
+    assert harness.Unanswered in found.values(), "the harness family is reached by importing its module"
+
+
+def test_a_stale_reading_a_refusal_and_a_damaged_record_are_three_answers(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One verb, three failures, three answers — which is the whole point.
+
+    They are three different next steps: read the lifecycle again, change what
+    stands in the way, look at a file on this machine. Collapsed into one number
+    the caller has to read the sentence to tell them apart, and the sentences are
+    the part that moves.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    fill_pool(config, feed_root, TARGET)
+    where = ["--repo", str(lineage_repo), "--feed-dir", str(feed_root)]
+    before = token(config)
+
+    # Legal, and the state does not permit it: nothing has been offered yet.
+    refused, _, _ = run(["evolution", "freeze", "--repo", str(lineage_repo)], capsys)
+
+    # Legal, permitted, and asked for a reading that has since moved.
+    run(["evolution", "start", *where], capsys)
+    stale, _, _ = run(["evolution", "freeze", "--repo", str(lineage_repo), "--expect", before], capsys)
+
+    # Neither: this machine's own record of the pool cannot be read.
+    config.state_path.write_text('{"schema_version": 2}', encoding="utf-8")
+    damaged, _, _ = run(["evolution", "freeze", "--repo", str(lineage_repo)], capsys)
+
+    assert refused == exits(evolution.BatchError)
+    assert stale == exits(evolution.StaleStateError)
+    assert damaged == exits(evolution.StateError)
+    assert len({refused, stale, damaged}) == 3
+    assert len({evolution.BatchError.code, evolution.StaleStateError.code, evolution.StateError.code}) == 3
+    assert evolution.load_batches(config) == []
+
+
+def test_an_operations_own_write_is_the_family_with_the_least_to_say(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The catch-all reaches the console under its own number too.
+
+    A freeze redone over a file that is not the analysis task it generated is
+    the shape: not a refusal about the lifecycle, not a record this build cannot
+    read, just an operation whose own filesystem work will not complete. It is
+    the family a failure lands in until somebody names it better, and it exits
+    as itself rather than as an unclassified one.
+    """
+
+    config = evolution.load_config(repo)
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    path = analysis_task.task_path(config, result.analysis_task_id or "")
+    path.write_text("# not the task that was generated\n", encoding="utf-8")
+
+    code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+
+    assert code == exits(evolution.EvolutionError)
+    assert code != cli.UNCLASSIFIED_EXIT
+    assert "is not the analysis task generated" in err
+
+
+def test_a_git_below_the_floor_is_a_fact_about_this_machine(tmp_path: Path) -> None:
+    """A Git too old to compute the tree says so, and says which version would.
+
+    Two floors, because the difference is a whole verb: everything up to a
+    promotion works on 2.38 and only a rollback needs 2.40, so a machine that
+    can promote and cannot reverse has to be told which of the two it is.
+
+    The revert half runs against the real Git — a `--merge-base` it cannot
+    resolve is the failure branch this reading lives on — and the merge half
+    injects the usage error an older Git answers a newer option with, which is
+    the one thing a checkout holding a current Git cannot produce.
+    """
+
+    repo = tmp_path / "checkout"
+    git_repo(repo, tag=None)
+    head = git_commit(repo, "one")
+
+    modern = revisions.revert_tree(repo, revision="deadbeef", parent=head, tip=head)
+
+    assert modern.tree is None and not modern.conflicted and not modern.too_old
+    assert "could not parse" in modern.complaint
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(revisions, "git_version", lambda root: (2, 39, 0))
+        rollback_floor = revisions.revert_tree(repo, revision="deadbeef", parent=head, tip=head)
+        # The probe explains an answer; it never decides whether to ask. A merge
+        # that succeeds is not asked about the version at all, even one this
+        # would call ancient.
+        patched.setattr(revisions, "git_version", lambda root: (0, 1))
+        clean = revisions.merge_tree(repo, head, head)
+
+    assert rollback_floor.too_old and "2.39" in rollback_floor.complaint
+    assert "2.40 or newer" in rollback_floor.complaint
+    assert clean.tree is not None and not clean.too_old
+
+    with pytest.MonkeyPatch.context() as patched:
+        # What a Git without `--write-tree` answers: an option it does not know,
+        # and a usage exit that is neither of merge-tree's two answers.
+        asked = revisions._run
+
+        def older(root, *args):
+            if args[0] != "merge-tree":
+                return asked(root, *args)
+            return subprocess.CompletedProcess(
+                args, 129, "", "error: unknown option `write-tree'\nusage: git merge-tree"
+            )
+
+        patched.setattr(revisions, "_run", older)
+        patched.setattr(revisions, "git_version", lambda root: (2, 37, 3))
+        merge_floor = revisions.merge_tree(repo, head, head)
+
+    assert merge_floor.too_old and not merge_floor.conflicted
+    assert "unknown option" in merge_floor.complaint, "Git's own words are kept"
+    assert "2.37.3" in merge_floor.complaint and "2.38 or newer" in merge_floor.complaint
+
+
+def test_a_git_that_cannot_merge_is_not_a_candidate_that_will_not(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The distinction the toolchain family exists for, at the console.
+
+    A candidate that conflicts is a fact about the revisions, true in every
+    checkout that holds them, and it retires the round. A Git that cannot compute
+    the merge is a fact about this machine and retires nothing — read as the
+    first, it would send an operator to resolve a conflict that is not there.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    sealed(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(
+            replay,
+            "merge_tree",
+            lambda *args, **kwargs: revisions.MergeAnswer(
+                None, "git merge-tree: unknown option `--write-tree'; this is git 2.30.0 and 2.38 or newer "
+                "computes it", too_old=True
+            ),
+        )
+        code, _, err = run(["evolution", "replay-start", *asked, *where], capsys)
+
+    assert code == exits(evolution.ToolchainError)
+    assert code != exits(evolution.BatchError)
+    assert "2.38 or newer" in err
+    experiment = lineage.describe(config).current.open_experiment
+    assert replay.read_replays(config, experiment).pending is None, "nothing was established, so nothing was pinned"
 
 
 # --- the change lineage, as commands -----------------------------------------
@@ -2227,7 +2436,7 @@ def test_a_verb_refuses_the_reading_another_writer_moved_under(
 
     code, _, err = run(["evolution", "create", "loader-fallback", "--expect", stale, *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.StaleStateError)
     assert f"the evolution records moved since {stale} was read" in err
     assert snapshot(lineage_repo) == before
 
@@ -2281,7 +2490,7 @@ def test_a_freeze_is_refused_on_a_token_taken_before_the_offer_was_built(
     assert token(config) != before, "building the offer is a write"
     code, _, err = run(["evolution", "freeze", "--repo", str(lineage_repo), "--expect", before], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.StaleStateError)
     assert "the evolution records moved" in err
     assert evolution.load_batches(config) == []
 
@@ -2304,7 +2513,7 @@ def test_a_token_from_another_scheme_is_refused_rather_than_compared(
 
     code, _, err = run(["evolution", "create", "loader-fallback", "--expect", "99-deadbeefdeadbeef", *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.InputError)
     assert "is not a state revision this build computes" in err
     assert lineage.describe(config).current.open_experiment is None
 
@@ -2333,7 +2542,7 @@ def test_a_refused_expectation_stops_before_the_operation_writes_anything(
         capsys,
     )
 
-    assert code == 2
+    assert code == exits(evolution.StaleStateError)
     assert "the evolution records moved since" in err
     assert not closure.exists()
     assert snapshot(lineage_repo) == before
@@ -2400,6 +2609,12 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
         deployment.HOLDING_AMBIGUOUS,
     ):
         assert f"| `{state}` |" in text, f"{state} is a state this reading emits and nothing documents"
+
+    for kind in errors.ERROR_KINDS:
+        # The family and the number it exits with, in one row: an operator
+        # reading a status they cannot look up is reading a number.
+        assert f"| `{kind}` |" in text, f"{kind} is a failure family and nothing documents it"
+        assert f"| {cli.EVOLUTION_EXIT_CODES[kind]} | `{kind}` |" in text, f"{kind} is documented at another exit"
 
     # The two fields a surface acts on, and the shape of the token it passes
     # back.
@@ -2651,7 +2866,7 @@ def test_the_stated_line_reaches_the_operations_that_take_theirs_from_evidence(
 
     code, _, err = run(["evolution", "promote", *reason, "--source-ref", "refs/heads/elsewhere", *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "moves the line its evidence names" in err
     assert git_rev(lineage_repo, RELEASE_REF) == release
 
@@ -2662,7 +2877,7 @@ def test_the_stated_line_reaches_the_operations_that_take_theirs_from_evidence(
         ["evolution", "rollback", "--reason", "worse", "--source-ref", "refs/heads/elsewhere", *where], capsys
     )
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "puts its inverse on the line" in err
     assert git_rev(lineage_repo, RELEASE_REF) == promoted
 
@@ -3148,7 +3363,7 @@ def test_a_release_verb_refuses_the_reading_another_writer_moved_under(
         capsys,
     )
 
-    assert code == 2
+    assert code == exits(evolution.StaleStateError)
     assert f"the evolution records moved since {stale} was read" in err
     assert snapshot(lineage_repo) == before
     assert git_rev(lineage_repo, RELEASE_REF) == phase.describe(config, now=NOW).last_promotion.revision
@@ -3195,7 +3410,7 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
         ["evolution", "assess", *reading, "--metric", "review-rounds", "rounds", "some", "1.2", "lower", *where],
         capsys,
     )
-    assert code == 2
+    assert code == exits(evolution.InputError)
     assert "where a measurement holds a number" in err
     assert assessment.read(config, assessment.describe_current(config).batch) is None
 
@@ -3268,7 +3483,9 @@ def test_a_replay_is_started_and_concluded_from_the_command_line(
 
     code, out, _ = run(["evolution", "replay-start", *asked, *where], capsys)
 
-    assert code == 0
+    # Neither the success it is not — nothing is running — nor a failure: the
+    # request is durable, and what comes back is what to go and run.
+    assert code == exits(harness.Unanswered)
     assert "attempt 1 requested — nothing is running yet" in out
     pending = replay.read_replays(config, experiment).pending
     assert pending is not None
@@ -3343,7 +3560,7 @@ def test_nothing_is_pinned_until_what_is_running_is_stated_in_full(
 
     code, _, err = run(["evolution", "replay-start", *asked, "--handle", "run-0101", *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.InputError)
     assert "states all of what it is running or none of it" in err
     assert "--case-set" in err and "--evaluator" in err and "--harness" in err
     assert snapshot(lineage_repo) == before
@@ -3357,7 +3574,7 @@ def test_nothing_is_pinned_until_what_is_running_is_stated_in_full(
     # said.
     code, _, err = run(["evolution", "replay-start", *asked, "--rubric", "r7", *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.InputError)
     assert "this states --rubric and not --case-set, --evaluator, --harness, --handle" in err
     assert snapshot(lineage_repo) == before
     assert replay.read_replays(config, experiment).pending is None
@@ -3387,7 +3604,7 @@ def test_a_rerun_states_what_the_attempt_it_repeats_measured(
 
     code, _, err = run(["evolution", "replay-start", *asked, *running("run-0102", another_cohort), *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "round 1 attempt 2 reruns an attempt that completed" in err
     assert "loader-regressions-trimmed" in err and CASE_SET[0] in err
     history = replay.read_replays(config, experiment)
@@ -3428,7 +3645,7 @@ def test_numbers_are_recorded_against_the_run_they_were_read_from(
 
     code, _, err = run(["evolution", "replay-conclude", *reported(), "--handle", "run-0207", *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.BatchError)
     assert "the run on record is 'run-0101' and this states numbers for 'run-0207'" in err
     assert replay.read_replays(config, experiment).replays[-1].running
 
@@ -3462,7 +3679,7 @@ def test_a_harness_verb_refuses_the_reading_another_writer_moved_under(
 
     code, _, err = run(["evolution", "replay-start", *asked, *running("run-0101"), "--expect", stale, *where], capsys)
 
-    assert code == 2
+    assert code == exits(evolution.StaleStateError)
     assert f"the evolution records moved since {stale} was read" in err
     assert snapshot(lineage_repo) == before
     experiment = lineage.describe(config).current.open_experiment
@@ -3506,7 +3723,7 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
 
     code, out, _ = run(["evolution", "assess-measure", "--expectation", "no change either way", *where], capsys)
 
-    assert code == 0
+    assert code == exits(harness.Unanswered)
     assert "counterfactual attempt 1 requested — nothing is running yet" in out
     assert promoted[:12] in out
     reading = assessment.read(config, assessment.describe_current(config).batch)

@@ -567,10 +567,38 @@ cohort's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
 
 Every subcommand takes `--repo <path>` to work on another checkout, and
-`status` takes `--json` for the same shape a script can read. Exit status is 0
-for any completed run — including a `start` that offered no batch, which is the
-contract's normal outcome when evidence is still thin — and 2 for a refusal,
-corrupt local state, lock contention, or an unusable feed.
+`status` takes `--json` for the same shape a script can read.
+
+Exit status names the *family* of what happened, because that is what decides
+the next move. 0 is any completed run — including a `start` that offered no
+batch and a `freeze` the admission policy will not release, which are the
+contract's normal outcomes when evidence is still thin. Everything else:
+
+| Exit | Family | What it means | What to do |
+|---|---|---|---|
+| 2 | — | The command was not understood, or the failure has no family: argparse's own usage errors, and every non-evolution error `mandrel` reports. | Read the message. |
+| 3 | `invalid` | What you typed is not usable — a number where a number goes, a state token in this build's scheme. | Retype the command. |
+| 4 | `refused` | A legal operation the current state does not permit. | The message names what stands in the way; change it, or do something else. |
+| 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
+| 6 | `busy` | Another run holds `.ai-evolution/lock`. | Wait, or clear a lock whose holder is gone — see Recovery below. |
+| 7 | `corrupt` | A persisted record this machine owns cannot be read, or is a version this build has no reader for. Never repaired silently. | Restore the file, or see Recovery below. |
+| 8 | `unavailable` | The report feed did not answer. Nothing was established, so nothing was recorded. | Retry, or supply `--feed-dir`. |
+| 9 | `misconfigured` | `evolution/config.toml` or a schema under `evolution/schemas/` is missing, malformed, or asks for behavior this build does not implement. | Fix the workspace. |
+| 10 | `toolchain` | A tool this operation needs is not usable here — in practice a Git below the floor (below). | Upgrade Git. Nothing was established about any revision. |
+| 11 | `failed` | An operation's own write did not complete and nothing above says why. | Read the message; re-running is safe. |
+| 12 | `unanswered` | Not a failure. A run was requested, the request is on record, and nothing is running yet because you have not said what is — the first half of `replay-start` or `assess-measure`. | Go run the evaluation the command printed, then run the same verb again stating what it is running. |
+
+Nothing downstream should match message text: the sentences are written for a
+person and get rewritten as the operations they explain get sharper. Every
+failure also carries a stable `kind` and `code`
+(`mandrel/evolution/errors.py`), and the table above is the `kind` column.
+
+`replay-start` and `rollback` need a Git newer than most: `merge-tree
+--write-tree` (Git 2.38) computes the integration a replay measures and a
+promotion carries, and `merge-tree --merge-base` (Git 2.40) computes the tree a
+rollback's inverse commit carries. A Git below either floor exits 10 and names
+the version that would answer, rather than reporting the candidate as one that
+does not merge.
 
 `status` names a lifecycle phase — `idle`, `pool N/<target>`,
 `batch-proposed N/<target>`, `batch-frozen`, `dispositions-ready`,
@@ -725,6 +753,7 @@ habit `dev` invites is the thing to correct, not the guard.
 ./bin/mandrel evolution seal-round                 # pins the round's candidate revision
 ./bin/mandrel evolution replay-start \
     --expectation "fewer remediation rounds, quality unchanged"
+# exits 12: the request is on record and nothing is running yet
 # ...run that evaluation yourself, then state what is running:
 # export CASE_SET_SHA256 and HARNESS_CONFIG_SHA256 with the hashes from your harness
 ./bin/mandrel evolution replay-start \
@@ -749,7 +778,8 @@ experiment is admitted until the reading is settled (invariant 17):
     --rationale "..." --recommend retain \
     --metric "remediation rounds" rounds 2.1 1.4 lower
 ./bin/mandrel evolution assess-measure --expectation "..."   # the pinned counterfactual
-# ...run it, state it, and `assess-conclude` it — the same two-step as a replay
+# ...run it, state it, and `assess-conclude` it — the same two-step as a replay,
+# and the same exit 12 on the half that only records the request
 ./bin/mandrel evolution assess-resolve --verdict improved --confidence medium \
     --rationale "..." --recommend retain
 ./bin/mandrel evolution settle --settlement retain --reason "the reading holds"
@@ -1086,6 +1116,13 @@ The `dev` extra is the complete tool set the verification gate needs — pytest,
 ruff, shellcheck (via `shellcheck-py`), and the build backend. Nothing else has
 to be installed by hand; the gate refuses to run rather than skip a check whose
 tool is missing, and its error names the command above.
+
+Git is the one thing the extra cannot install, and the evolution lifecycle needs
+a recent one: **2.38** for `merge-tree --write-tree`, which computes the
+integration a replay measures and a promotion carries, and **2.40** for
+`merge-tree --merge-base`, which computes the tree a rollback's inverse commit
+carries. Below either, that verb exits 10 (`toolchain`) naming the version that
+would answer; everything else in this repository works on any Git.
 
 ### One command
 

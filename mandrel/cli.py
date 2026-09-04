@@ -13,6 +13,44 @@ from typing import Any
 from . import deploy, lockfile, manifest, placement, registry
 from .evolution import errors as evolution_errors
 
+# What the process says about an evolution failure, drawn at the family rather
+# than at the class (`evolution/errors.py`): a shell branching on the number is
+# choosing what to do next, and that is what a `kind` names. Two classes an
+# operator answers the same way share a number and stay distinguishable by their
+# `code`, which is what a caller reading more than the exit status has.
+#
+# 0 and 1 are the process's existing answers and are not redrawn here: 0 is any
+# completed run — including a `start` that offered no batch and a `freeze` the
+# admission policy will not release, which are the contract's normal outcomes —
+# and 1 is a completed read whose answer is no, which only `status` on a target
+# gives. 2 stays what it has always been: the command was not understood
+# (argparse spells its own usage errors that way) or the failure carries no
+# family, which is every non-evolution error this adapter reports.
+UNCLASSIFIED_EXIT = 2
+EVOLUTION_EXIT_CODES: dict[str, int] = {
+    evolution_errors.KIND_INVALID: 3,
+    evolution_errors.KIND_REFUSED: 4,
+    evolution_errors.KIND_STALE: 5,
+    evolution_errors.KIND_BUSY: 6,
+    evolution_errors.KIND_CORRUPT: 7,
+    evolution_errors.KIND_UNAVAILABLE: 8,
+    evolution_errors.KIND_MISCONFIGURED: 9,
+    evolution_errors.KIND_TOOLCHAIN: 10,
+    evolution_errors.KIND_FAILED: 11,
+    evolution_errors.KIND_UNANSWERED: 12,
+}
+
+
+def _exit_code(exc: evolution_errors.EvolutionError) -> int:
+    """The number this failure's family exits with.
+
+    Falls back rather than raising on a kind nobody mapped: a taxonomy gap is
+    not worth turning an operator's refusal into a traceback, and the structural
+    test over `ERROR_KINDS` is what keeps the map complete.
+    """
+
+    return EVOLUTION_EXIT_CODES.get(exc.kind, UNCLASSIFIED_EXIT)
+
 
 def _add_workspace_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo", help="evolution workspace root (default: this checkout)")
@@ -645,8 +683,10 @@ def _evolution(args: argparse.Namespace) -> int:
 
     Exit status is 0 for every completed run, including a `start` that offered no
     batch and a `freeze` the admission policy will not release: too little
-    evidence is the contract's normal outcome, not a failure. A refusal or an
-    unusable feed raises and `main` reports it as 2.
+    evidence is the contract's normal outcome, not a failure. Anything else
+    raises and `main` exits with its family's number
+    (`EVOLUTION_EXIT_CODES`) — except a start whose harness said nothing, which
+    is neither and is described below.
     """
 
     from .evolution import batches, config as evolution_config, importer, phase, render
@@ -687,8 +727,9 @@ def _evolution(args: argparse.Namespace) -> int:
         return 0
 
     if args.evolution_command in _harness_verbs(phase):
-        print(_harness(config, args))
-        return 0
+        said, status = _harness(config, args)
+        print(said)
+        return status
 
     feed = _evolution_feed(config, args.feed_dir)
     if args.evolution_command == "list":
@@ -932,8 +973,8 @@ def _release(config, args: argparse.Namespace) -> str:
     raise AssertionError(f"{command} is a release verb with no dispatch")
 
 
-def _harness(config, args: argparse.Namespace) -> str:
-    """Run one harness verb and describe what it did.
+def _harness(config, args: argparse.Namespace) -> tuple[str, int]:
+    """Run one harness verb, describe what it did, and say how it ended.
 
     The operator's statement goes to the same operations a wired-up harness
     would drive, in the same order and under the same lock; what is different is
@@ -941,8 +982,16 @@ def _harness(config, args: argparse.Namespace) -> str:
     that boundary already had: the operation records its request, the stated
     harness declines to describe a run, and what comes back is the request
     itself — which is what an operator hands the evaluation they are about to
-    run. Exit 0, because the command did what it was asked: it pinned a run and
-    put it on record.
+    run.
+
+    That last one is why there is a number here at all. The request is durable
+    by the time it is raised, so the command did part of what it was asked and
+    is not a failure — but it did not pin a run either, and a script that read
+    it as an ordinary success would go looking for numbers nobody is producing.
+    So it comes back on stdout, where the request an operator has to act on
+    belongs, under its family's own exit status (`errors.KIND_UNANSWERED`):
+    distinguishable from the success it is not, and from every failure it is
+    also not.
     """
 
     from .evolution import assessment, harness, phase, render, replay
@@ -952,31 +1001,43 @@ def _harness(config, args: argparse.Namespace) -> str:
         stated = harness.StatedHarness(plan=_plan(replay, args))
         try:
             if command == phase.ACTION_REPLAY_START:
-                return render.format_run_started(
-                    replay.start(
-                        config,
-                        stated,
-                        source_ref=args.source_ref,
-                        expectation=args.expectation,
-                        expect=args.expect,
-                    )
+                return (
+                    render.format_run_started(
+                        replay.start(
+                            config,
+                            stated,
+                            source_ref=args.source_ref,
+                            expectation=args.expectation,
+                            expect=args.expect,
+                        )
+                    ),
+                    0,
                 )
-            return render.format_counterfactual_started(
-                assessment.measure(config, stated, expectation=args.expectation, expect=args.expect)
+            return (
+                render.format_counterfactual_started(
+                    assessment.measure(config, stated, expectation=args.expectation, expect=args.expect)
+                ),
+                0,
             )
         except harness.Unanswered as unanswered:
             # Each boundary's request in its own vocabulary: a replay is a tree
             # to build and exercise, a counterfactual is two revisions the
             # promotion already produced.
-            if command == phase.ACTION_REPLAY_START:
-                return render.format_request_made(unanswered.request)
-            return render.format_counterfactual_requested(unanswered.request)
+            said = (
+                render.format_request_made(unanswered.request)
+                if command == phase.ACTION_REPLAY_START
+                else render.format_counterfactual_requested(unanswered.request)
+            )
+            return said, _exit_code(unanswered)
 
     answering = harness.StatedHarness(report=_report(replay, args), handle=args.handle)
     if command == phase.ACTION_REPLAY_CONCLUDE:
-        return render.format_run_concluded(replay.conclude(config, answering, expect=args.expect))
+        return render.format_run_concluded(replay.conclude(config, answering, expect=args.expect)), 0
     if command == phase.ACTION_ASSESS_CONCLUDE:
-        return render.format_counterfactual_concluded(assessment.conclude(config, answering, expect=args.expect))
+        return (
+            render.format_counterfactual_concluded(assessment.conclude(config, answering, expect=args.expect)),
+            0,
+        )
     # A harness verb named above and not dispatched here, for `_lineage`'s
     # reason: a verb added to one list and not the other is raised rather than
     # answered as one of the verbs that happens to be near it.
@@ -1010,7 +1071,7 @@ def _plan(replay, args: argparse.Namespace) -> Any:
         return None
     missing = [name for name, value in required.items() if not value]
     if missing:
-        raise evolution_errors.BatchError(
+        raise evolution_errors.InputError(
             f"a harness states all of what it is running or none of it; this states {', '.join(given)} and not "
             f"{', '.join(missing)}. State nothing to record the request and be told what to exercise, or state "
             "the whole of what the harness answered with"
@@ -1067,7 +1128,7 @@ def _count(stated: str) -> int:
     try:
         return int(stated)
     except ValueError:
-        raise evolution_errors.BatchError(
+        raise evolution_errors.InputError(
             f"--case-set states {stated!r} where the number of cases goes; a cohort's size is what a later "
             "reader compares one run's coverage with another's"
         ) from None
@@ -1083,7 +1144,7 @@ def _measured(stated: str, where: str) -> float:
 
     value = _quantity(stated, where)
     if value is None:
-        raise evolution_errors.BatchError(
+        raise evolution_errors.InputError(
             f"{where!r} states no candidate value; a run reports what it measured on the candidate, and a "
             "quantity it did not measure is not one it states"
         )
@@ -1135,7 +1196,7 @@ def _quantity(stated: str, where: str) -> float | None:
     try:
         return float(stated)
     except ValueError:
-        raise evolution_errors.BatchError(
+        raise evolution_errors.InputError(
             f"{where!r} states {stated!r} where a measurement holds a number; an empty value is how a cohort that "
             "measured nothing here is stated"
         ) from None
@@ -1273,20 +1334,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "evolution":
             return _evolution(args)
 
+    except evolution_errors.EvolutionError as exc:
+        # Reported like any other failure and exited unlike one: the family is
+        # what a caller routes on, and collapsing a stale reading, a held lock
+        # and a damaged record into one number is what made every evolution
+        # failure look like the same thing to anything but a human reader.
+        print(f"error: {exc}", file=sys.stderr)
+        return _exit_code(exc)
     except (
         FileNotFoundError,
         deploy.PayloadError,
         manifest.ManifestError,
         registry.RegistryError,
-        evolution_errors.EvolutionError,
         OSError,
         subprocess.CalledProcessError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return UNCLASSIFIED_EXIT
 
     parser.error("unknown command")
-    return 2
+    return UNCLASSIFIED_EXIT
 
 
 def manifest_path_name() -> str:
