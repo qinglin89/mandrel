@@ -107,7 +107,7 @@ from .reports import (
     normalize,
     verify_artifact_bytes,
 )
-from .revisions import ref_tip
+from .revisions import ref_tip, require_git
 from .schema import format_rfc3339, load_schema, parse_rfc3339, validate_or_raise
 from .state import (
     ARTIFACTS_SUBDIR,
@@ -1506,6 +1506,7 @@ def _source_line_revision(config: EvolutionConfig) -> str:
 
     revision = ref_tip(config.repo_root, config.source_line.ref)
     if revision is None:
+        require_git(config.repo_root, reading=f"where {config.source_line.ref} stands")
         raise BatchError(_unfetched_line_refusal(config))
     return revision
 
@@ -1733,6 +1734,14 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
     proposal = load_proposal(config)
     refusal = proposal_refusal(config, state, proposal)
     if refusal is not None:
+        if proposal is not None:
+            # An offer exists, so the refusal came from a rule below the first —
+            # and the first of those asks Git where the source line stands. A
+            # `git` that will not run answers that exactly as a checkout without
+            # the ref does, and only one of the two is a fetch away. Asked here
+            # rather than inside the predicate because the gate reads that one
+            # and a gate may not raise (`revisions.require_git`).
+            require_git(config.repo_root, reading=f"where {config.source_line.ref} stands")
         raise BatchError(refusal)
     # `proposal_refusal` answers on a missing offer before anything else, so a
     # None here is unreachable; asserted rather than assumed, since the

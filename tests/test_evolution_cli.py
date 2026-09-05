@@ -2166,7 +2166,7 @@ def test_a_git_below_the_floor_is_a_fact_about_this_machine(tmp_path: Path) -> N
 
     modern = revisions.revert_tree(repo, revision="deadbeef", parent=head, tip=head)
 
-    assert modern.tree is None and not modern.conflicted and not modern.too_old
+    assert modern.tree is None and not modern.conflicted and not modern.toolchain
     assert "could not parse" in modern.complaint
 
     with pytest.MonkeyPatch.context() as patched:
@@ -2178,9 +2178,9 @@ def test_a_git_below_the_floor_is_a_fact_about_this_machine(tmp_path: Path) -> N
         patched.setattr(revisions, "git_version", lambda root: (0, 1))
         clean = revisions.merge_tree(repo, head, head)
 
-    assert rollback_floor.too_old and "2.39" in rollback_floor.complaint
+    assert rollback_floor.toolchain and "2.39" in rollback_floor.complaint
     assert "2.40 or newer" in rollback_floor.complaint
-    assert clean.tree is not None and not clean.too_old
+    assert clean.tree is not None and not clean.toolchain
 
     with pytest.MonkeyPatch.context() as patched:
         # What a Git without `--write-tree` answers: an option it does not know,
@@ -2198,7 +2198,7 @@ def test_a_git_below_the_floor_is_a_fact_about_this_machine(tmp_path: Path) -> N
         patched.setattr(revisions, "git_version", lambda root: (2, 37, 3))
         merge_floor = revisions.merge_tree(repo, head, head)
 
-    assert merge_floor.too_old and not merge_floor.conflicted
+    assert merge_floor.toolchain and not merge_floor.conflicted
     assert "unknown option" in merge_floor.complaint, "Git's own words are kept"
     assert "2.37.3" in merge_floor.complaint and "2.38 or newer" in merge_floor.complaint
 
@@ -2225,7 +2225,7 @@ def test_a_git_that_cannot_merge_is_not_a_candidate_that_will_not(
             "merge_tree",
             lambda *args, **kwargs: revisions.MergeAnswer(
                 None, "git merge-tree: unknown option `--write-tree'; this is git 2.30.0 and 2.38 or newer "
-                "computes it", too_old=True
+                "computes it", toolchain=True
             ),
         )
         code, _, err = run(["evolution", "replay-start", *asked, *where], capsys)
@@ -2235,6 +2235,74 @@ def test_a_git_that_cannot_merge_is_not_a_candidate_that_will_not(
     assert "2.38 or newer" in err
     experiment = lineage.describe(config).current.open_experiment
     assert replay.read_replays(config, experiment).pending is None, "nothing was established, so nothing was pinned"
+
+
+def test_a_git_that_will_not_run_is_not_a_checkout_that_lost_its_line(
+    repo: Path, feed_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the same distinction, one layer below the merge.
+
+    Every question `revisions.py` puts comes back None twice over: Git looked and
+    said no, and nothing looked at all. Collapsed, an absent Git reads as a
+    checkout that does not hold the source line — a sentence that sends an
+    operator to fetch a ref from a repository nothing ever asked about, and one
+    no fetch will ever satisfy.
+
+    `git` is taken off `PATH` rather than patched out, which is the condition
+    itself: `_run` returns None only where the process could not be started, and
+    that is the one thing an argument list cannot change.
+    """
+
+    config = evolution.load_config(repo)
+    fill_pool(config, feed_root, TARGET)
+    where = ["--repo", str(repo), "--feed-dir", str(feed_root)]
+
+    monkeypatch.setenv("PATH", str(repo / "no-tools-here"))
+    absent = revisions.merge_tree(repo, "HEAD", "HEAD")
+    code, _, err = run(["evolution", "start", *where], capsys)
+
+    # The integration half: no tree, and the reason is this machine rather than a
+    # work tree nothing looked for.
+    assert absent.tree is None and absent.toolchain and not absent.conflicted
+    assert "not the top of a work tree" not in absent.complaint
+
+    # The ref half, at the console.
+    assert code == exits(evolution.ToolchainError)
+    assert code != exits(evolution.BatchError)
+    assert "git will not run on this machine" in err
+    assert "fetch" not in err, "nothing looked at the repository, so nothing about it is being asked for"
+
+
+def test_a_replay_record_this_build_cannot_read_is_not_a_mistyped_command(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A damaged record on disk reaches the console as one, through the guard
+    every operation runs before it writes.
+
+    The parser that refuses it serves the writers too, so what it raises about a
+    value is `invalid` — which is the caller's family, and the caller here typed
+    nothing. Read as that, an operator is told to retype a command over a file
+    only they can decide about; read as a refusal, to change a lifecycle that is
+    not what is wrong. It is the third thing, and the exit status says so.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    experiment = lineage.describe(config).current.open_experiment
+    path = replay.replays_path(experiment)
+    # Well-formed JSON, and not a replay history: the schema is what refuses it,
+    # which is the door this translation was missing.
+    path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+
+    code, _, err = run(
+        ["evolution", "promote", "--reason", "the measured candidate", "--repo", str(lineage_repo)], capsys
+    )
+
+    assert code == exits(evolution.RecordError)
+    assert code not in {exits(evolution.InputError), exits(evolution.BatchError)}
+    assert len({evolution.RecordError.code, evolution.ValidationError.code}) == 2
+    assert str(path) in err
+    assert git_rev(lineage_repo, RELEASE_REF) == release, "nothing was promoted over a record nobody can read"
 
 
 # --- the change lineage, as commands -----------------------------------------

@@ -88,10 +88,10 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, ToolchainError, ValidationError
+from .errors import BatchError, RecordError, ToolchainError, ValidationError
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Experiment
-from .revisions import merge_tree, ref_tip
+from .revisions import merge_tree, ref_tip, require_git
 from .schema import definition, format_rfc3339, load_schema, parse_json, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
@@ -475,6 +475,16 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
     Empty covers both "the file lists nothing" and "no file yet": an experiment
     nobody has measured is the ordinary state of every round before its first
     replay, and the two are the same fact about the evidence.
+
+    This is also where the parser below stops being asked in two directions.
+    `parse_replays` serves the writers as well, so what it raises about a *value*
+    is `invalid` — right for a caller handing in the next state of this file and
+    wrong for a file already on disk, where nothing was typed and an operator
+    told to retype the command has nothing to retype. The reader owns that
+    translation (`RecordError`), which is the family whose recovery is a person
+    looking at the file. Its two schema doors are translated here; the refusals
+    this reader states in its own words are not yet, and the comment below says
+    where they are being settled.
     """
 
     path = replays_path(experiment)
@@ -482,11 +492,37 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
         record = parse_json(path.read_text(encoding="utf-8"), description=f"replay record {path}")
     except FileNotFoundError:
         return History(replays=(), pending=None, withdrawn=())
+    # Two doors here — the unreadable bytes below, and the not-an-object check
+    # under them — still answer as refusals, which is the same damaged file said
+    # the wrong way. Left with the rest of this module's persisted-state
+    # classification rather than split off alone, so one pass settles them
+    # together (task 2026-08-26-evolution-error-taxonomy, session-2).
     except (OSError, json.JSONDecodeError) as exc:
         raise BatchError(f"unreadable replay record {path}: {exc}") from exc
+    except ValidationError as exc:
+        raise RecordError(_damaged_record(exc)) from exc
     if not isinstance(record, dict):
         raise BatchError(f"replay record is not a JSON object: {path}")
-    return parse_replays(config, record, experiment)
+    try:
+        return parse_replays(config, record, experiment)
+    except ValidationError as exc:
+        raise RecordError(_damaged_record(exc)) from exc
+
+
+def _damaged_record(exc: ValidationError) -> str:
+    """The same failure, said to whoever can act on it.
+
+    `exc` already names the file and what is wrong with it — that half is the
+    validator's and is kept verbatim. What is added is the half the family
+    carries: this is a durable record of what was measured, so it is neither
+    written over nor read around, and no command retyped anywhere fixes it.
+    """
+
+    return (
+        f"{exc}; that file is this experiment's durable record of what was measured, so nothing here writes "
+        "over it or reads around it — restore it from version control, or have someone who has looked at it "
+        "decide what the evidence is"
+    )
 
 
 def replays_path(experiment: Experiment) -> Path:
@@ -1416,6 +1452,7 @@ def _pin(
 
     merge_input = ref_tip(config.repo_root, source_ref)
     if merge_input is None:
+        require_git(config.repo_root, reading=f"where {source_ref} stands")
         raise BatchError(
             f"{source_ref} is not in this checkout, so there is no source line to integrate {candidate[:12]} "
             "onto; a replay measures the candidate as a promotion would carry it, which is that candidate "
@@ -1424,7 +1461,7 @@ def _pin(
         )
 
     merged = merge_tree(config.repo_root, merge_input, candidate)
-    if merged.too_old:
+    if merged.toolchain:
         raise ToolchainError(
             f"the integration for {described} of {experiment.experiment_id} cannot be computed here: "
             f"{merged.complaint}. Nothing was established about {candidate[:12]} — a candidate this checkout "

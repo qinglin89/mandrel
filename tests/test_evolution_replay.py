@@ -442,15 +442,24 @@ def test_a_number_nothing_can_be_compared_against_is_not_a_measurement(
     """Python writes and reads three literals JSON does not have, and each of
     them passes every check a schema makes of a number: `isinstance` says float,
     and `minimum` — like every comparison against NaN — is false. A completed run
-    whose metrics are not quantities would otherwise read as promotable."""
+    whose metrics are not quantities would otherwise read as promotable.
+
+    Refused as the record's own failure rather than as the validator's. The
+    parser is asked in both directions and `invalid` is the caller's family, and
+    nothing was typed here: this is a file on disk, and an operator sent to retype
+    a command has nothing to retype (`test_a_writer_cannot_publish_...` is the
+    other door, and stays `invalid` because there the value is the caller's).
+    The validator's own sentence about the literal is kept verbatim.
+    """
 
     experiment = sealed_experiment(config)
     replay.replays_path(experiment).write_text(
         json.dumps(record([replay_entry(1, 1, result=numeric_result(field, value))])), encoding="utf-8"
     )
 
-    with pytest.raises(evolution.ValidationError, match="not a number JSON has"):
+    with pytest.raises(evolution.RecordError, match="not a number JSON has") as raised:
         replay.read_replays(config, experiment)
+    assert raised.value.kind != evolution.ValidationError.kind, "a file on disk is not something a caller typed"
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])

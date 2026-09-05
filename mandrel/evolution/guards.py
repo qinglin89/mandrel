@@ -139,9 +139,9 @@ def require_readable_evidence(config: EvolutionConfig, current: BatchLineage) ->
     refused.
     """
 
-    refusal = evidence_refusal(config, current)
-    if refusal is not None:
-        raise BatchError(refusal)
+    failure = evidence_failure(config, current)
+    if failure is not None:
+        raise failure
 
 
 def evidence_refusal(config: EvolutionConfig, current: BatchLineage) -> str | None:
@@ -163,6 +163,25 @@ def evidence_refusal(config: EvolutionConfig, current: BatchLineage) -> str | No
     outcome among them, whose whole state is that nothing is open.
     """
 
+    failure = evidence_failure(config, current)
+    return None if failure is None else str(failure)
+
+
+def evidence_failure(config: EvolutionConfig, current: BatchLineage) -> EvolutionError | None:
+    """The same question as `evidence_refusal`, kept as what the reader raised.
+
+    Two shapes because the two readers of this need different halves of one
+    answer, and neither may be derived from the other. The gate composes
+    sentences (`phase._Held`), so it takes the string; an operation about to
+    refuse is re-raising a failure a caller routes on, and a family flattened
+    into a sentence cannot be recovered from it — which is what sent an operator
+    to change a lifecycle over a file this machine simply could not parse.
+
+    Re-raised rather than restated, unlike every other refusal here. The rest are
+    facts about the lineage and are therefore one family; a record that will not
+    read is whatever the reader says it is (`errors.py`: what `kind` is for).
+    """
+
     # Locally imported: `replay.py` runs this preamble before its own writes, so
     # the dependency between the two points that way. What is needed here is its
     # reader, and a module-level import would close the loop.
@@ -172,7 +191,7 @@ def evidence_refusal(config: EvolutionConfig, current: BatchLineage) -> str | No
         try:
             read_replays(config, experiment)
         except EvolutionError as exc:
-            return str(exc)
+            return exc
     return None
 
 

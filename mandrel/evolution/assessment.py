@@ -159,7 +159,7 @@ from .replay import (
     ReplayReport,
     ReplayRequest,
 )
-from .revisions import resolve_commit
+from .revisions import require_git, resolve_commit
 from .rollback import BatchEnded, RollbackResult
 from .rollback import end_batch as end_rolled_back_batch
 from .rollback import reverse as reverse_promotion
@@ -2715,6 +2715,7 @@ def _require_measurable(config: EvolutionConfig, frame: Frame, pinned: Pinned) -
         ("the promotion", pinned.candidate_revision),
     ):
         if resolve_commit(config.repo_root, revision) is None:
+            require_git(config.repo_root, reading=f"{described} ({revision[:12]})")
             raise BatchError(
                 f"{config.repo_root} does not hold {described} ({revision[:12]}) of the {frame.subject.batch_id} "
                 "release, so there is no pair here to measure; a counterfactual exercises both revisions as they "

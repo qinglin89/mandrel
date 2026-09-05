@@ -158,6 +158,7 @@ from .revisions import (
     move_ref,
     ref_tip,
     release_ref,
+    require_git,
     resolve_commit,
 )
 from .schema import definition, format_rfc3339, load_schema, validate_or_raise
@@ -1967,7 +1968,7 @@ def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, inte
     )
     if merged.tree == integration.tree:
         return
-    if merged.too_old:
+    if merged.toolchain:
         raise ToolchainError(
             f"{experiment.experiment_id}: this checkout cannot recompute the integration the run measured: "
             f"{merged.complaint}. The evidence is untouched and the candidate is not in question — what is "
@@ -2045,6 +2046,7 @@ def _standing(config: EvolutionConfig, experiment: Experiment, prepared: Prepare
     ref = prepared.merge_input_ref
     tip = ref_tip(config.repo_root, ref)
     if tip is None:
+        require_git(config.repo_root, reading=f"where {ref} stands")
         raise BatchError(
             f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto {ref}, and "
             "this checkout does not hold that ref; whether the promotion reached the source line is what says "
@@ -3121,6 +3123,7 @@ def _base_revision(
     frozen = current.base_revision
     _require_requested_base(config, current, frozen, requested)
     if resolve_commit(config.repo_root, frozen) is None:
+        require_git(config.repo_root, reading=f"{current.batch_id}'s base revision {frozen[:12]}")
         raise BatchError(
             f"this checkout does not hold {current.batch_id}'s base revision {frozen[:12]}; fetch it before "
             "starting an experiment, since the new ref has to be created at exactly that commit"
@@ -3328,6 +3331,7 @@ def _require_requested_base(
 def _resolve(config: EvolutionConfig, revision: str) -> str:
     resolved = resolve_commit(config.repo_root, revision)
     if resolved is None:
+        require_git(config.repo_root, reading=f"the commit {revision!r} names")
         raise BatchError(
             f"cannot resolve {revision!r} to a commit in {config.repo_root}; an experiment records the exact "
             "revision it starts from, so the base has to be a commit this repository holds"

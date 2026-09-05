@@ -125,7 +125,9 @@ class ValidationError(EvolutionError):
     directions and the value is the subject either way: a record about to be
     written that the schema will not take is the caller's, and a persisted one
     that no longer validates is read through the parser that owns its file,
-    which says whose record it is (`StateError`, `ProposalError`).
+    which says whose record it is (`StateError`, `ProposalError`, `RecordError`).
+    A reader that does not translate reports a file on this machine as something
+    the operator typed, which is the one mistake this split exists to prevent.
     """
 
     kind = KIND_INVALID
@@ -183,6 +185,22 @@ class ProposalError(EvolutionError):
 
     kind = KIND_STALE
     code = "proposal-unusable"
+
+
+class RecordError(EvolutionError):
+    """A durable record under `evolution/` cannot be read as what it claims to be.
+
+    The read side of the file the writers publish through. Those parsers are
+    asked in both directions, so what they raise about a value is `invalid` —
+    correct for a caller handing in the next state of a record, and wrong for
+    the same parser reading one off disk, where nothing was typed and the value
+    is a file this machine is holding. Whoever reads owns that translation, and
+    this is what it translates to: the record's own family, whose recovery is a
+    person looking at the file rather than an operator retyping a command.
+    """
+
+    kind = KIND_CORRUPT
+    code = "record-corrupt"
 
 
 class LedgerError(EvolutionError):

@@ -581,10 +581,10 @@ contract's normal outcomes when evidence is still thin. Everything else:
 | 4 | `refused` | A legal operation the current state does not permit. | The message names what stands in the way; change it, or do something else. |
 | 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
 | 6 | `busy` | Another run holds `.ai-evolution/lock`. | Wait, or clear a lock whose holder is gone — see Recovery below. |
-| 7 | `corrupt` | A persisted record this machine owns cannot be read, or is a version this build has no reader for. Never repaired silently. | Restore the file, or see Recovery below. |
+| 7 | `corrupt` | A persisted record cannot be read, or is a version this build has no reader for — this machine's pool state, or a durable record under `evolution/` such as an experiment's `replays.json`. Never repaired silently. | Restore the file from version control, or see Recovery below. |
 | 8 | `unavailable` | The report feed did not answer. Nothing was established, so nothing was recorded. | Retry, or supply `--feed-dir`. |
 | 9 | `misconfigured` | `evolution/config.toml` or a schema under `evolution/schemas/` is missing, malformed, or asks for behavior this build does not implement. | Fix the workspace. |
-| 10 | `toolchain` | A tool this operation needs is not usable here — in practice a Git below the floor (below). | Upgrade Git. Nothing was established about any revision. |
+| 10 | `toolchain` | A tool this operation needs is not usable here — a Git below the floor (below), or no runnable `git` at all. | Install or upgrade Git. Nothing was established about any revision. |
 | 11 | `failed` | An operation's own write did not complete and nothing above says why. | Read the message; re-running is safe. |
 | 12 | `unanswered` | Not a failure. A run was requested, the request is on record, and nothing is running yet because you have not said what is — the first half of `replay-start` or `assess-measure`. | Go run the evaluation the command printed, then run the same verb again stating what it is running. |
 
@@ -598,7 +598,11 @@ failure also carries a stable `kind` and `code`
 promotion carries, and `merge-tree --merge-base` (Git 2.40) computes the tree a
 rollback's inverse commit carries. A Git below either floor exits 10 and names
 the version that would answer, rather than reporting the candidate as one that
-does not merge.
+does not merge. A `git` that will not run at all exits 10 too, and for the same
+reason: every question this controller puts to Git comes back empty either
+because Git looked and said no or because nothing looked, and only the first is
+a fact about the repository — an absent Git reported as the second sends an
+operator to fetch a ref from a checkout nothing ever asked about.
 
 `status` names a lifecycle phase — `idle`, `pool N/<target>`,
 `batch-proposed N/<target>`, `batch-frozen`, `dispositions-ready`,
@@ -1122,7 +1126,8 @@ a recent one: **2.38** for `merge-tree --write-tree`, which computes the
 integration a replay measures and a promotion carries, and **2.40** for
 `merge-tree --merge-base`, which computes the tree a rollback's inverse commit
 carries. Below either, that verb exits 10 (`toolchain`) naming the version that
-would answer; everything else in this repository works on any Git.
+would answer, and a machine with no runnable `git` exits 10 saying that instead;
+everything else in this repository works on any Git.
 
 ### One command
 

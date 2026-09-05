@@ -7,6 +7,14 @@ answer. Five things here are not questions: `create_ref` / `move_ref`,
 failure instead of raising, and `held_at`, which writes nothing but takes Git's
 own ref lock and therefore refuses when it cannot.
 
+One thing here is neither: `require_git`, which raises because *no* question was
+put. Every None above is Git answering "not here"; a `git` this process cannot
+run answers nothing at all, and a caller about to say "this checkout does not
+hold that ref" over that silence states a fact about a repository nothing looked
+at. Read-only callers keep the None and degrade — that is what lets a status
+command still answer — and a mutation about to refuse asks this first
+(`errors.ToolchainError`).
+
 **The release tag** (`release_ref`). The most recent release tag reachable from
 a *commit*, recorded beside a frozen base so the record still names which
 released protocol that candidate builds on after the tag has moved or gone.
@@ -54,9 +62,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
 
-from .errors import RefHoldError
+from .errors import RefHoldError, ToolchainError
 
 RELEASE_TAG_GLOB = "v[0-9]*"
+
+_GIT_UNAVAILABLE = (
+    "git will not run on this machine, so nothing was asked about this repository and nothing answered; "
+    "the silence is the tooling's and says nothing about any ref, commit, or tree"
+)
 
 # The Git this package needs, per call rather than as one number, because the
 # difference is a whole verb: everything up to and including a promotion works
@@ -300,15 +313,17 @@ class MergeAnswer:
     tree: str | None
     complaint: str
     conflicted: bool = False
-    too_old: bool = False
-    """Whether the reason there is no answer is this checkout's Git.
+    toolchain: bool = False
+    """Whether the reason there is no answer is this machine's Git.
 
-    The third value's third value, and set only on the failure branch: a Git
-    below the floor the call needed is not "these revisions do not integrate",
-    and a caller raising the two alike retires a candidate on the strength of
-    which version somebody happened to have installed. `complaint` says which
-    version is here and which would answer, so the sentence is actionable
-    wherever it comes out.
+    The third value's third value, and set only on the failure branch. Two ways
+    to reach it and one thing to do about either: a `git` this process cannot
+    run, and a `git` below the floor the call needed. Neither is "these revisions
+    do not integrate", and a caller raising them alike retires a candidate on the
+    strength of what somebody happened to have installed. Named for the family it
+    is raised as (`errors.KIND_TOOLCHAIN`) rather than for one of its two causes,
+    because a consumer branching on it is choosing that family; `complaint` is
+    where the two are told apart, and it is actionable either way.
     """
 
 
@@ -338,7 +353,7 @@ def merge_tree(repo_root: Path, ours: str, theirs: str) -> MergeAnswer:
     `MERGE_TREE_FLOOR` lands in the failure branch instead, saying so in its own
     usage error, for the reason a Git too old for ref transactions does in
     `_prepare`, and the two say opposite things about the revisions themselves.
-    That branch marks it too (`MergeAnswer.too_old`), so the distinction survives
+    That branch marks it too (`MergeAnswer.toolchain`), so the distinction survives
     the caller: a conflict retires a candidate and an old Git retires nothing.
     """
 
@@ -370,7 +385,7 @@ def revert_tree(repo_root: Path, *, revision: str, parent: str, tip: str) -> Mer
     held to. `--merge-base` needs `REVERT_TREE_FLOOR`, and a Git without it says
     so in its own usage error — which names an option and not a release, so the
     failure branch reads the version back and states the floor
-    (`MergeAnswer.too_old`). Nothing is probed to decide whether to ask; the
+    (`MergeAnswer.toolchain`). Nothing is probed to decide whether to ask; the
     probe explains an answer already given.
     """
 
@@ -403,10 +418,18 @@ def _written_tree(repo_root: Path, floor: tuple[int, int], *arguments: str) -> M
     """
 
     if not _is_repository_root(repo_root):
+        # Asked in this order because the reading above cannot tell its own two
+        # answers apart: `_is_repository_root` goes through `_git`, where a
+        # directory Git refused and a Git that never ran are the same None. So
+        # the probe runs where that None arrives, and the sentence it produces
+        # is about this machine rather than about a work tree nothing looked at.
+        absent = git_unavailable(repo_root)
+        if absent is not None:
+            return MergeAnswer(None, absent, toolchain=True)
         return MergeAnswer(None, f"{repo_root} is not the top of a work tree")
     result = _run(repo_root, "merge-tree", *arguments)
     if result is None:
-        return MergeAnswer(None, "git is not available here")
+        return MergeAnswer(None, _GIT_UNAVAILABLE, toolchain=True)
     written = result.stdout.strip().splitlines()
     if result.returncode == 0:
         if not written:
@@ -418,7 +441,7 @@ def _written_tree(repo_root: Path, floor: tuple[int, int], *arguments: str) -> M
     complaint = _said(result.stderr) or _said(result.stdout) or f"git merge-tree exited {result.returncode}"
     short = _below_floor(repo_root, floor)
     if short is not None:
-        return MergeAnswer(None, f"{complaint}; {short}", too_old=True)
+        return MergeAnswer(None, f"{complaint}; {short}", toolchain=True)
     return MergeAnswer(None, complaint)
 
 
@@ -444,6 +467,47 @@ def _below_floor(repo_root: Path, floor: tuple[int, int]) -> str | None:
         f"this is git {_version_text(found)} and {_version_text(floor)} or newer computes it — the option this "
         "needs was added there, so what stopped the run is the version installed here rather than anything "
         "about these revisions"
+    )
+
+
+def git_unavailable(repo_root: Path) -> str | None:
+    """Why nothing here could be asked at all, when the reason is that `git`
+    itself will not run — and None when it will.
+
+    The other failure-branch probe, beside `_below_floor` and asked on the same
+    terms: never to decide whether to put a question, only to explain a question
+    that already came back empty. Every None this module returns means one of two
+    things — Git looked and said no, or nothing looked — and the difference is
+    the whole `toolchain` family: the first is a fact about the repository, true
+    for anyone holding it, and the second is a fact about this machine.
+
+    Asked with `--version` rather than by re-running whatever failed, because
+    what is being established is that the binary runs at all. `_run` returns None
+    only when the process could not be started, which no argument list changes.
+    """
+
+    return None if _run(repo_root, "--version") is not None else _GIT_UNAVAILABLE
+
+
+def require_git(repo_root: Path, *, reading: str) -> None:
+    """Refuse before a mutation turns this module's silence into a claim about
+    the repository.
+
+    `reading` names what the caller was about to state — where a ref stands, the
+    commit a revision resolves to — and the refusal says that nothing looked. A
+    mutation is where this matters: it is about to record something, and every
+    sentence it would write instead ("this checkout does not hold that ref",
+    "fetch it and run again") sends an operator to a repository that was never
+    the problem. Read-only callers do not ask; degrading is what a status command
+    owes its reader.
+    """
+
+    complaint = git_unavailable(repo_root)
+    if complaint is None:
+        return
+    raise ToolchainError(
+        f"{reading} cannot be read here: {complaint}. Install git, or run this where it is installed — "
+        "nothing was established and nothing was written"
     )
 
 

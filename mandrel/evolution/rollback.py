@@ -77,7 +77,7 @@ from .manifests import (
     RECORD_BATCH_CONCLUDED,
     ROLLBACK_SCHEMA_VERSION,
 )
-from .revisions import commit_shape, commit_tree, contains, move_ref, ref_tip, revert_tree
+from .revisions import commit_shape, commit_tree, contains, move_ref, ref_tip, require_git, revert_tree
 from .schema import format_rfc3339, load_schema, validate_or_raise
 from .state import atomic_write_text, single_writer_lock
 
@@ -291,6 +291,7 @@ def reverse(
     stamp = format_rfc3339(moment)
     tip = ref_tip(config.repo_root, line)
     if tip is None:
+        require_git(config.repo_root, reading=f"where {line} stands")
         raise BatchError(
             f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {line}, and this "
             "checkout does not hold that ref; a rollback moves the source line, so it is run from a checkout "
@@ -839,7 +840,7 @@ def _prepare(
         parent=merge["merge_input_revision"],
         tip=tip,
     )
-    if reverted.too_old:
+    if reverted.toolchain:
         raise ToolchainError(
             f"{promoted.batch_id}: the inverse of {revision[:12]} cannot be computed here: "
             f"{reverted.complaint}. Nothing was written and the promotion still stands — a revert this checkout "
