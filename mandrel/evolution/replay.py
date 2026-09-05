@@ -1709,11 +1709,14 @@ def _merge_input_moved(config: EvolutionConfig, replay: Replay) -> tuple[bool | 
     """Whether the source line has moved since this run measured it.
 
     Three-valued, like every other question this package puts to Git: a ref this
-    checkout does not hold, or a run driven from a detached revision, says
-    nothing about the source line and must not be reported as either drift or
-    agreement. The refusal that matters is at the promotion, which holds the ref
-    it is about to move and therefore always has an answer; a reader says what it
-    knows.
+    checkout does not hold, a machine on which `git` will not run, or a run
+    driven from a detached revision says nothing about the source line and must
+    not be reported as either drift or agreement. Which of the three is
+    deliberately not separated here — a reader says what it knows, and all three
+    leave it knowing nothing about this integration. The refusal that matters is
+    at the promotion, and that is where the machine's own silence is told from
+    the repository's, because only there does the difference name a repair
+    (`experiments._require_promotable`).
     """
 
     integration = replay.integration

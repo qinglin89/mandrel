@@ -1917,7 +1917,7 @@ def _promotable_integration(
 
     _require_nothing_in_flight(experiment, history)
     evidence = describe_evidence(config, experiment)
-    _require_promotable(experiment, evidence)
+    _require_promotable(config, experiment, evidence)
     integration = evidence.replay.integration
     if integration.merge_input_ref is None:
         # Unreachable through `promotable`, which is a reading about a named ref
@@ -1941,13 +1941,25 @@ def _require_nothing_in_flight(experiment: Experiment, history: History) -> None
         raise BatchError(refusal)
 
 
-def _require_promotable(experiment: Experiment, evidence: Evidence) -> None:
+def _require_promotable(config: EvolutionConfig, experiment: Experiment, evidence: Evidence) -> None:
     """The round's evidence describes the tree this promotion would carry
-    (`promotable_refusal`)."""
+    (`promotable_refusal`).
+
+    `unverified` is the reader reporting a question it could not put to Git: the
+    ref the run integrated onto is not in this checkout, or nothing here runs
+    `git` at all. A reader answers those the same way and should — neither is an
+    answer about the evidence — but this is the promotion, which is about to move
+    that ref, and only one of the two is the fetch its refusal offers. So the
+    machine's own silence is named here rather than inside the reading every
+    `status` shares (`revisions.require_git`).
+    """
 
     refusal = promotable_refusal(experiment, evidence)
-    if refusal is not None:
-        raise BatchError(refusal)
+    if refusal is None:
+        return
+    if evidence.unverified:
+        require_git(config.repo_root, reading="whether the source line has moved since the run measured it")
+    raise BatchError(refusal)
 
 
 def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, integration: Integration) -> None:

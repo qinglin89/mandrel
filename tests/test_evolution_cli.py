@@ -2273,6 +2273,47 @@ def test_a_git_that_will_not_run_is_not_a_checkout_that_lost_its_line(
     assert "fetch" not in err, "nothing looked at the repository, so nothing about it is being asked for"
 
 
+def test_a_git_that_will_not_run_is_not_a_promotion_the_evidence_refuses(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same distinction along the whole path a promotion takes, at both of
+    the places it reads a silence and calls it something.
+
+    A promotion asks two Git questions before it moves anything: whether the line
+    still stands where the run measured it, and whether any work tree is sitting
+    on it. Both come back None twice over — the ref is not in this checkout, or
+    nothing here runs `git` — and the reader answering the first collapses them
+    on purpose, because a `status` owes its reader a degraded answer. The
+    promotion may not: read as the ref being absent, an operator is sent to fetch
+    from a repository nothing ever asked about, and read as the line being busy,
+    to a second clone. Neither repair exists on a machine with no git.
+
+    The evidence gate answers first, so it is what the console shows. The
+    worktree guard is asserted directly, because it is the last thing between the
+    move and somebody's work tree and asks its own question rather than
+    inheriting one — the property both `_land` docstrings rest on.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    measured(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setenv("PATH", str(lineage_repo / "no-tools-here"))
+        listed = revisions.checked_out_refs(lineage_repo)
+        code, _, err = run(["evolution", "promote", "--reason", "the measured candidate", *where], capsys)
+        with pytest.raises(evolution.ToolchainError) as guarded:
+            guards.require_line_not_checked_out(config, RELEASE_REF, "a promotion")
+
+    assert listed is None, "the reading itself still cannot say; what changed is who is told why"
+    assert code == exits(evolution.ToolchainError)
+    assert code != exits(evolution.BatchError)
+    assert "git will not run on this machine" in err
+    assert "fetch" not in err, "nothing looked at the repository, so nothing about it is being asked for"
+    assert "cannot be answered" not in str(guarded.value), "no work tree was looked for, so none is reported"
+    assert git_rev(lineage_repo, RELEASE_REF) == release, "the line stands where it stood"
+
+
 def test_a_replay_record_this_build_cannot_read_is_not_a_mistyped_command(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

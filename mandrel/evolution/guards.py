@@ -59,7 +59,7 @@ from .config import EvolutionConfig
 from .errors import BatchError, EvolutionError, InputError, RefHoldError, StaleStateError
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
-from .revisions import checked_out_refs, held_at, ref_tip
+from .revisions import checked_out_refs, held_at, ref_tip, require_git
 
 
 def current_cycle(
@@ -603,17 +603,23 @@ def require_line_not_checked_out(config: EvolutionConfig, ref: str, action: str)
     (`git worktree add`) holds a branch this checkout never looks at, and
     `update-ref` moves it there without a word — leaving a directory the operator
     may not have thought about in exactly the state above. So the question is put
-    to Git once, and a Git that cannot answer it refuses: this is the only thing
-    standing between the move and somebody's working tree.
+    to Git once, and a Git that ran and could not answer it refuses: this is the
+    only thing standing between the move and somebody's working tree.
 
     Refused rather than repaired, because the repair is a checkout and that is a
     far larger promise than either of these operations makes. It is also the one
     refusal here an operator answers without deciding anything: run it from a
     clone that is not on the release line.
+
+    Which is exactly why the other None is not this refusal
+    (`revisions.require_git`). A machine with no git is the one condition under
+    which a second clone changes nothing, and every caller reaching here is about
+    to move a ref — so whose silence it is gets said before a repair is named.
     """
 
     checked_out = checked_out_refs(config.repo_root)
     if checked_out is None:
+        require_git(config.repo_root, reading=f"whether any work tree is sitting on {ref}")
         raise BatchError(
             f"whether {ref} is checked out anywhere cannot be answered in {config.repo_root}, and {action} "
             "moves it without touching a working tree; a work tree sitting on that branch would be left "
