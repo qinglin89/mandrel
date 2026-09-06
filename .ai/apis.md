@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
+last-updated: 2026-09-06
+verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
 ---
 
 # APIs and Interfaces
@@ -34,6 +34,17 @@ token hashes authoritative record bytes plus the configured source line and
 every ref those records name; it deliberately excludes `HEAD`, because no
 evolution write resolves the operator's checkout.
 
+Evolution failures carry stable class attributes: `kind` is the recovery
+family and CLI exit-code key, while unique `code` identifies the error class;
+callers never classify by message text. The ten kinds map to exits 3–12.
+`unanswered` / exit 12 is the third response family: a harness request was
+durably recorded, so the result is neither success nor failure. Persisted-file
+readers translate shared parser refusals/validation failures to
+`record-corrupt`; ignored `state.json` plus the staged bundles it names use
+`runtime-state-corrupt`, whose recovery is re-import rather than version-control
+restore. Required Git failures use `git-unusable`: merge-tree needs Git 2.38,
+revert-tree needs 2.40, and an absent Git is the same `toolchain` family.
+
 ## Evolution Domain Operations
 
 | Operation | Behavior |
@@ -62,9 +73,9 @@ evolution write resolves the operator's checkout.
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
 | `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; `start` records its tip in the proposal, `freeze` publishes it as the batch base/runner commit after revalidation, and replays resolve it, while promotion/rollback take their line from evidence |
 | `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
-| `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state |
+| `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state; together with its referenced staged bundles, one `runtime-state-corrupt` record that is never silently repaired |
 | `.ai-evolution/batch-proposal.json` | Ignored schema-v1 base, selected members, excluded denominator, and attributed human moves; included in `state_revision`, revalidated at freeze |
-| `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies |
+| `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies; freeze re-verifies the pool's hashes/identities/bodies and reports missing or changed evidence as corrupt runtime state |
 | `evolution/batches/<id>/manifest.json` | Immutable committed base, semantically validated selected/excluded denominator, human attribution, and evaluator/protocol provenance |
 | `evolution/batches/<id>/analysis-complete.json` | Portable reviewed-analysis closure record |
 | `evolution/batches/<id>/proposed-tasks/` | Inert change-task drafts retained after human admission copies them into `.ai-tasks/` |

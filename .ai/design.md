@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
+last-updated: 2026-09-06
+verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
 ---
 
 # Design Principles and Decisions
@@ -24,6 +24,8 @@ verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
   sealed candidate; whole-commit equality, stored digests, the maintainer's
   checkout, and uncommitted canonical bytes are not readiness inputs.
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
+- Evolution failures are classified by type attributes, never prose: `kind`
+  names the operator recovery/exit family and unique `code` names the class.
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
 - Protocol evolution uses repeated unique-task evidence, immutable batches,
@@ -151,6 +153,9 @@ verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
   fact being recorded.
 - Evolution writers publish through the reader's parser so persisted
   cross-field rules are enforced in both directions.
+- A persisted reader owns translation of shared parser validation/refusal
+  answers to record corruption; ignored pool state and the staged bundles its
+  pointers/hashes name are one runtime-state corruption carrier.
 - Batch proposal decisions are held in `(repo_id, task_id)` order independent
   of report arrival, so a no-op poll preserves proposal bytes and stale-state
   tokens; human moves carry forward while their automatic answer still differs.

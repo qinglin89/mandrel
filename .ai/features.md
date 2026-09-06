@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
+last-updated: 2026-09-06
+verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
 ---
 
 # Features
@@ -20,7 +20,7 @@ verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
 | Evolution report feed | published; client reconciled; complete protocol identity live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, atomic pair translation in `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch proposal, human membership window, freeze and analysis-task creation | implemented | canonical-identity selection, proposal-based admission, attributed include/exclude decisions, immutable manifest denominator, closure records, generated task/index |
-| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON status, stale-state token, allowed/refused/recovery actions; README operator contract |
+| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON status, stale-state token, allowed/refused/recovery actions; stable kind/code taxonomy and differentiated exits 3–12, including durable `unanswered` and Git-toolchain families; README operator contract |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promoted/no-change/rolled-back outcomes; a landed rollback ends the zero-attempt batch whose base carries the reversed release, with public shared refusals aligning operations and console recovery |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
 | Cross-batch release assessment | implemented | canonical-identity before/after cohorts and clone-dependent exclusions; persisted/JSON `unstated` versus `differing` facet failures; CLI-visible durable assessment/counterfactual with retain/rollback recommendation; human settlement and next-base gate |
