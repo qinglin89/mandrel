@@ -19,6 +19,10 @@ test = ["pytest>=8"]
 # pass/fail, and an unpinned upgrade would change the verdict without a commit.
 dev = [
     "pytest>=8,<10",
+    # The suite runs across worker processes; pinned with the rest because
+    # which tests share a process is a thing that can decide pass/fail, and an
+    # unpinned upgrade would change it without a commit.
+    "pytest-xdist==3.8.0",
     "ruff==0.16.2",
     "shellcheck-py==0.11.0.1",
     "build==1.5.0",

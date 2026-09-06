@@ -44,6 +44,7 @@ RUN_CHECK = re.compile(r'^run_check\s+(\S+)\s+"[^"]*"\s+(\S+)\s*$', re.MULTILINE
 SCENARIO_DEF = re.compile(r"^def (scenario_\d+_\w+)\(", re.MULTILINE)
 SCENARIO_CALL = re.compile(r"^\s+(scenario_\d+_\w+)\(repo\)$", re.MULTILINE)
 PREFLIGHT_MODULES = re.compile(r"^for module in ([^;]+); do", re.MULTILINE)
+PYTEST_CHECK = re.compile(r"^check_pytest\(\) \{\n(.*?)^\}", re.MULTILINE | re.DOTALL)
 REQUIREMENT_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
 
 
@@ -144,6 +145,22 @@ def test_the_preflight_requires_what_the_dev_extra_installs() -> None:
     for module in modules.group(1).split():
         assert module in declared, f"gate requires {module}; dev extra lacks it"
     assert "shellcheck-py" in declared
+
+
+def test_the_suite_is_distributed_and_the_gate_says_so_when_it_cannot_be() -> None:
+    """pytest-xdist is the difference between a gate that runs in minutes and
+    one that runs in a quarter of an hour, so the suite has to actually be
+    distributed. It imports under a name of its own, which is why it cannot
+    ride in the preflight loop above — checked here instead, along with the
+    dev extra that has to supply it."""
+    gate = gate_text()
+
+    check = PYTEST_CHECK.search(gate)
+    assert check, "check_pytest not found in the gate"
+    assert " -n " in check.group(1), "the pytest check runs the suite in one process"
+
+    assert "import xdist" in gate, "a missing pytest-xdist is not preflighted"
+    assert "pytest-xdist" in dev_extra()
 
 
 def test_ci_calls_the_entrypoint_and_inlines_no_check() -> None:

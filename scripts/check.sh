@@ -49,6 +49,12 @@ fi
 for module in pytest ruff build setuptools wheel; do
   "$PYTHON" -c "import $module" >/dev/null 2>&1 || missing+=("Python module: $module")
 done
+# pytest-xdist imports under a name of its own, so it cannot ride in the loop
+# above — those names are checked against the dev extra's distribution names
+# (tests/test_verification_gate.py). Without it the pytest check would still
+# fail, but on "unrecognized arguments: -n" several checks later; this turns
+# that into the same one-line install message every other missing tool gets.
+"$PYTHON" -c 'import xdist' >/dev/null 2>&1 || missing+=("Python module: xdist (pip package pytest-xdist)")
 
 # The shellcheck-py package installs the binary beside the interpreter; a system
 # install is an equally good source, so prefer the venv copy, then fall back to
@@ -152,8 +158,31 @@ check_boundary_lint() {
   AII_PYTHON="$PYTHON" scripts/boundary-lint.sh
 }
 
+# The suite is what this gate's wall-clock is made of — every other check
+# together costs under ten seconds — and it is I/O-bound: most of its tests
+# build a throwaway Git repository and shell out to git. So it parallelises.
+# Measured on a 12-core machine, 2026-09-06, back to back: 712s in one
+# process, 234s spread across workers.
+#
+# `auto` is xdist's reading of the machine rather than a count baked in here,
+# which would be wrong on the next machine: os.cpu_count() on macOS, and on
+# Linux the affinity-limited count the process was actually given — 4 on
+# GitHub's current standard runner. `worksteal` hands a worker that has run
+# dry the work still queued on a busy one, rather than leaving the run waiting
+# on whichever worker drew the slowest tail; worth a couple of percent here,
+# and never slower than the default `load` in back-to-back runs.
+#
+# Override the count with AII_PYTEST_WORKERS. `0` runs the suite in the pytest
+# process itself, which is what you want when bisecting a failure that only
+# appears under some orderings.
+#
+# Not -q: quiet mode drops the header line stating what `auto` resolved to, and
+# on an unfamiliar machine that number is the first thing a slow gate log has
+# to answer.
+PYTEST_WORKERS=${AII_PYTEST_WORKERS:-auto}
+
 check_pytest() {
-  "$PYTHON" -m pytest -q
+  "$PYTHON" -m pytest -n "$PYTEST_WORKERS" --dist=worksteal
 }
 
 # The orchestrator's mock-loop scenarios live outside `testpaths`, so pytest
@@ -199,18 +228,28 @@ check_tree_unchanged() {
 
 PASSED=()
 FAILED=()
+TIMINGS=()
 
+# Elapsed seconds are printed per check and repeated in the summary: the gate
+# is the most frequent action in the repository, so its cost is a number worth
+# keeping visible rather than re-measuring. SECONDS is integer-only, which is
+# the right resolution here and works on bash 3.2 (stock macOS).
 run_check() { # <id> <description> <command...>
-  local id=$1 desc=$2
+  local id=$1 desc=$2 started status elapsed
   shift 2
   printf '\n===== %s: %s\n' "$id" "$desc"
-  if "$@"; then
-    printf '===== %s: OK\n' "$id"
+  started=$SECONDS
+  "$@"
+  status=$?
+  elapsed=$((SECONDS - started))
+  if [ "$status" -eq 0 ]; then
+    printf '===== %s: OK (%ds)\n' "$id" "$elapsed"
     PASSED+=("$id")
   else
-    printf '===== %s: FAILED\n' "$id" >&2
+    printf '===== %s: FAILED (%ds)\n' "$id" "$elapsed" >&2
     FAILED+=("$id")
   fi
+  TIMINGS+=("$(printf '%4ds  %s' "$elapsed" "$id")")
 }
 
 # --- CHECKS ------------------------------------------------------------------
@@ -225,6 +264,9 @@ run_check package-build           "wheel build, offline install, CLI"    check_p
 run_check tree-unchanged          "the gate mutated no tracked file"     check_tree_unchanged
 
 # --- summary -----------------------------------------------------------------
+
+printf '\n===== wall-clock (total %ds)\n' "$SECONDS"
+printf '  %s\n' "${TIMINGS[@]}"
 
 printf '\n===== summary\n'
 if [ ${#PASSED[@]} -gt 0 ]; then

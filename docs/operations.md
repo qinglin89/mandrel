@@ -1166,6 +1166,27 @@ and leaves `git status --porcelain` unchanged. It runs:
 The interpreter is `.venv/bin/python` when present, otherwise `python3`; set
 `AII_PYTHON` to override.
 
+The `pytest` check is the gate: on a 12-core machine it is 234 of the run's 243
+seconds, and every other check together is under ten. It runs distributed
+(`pytest-xdist`, pinned in the `dev` extra), because the suite is I/O-bound —
+most of its tests build a throwaway Git repository and shell out to git — and
+one process takes 712 seconds for the same work. `-n auto` is xdist's own
+reading of the machine, not a number this repository carries: `os.cpu_count()`
+on macOS, 12 here, and on Linux the affinity-limited count the process was
+actually given, which is 4 on GitHub's current standard Linux runner. Every run
+states what it resolved to in the `N workers [M items]` header line, so the
+number never has to be assumed.
+
+Set `AII_PYTEST_WORKERS` to override the count. `0` runs the suite in the
+pytest process itself, in file order — reach for it when a failure looks like
+it depends on what else ran in the same worker. Raising it is not worth much:
+the parallel run is kernel-bound rather than compute-bound — roughly twice as
+much system time as user time, spawning git and writing files — so it leaves
+cores idle that more workers do not reclaim. Sixteen workers on this 12-core
+machine measured 230s against `auto`'s 233s. What the number really moves with
+is other load on the machine: the same run has landed anywhere between 2m42s
+and 4m05s here.
+
 `canonical/orchestrator/test_loop_mock.py` is deliberately outside pytest's
 `testpaths` — it is a standalone script with its own `main()`, and the gate is
 the only thing that runs it. The same is true of the two shell checks. That is
