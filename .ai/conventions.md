@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-27
-verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
+last-updated: 2026-09-06
+verified-against: d158e93f90d01a6f29af60acaf3c8addf6e48d16
 ---
 
 # Conventions
@@ -41,6 +41,8 @@ verified-against: d830c70a0ac0959ee02c5676c6ce7f5bd57720f5
 - Primary suite: `scripts/check.sh` after `pip install -e '.[dev]'`; it is
   working-directory-independent and includes pytest, mock-loop scenarios,
   boundary/whitespace/static lint, package build/install, and non-mutation.
+  Pytest is distributed by pinned xdist with `-n auto`
+  (`AII_PYTEST_WORKERS` overrides), and the gate reports per-check wall-clock.
 - Add deterministic checks only through `scripts/check.sh`; CI and optional
   Git hooks invoke that entrypoint rather than duplicate its commands.
 - Keep credentialed/network-dependent probes outside the required gate and on
