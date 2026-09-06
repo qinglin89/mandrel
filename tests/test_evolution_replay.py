@@ -430,7 +430,7 @@ def test_an_unreadable_record_stops_the_read(
     experiment = sealed_experiment(config)
     replay.replays_path(experiment).write_text(text, encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError):
+    with pytest.raises(evolution.RecordError):
         replay.read_replays(config, experiment)
 
 
@@ -513,7 +513,7 @@ def test_evidence_cannot_name_another_experiment(config: evolution.EvolutionConf
         declares=f"{BATCH_ID}-exp-01",
     )
 
-    with pytest.raises(evolution.BatchError, match="cannot measure another"):
+    with pytest.raises(evolution.RecordError, match="cannot measure another"):
         replay.read_replays(config, experiment)
 
 
@@ -526,7 +526,7 @@ def test_a_run_cannot_measure_a_round_the_experiment_does_not_have(
     experiment = sealed_experiment(config)
     write_replays(config.experiments_root, EXPERIMENT_ID, [replay_entry(2, 1)])
 
-    with pytest.raises(evolution.BatchError, match="does not have"):
+    with pytest.raises(evolution.RecordError, match="does not have"):
         replay.read_replays(config, experiment)
 
 
@@ -539,7 +539,7 @@ def test_nothing_measures_a_round_before_its_seal(config: evolution.EvolutionCon
     experiment = sealed_experiment(config, rounds=[experiment_round(1)])
     write_replays(config.experiments_root, EXPERIMENT_ID, [replay_entry(1, 1)])
 
-    with pytest.raises(evolution.BatchError, match="carries no seal"):
+    with pytest.raises(evolution.RecordError, match="carries no seal"):
         replay.read_replays(config, experiment)
 
 
@@ -553,7 +553,7 @@ def test_a_run_exercises_exactly_the_revision_its_round_pinned(
         [replay_entry(1, 1, integration=replay_integration(candidate_revision="c" * 40))],
     )
 
-    with pytest.raises(evolution.BatchError, match="round 1 pinned"):
+    with pytest.raises(evolution.RecordError, match="round 1 pinned"):
         replay.read_replays(config, experiment)
 
 
@@ -583,7 +583,7 @@ def test_a_later_round_cannot_reuse_an_earlier_rounds_report(
         [replay_entry(2, 1, integration=replay_integration(candidate_revision=CANDIDATE))],
     )
 
-    with pytest.raises(evolution.BatchError, match="round 2 pinned"):
+    with pytest.raises(evolution.RecordError, match="round 2 pinned"):
         replay.read_replays(config, experiment)
 
 
@@ -595,7 +595,7 @@ def test_evidence_carries_the_base_its_batch_froze(config: evolution.EvolutionCo
         [replay_entry(1, 1, integration=replay_integration(base_revision="7" * 40))],
     )
 
-    with pytest.raises(evolution.BatchError, match="was created on"):
+    with pytest.raises(evolution.RecordError, match="was created on"):
         replay.read_replays(config, experiment)
 
 
@@ -655,7 +655,7 @@ def test_runs_are_appended_in_order(
     resolved = [second_round_entry() if entry == "second" else entry for entry in entries]
     write_replays(config.experiments_root, EXPERIMENT_ID, resolved)
 
-    with pytest.raises(evolution.BatchError, match=match):
+    with pytest.raises(evolution.RecordError, match=match):
         replay.read_replays(config, experiment)
 
 
@@ -705,7 +705,7 @@ def test_a_position_is_allocated_once_whatever_became_of_it(
     experiment = sealed_experiment(config)
     write_replays(config.experiments_root, EXPERIMENT_ID, entries, withdrawn=withdrawn)
 
-    with pytest.raises(evolution.BatchError, match=match):
+    with pytest.raises(evolution.RecordError, match=match):
         replay.read_replays(config, experiment)
 
 
@@ -741,7 +741,7 @@ def test_the_run_after_a_withdrawal_takes_the_position_after_it(
         withdrawn=[replay_withdrawal(1, 1)],
         pending=replay_pending(1, 1),
     )
-    with pytest.raises(evolution.BatchError, match="next attempt is 2"):
+    with pytest.raises(evolution.RecordError, match="next attempt is 2"):
         replay.read_replays(config, experiment)
 
     write_replays(
@@ -764,7 +764,7 @@ def test_one_round_is_measured_against_one_integration_at_a_time(
         [replay_entry(1, 1, running=True), replay_entry(1, 2, running=True)],
     )
 
-    with pytest.raises(evolution.BatchError, match="all recorded as still running"):
+    with pytest.raises(evolution.RecordError, match="all recorded as still running"):
         replay.read_replays(config, experiment)
 
 
@@ -808,7 +808,7 @@ def test_a_request_stands_where_the_run_it_becomes_will(
     resolved = [second_round_entry() if entry == "second" else entry for entry in entries]
     write_replays(config.experiments_root, EXPERIMENT_ID, resolved, pending=pending)
 
-    with pytest.raises(evolution.BatchError, match=match):
+    with pytest.raises(evolution.RecordError, match=match):
         replay.read_replays(config, experiment)
 
 
@@ -847,7 +847,7 @@ def test_a_request_is_held_to_the_rules_the_run_it_becomes_will_be(
     experiment = sealed_experiment(config)
     write_replays(config.experiments_root, EXPERIMENT_ID, [], pending=pending)
 
-    with pytest.raises(evolution.BatchError, match=match):
+    with pytest.raises(evolution.RecordError, match=match):
         replay.read_replays(config, experiment)
 
 
@@ -885,7 +885,7 @@ def test_a_run_that_was_overtaken_is_one_nothing_will_conclude(
         [replay_entry(1, 1, running=True), replay_entry(1, 2)],
     )
 
-    with pytest.raises(evolution.BatchError, match="overtaken"):
+    with pytest.raises(evolution.RecordError, match="overtaken"):
         replay.read_replays(config, experiment)
 
 
@@ -910,7 +910,7 @@ def test_a_running_record_names_the_run_something_can_poll(
         ],
     )
 
-    with pytest.raises(evolution.BatchError, match="no harness handle"):
+    with pytest.raises(evolution.RecordError, match="no harness handle"):
         replay.read_replays(config, experiment)
 
 
@@ -947,7 +947,7 @@ def test_one_handle_names_one_run(config: evolution.EvolutionConfig) -> None:
         [replay_entry(1, 1, harness=harness_of("run-0001")), replay_entry(1, 2, harness=harness_of("run-0001"))],
     )
 
-    with pytest.raises(evolution.BatchError, match="handle 'run-0001'"):
+    with pytest.raises(evolution.RecordError, match="handle 'run-0001'"):
         replay.read_replays(config, experiment)
 
 
@@ -961,7 +961,7 @@ def test_a_retry_across_rounds_cannot_reuse_the_handle_either(
         [replay_entry(1, 1, harness=harness_of("run-0001")), second_round_entry(harness=harness_of("run-0001"))],
     )
 
-    with pytest.raises(evolution.BatchError, match="handle 'run-0001'"):
+    with pytest.raises(evolution.RecordError, match="handle 'run-0001'"):
         replay.read_replays(config, experiment)
 
 
@@ -1046,7 +1046,7 @@ def test_a_result_that_cannot_be_read_as_one_measurement_stops_the_read(
     experiment = sealed_experiment(config)
     write_replays(config.experiments_root, EXPERIMENT_ID, [replay_entry(1, 1, result=result)])
 
-    with pytest.raises(evolution.BatchError, match=match):
+    with pytest.raises(evolution.RecordError, match=match):
         replay.read_replays(config, experiment)
 
 
@@ -1108,7 +1108,7 @@ def test_a_case_is_held_out_once(config: evolution.EvolutionConfig) -> None:
         ],
     )
 
-    with pytest.raises(evolution.BatchError, match="twice"):
+    with pytest.raises(evolution.RecordError, match="twice"):
         replay.read_replays(config, experiment)
 
 
@@ -1131,7 +1131,7 @@ def test_a_merge_input_ref_git_could_never_hold_is_refused_with_the_reason(
         [replay_entry(1, 1, integration=replay_integration(merge_input_ref=ref))],
     )
 
-    with pytest.raises(evolution.BatchError, match="check-ref-format"):
+    with pytest.raises(evolution.RecordError, match="check-ref-format"):
         replay.read_replays(config, experiment)
 
 
@@ -1619,7 +1619,7 @@ def test_an_expectation_is_collapsed_and_a_missing_one_refuses(
     # the harness is an instruction.
     assert not hasattr(harness.requests[0], "expectation")
 
-    with pytest.raises(evolution.BatchError, match="expected to show"):
+    with pytest.raises(evolution.InputError, match="expected to show"):
         run(config, harness, expectation="   \n ")
 
 

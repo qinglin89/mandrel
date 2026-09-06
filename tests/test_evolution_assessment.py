@@ -686,7 +686,7 @@ def test_a_record_excluding_a_report_this_checkout_places_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     message = str(error.value)
     assert f"excluded as {assessment.EXCLUDED_OTHER_PROTOCOL!r}" in message
@@ -852,7 +852,7 @@ def test_a_record_placing_a_revision_that_is_not_a_commit_id_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert assessment.EXCLUDED_REVISION_MALFORMED in str(error.value)
 
@@ -1137,7 +1137,7 @@ def test_a_directional_verdict_over_incomparable_cohorts_is_refused(
     assert frame is not None
     publish(second, build(frame, verdict=assessment.VERDICT_IMPROVED))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "not comparable" in str(error.value)
     assert assessment.FACET_EVALUATOR_RUBRIC in str(error.value)
@@ -1164,7 +1164,7 @@ def test_a_directional_verdict_below_the_minimum_cohort_is_refused(
     assert frame is not None
     publish(second, build(frame))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "unique completed task(s) against a minimum of 3" in str(error.value)
 
@@ -1189,7 +1189,7 @@ def test_a_direction_the_cohorts_cannot_carry_rests_on_the_counterfactual(
     assert frame.comparability.incoherent == (assessment.FACET_TASK_SHAPE,)
     publish(second, build(frame, verdict=assessment.VERDICT_IMPROVED))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert assessment.FACET_TASK_SHAPE in str(error.value)
     assert assessment.VERDICT_INCONCLUSIVE in str(error.value)
@@ -1213,7 +1213,7 @@ def test_a_summary_that_disagrees_with_its_own_facets_is_refused(
     record["comparability"]["coherent"] = True
     second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "comparability is recorded True while its own facets say False" in str(error.value)
     assert assessment.FACET_TASK_SHAPE in str(error.value)
@@ -1266,7 +1266,7 @@ def test_invented_comparability_facets_are_refused(
     }
     second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the facets are derived from the frozen manifests" in str(error.value)
 
@@ -1304,7 +1304,7 @@ def test_a_facet_recorded_against_its_own_manifests_is_refused(
             facet.update({"coherent": True, "after": ["r7"]})
     second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert f"the {assessment.FACET_EVALUATOR_RUBRIC!r} facet is recorded coherent=True" in str(error.value)
     assert "['r7', 'r8']" in str(error.value)
@@ -1319,7 +1319,7 @@ def test_a_direction_with_no_measured_goal_is_refused(
     assert frame is not None
     publish(second, build(frame, metrics=(measurement(better=replay.BETTER_NEITHER, before=None),)))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "no measurement carries one" in str(error.value)
 
@@ -1340,7 +1340,7 @@ def test_a_goal_measured_only_after_the_release_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "no before value to compare against" in str(error.value)
 
@@ -1357,7 +1357,7 @@ def test_regressed_without_a_completed_counterfactual_is_refused(
     assert frame is not None
     publish(second, build(frame, verdict=assessment.VERDICT_REGRESSED))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "rests on the counterfactual, and this record has none" in str(error.value)
 
@@ -1375,7 +1375,7 @@ def test_regressed_without_a_completed_counterfactual_is_refused(
     )
     publish(second, build(frame, verdict=assessment.VERDICT_REGRESSED, counterfactual=failed))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "one that did not complete" in str(error.value)
 
@@ -1432,7 +1432,7 @@ def test_a_counterfactual_that_measured_no_goal_carries_no_direction(
     )
     publish(second, build(frame, verdict=assessment.VERDICT_REGRESSED, counterfactual=observed))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "measured no goal quantity on both revisions" in str(error.value)
 
@@ -1461,7 +1461,7 @@ def test_a_direction_the_counterfactual_measured_the_other_way_is_refused(
             counterfactual=counterfactual(frame, metrics=SLOWER, detail=WORSE),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the run it records measured 'regressed'" in str(error.value)
     assert "remediation-rounds 1.6 → 2.4 with 'lower' better: regressed" in str(error.value)
@@ -1475,7 +1475,7 @@ def test_a_direction_the_counterfactual_measured_the_other_way_is_refused(
             counterfactual=counterfactual(frame),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the run it records measured 'improved'" in str(error.value)
 
@@ -1496,7 +1496,7 @@ def test_neutral_is_a_measured_reading_rather_than_an_unmeasured_one(
         second,
         build(frame, verdict=assessment.VERDICT_NEUTRAL, counterfactual=counterfactual(frame)),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the run it records measured 'improved'" in str(error.value)
 
@@ -1550,7 +1550,7 @@ def test_goals_the_run_moved_both_ways_settle_no_direction(
             ),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "its goal quantities point both ways" in str(error.value)
     assert "review-findings 1.0 → 3.0 with 'lower' better: regressed" in str(error.value)
@@ -1591,7 +1591,7 @@ def test_a_counterfactual_of_another_pair_is_refused(
     )
     publish(second, build(frame, counterfactual=elsewhere))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "measured another question" in str(error.value)
 
@@ -1605,7 +1605,7 @@ def test_an_assessment_of_another_release_is_refused(
     assert frame is not None
     publish(second, build(frame, subject=dataclasses.replace(frame.subject, tree="9" * 40)))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "is not this batch's reading of the one before it" in str(error.value)
 
@@ -1622,7 +1622,7 @@ def test_a_reversal_no_rollback_record_names_is_refused(
         build(frame, subject=dataclasses.replace(frame.subject, standing=False, rollback_revision="1" * 40)),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "no rollback record beside that batch's outcome names" in str(error.value)
 
@@ -1639,7 +1639,7 @@ def test_a_report_placed_against_git_is_refused(
     assert frame is not None
     publish(second, build(frame, before=("b1", "b2"), after=("b3", "a1", "a2", "a3"), before_task_count=2, after_task_count=4))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "places it before" in str(error.value)
 
@@ -1674,7 +1674,7 @@ def test_an_exclusion_the_manifest_contradicts_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "places it in the after cohort" in str(error.value)
 
@@ -1763,7 +1763,7 @@ def test_a_record_calling_a_malformed_revision_unresolvable_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     message = str(error.value)
     assert f"excluded as {assessment.EXCLUDED_REVISION_UNRESOLVABLE!r}" in message
@@ -1802,7 +1802,7 @@ def test_a_record_calling_an_unresolvable_revision_absent_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     message = str(error.value)
     assert f"excluded as {assessment.EXCLUDED_REVISION_ABSENT!r}" in message
@@ -1818,7 +1818,7 @@ def test_a_report_no_manifest_names_is_refused(
     assert frame is not None
     publish(second, build(frame, after=frame.after.report_keys + ("stray",)))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "belong to no frozen manifest" in str(error.value)
 
@@ -1835,7 +1835,7 @@ def test_a_frozen_member_placed_nowhere_is_refused(
     assert frame is not None
     publish(second, build(frame, after=("a1", "a2"), after_task_count=2))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "places them nowhere" in str(error.value)
 
@@ -1864,7 +1864,7 @@ def test_a_denominator_counted_in_reports_is_refused(
     assert frame.after.task_count == 1
     publish(second, build(frame, after_task_count=3))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the denominator is unique tasks, not reports" in str(error.value)
 
@@ -1914,7 +1914,7 @@ def test_a_denominator_no_checkout_could_place_is_still_counted(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the denominator is unique tasks, not reports" in str(error.value)
 
@@ -1939,7 +1939,7 @@ def test_a_settlement_naming_no_inverse_commit_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "the rollback record stays the authority" in str(error.value)
 
@@ -2086,7 +2086,7 @@ def test_a_settlement_beside_a_prepared_rollback_is_refused(
         ),
     )
     publish(second, settled)
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "prepared without the source line recorded as carrying it" in str(error.value)
 
@@ -2136,7 +2136,7 @@ def test_a_reading_of_a_reversal_the_line_never_took_is_refused(
             ),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "prepared without the source line recorded as carrying it" in str(error.value)
 
@@ -2154,7 +2154,7 @@ def test_a_record_with_no_release_before_it_is_refused(
     first = next(item for item in evolution.load_batches(config) if item.batch_id == FIRST)
     publish(first, dataclasses.replace(build(frame), batch_id=FIRST))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, first)
     assert "follows no promotion" in str(error.value)
 
@@ -2298,7 +2298,7 @@ def test_a_reading_with_no_reason_is_refused(
 ) -> None:
     freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.InputError) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2390,7 +2390,7 @@ def test_the_two_ways_a_comparison_fails_are_recorded_apart(
     stated["differing"] = [assessment.FACET_EVALUATOR_RUBRIC, assessment.FACET_TASK_SHAPE]
     second.assessment_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "comparability records differing as" in str(error.value)
     assert "the two ways a comparison fails" in str(error.value)
@@ -2608,7 +2608,7 @@ def test_a_naive_moment_is_refused(
 ) -> None:
     freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.InputError) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2755,7 +2755,7 @@ def test_a_key_inside_the_experiments_rounds_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "answered with the run that round was measured by" in str(error.value)
 
@@ -2986,7 +2986,7 @@ def test_a_running_run_with_no_handle_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "can never be concluded" in str(error.value)
 
@@ -3017,7 +3017,7 @@ def test_a_request_beside_a_recorded_run_is_refused(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "clears it in the same file" in str(error.value)
 
@@ -3178,13 +3178,13 @@ def test_a_position_a_withdrawal_holds_is_never_asked_for_again(
         return build(frame, verdict=assessment.VERDICT_INCONCLUSIVE, withdrawn=(given_up,), **overrides)
 
     publish(second, reading(requested=request))
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "next attempt is 2" in str(error.value)
 
     skipped = dataclasses.replace(request, position=dataclasses.replace(request.position, attempt=3))
     publish(second, reading(requested=skipped))
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "next attempt is 2" in str(error.value)
 
@@ -3230,7 +3230,7 @@ def test_a_retry_is_numbered_past_the_run_and_the_withdrawals_together(
 
     early = dataclasses.replace(request, position=dataclasses.replace(request.position, attempt=2))
     publish(second, reading(requested=early))
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "next attempt is 3" in str(error.value)
 
@@ -3245,7 +3245,7 @@ def test_a_retry_is_numbered_past_the_run_and_the_withdrawals_together(
             withdrawn=(withdrawal(frame, ended.position.attempt),),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "a position is allocated once" in str(error.value)
 
@@ -3487,7 +3487,7 @@ def test_a_settlement_over_a_measurement_still_in_flight_is_refused(
     run = counterfactual(frame)
 
     publish(second, settled_reading(frame, counterfactual=dataclasses.replace(run, result=None)))
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "is still going" in str(error.value)
 
@@ -3503,7 +3503,7 @@ def test_a_settlement_over_a_measurement_still_in_flight_is_refused(
             ),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
     assert "is outstanding" in str(error.value)
 
@@ -3967,11 +3967,11 @@ def test_the_gate_takes_one_of_two_answers_and_a_reason(
     second = freeze_second(config, promoted)
     form_reading(config)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.InputError) as error:
         assessment.settle(config, settlement="deferred", reason=KEPT, now=RESOLVED_AT)
     assert "is not an answer to a release assessment" in str(error.value)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.InputError) as error:
         assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason="  ", now=RESOLVED_AT)
     assert "a settlement records why" in str(error.value)
     assert read_reading(config, second).settled is False

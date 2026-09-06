@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import EvolutionConfig
-from .errors import EvolutionError
+from .errors import BatchError, EvolutionError, RecordError
 from .schema import format_rfc3339
 from .state import atomic_create_text, atomic_write_text
 
@@ -364,7 +364,11 @@ def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:
 
     Nothing is repaired: a file at this path may already carry a session log,
     and overwriting one to satisfy a freeze would destroy the record it exists
-    to keep.
+    to keep. Which is the whole of why this is the record family and not a
+    refusal — a refusal names a state some verb changes, and there is no verb
+    here that may touch this file. Only this machine ever held it, so version
+    control does not have it back either; the manifest is what it is restored
+    from (`errors.RecordError`).
     """
 
     path = existing_task_path(config, spec.task_id)
@@ -376,7 +380,7 @@ def assert_generated(config: EvolutionConfig, spec: AnalysisTaskSpec) -> None:
         raise EvolutionError(f"cannot read the analysis task {path}: {exc}") from exc
     missing = [marker for marker in _markers(spec) if marker not in text]
     if not text.startswith("---") or missing:
-        raise EvolutionError(
+        raise RecordError(
             f"{path} is not the analysis task generated for {spec.batch_id} (missing {missing or ['frontmatter']}); "
             "restore it from the batch manifest, or remove the file so the next run can write it again"
         )
@@ -402,7 +406,7 @@ def publish_task(config: EvolutionConfig, task_id: str, text: str, *, descriptio
     path = task_path(config, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not atomic_create_text(path, text):
-        raise EvolutionError(f"{description} already exists: {path}")
+        raise BatchError(f"{description} already exists: {path}")
     return path
 
 

@@ -64,7 +64,7 @@ from ..lockfile import CanonicalIdentities, is_object_id
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
 from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, ProposalError
+from .errors import BatchError, InputError, ProposalError, RecordError
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
@@ -846,7 +846,7 @@ def _require_identified(repo_id: str, task_id: str) -> None:
 
     missing = sorted(name for name, value in (("repo_id", repo_id), ("task_id", task_id)) if not (value or "").strip())
     if missing:
-        raise BatchError(
+        raise InputError(
             f"a move names one pooled task by both halves of its identity, and {missing} is blank; the offer "
             "states the two apart, and so does every record a move lands in"
         )
@@ -865,7 +865,7 @@ def _require_stated(justification: str, actor: str) -> None:
         name for name, value in (("justification", justification), ("actor", actor)) if not (value or "").strip()
     )
     if missing:
-        raise BatchError(
+        raise InputError(
             f"a human move must state {missing}; it is invariant 1's recorded exception and it survives into the "
             "frozen manifest, so a move with no words and no name is not a judgement anybody can read back"
         )
@@ -1455,7 +1455,7 @@ def _require_justified(forced: bool, justification: str | None) -> None:
     silent (contract: forced sub-threshold batches require a justification)."""
 
     if forced and not (justification or "").strip():
-        raise BatchError(
+        raise InputError(
             "a forced batch needs a written human justification; it waives the configured target "
             "and the manifest records why"
         )
@@ -1463,7 +1463,7 @@ def _require_justified(forced: bool, justification: str | None) -> None:
 
 def _require_aware(moment: datetime) -> datetime:
     if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
-        raise BatchError("freeze time must be timezone-aware; a naive datetime makes the age rule guesswork")
+        raise InputError("freeze time must be timezone-aware; a naive datetime makes the age rule guesswork")
     return moment
 
 
@@ -2078,7 +2078,7 @@ def _complete_freeze(
 
     task_id = batch.analysis_task_id
     if task_id is None:
-        raise BatchError(
+        raise RecordError(
             f"{batch.manifest_path}: the open batch names no analysis_task_id, so this controller cannot tell "
             "which task is meant to analyze it — and nothing can show that analysis completed; restore the field"
         )

@@ -581,7 +581,7 @@ contract's normal outcomes when evidence is still thin. Everything else:
 | 4 | `refused` | A legal operation the current state does not permit. | The message names what stands in the way; change it, or do something else. |
 | 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
 | 6 | `busy` | Another run holds `.ai-evolution/lock`. | Wait, or clear a lock whose holder is gone — see Recovery below. |
-| 7 | `corrupt` | A persisted record cannot be read, or is a version this build has no reader for — this machine's pool state, or a durable record under `evolution/` such as an experiment's `replays.json`. Never repaired silently. | Restore the file from version control, or see Recovery below. |
+| 7 | `corrupt` | A persisted record cannot be read as what it claims to be, or is a version this build has no reader for — this machine's pool state, a record the repository carries (a batch manifest, an outcome, an experiment record, an experiment's `replays.json`), or the generated analysis task a freeze reads a lifecycle from. Never repaired silently. | Restore the file from version control — or, for the analysis task, from the batch manifest. See Recovery below. |
 | 8 | `unavailable` | The report feed did not answer. Nothing was established, so nothing was recorded. | Retry, or supply `--feed-dir`. |
 | 9 | `misconfigured` | `evolution/config.toml` or a schema under `evolution/schemas/` is missing, malformed, or asks for behavior this build does not implement. | Fix the workspace. |
 | 10 | `toolchain` | A tool this operation needs is not usable here — a Git below the floor (below), or no runnable `git` at all. | Install or upgrade Git. Nothing was established about any revision. |
@@ -1085,11 +1085,21 @@ cannot observe that transition.
   the base the batch would be formed at. Not the same as an empty pool: the
   evaluations exist, they are just about another protocol. It waits for reports
   produced at the configured source line.
+- **A committed record that will not load.** A batch manifest, a closure, an
+  outcome, a rollback, an experiment record, or an experiment's `replays.json`
+  that contradicts itself or its schema stops every command, because reading
+  the lineage is the first thing each of them does. Exit 7 (`corrupt`), and
+  never repaired here: the file is under version control, so restore it there,
+  or have someone who has looked at it decide what the record should say. It is
+  deliberately not a refusal — no verb changes the state of a record that may
+  not be edited.
 - **A generated analysis task that no longer looks like one.** The controller
   identifies it by its id line, its `# Batch analysis — <batch-id>` heading, and
   the manifest path it cites, then reads its lifecycle. Keep those three intact
   while working the task; if the file is damaged, restore them or remove the
-  file so the next run can write it again.
+  file so the next run can write it again. Exit 7 as well, and the one record
+  version control does not have back — only this machine ever held it, so the
+  manifest is what it is restored from.
 
 ## Excluded from deployment
 

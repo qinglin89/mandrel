@@ -103,7 +103,7 @@ from ..hashing import sha256_bytes
 from . import analysis_task, assessment
 from . import rollback as rollback_ops
 from .config import EvolutionConfig
-from .errors import BatchError, ToolchainError
+from .errors import BatchError, InputError, ToolchainError
 from .guards import (
     current_cycle,
     held,
@@ -3927,7 +3927,7 @@ def _moment(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(timezone.utc)
     if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-        raise BatchError("admission time must be timezone-aware; a naive datetime records an ambiguous moment")
+        raise InputError("admission time must be timezone-aware; a naive datetime records an ambiguous moment")
     return now
 
 

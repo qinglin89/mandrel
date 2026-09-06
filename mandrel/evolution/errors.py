@@ -48,9 +48,10 @@ KIND_BUSY = "busy"
 holder is gone."""
 
 KIND_CORRUPT = "corrupt"
-"""A persisted record this machine owns cannot be read, or is a version this
-build has no reader for. Never repaired silently; the file is restored or
-removed by a human who has looked at it."""
+"""A persisted record cannot be read as what it claims to be, or is a version
+this build has no reader for — this machine's runtime state, or a record the
+repository carries. Never repaired silently; the file is restored or removed by
+a human who has looked at it."""
 
 KIND_UNAVAILABLE = "unavailable"
 """Something outside this checkout did not answer. Nothing was established, so
@@ -93,7 +94,7 @@ class EvolutionError(RuntimeError):
     """Base class for every evolution controller failure.
 
     Raised directly where an operation's own filesystem work did not complete —
-    a generated task that cannot be read or written — which is what `failed`
+    a generated task this machine cannot read back — which is what `failed`
     names. Its attributes are the defaults every subclass narrows.
     """
 
@@ -188,15 +189,24 @@ class ProposalError(EvolutionError):
 
 
 class RecordError(EvolutionError):
-    """A durable record under `evolution/` cannot be read as what it claims to be.
+    """A record this controller wrote and reads back as fact cannot be read as
+    what it claims to be — the committed batch, experiment, replay, and
+    release-assessment records under `evolution/`, and the generated analysis
+    task a freeze reads a lifecycle from.
 
-    The read side of the file the writers publish through. Those parsers are
-    asked in both directions, so what they raise about a value is `invalid` —
-    correct for a caller handing in the next state of a record, and wrong for
-    the same parser reading one off disk, where nothing was typed and the value
-    is a file this machine is holding. Whoever reads owns that translation, and
-    this is what it translates to: the record's own family, whose recovery is a
-    person looking at the file rather than an operator retyping a command.
+    The read side of the files the writers publish through. Those parsers are
+    asked in both directions, so what they raise is written for the writer: the
+    shared validator says `invalid` about a value, and a parser's own
+    cross-field rules refuse the document. Both are right for a caller handing
+    in the next state of a record and wrong for the same parser reading one off
+    disk, where nothing was typed and no state changes to make the file load.
+    Whoever reads owns that translation, and this is what it translates to: the
+    record's own family, whose recovery is a person looking at the file rather
+    than an operator retyping a command or running another verb.
+
+    The translation is the reader's and not the parser's because only the reader
+    knows which direction it is: at a rule inside a shared parser, a record
+    handed in and a record read off disk are the same mapping.
     """
 
     kind = KIND_CORRUPT
@@ -267,3 +277,28 @@ class BatchError(EvolutionError):
 
     kind = KIND_REFUSED
     code = "state-refused"
+
+
+def damaged_record(complaint: object, *, what: str) -> str:
+    """A `RecordError`'s sentence: what is wrong with the file, and what the
+    family asks for.
+
+    Here rather than in each reader because the second half is the family's and
+    not any one reader's, and a copy of it in every reader would drift into that
+    many recoveries for one exit code.
+
+    `complaint` is kept verbatim. Whatever refused — the shared validator, or a
+    parser's own cross-field rule — already names the file and the disagreement,
+    and that is the only part saying where to look. What is added is the half
+    `kind` carries: this is a record, so nothing writes over it or reads around
+    it, and no command retyped anywhere fixes it.
+
+    `what` names the record, because one word of it is load-bearing: a record
+    the repository carries is restored from version control, and one only this
+    machine ever held is not restored at all.
+    """
+
+    return (
+        f"{complaint}; that file is {what}, so nothing here writes over it or reads around it — restore "
+        "it, or have someone who has looked at it decide what it should say"
+    )

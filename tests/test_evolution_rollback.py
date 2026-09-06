@@ -320,7 +320,7 @@ def test_a_second_reason_is_not_a_second_reversal(
 def test_rolling_back_records_why(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    with pytest.raises(evolution.BatchError, match="a rollback records why"):
+    with pytest.raises(evolution.InputError, match="a rollback records why"):
         rollback.rollback(config, reason="   ", now=REVERSED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -651,9 +651,9 @@ def test_a_commit_that_reverses_nothing_is_not_this_promotions_inverse(
         reverted_at=reverted_at,
     )
 
-    with pytest.raises(evolution.BatchError, match="reverting it here produces"):
+    with pytest.raises(evolution.RecordError, match="reverting it here produces"):
         lineage.describe(config)
-    with pytest.raises(evolution.BatchError, match="reverting it here produces"):
+    with pytest.raises(evolution.RecordError, match="reverting it here produces"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -682,9 +682,9 @@ def test_a_revert_that_conflicts_is_an_answer_about_the_record(
         reverted_at=reverted_at,
     )
 
-    with pytest.raises(evolution.BatchError, match="conflicts"):
+    with pytest.raises(evolution.RecordError, match="conflicts"):
         lineage.describe(config)
-    with pytest.raises(evolution.BatchError, match="conflicts"):
+    with pytest.raises(evolution.RecordError, match="conflicts"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -719,9 +719,9 @@ def test_a_commit_that_takes_nothing_back_out_is_not_this_promotions_inverse(
         reverted_at=reverted_at,
     )
 
-    with pytest.raises(evolution.BatchError, match="already carries none of the promotion"):
+    with pytest.raises(evolution.RecordError, match="already carries none of the promotion"):
         lineage.describe(config)
-    with pytest.raises(evolution.BatchError, match="already carries none of the promotion"):
+    with pytest.raises(evolution.RecordError, match="already carries none of the promotion"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == by_hand
@@ -742,7 +742,7 @@ def test_an_inverse_made_from_a_line_without_the_promotion_is_refused(
         revision=elsewhere,
     )
 
-    with pytest.raises(evolution.BatchError, match="does not have that promotion in its history"):
+    with pytest.raises(evolution.RecordError, match="does not have that promotion in its history"):
         lineage.describe(config)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -1298,5 +1298,5 @@ def test_a_checkout_without_the_source_line_rolls_nothing_back(
 def test_the_moment_a_rollback_records_is_unambiguous(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    with pytest.raises(evolution.BatchError, match="rollback time must be timezone-aware"):
+    with pytest.raises(evolution.InputError, match="rollback time must be timezone-aware"):
         rollback.rollback(config, reason=WHY, now=datetime(2026, 8, 9, 9, 0, 0))

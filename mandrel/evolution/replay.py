@@ -88,7 +88,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, RecordError, ToolchainError, ValidationError
+from .errors import BatchError, InputError, RecordError, ToolchainError, ValidationError, damaged_record
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Experiment
 from .revisions import merge_tree, ref_tip, require_git
@@ -477,14 +477,14 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
     replay, and the two are the same fact about the evidence.
 
     This is also where the parser below stops being asked in two directions.
-    `parse_replays` serves the writers as well, so what it raises about a *value*
-    is `invalid` — right for a caller handing in the next state of this file and
-    wrong for a file already on disk, where nothing was typed and an operator
-    told to retype the command has nothing to retype. The reader owns that
-    translation (`RecordError`), which is the family whose recovery is a person
-    looking at the file. Its two schema doors are translated here; the refusals
-    this reader states in its own words are not yet, and the comment below says
-    where they are being settled.
+    `parse_replays` serves the writers as well, so everything it raises is
+    written for that caller — `invalid` about a value the shared validator was
+    handed, and a refusal about a history that does not hold together. Both are
+    right for a caller building the next state of this file and wrong for a file
+    already on disk, where nothing was typed and no state changes to make the
+    record load. The reader owns that translation (`RecordError`), which is the
+    family whose recovery is a person looking at the file — its own doors below
+    raise it directly, and the parse is translated whole.
     """
 
     path = replays_path(experiment)
@@ -492,37 +492,22 @@ def read_replays(config: EvolutionConfig, experiment: Experiment) -> History:
         record = parse_json(path.read_text(encoding="utf-8"), description=f"replay record {path}")
     except FileNotFoundError:
         return History(replays=(), pending=None, withdrawn=())
-    # Two doors here — the unreadable bytes below, and the not-an-object check
-    # under them — still answer as refusals, which is the same damaged file said
-    # the wrong way. Left with the rest of this module's persisted-state
-    # classification rather than split off alone, so one pass settles them
-    # together (task 2026-08-26-evolution-error-taxonomy, session-2).
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"unreadable replay record {path}: {exc}") from exc
+        raise RecordError(_damaged_record(f"unreadable replay record {path}: {exc}")) from exc
     except ValidationError as exc:
         raise RecordError(_damaged_record(exc)) from exc
     if not isinstance(record, dict):
-        raise BatchError(f"replay record is not a JSON object: {path}")
+        raise RecordError(_damaged_record(f"replay record is not a JSON object: {path}"))
     try:
         return parse_replays(config, record, experiment)
-    except ValidationError as exc:
+    except (BatchError, ValidationError) as exc:
         raise RecordError(_damaged_record(exc)) from exc
 
 
-def _damaged_record(exc: ValidationError) -> str:
-    """The same failure, said to whoever can act on it.
+def _damaged_record(complaint: object) -> str:
+    """What this module says about a replay record that will not load."""
 
-    `exc` already names the file and what is wrong with it — that half is the
-    validator's and is kept verbatim. What is added is the half the family
-    carries: this is a durable record of what was measured, so it is neither
-    written over nor read around, and no command retyped anywhere fixes it.
-    """
-
-    return (
-        f"{exc}; that file is this experiment's durable record of what was measured, so nothing here writes "
-        "over it or reads around it — restore it from version control, or have someone who has looked at it "
-        "decide what the evidence is"
-    )
+    return damaged_record(complaint, what="this experiment's record of what was measured, kept in version control")
 
 
 def replays_path(experiment: Experiment) -> Path:
@@ -550,6 +535,10 @@ def parse_replays(
     Public because the writers publish through it: an operation builds the next
     state of this file and validates it here before it lands, so a write cannot
     produce evidence its own reader refuses.
+
+    So it refuses in that caller's terms. At a rule in here the record handed in
+    and the record read off disk are the same mapping, which is why the
+    direction is the reader's to know: `read_replays` translates.
     """
 
     path = replays_path(experiment)
@@ -1689,7 +1678,7 @@ def _line(text: str, requirement: str) -> str:
 
     collapsed = " ".join(text.split())
     if not collapsed:
-        raise BatchError(requirement)
+        raise InputError(requirement)
     return collapsed
 
 
@@ -1697,7 +1686,7 @@ def _moment(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(timezone.utc)
     if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-        raise BatchError("replay time must be timezone-aware; a naive datetime records an ambiguous moment")
+        raise InputError("replay time must be timezone-aware; a naive datetime records an ambiguous moment")
     return now
 
 

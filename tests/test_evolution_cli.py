@@ -24,6 +24,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import shlex
 import shutil
@@ -1674,8 +1675,10 @@ def test_an_entry_the_feed_mangled_is_translated_and_then_rejected(
 # --- CLI ---------------------------------------------------------------------
 
 
-def _exposed_verbs() -> set[str]:
-    """Every `mandrel evolution <verb>` this build has a parser for."""
+def _evolution_verbs() -> dict[str, argparse.ArgumentParser]:
+    """Every `mandrel evolution <verb>` this build has a parser for, and its
+    parser — read off the tree an operator actually meets, which is the only
+    place the answer cannot drift from what ships."""
 
     parser = cli.build_parser()
     evolution_action = next(
@@ -1683,7 +1686,13 @@ def _exposed_verbs() -> set[str]:
         for action in parser._actions
         if isinstance(action, argparse._SubParsersAction)
     )
-    return set(evolution_action.choices["evolution"]._subparsers._group_actions[0].choices)
+    return evolution_action.choices["evolution"]._subparsers._group_actions[0].choices
+
+
+def _exposed_verbs() -> set[str]:
+    """Their names."""
+
+    return set(_evolution_verbs())
 
 
 def test_every_command_a_refusal_names_is_one_this_build_exposes() -> None:
@@ -1866,7 +1875,7 @@ def test_force_without_a_justification_is_refused(
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo), "--force"], capsys)
 
-    assert code == exits(evolution.BatchError)
+    assert code == exits(evolution.InputError)
     assert "justification" in err
     assert evolution.load_batches(evolution.load_config(repo)) == []
 
@@ -2122,16 +2131,18 @@ def test_a_stale_reading_a_refusal_and_a_damaged_record_are_three_answers(
     assert evolution.load_batches(config) == []
 
 
-def test_an_operations_own_write_is_the_family_with_the_least_to_say(
+def test_a_generated_task_replaced_by_something_else_is_a_damaged_record(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The catch-all reaches the console under its own number too.
+    """A freeze redone over a file that is not the analysis task it generated.
 
-    A freeze redone over a file that is not the analysis task it generated is
-    the shape: not a refusal about the lifecycle, not a record this build cannot
-    read, just an operation whose own filesystem work will not complete. It is
-    the family a failure lands in until somebody names it better, and it exits
-    as itself rather than as an unclassified one.
+    Read as the catch-all it once was, this told an operator their filesystem
+    work had not completed — which sends them to redo the command, and the redo
+    finds the same file and says the same thing. It is a record: the freeze
+    wrote it, everything downstream reads a lifecycle out of it, and nothing
+    here may write over one that may already carry a session log. So the answer
+    is the record family, and what restores it is the manifest rather than
+    version control — only this machine ever held the file.
     """
 
     config = evolution.load_config(repo)
@@ -2142,9 +2153,44 @@ def test_an_operations_own_write_is_the_family_with_the_least_to_say(
 
     code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
 
+    assert code == exits(evolution.RecordError)
+    assert code not in {cli.UNCLASSIFIED_EXIT, exits(evolution.EvolutionError)}
+    assert "is not the analysis task generated" in err
+
+
+def test_an_operations_own_write_is_the_family_with_the_least_to_say(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The catch-all reaches the console under its own number too.
+
+    What is left in it once the two failures that were only sitting there have
+    been named: not the record, which is intact, and not a refusal about the
+    lifecycle, which has not been reached — this machine simply would not hand
+    the file over. That is the whole of `failed`, and it exits as itself rather
+    than as an unclassified failure.
+
+    The file is made unreadable rather than the read patched, because the
+    condition is the point: a path the process cannot open is what the door
+    behind this catches, and a patched `read_text` would assert the handler
+    rather than the case reaching it.
+    """
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file, so the condition cannot be created")
+
+    config = evolution.load_config(repo)
+    fill_pool(config, feed_root, TARGET)
+    result = freeze(config)
+    path = analysis_task.task_path(config, result.analysis_task_id or "")
+    path.chmod(0o000)
+    try:
+        code, _, err = run(["evolution", "freeze", "--repo", str(repo)], capsys)
+    finally:
+        path.chmod(0o644)
+
     assert code == exits(evolution.EvolutionError)
     assert code != cli.UNCLASSIFIED_EXIT
-    assert "is not the analysis task generated" in err
+    assert "cannot read the analysis task" in err
 
 
 def test_a_git_below_the_floor_is_a_fact_about_this_machine(tmp_path: Path) -> None:
@@ -2344,6 +2390,39 @@ def test_a_replay_record_this_build_cannot_read_is_not_a_mistyped_command(
     assert len({evolution.RecordError.code, evolution.ValidationError.code}) == 2
     assert str(path) in err
     assert git_rev(lineage_repo, RELEASE_REF) == release, "nothing was promoted over a record nobody can read"
+
+
+def test_a_frozen_manifest_that_contradicts_itself_is_not_a_freeze_being_refused(
+    repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the same translation, on the record the repository
+    carries rather than this machine.
+
+    A manifest's counts and its reports have to describe one cohort, and the
+    rule saying so is asked in both directions: the freeze publishes through it,
+    where refusing is right because the manifest is still being built and does
+    not have to be published, and the reader asks it of a file frozen months ago
+    under invariant 3. Answered there as a refusal, an operator is told to change
+    a state — of a document that may not be edited, by a command that cannot run
+    because reading it is the first thing every command does.
+    """
+
+    config = evolution.load_config(repo)
+    fill_pool(config, feed_root, TARGET)
+    frozen = freeze(config)
+    path = config.batches_root / (frozen.batch_id or "") / batches.MANIFEST_FILENAME
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    # Shape-valid and self-contradicting: the denominator no longer counts the
+    # reports beside it, which is the rule no schema can state.
+    manifest["selection"]["considered"] += 1
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    code, _, err = run(["evolution", "status", "--repo", str(repo)], capsys)
+
+    assert code == exits(evolution.RecordError)
+    assert code not in {exits(evolution.InputError), exits(evolution.BatchError)}
+    assert str(path) in err
+    assert "restore it" in err, "the answer names what a person does with the file"
 
 
 # --- the change lineage, as commands -----------------------------------------
@@ -2684,6 +2763,85 @@ def test_the_verbs_this_cli_offers_are_the_ones_the_gate_names(
         parsed = parser.parse_args(["evolution", verb, *_minimal(verb), "--expect", "1-abc", "--repo", "/tmp/x"])
         assert parsed.evolution_command == verb
         assert parsed.expect == "1-abc"
+
+
+def _takes_expectation() -> set[str]:
+    """The verbs that offer `--expect`."""
+
+    return {
+        name
+        for name, subparser in _evolution_verbs().items()
+        if any("--expect" in action.option_strings for action in subparser._actions)
+    }
+
+
+def test_the_token_is_offered_by_every_verb_that_decides_anything() -> None:
+    """Which verbs take `--expect`, settled against the parser rather than a
+    count somebody wrote down.
+
+    The lifecycle verbs come from the gate, and the two formation verbs are
+    named here because the human membership window is exactly where a reading
+    goes stale — `start` offers a batch and `freeze` fixes it, with a person's
+    include and exclude decisions in between and no lock spanning them.
+
+    The three left out are left out for one reason each and none of them is an
+    omission: `list` and `status` write nothing, and `sync` decides nothing
+    about the lifecycle — it imports what the feed has, which is the same
+    import whatever the records did meanwhile. Naming them is what makes a
+    fourth one impossible to add by accident.
+    """
+
+    takes = _takes_expectation()
+    every = takes | {"list", "status", "sync"}
+
+    assert takes == cli._wired_verbs(phase) | {"start", "freeze"}
+    assert every == set(_evolution_verbs())
+
+
+def test_a_token_from_another_scheme_and_a_token_that_moved_are_two_answers_everywhere(
+    lineage_repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every verb that takes the token tells its two bad tokens apart.
+
+    They are two different next steps: one says take a token from this
+    checkout, the other says read the lifecycle again and decide over what is
+    there now — and an automated caller, which is who passes a token at all,
+    retries the wrong one forever if the two arrive as one answer. Swept over
+    the whole set rather than sampled, because this only ever breaks one verb
+    at a time: the check is a single call at the top of each operation, and a
+    verb that forgot to make it looks exactly like every other one until a
+    token is actually wrong.
+
+    The workspace is a batch at its admission gate and the arguments are only
+    what each verb needs to parse. What each verb would then refuse about does
+    not matter and is the point: the token is compared first thing under the
+    lock, before the state is read, so the answer is the same from any state.
+    `start` alone needs one more, and it is the adapter's rather than the
+    operation's — a poll is named by the feed it polls, so the console resolves
+    one before there is an operation for a token to be checked in at all.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(lineage_repo)]
+    before = snapshot(lineage_repo)
+
+    moved = f"{guards.STATE_REVISION_VERSION}-{'0' * 16}"
+    foreign = "99-deadbeefdeadbeef"
+    assert moved != token(config), "the moved token has to describe a reading that is not the one standing"
+
+    answers = {}
+    for verb in sorted(_takes_expectation()):
+        feed = ["--feed-dir", str(feed_root)] if verb == "start" else []
+        asked = ["evolution", verb, *_minimal(verb), *feed, *where]
+        stale, _, _ = run([*asked, "--expect", moved], capsys)
+        invalid, _, _ = run([*asked, "--expect", foreign], capsys)
+        answers[verb] = (stale, invalid)
+
+    assert answers == {
+        verb: (exits(evolution.StaleStateError), exits(evolution.InputError)) for verb in sorted(_takes_expectation())
+    }
+    assert snapshot(lineage_repo) == before, "a token nobody can act on is answered before anything is written"
 
 
 def test_the_documented_console_is_the_console_this_build_offers() -> None:

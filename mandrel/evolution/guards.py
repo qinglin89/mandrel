@@ -581,11 +581,15 @@ def reason(text: str, requirement: str) -> str:
     redo recognising its own interrupted work matches the reason it wrote, and
     two spellings differing only in how they were wrapped would read as two
     different decisions.
+
+    An empty one is the command rather than the lifecycle — nothing about the
+    state stands in the way, and what the operator does is type the sentence —
+    so it is `InputError` wherever it is asked (`errors.py`).
     """
 
     collapsed = " ".join((text or "").split())
     if not collapsed:
-        raise BatchError(requirement)
+        raise InputError(requirement)
     return collapsed
 
 

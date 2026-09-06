@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import OUTCOME_SCHEMA_FILENAME, ROLLBACK_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, ToolchainError
+from .errors import BatchError, InputError, ToolchainError
 from .guards import held
 from .guards import reason as require_reason
 from .guards import require_expected, require_line_not_checked_out, require_readable_evidence, settled
@@ -1140,7 +1140,7 @@ def _moment(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(timezone.utc)
     if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-        raise BatchError("rollback time must be timezone-aware; a naive datetime records an ambiguous moment")
+        raise InputError("rollback time must be timezone-aware; a naive datetime records an ambiguous moment")
     return now
 
 

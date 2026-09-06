@@ -23,9 +23,13 @@ everywhere but the one machine the work happened on.
 unambiguous history stops the read (two open experiments, two bases for one
 batch, a round sealed with an unfinished task, a draft consumed twice) — the
 same rule the manifests already follow, and for the same reason: a reading that
-picks one interpretation lets the next operation act on the other. Git is
-treated differently. A ref that is absent, ahead of where the record says it
-should be, or standing on a history the record's own pins do not lead to is
+picks one interpretation lets the next operation act on the other. All of it is
+one family, and it is the record's: nothing here is a state an operator changes
+with a verb, because every verb begins by reading this. A person restores or
+removes the file (`errors.RecordError`).
+
+Git is treated differently. A ref that is absent, ahead of where the record
+says it should be, or standing on a history the record's own pins do not lead to is
 reported as an observation rather than raised: the artifacts are intact, the
 operator needs to be told which ref moved, and refusing to describe the
 lifecycle is not how they find out. Guarded operations are what refuse on an
@@ -47,7 +51,7 @@ from .config import (
     EXPERIMENT_SCHEMA_FILENAME,
     EvolutionConfig,
 )
-from .errors import BatchError
+from .errors import BatchError, InputError, RecordError, ValidationError, damaged_record
 from .manifests import (
     OUTCOME_PROMOTED,
     OUTCOME_ROLLED_BACK,
@@ -557,7 +561,7 @@ def _require_one_current(current: list[BatchLineage]) -> None:
     """
 
     if len(current) > 1:
-        raise BatchError(
+        raise RecordError(
             "more than one current batch: "
             + ", ".join(lineage.batch_id for lineage in current)
             + " — invariant 14 allows one at a time; record the earlier batch's outcome "
@@ -603,7 +607,7 @@ def load_experiments(
         if entry.name.startswith(".") or not entry.is_dir():
             continue
         if experiment_ordinal(entry.name) is None:
-            raise BatchError(
+            raise RecordError(
                 f"{entry}: not an experiment identifier; only experiment records belong under "
                 f"{config.storage.experiments}/"
             )
@@ -613,7 +617,7 @@ def load_experiments(
     grouped: dict[str, list[Experiment]] = {}
     for experiment in experiments:
         if experiment.batch_id not in known:
-            raise BatchError(
+            raise RecordError(
                 f"{experiment.directory / EXPERIMENT_FILENAME}: names batch {experiment.batch_id!r}, which has no "
                 f"frozen manifest under {config.storage.batches}/; an experiment belongs to the cohort that "
                 "justified it"
@@ -654,7 +658,7 @@ def experiment_batch_id(experiment_id: str) -> str | None:
 
 def format_experiment_id(batch_id: str, ordinal: int) -> str:
     if ordinal < 1:
-        raise BatchError(f"experiment ordinals start at 1, got {ordinal}")
+        raise InputError(f"experiment ordinals start at 1, got {ordinal}")
     return f"{batch_id}{EXPERIMENT_ID_INFIX}{ordinal:0{EXPERIMENT_ORDINAL_DIGITS}d}"
 
 
@@ -736,7 +740,7 @@ def _batch_lineage(
     _require_one_base(batch, experiments)
     open_experiments = [experiment for experiment in experiments if experiment.open]
     if len(open_experiments) > 1:
-        raise BatchError(
+        raise RecordError(
             f"{batch.batch_id} has more than one open experiment: "
             + ", ".join(experiment.experiment_id for experiment in open_experiments)
             + " — invariant 14 allows one; abandon or supersede the earlier attempt, which keeps it as evidence"
@@ -793,7 +797,7 @@ def _require_one_base(batch: Batch, experiments: Iterable[Experiment]) -> None:
     }
     if off_base:
         listed = ", ".join(f"{name} at {revision[:12]}" for revision, name in sorted(off_base.items()))
-        raise BatchError(
+        raise RecordError(
             f"{batch.batch_id} was formed at base {frozen[:12]} and has experiments on another revision "
             f"({listed}); every experiment of one batch starts from the commit its manifest froze"
         )
@@ -815,14 +819,14 @@ def _require_serial_experiments(batch: Batch, experiments: tuple[Experiment, ...
 
     ordinals = [experiment.ordinal for experiment in experiments]
     if ordinals != list(range(1, len(experiments) + 1)):
-        raise BatchError(
+        raise RecordError(
             f"{batch.batch_id} has experiment ordinals {ordinals}; they are allocated one at a time from 1 and "
             "an id is never reused, so a gap is an attempt whose record is missing rather than one that never "
             "existed"
         )
     stale = [experiment.experiment_id for experiment in experiments[:-1] if experiment.open]
     if stale:
-        raise BatchError(
+        raise RecordError(
             f"{batch.batch_id}: {stale} carry no decision while {experiments[-1].experiment_id} exists after "
             "them; an experiment is created only once the one before it ended, so the open one is the newest "
             "(invariant 14) — record what happened to the earlier attempt"
@@ -860,7 +864,7 @@ def _require_named_successors(experiments: tuple[Experiment, ...]) -> None:
         expected = format_experiment_id(experiment.batch_id, experiment.ordinal + 1)
         if successor != expected:
             relation = "itself" if successor == experiment.experiment_id else "another attempt"
-            raise BatchError(
+            raise RecordError(
                 f"{experiment.directory / EXPERIMENT_FILENAME}: names {successor!r} as its successor, which is "
                 f"{relation}; superseding creates the replacement in the same operation, so the successor is the "
                 f"next experiment in the series ({expected})"
@@ -883,7 +887,7 @@ def _require_one_task_per_admission(batch: Batch, experiments: Iterable[Experime
             admission = f"{experiment.experiment_id} as draft {task.draft_id!r}"
             previous = owners.setdefault(task.task_id, admission)
             if previous != admission:
-                raise BatchError(
+                raise RecordError(
                     f"{batch.batch_id}: task {task.task_id!r} is admitted by {previous} and by {admission}; one "
                     "task implements one proposal, and a second draft admitted into it means a task id nothing "
                     "can be traced through"
@@ -911,13 +915,13 @@ def _require_ended_attempts(
     """
 
     if open_experiment is not None:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: this batch has concluded, but {open_experiment.experiment_id} carries no "
             "decision; a batch's outcome is recorded after its last experiment ends, never over an open one"
         )
     successor = _pending_successor(experiments)
     if successor is not None:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: this batch has concluded, while {experiments[-1].experiment_id} was "
             f"superseded by {successor}, which does not exist; an attempt nobody created has not ended either — "
             "remove this outcome, redo that supersession to finish it, and conclude the batch over what it "
@@ -974,14 +978,14 @@ def _require_one_promotion(
     ]
     if outcome["outcome"] != OUTCOME_PROMOTED:
         if recorded:
-            raise BatchError(
+            raise RecordError(
                 f"{batch.outcome_path}: concludes {outcome['outcome']!r}, while "
                 f"{[experiment.experiment_id for experiment in recorded]} record a promotion; a batch whose "
                 "candidate reached the source line concluded by promoting it, and the endings that name no "
                 "promotion are for the batch that changed nothing and the batch whose release came off the line"
             )
         if outcome["outcome"] == OUTCOME_ROLLED_BACK and experiments:
-            raise BatchError(
+            raise RecordError(
                 f"{batch.outcome_path}: ends {OUTCOME_ROLLED_BACK!r}, while {batch.batch_id} admitted "
                 f"{[experiment.experiment_id for experiment in experiments]}; a rollback ends the batch whose "
                 "base carries the promotion it reverses, and it refuses outright while any attempt stands on "
@@ -989,7 +993,7 @@ def _require_one_promotion(
             )
         return
     if len(recorded) > 1:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: {[experiment.experiment_id for experiment in recorded]} all record a "
             "promotion; one batch promotes one candidate, and the outcome names which of them it was"
         )
@@ -999,19 +1003,19 @@ def _require_one_promotion(
     named = outcome["experiment_id"]
     promoted = {experiment.experiment_id: experiment for experiment in experiments}.get(named)
     if promoted is None:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: names {named!r} as the promoted experiment, but {batch.batch_id} has no such "
             "experiment; the outcome names the attempt whose record carries the decision"
         )
     decision = promoted.decision
     if decision is None or decision.outcome != DECISION_PROMOTED:
         recorded = decision.outcome if decision else "no decision"
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: names {named!r} as promoted, but that experiment records {recorded!r}; "
             "one event, and the two records state it the same way"
         )
     if decision.promotion_revision != outcome["promotion_revision"]:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: promotes {outcome['promotion_revision']}, while {named} records "
             f"{decision.promotion_revision}; the promotion revision is one commit on the source line"
         )
@@ -1072,7 +1076,7 @@ def _require_checkable_merge_unit(
         }
         differing = sorted(field for field, value in unit.items() if stated[field] != value)
         if differing:
-            raise BatchError(
+            raise RecordError(
                 f"{batch.outcome_path}: states {differing} differently from the promotion "
                 f"{promoted.experiment_id} was prepared as; the outcome states the merge unit that was promoted, "
                 "which is the one the experiment recorded before the source line moved"
@@ -1081,7 +1085,7 @@ def _require_checkable_merge_unit(
     # one sentence, which `parse_experiment` is what holds them to.
     decided = promoted.decision.reason if promoted.decision is not None else None
     if outcome["reason"] != decided:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: concludes {outcome['reason']!r} while {promoted.experiment_id} was promoted "
             f"for {decided!r}; one decision, and the batch it ends is concluded by the reason it was promoted for"
         )
@@ -1099,7 +1103,7 @@ def _require_checkable_merge_unit(
         and run.integration.tree == tree
     ]
     if not measured:
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: promotes the tree {tree[:12]} that round {round_number} of "
             f"{promoted.experiment_id} produced on {stated['merge_input_ref']}, and no completed run of that round "
             "measured that integration; what reaches the source line is a tree a replay measured (invariant 10)"
@@ -1111,7 +1115,7 @@ def _require_checkable_merge_unit(
         return
     carried, parents = shape
     if carried != tree or parents != (stated["merge_input_revision"], stated["candidate_revision"]):
-        raise BatchError(
+        raise RecordError(
             f"{batch.outcome_path}: {revision[:12]} carries {carried[:12]} made from "
             f"{[parent[:12] for parent in parents]}, and the promotion is recorded as {tree[:12]} made "
             f"from {[stated['merge_input_revision'][:12], stated['candidate_revision'][:12]]}; the commit on the "
@@ -1157,7 +1161,7 @@ def _require_reversed_promotion(
     path = batch.rollback_path
     if outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
         concluded = f"concludes {outcome['outcome']!r}" if outcome is not None else "has not concluded"
-        raise BatchError(
+        raise RecordError(
             f"{path}: reverses a promotion of {rollback['promotion_revision'][:12]}, and {batch.batch_id} "
             f"{concluded}; a rollback takes back the promotion its own batch recorded, and one standing beside "
             "no promotion says the source line lost something nothing here ever put there"
@@ -1170,13 +1174,13 @@ def _require_reversed_promotion(
     }
     differing = sorted(field for field, value in stated.items() if rollback[field] != value)
     if differing:
-        raise BatchError(
+        raise RecordError(
             f"{path}: states {differing} differently from the promotion {batch.outcome_path.name} recorded; a "
             "rollback names the promotion it reverses, and one naming another commit, another attempt, or "
             "another line is not a record of this batch's promotion coming off the source line"
         )
     if rollback["revision"] == rollback["promotion_revision"]:
-        raise BatchError(
+        raise RecordError(
             f"{path}: names {rollback['revision'][:12]} as both the promotion and the commit reversing it; a "
             "rollback adds history rather than removing it, so the inverse is a commit of its own"
         )
@@ -1185,7 +1189,7 @@ def _require_reversed_promotion(
     if shape is not None:
         carried, parents = shape
         if carried != rollback["tree"] or parents != (rollback["reverted_from"],):
-            raise BatchError(
+            raise RecordError(
                 f"{path}: {rollback['revision'][:12]} carries {carried[:12]} made from "
                 f"{[parent[:12] for parent in parents]}, and the rollback is recorded as "
                 f"{rollback['tree'][:12]} made from {[rollback['reverted_from'][:12]]}; the commit on the source "
@@ -1244,14 +1248,14 @@ def require_inverse(
     if carried is None:
         return f"this checkout does not hold both {revision[:12]} and {made_from[:12]}"
     if not carried:
-        raise BatchError(
+        raise RecordError(
             f"{path}: reverses {revision[:12]} out of {made_from[:12]}, which does not have that promotion in "
             "its history; an inverse commit is computed from the line as it stood carrying the change, so a "
             "record made from another history describes taking back something that was never there"
         )
     reverted = revert_tree(config.repo_root, revision=revision, parent=parent, tip=made_from)
     if reverted.conflicted:
-        raise BatchError(
+        raise RecordError(
             f"{path}: taking {revision[:12]} back out of {made_from[:12]} conflicts — {reverted.complaint}; "
             "there is no tree that revert produces, so no commit is it, and what the line should hold instead "
             "is a person's judgement with a working tree in front of them rather than a record naming one"
@@ -1259,7 +1263,7 @@ def require_inverse(
     if reverted.tree is None:
         return f"taking {revision[:12]} back out of {made_from[:12]} produces no tree here: {reverted.complaint}"
     if reverted.tree != record["tree"]:
-        raise BatchError(
+        raise RecordError(
             f"{path}: records {record['tree'][:12]} as {made_from[:12]} with {revision[:12]} taken back out, "
             f"and reverting it here produces {reverted.tree[:12]}; the content of a rollback is computed from "
             "the line it was made from, and a record naming another tree names a commit this operation did not make"
@@ -1268,7 +1272,7 @@ def require_inverse(
     if before is None:
         return f"this checkout does not hold {made_from[:12]}"
     if before[0] == record["tree"]:
-        raise BatchError(
+        raise RecordError(
             f"{path}: {made_from[:12]} already carries none of the promotion {revision[:12]}, so "
             f"{record['revision'][:12]} takes nothing back out of it; something outside this controller removed "
             "that change, and a record adopting its own no-op commit says this operation did what it did not"
@@ -1289,7 +1293,7 @@ def _consumed_drafts(batch: Batch, experiments: Iterable[Experiment]) -> dict[st
         for draft_id in experiment.draft_ids:
             owner = consumed.setdefault(draft_id, experiment.experiment_id)
             if owner != experiment.experiment_id:
-                raise BatchError(
+                raise RecordError(
                     f"draft {draft_id!r} of {batch.batch_id} is admitted by both {owner} and "
                     f"{experiment.experiment_id}; a draft is consumed once, and proposing the idea again means "
                     "a new draft id"
@@ -1301,7 +1305,7 @@ def _gate(config: EvolutionConfig, batch: Batch, consumed: Mapping[str, str]) ->
     declined = tuple(entry["draft_id"] for entry in read_rejected_drafts(config, batch))
     both = sorted(set(declined) & set(consumed))
     if both:
-        raise BatchError(
+        raise RecordError(
             f"{batch.rejected_drafts_path}: draft(s) {both} are recorded as declined and also admitted by an "
             "experiment; admitting and declining are both terminal for a proposal"
         )
@@ -1321,21 +1325,38 @@ def _gate(config: EvolutionConfig, batch: Batch, consumed: Mapping[str, str]) ->
 
 
 def _read_experiment(config: EvolutionConfig, directory: Path) -> Experiment:
-    """One experiment record from disk."""
+    """One experiment record from disk.
+
+    The only place `parse_experiment` is asked about a file rather than about a
+    record a caller is holding, and so the place that translates. The parse
+    answers in the writer's terms — `experiments._validate` publishes through it
+    — and none of those terms fits a record already written: nothing was typed,
+    and no state changes to make it load. What a reader hits is the record's own
+    family (`errors.RecordError`).
+    """
 
     path = directory / EXPERIMENT_FILENAME
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise BatchError(
+        raise RecordError(
             f"{directory} has no {EXPERIMENT_FILENAME}; an experiment directory without its record names no "
             "base, no tasks, and no candidate — remove it or restore the record"
         ) from exc
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"unreadable experiment record {path}: {exc}") from exc
+        raise RecordError(_damaged(f"unreadable experiment record {path}: {exc}")) from exc
     if not isinstance(record, dict):
-        raise BatchError(f"experiment record is not a JSON object: {path}")
-    return parse_experiment(config, record, directory)
+        raise RecordError(_damaged(f"experiment record is not a JSON object: {path}"))
+    try:
+        return parse_experiment(config, record, directory)
+    except (BatchError, ValidationError) as exc:
+        raise RecordError(_damaged(exc)) from exc
+
+
+def _damaged(complaint: object) -> str:
+    """What this module says about an experiment record that will not load."""
+
+    return damaged_record(complaint, what="this attempt's record of what was admitted, sealed and decided")
 
 
 def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directory: Path) -> Experiment:
@@ -1361,6 +1382,10 @@ def parse_experiment(config: EvolutionConfig, record: Mapping[str, Any], directo
     those rules a second time on the write side is what would let the two drift
     — and the direction they drift in is a record this controller wrote and can
     no longer read.
+
+    Which is why what it raises is written for that caller and not for a reader.
+    At a rule in here the two directions are the same mapping, so the direction
+    is the reader's to know: `_read_experiment` translates.
     """
 
     path = directory / EXPERIMENT_FILENAME

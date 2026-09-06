@@ -425,7 +425,7 @@ def test_an_admission_records_an_unambiguous_moment(
     """Every timestamp here goes into a committed record that another machine
     reads; a naive one says nothing about when the admission happened."""
 
-    with pytest.raises(evolution.BatchError, match="timezone-aware"):
+    with pytest.raises(evolution.InputError, match="timezone-aware"):
         experiments.create(config, ["loader-fallback"], now=datetime(2026, 8, 5, 9, 0, 0))
 
 
@@ -450,7 +450,7 @@ def test_two_current_batches_stop_the_admission(config: evolution.EvolutionConfi
 
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"], analysis_task_id="2026-08-04-second-analysis")
 
-    with pytest.raises(evolution.BatchError, match="more than one current batch"):
+    with pytest.raises(evolution.RecordError, match="more than one current batch"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -524,7 +524,7 @@ def test_a_replay_record_nobody_can_read_stops_the_lifecycle(
         lambda: experiments.revise(config, reason="the candidate regressed", now=LATEST),
         lambda: experiments.abandon(config, reason="the approach does not hold", now=LATEST),
     ):
-        with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+        with pytest.raises(evolution.RecordError, match="unreadable replay record"):
             operation()
 
     assert record(config, EXP_01)["decision"] is None
@@ -549,9 +549,9 @@ def test_ending_an_attempt_cannot_hide_a_replay_record_nobody_can_read(
 
     # And it still stops the batch, from the next attempt through the conclusion
     # that would end the batch over it.
-    with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+    with pytest.raises(evolution.RecordError, match="unreadable replay record"):
         experiments.create(config, ["hook-side-loader"], now=LATEST)
-    with pytest.raises(evolution.BatchError, match="unreadable replay record"):
+    with pytest.raises(evolution.RecordError, match="unreadable replay record"):
         experiments.conclude_no_change(config, reason="the evidence justified no change", now=LATEST)
 
 
@@ -1549,7 +1549,7 @@ def test_a_rejection_redo_names_the_drafts_already_declined(
 
 @pytest.mark.parametrize("reason", ["", "   ", "\n"], ids=["empty", "blank", "newline"])
 def test_declining_states_why(config: evolution.EvolutionConfig, batch: Path, reason: str) -> None:
-    with pytest.raises(evolution.BatchError, match="records why"):
+    with pytest.raises(evolution.InputError, match="records why"):
         experiments.reject(config, ["not-worth-it"], reason=reason, now=NOW)
 
 
@@ -1829,7 +1829,7 @@ def test_revise_refuses_while_the_round_is_still_open(
 def test_revise_records_why(config: evolution.EvolutionConfig, batch: Path) -> None:
     seal(config, ["loader-fallback"])
 
-    with pytest.raises(evolution.BatchError, match="revising records why"):
+    with pytest.raises(evolution.InputError, match="revising records why"):
         experiments.revise(config, reason="   ", now=LATEST)
 
 
@@ -2169,7 +2169,7 @@ def test_history_never_blocks_the_next_alternative(config: evolution.EvolutionCo
 def test_ending_an_attempt_records_why(config: evolution.EvolutionConfig, batch: Path) -> None:
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="records why"):
+    with pytest.raises(evolution.InputError, match="records why"):
         experiments.abandon(config, reason="  \n ", now=LATER)
 
     assert record(config, EXP_01)["decision"] is None
@@ -2855,7 +2855,7 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
 def test_concluding_records_why(config: evolution.EvolutionConfig, batch: Path) -> None:
     experiments.reject(config, list(DRAFTS), reason="one report each is not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="concluding records why"):
+    with pytest.raises(evolution.InputError, match="concluding records why"):
         experiments.conclude_no_change(config, reason="", now=LATER)
 
     assert not (batch / "outcome.json").exists()
@@ -3109,7 +3109,7 @@ def test_a_target_planned_twice_refuses(
 def test_promoting_records_why(config: evolution.EvolutionConfig, batch: Path, release: str) -> None:
     prepared(config)
 
-    with pytest.raises(evolution.BatchError, match="a promotion records why"):
+    with pytest.raises(evolution.InputError, match="a promotion records why"):
         experiments.promote(config, reason="  ", targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3570,7 +3570,10 @@ def test_a_record_that_lost_its_prepared_promotion_stops_every_operation(
 
     The version is what makes that reading available at all — a current record
     always writes the field — so a lost one is refused where a version-1 record's
-    absent one is read as the shape it is."""
+    absent one is read as the shape it is. Refused as the record it is, too: the
+    schema is what noticed, and the shared validator says `invalid` about a value
+    because it is asked in both directions — which would send an operator to
+    retype a command over a file nothing here typed."""
 
     prepared(config)
     interrupt(monkeypatch, "move_ref")
@@ -3590,8 +3593,9 @@ def test_a_record_that_lost_its_prepared_promotion_stops_every_operation(
         lambda: experiments.revise(config, reason="one more pass", now=LATEST),
         lambda: experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST),
     ):
-        with pytest.raises(evolution.ValidationError, match="missing required property 'promotion'"):
+        with pytest.raises(evolution.RecordError, match="missing required property 'promotion'") as refused:
             operation()
+        assert isinstance(refused.value.__cause__, evolution.ValidationError)
 
     # Nothing moved on the strength of a record nobody could read: the line still
     # stands where it did, and the merge that run made is still off it — named by
@@ -3766,7 +3770,7 @@ def test_the_promotion_owed_an_outcome_is_offered_only_where_its_evidence_reads(
     intact = path.read_text(encoding="utf-8")
     path.write_text("{", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="unreadable replay record") as refused:
+    with pytest.raises(evolution.RecordError, match="unreadable replay record") as refused:
         experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
 
     offered = {item.action: item for item in phase.describe(config, now=LATEST).actions}["promote"]
@@ -3795,7 +3799,7 @@ def test_a_record_at_a_version_this_build_does_not_read_is_refused(
     written.pop("promotion", None)
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="unsupported experiment record schema_version 1"):
+    with pytest.raises(evolution.RecordError, match="unsupported experiment record schema_version 1"):
         experiments.add_tasks(config, ["hook-side-loader"], now=LATER)
 
 

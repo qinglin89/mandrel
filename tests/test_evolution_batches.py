@@ -401,7 +401,7 @@ def test_a_force_without_a_written_justification_is_refused(
     """The force path waives the configured target, so it never runs silently."""
     fill_pool(config, feed_root, MINIMUM)
 
-    with pytest.raises(evolution.BatchError):
+    with pytest.raises(evolution.InputError):
         freeze(config, forced=True, justification=justification)
 
     assert evolution.load_batches(config) == []
@@ -1757,7 +1757,7 @@ def test_a_closure_record_needs_a_manifest_that_names_its_task(
     record_findings(config, "evolution-batch-0001")
     write_closure(config.batches_root, "evolution-batch-0001", analysis_task_id="2026-07-31-unrelated-analysis")
 
-    with pytest.raises(evolution.BatchError, match="names no analysis task"):
+    with pytest.raises(evolution.RecordError, match="names no analysis task"):
         batches.batch_awaiting_analysis(config)
 
 
@@ -1772,7 +1772,7 @@ def test_an_open_batch_that_names_no_analysis_task_is_reported(
     manifest = {key: value for key, value in read_manifest(result).items() if key != "analysis_task_id"}
     result.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="names no analysis_task_id"):
+    with pytest.raises(evolution.RecordError, match="names no analysis_task_id"):
         freeze(config)
 
 
@@ -1812,7 +1812,7 @@ def test_two_current_batches_are_refused_rather_than_arbitrated(
         json.dumps({**read_manifest(first), "batch_id": "evolution-batch-0007"}), encoding="utf-8"
     )
 
-    with pytest.raises(evolution.BatchError, match="more than one current batch"):
+    with pytest.raises(evolution.RecordError, match="more than one current batch"):
         freeze(config)
 
 
@@ -1847,7 +1847,7 @@ def test_a_second_current_batch_stops_the_repair_before_it_is_selected(
         analysis_task_id=task_id,
     )
 
-    with pytest.raises(evolution.BatchError, match="more than one current batch"):
+    with pytest.raises(evolution.RecordError, match="more than one current batch"):
         freeze(config, now=NOW + timedelta(days=1))
 
     assert not analysis_task.task_exists(config, task_id)
@@ -1900,7 +1900,7 @@ def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
     ]
     evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
-    with pytest.raises(evolution.BatchError, match=message):
+    with pytest.raises(evolution.RecordError, match=message):
         freeze(config, now=NOW + timedelta(days=1))
 
     assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
@@ -1935,7 +1935,7 @@ def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
     ]
     evolution.sync(config, write_feed(feed_root, at_line(config, later)))
 
-    with pytest.raises(evolution.BatchError, match="which does not exist"):
+    with pytest.raises(evolution.RecordError, match="which does not exist"):
         freeze(config, now=NOW + timedelta(days=1))
 
     assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
@@ -1994,7 +1994,7 @@ def test_a_manifest_that_claims_another_batchs_id_is_refused(
         json.dumps({**read_manifest(result), "batch_id": "evolution-batch-0042"}), encoding="utf-8"
     )
 
-    with pytest.raises(evolution.BatchError, match="cannot name another batch"):
+    with pytest.raises(evolution.RecordError, match="cannot name another batch"):
         evolution.load_batches(config)
 
 
@@ -2078,7 +2078,7 @@ def test_a_manifest_version_this_build_cannot_read_fails_closed(
         json.dumps({**manifest, "schema_version": version}), encoding="utf-8"
     )
 
-    with pytest.raises(evolution.BatchError, match="unsupported batch manifest schema_version"):
+    with pytest.raises(evolution.RecordError, match="unsupported batch manifest schema_version"):
         evolution.load_batches(config)
 
 
@@ -2185,11 +2185,25 @@ def test_a_manifest_stating_a_cohort_that_cannot_exist_is_refused(
     repaired analysis task would each report it as the batch's own account of
     what it was drawn from. The freeze publishes through this same reader, so a
     writer cannot commit one either.
+
+    One rule and two answers, which is what the second half asserts. Asked by a
+    freeze it is a refusal: the manifest is being built and simply does not get
+    published. Asked of a file already frozen it is the record's own family —
+    invariant 3 says that document may not be edited, and there is no verb whose
+    state could change to make it load, because reading it is the first thing
+    every verb does.
     """
     write_manifest(config.batches_root, "evolution-batch-0001", ["r1"], **overrides)
 
-    with pytest.raises(evolution.BatchError, match=message):
+    with pytest.raises(evolution.RecordError, match=message) as read:
         evolution.load_batches(config)
+
+    frozen = json.loads((config.batches_root / "evolution-batch-0001" / "manifest.json").read_text(encoding="utf-8"))
+    with pytest.raises(evolution.BatchError, match=message) as published:
+        manifests.require_coherent_selection(frozen, where="a manifest being built")
+
+    assert read.value.kind != published.value.kind
+    assert not isinstance(published.value, evolution.RecordError)
 
 
 # --- the generated analysis task ---------------------------------------------
@@ -3104,7 +3118,7 @@ def test_a_move_nobody_is_named_for_is_refused_before_the_lock(
     evolution.build_proposal(config, now=NOW)
     stated = {"justification": WHY_IN, "actor": ACTOR, blank: "   "}
 
-    with pytest.raises(evolution.BatchError, match="a human move must state"):
+    with pytest.raises(evolution.InputError, match="a human move must state"):
         evolution.include(config, "repo-alpha", absent, now=NOW, **stated)
 
 
@@ -3123,7 +3137,7 @@ def test_a_move_naming_no_task_is_refused_before_anything_is_read(
     before = config.proposal_path.read_bytes()
 
     for repo_id, task_id in (("", "2026-07-01-task"), ("repo-alpha", "   ")):
-        with pytest.raises(evolution.BatchError, match="names one pooled task by both halves"):
+        with pytest.raises(evolution.InputError, match="names one pooled task by both halves"):
             evolution.exclude(config, repo_id, task_id, justification=WHY_OUT, actor=ACTOR, now=NOW)
 
     assert config.proposal_path.read_bytes() == before

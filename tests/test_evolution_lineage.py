@@ -841,7 +841,7 @@ def test_a_second_open_experiment_is_refused(config: evolution.EvolutionConfig, 
     write_experiment(config.experiments_root, EXP_01)
     write_experiment(config.experiments_root, EXP_02, rounds=[experiment_round(1, tasks=[admitted_task("other")])])
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordError) as error:
         lineage.describe(config)
     assert EXP_01 in str(error.value) and EXP_02 in str(error.value)
 
@@ -858,7 +858,7 @@ def test_experiments_on_two_bases_are_not_alternatives(config: evolution.Evoluti
         rounds=[experiment_round(1, tasks=[admitted_task("other")])],
     )
 
-    with pytest.raises(evolution.BatchError, match="has experiments on another revision"):
+    with pytest.raises(evolution.RecordError, match="has experiments on another revision"):
         lineage.describe(config)
 
 
@@ -928,7 +928,7 @@ def test_a_superseded_decision_names_the_successor_it_created(
         EXP_03,
         rounds=[experiment_round(1, tasks=[admitted_task("prompt-budget")])],
     )
-    with pytest.raises(evolution.BatchError, match="next experiment in the series"):
+    with pytest.raises(evolution.RecordError, match="next experiment in the series"):
         lineage.describe(config)
 
 
@@ -975,7 +975,7 @@ def test_a_directory_that_is_not_an_experiment_identifier_is_refused(
     """Skipping it would let an allocation reuse an ordinal a record claims."""
 
     (config.experiments_root / "scratch").mkdir(parents=True)
-    with pytest.raises(evolution.BatchError, match="not an experiment identifier"):
+    with pytest.raises(evolution.RecordError, match="not an experiment identifier"):
         lineage.describe(config)
 
 
@@ -993,21 +993,21 @@ def test_an_experiment_directory_without_its_record_is_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     (config.experiments_root / EXP_01).mkdir(parents=True)
-    with pytest.raises(evolution.BatchError, match="has no experiment.json"):
+    with pytest.raises(evolution.RecordError, match="has no experiment.json"):
         lineage.describe(config)
 
 
 def test_a_record_naming_another_experiment_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
     directory = write_experiment(config.experiments_root, EXP_01)
     directory.rename(config.experiments_root / EXP_02)
-    with pytest.raises(evolution.BatchError, match="directory is its identity"):
+    with pytest.raises(evolution.RecordError, match="directory is its identity"):
         lineage.describe(config)
 
 
 def test_an_experiment_id_outside_its_own_batch_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
     write_experiment(config.experiments_root, EXP_01, batch_id=SECOND_BATCH)
-    with pytest.raises(evolution.BatchError, match="does not belong to batch"):
+    with pytest.raises(evolution.RecordError, match="does not belong to batch"):
         lineage.describe(config)
 
 
@@ -1018,7 +1018,7 @@ def test_an_experiment_of_a_batch_that_does_not_exist_is_refused(
     histories this controller must not quietly stop showing."""
 
     write_experiment(config.experiments_root, f"{SECOND_BATCH}-exp-01")
-    with pytest.raises(evolution.BatchError, match="no frozen manifest"):
+    with pytest.raises(evolution.RecordError, match="no frozen manifest"):
         lineage.describe(config)
 
 
@@ -1029,7 +1029,7 @@ def test_a_record_claiming_another_experiments_ref_is_refused(
     fast-forward over each other."""
 
     write_experiment(config.experiments_root, EXP_01, ref=f"refs/evolution/experiments/{EXP_02}")
-    with pytest.raises(evolution.BatchError, match="one experiment, one durable ref"):
+    with pytest.raises(evolution.RecordError, match="one experiment, one durable ref"):
         lineage.describe(config)
 
 
@@ -1051,7 +1051,7 @@ def test_an_ordinal_has_exactly_one_spelling(
     """
 
     write_experiment(config.experiments_root, f"{BATCH_ID}-exp-{ordinal}")
-    with pytest.raises(evolution.BatchError, match="not an experiment identifier"):
+    with pytest.raises(evolution.RecordError, match="not an experiment identifier"):
         lineage.describe(config)
 
 
@@ -1085,7 +1085,7 @@ def test_experiment_ordinals_run_from_one_with_none_missing(
         EXP_03,
         rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
     )
-    with pytest.raises(evolution.BatchError, match=r"experiment ordinals \[1, 3\]"):
+    with pytest.raises(evolution.RecordError, match=r"experiment ordinals \[1, 3\]"):
         lineage.describe(config)
 
 
@@ -1106,7 +1106,7 @@ def test_only_the_newest_experiment_may_be_open(config: evolution.EvolutionConfi
         rounds=[experiment_round(1, tasks=[admitted_task("hook-side-loader")])],
         decision=experiment_decision("abandoned"),
     )
-    with pytest.raises(evolution.BatchError, match="the open one is the newest"):
+    with pytest.raises(evolution.RecordError, match="the open one is the newest"):
         lineage.describe(config)
 
 
@@ -1135,7 +1135,7 @@ def test_rounds_are_appended_one_at_a_time_from_one(
     (invariant 15: rounds only add)."""
 
     write_experiment(config.experiments_root, EXP_01, rounds=rounds)
-    with pytest.raises(evolution.BatchError, match="numbered"):
+    with pytest.raises(evolution.RecordError, match="numbered"):
         lineage.describe(config)
 
 
@@ -1150,7 +1150,7 @@ def test_work_never_resumes_under_a_round_something_already_measured(
             experiment_round(2, tasks=[admitted_task("other")], candidate_revision=CANDIDATE),
         ],
     )
-    with pytest.raises(evolution.BatchError, match="carry no seal while later rounds exist"):
+    with pytest.raises(evolution.RecordError, match="carry no seal while later rounds exist"):
         lineage.describe(config)
 
 
@@ -1171,7 +1171,7 @@ def test_a_sealed_round_whose_task_was_never_observed_complete_is_refused(
             )
         ],
     )
-    with pytest.raises(evolution.BatchError, match="no completion observation"):
+    with pytest.raises(evolution.RecordError, match="no completion observation"):
         lineage.describe(config)
 
 
@@ -1188,7 +1188,7 @@ def test_a_sealed_round_that_admitted_nothing_is_refused(
         EXP_01,
         rounds=[experiment_round(1, tasks=[], candidate_revision=CANDIDATE)],
     )
-    with pytest.raises(evolution.BatchError, match="pins a candidate but admitted nothing"):
+    with pytest.raises(evolution.RecordError, match="pins a candidate but admitted nothing"):
         lineage.describe(config)
 
 
@@ -1259,7 +1259,7 @@ def test_a_draft_is_never_readmitted_by_the_same_experiment(
             experiment_round(2, tasks=[admitted_task("loader-fallback", task_id="2026-08-04-again")]),
         ],
     )
-    with pytest.raises(evolution.BatchError, match="admitted more than once"):
+    with pytest.raises(evolution.RecordError, match="admitted more than once"):
         lineage.describe(config)
 
 
@@ -1268,7 +1268,7 @@ def test_a_draft_is_never_readmitted_by_another_experiment(
 ) -> None:
     write_experiment(config.experiments_root, EXP_01, decision=experiment_decision("abandoned"))
     write_experiment(config.experiments_root, EXP_02)
-    with pytest.raises(evolution.BatchError, match="consumed once"):
+    with pytest.raises(evolution.RecordError, match="consumed once"):
         lineage.describe(config)
 
 
@@ -1308,7 +1308,7 @@ def test_one_task_answers_for_one_admission(
         )
         write_experiment(config.experiments_root, EXP_02, rounds=[experiment_round(1, tasks=[second])])
 
-    with pytest.raises(evolution.BatchError, match="one task implements one proposal"):
+    with pytest.raises(evolution.RecordError, match="one task implements one proposal"):
         lineage.describe(config)
 
 
@@ -1353,7 +1353,7 @@ def test_a_promotion_from_an_open_round_is_refused(config: evolution.EvolutionCo
         rounds=[experiment_round(1)],
         decision=experiment_decision("promoted", promotion_revision=PROMOTION),
     )
-    with pytest.raises(evolution.BatchError, match="never sealed"):
+    with pytest.raises(evolution.RecordError, match="never sealed"):
         lineage.describe(config)
 
 
@@ -1406,7 +1406,7 @@ def test_a_prepared_promotion_names_the_round_it_was_prepared_from(
     past, with a completed round-1 run to make it look justified."""
 
     revised_experiment(config, round=1, candidate_revision=CANDIDATE)
-    with pytest.raises(evolution.BatchError, match="revised past"):
+    with pytest.raises(evolution.RecordError, match="revised past"):
         lineage.describe(config)
 
 
@@ -1414,7 +1414,7 @@ def test_a_prepared_promotion_names_a_round_this_record_has(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     revised_experiment(config, round=3)
-    with pytest.raises(evolution.BatchError, match="revised past"):
+    with pytest.raises(evolution.RecordError, match="revised past"):
         lineage.describe(config)
 
 
@@ -1426,7 +1426,7 @@ def test_a_prepared_promotion_states_the_reason_the_decision_records(
     leaves two answers to why the source line moved."""
 
     revised_experiment(config, reason="a different sentence entirely")
-    with pytest.raises(evolution.BatchError, match="one promotion is justified by one sentence"):
+    with pytest.raises(evolution.RecordError, match="one promotion is justified by one sentence"):
         lineage.describe(config)
 
 
@@ -1452,7 +1452,7 @@ def test_a_decision_carries_exactly_the_fields_its_outcome_means(
         rounds=[experiment_round(1, candidate_revision=CANDIDATE)],
         decision=decision,
     )
-    with pytest.raises(evolution.BatchError, match="only a"):
+    with pytest.raises(evolution.RecordError, match="only a"):
         lineage.describe(config)
 
 
@@ -1494,14 +1494,14 @@ def test_the_batch_stays_current_through_admission_and_the_decision(
 
 def test_two_current_batches_are_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
-    with pytest.raises(evolution.BatchError, match="more than one current batch"):
+    with pytest.raises(evolution.RecordError, match="more than one current batch"):
         lineage.describe(config)
 
 
 def test_a_batch_cannot_conclude_over_an_open_experiment(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_experiment(config.experiments_root, EXP_01)
     write_outcome(config.batches_root, BATCH_ID, reason="calling it here")
-    with pytest.raises(evolution.BatchError, match="carries no decision"):
+    with pytest.raises(evolution.RecordError, match="carries no decision"):
         lineage.describe(config)
 
 
@@ -1531,7 +1531,7 @@ def test_a_batch_cannot_conclude_over_a_successor_nobody_created(
     assert derived.pending_successor == EXP_02
 
     write_outcome(config.batches_root, BATCH_ID, reason="calling it here")
-    with pytest.raises(evolution.BatchError, match=f"superseded by {EXP_02}, which does not exist"):
+    with pytest.raises(evolution.RecordError, match=f"superseded by {EXP_02}, which does not exist"):
         lineage.describe(config)
 
 
@@ -1565,7 +1565,7 @@ def test_an_outcome_pairs_its_fields_with_what_it_concluded(
     what reached the source line."""
 
     write_outcome(config.batches_root, BATCH_ID, reason="recorded", **overrides)
-    with pytest.raises(evolution.BatchError):
+    with pytest.raises(evolution.RecordError):
         lineage.describe(config)
 
 
@@ -1605,7 +1605,7 @@ def test_a_promoted_batch_and_the_experiment_it_names_state_one_event(
         reason="promoted",
         **{"experiment_id": EXP_01, "promotion_revision": PROMOTION, **overrides},
     )
-    with pytest.raises(evolution.BatchError, match=message):
+    with pytest.raises(evolution.RecordError, match=message):
         lineage.describe(config)
 
 
@@ -1624,7 +1624,7 @@ def test_a_no_change_batch_over_a_promoted_experiment_is_refused(
         decision=experiment_decision("promoted", promotion_revision=PROMOTION),
     )
     write_outcome(config.batches_root, BATCH_ID, reason="the evidence justified no change")
-    with pytest.raises(evolution.BatchError, match="record a promotion"):
+    with pytest.raises(evolution.RecordError, match="record a promotion"):
         lineage.describe(config)
 
 
@@ -1653,7 +1653,7 @@ def test_a_rolled_back_batch_admitted_nothing(
         outcome="rolled-back",
         reason="the release it stood on came off the source line",
     )
-    with pytest.raises(evolution.BatchError, match="cannot both have happened"):
+    with pytest.raises(evolution.RecordError, match="cannot both have happened"):
         lineage.describe(config)
 
 
@@ -1676,7 +1676,7 @@ def test_one_batch_promotes_one_candidate(config: evolution.EvolutionConfig, bat
         experiment_id=EXP_02,
         promotion_revision=PROMOTION,
     )
-    with pytest.raises(evolution.BatchError, match="one batch promotes one candidate"):
+    with pytest.raises(evolution.RecordError, match="one batch promotes one candidate"):
         lineage.describe(config)
 
 
@@ -1737,7 +1737,7 @@ def test_an_outcome_states_the_merge_unit_the_experiment_was_promoted_as(
     record written before the source line moved."""
 
     promoted_batch(config, **overrides)
-    with pytest.raises(evolution.BatchError, match="differently from the promotion"):
+    with pytest.raises(evolution.RecordError, match="differently from the promotion"):
         lineage.describe(config)
 
 
@@ -1759,7 +1759,7 @@ def test_a_batch_is_concluded_by_the_reason_it_was_promoted_for(
         promotion_revision=PROMOTION,
         promotion=promotion_of(candidate_revision=CANDIDATE),
     )
-    with pytest.raises(evolution.BatchError, match="one decision, and the batch it ends"):
+    with pytest.raises(evolution.RecordError, match="one decision, and the batch it ends"):
         lineage.describe(config)
 
 
@@ -1778,7 +1778,7 @@ def test_a_promotion_no_run_measured_is_refused(config: evolution.EvolutionConfi
     written["replays"][0]["result"]["elapsed_seconds"] = None
     replays.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="no completed run of that round measured that integration"):
+    with pytest.raises(evolution.RecordError, match="no completed run of that round measured that integration"):
         lineage.describe(config)
 
 
@@ -1797,7 +1797,7 @@ def test_the_commit_on_the_source_line_is_what_the_record_is_held_to(
     outcome_path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     rewrite_decision(config, promotion_revision=real)
 
-    with pytest.raises(evolution.BatchError, match="is what the record is held to"):
+    with pytest.raises(evolution.RecordError, match="is what the record is held to"):
         lineage.describe(config)
 
 
@@ -1842,7 +1842,7 @@ def test_a_promoted_outcome_still_has_to_state_its_merge_unit(
     del written["promotion"]
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="states the experiment it promoted"):
+    with pytest.raises(evolution.RecordError, match="states the experiment it promoted"):
         lineage.describe(config)
 
 
@@ -1855,7 +1855,10 @@ def test_a_current_record_that_lost_its_prepared_promotion_is_refused(
     prepared" hands the experiment back to every operation that refuses over one
     — including a second `promote`, which would go and make a second merge. The
     version says the field is written, so its absence here is a damaged record
-    and not an older one."""
+    and not an older one — and it comes back as one. The schema is what noticed,
+    and the shared validator says `invalid` about a value because it is asked in
+    both directions; a reader passing that on reports a file in this repository
+    as something the operator typed."""
 
     write_experiment(
         config.experiments_root,
@@ -1870,8 +1873,11 @@ def test_a_current_record_that_lost_its_prepared_promotion_is_refused(
     del written["promotion"]
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.ValidationError, match="missing required property 'promotion'"):
+    with pytest.raises(evolution.RecordError, match="missing required property 'promotion'") as raised:
         lineage.describe(config)
+
+    assert isinstance(raised.value.__cause__, evolution.ValidationError)
+    assert raised.value.kind != evolution.ValidationError.kind
 
 
 # --- a promotion taken back off the source line -------------------------------
@@ -1941,7 +1947,7 @@ def test_a_rollback_naming_another_promotion_is_refused(
 
     rolled_back(config, **overrides)
 
-    with pytest.raises(evolution.BatchError, match="differently from the promotion"):
+    with pytest.raises(evolution.RecordError, match="differently from the promotion"):
         lineage.describe(config)
 
 
@@ -1956,7 +1962,7 @@ def test_a_rollback_of_a_batch_that_promoted_nothing_is_refused(
         config.batches_root, BATCH_ID, experiment_id=EXP_01, promotion_revision=PROMOTION
     )
 
-    with pytest.raises(evolution.BatchError, match="concludes 'no-change'"):
+    with pytest.raises(evolution.RecordError, match="concludes 'no-change'"):
         lineage.describe(config)
 
 
@@ -1967,7 +1973,7 @@ def test_a_rollback_of_a_batch_that_has_not_concluded_is_refused(
         config.batches_root, BATCH_ID, experiment_id=EXP_01, promotion_revision=PROMOTION
     )
 
-    with pytest.raises(evolution.BatchError, match="has not concluded"):
+    with pytest.raises(evolution.RecordError, match="has not concluded"):
         lineage.describe(config)
 
 
@@ -1980,7 +1986,7 @@ def test_a_rollback_whose_inverse_is_the_promotion_itself_is_refused(
 
     rolled_back(config, revision=PROMOTION)
 
-    with pytest.raises(evolution.BatchError, match="as both the promotion and the commit reversing it"):
+    with pytest.raises(evolution.RecordError, match="as both the promotion and the commit reversing it"):
         lineage.describe(config)
 
 
@@ -1994,7 +2000,7 @@ def test_the_inverse_commit_is_what_the_rollback_record_is_held_to(
     real = git_commit(config.repo_root, "a commit that reverses nothing")
     rolled_back(config, revision=real)
 
-    with pytest.raises(evolution.BatchError, match="is what the record is held to"):
+    with pytest.raises(evolution.RecordError, match="is what the record is held to"):
         lineage.describe(config)
 
 
@@ -2009,7 +2015,7 @@ def test_a_rollback_record_sitting_in_another_batch_is_refused(
     written["batch_id"] = "evolution-batch-0008"
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="cannot be reversed by another's record"):
+    with pytest.raises(evolution.RecordError, match="cannot be reversed by another's record"):
         lineage.describe(config)
 
 
@@ -2035,7 +2041,7 @@ def test_a_version_2_promotion_still_states_its_merge_unit(
     written["promotion"] = None
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="not the merge unit it went as"):
+    with pytest.raises(evolution.RecordError, match="not the merge unit it went as"):
         lineage.describe(config)
 
 
@@ -2046,7 +2052,7 @@ def test_an_experiment_record_of_an_unknown_version_is_refused(
     later one states things this code would silently not look at."""
 
     write_experiment(config.experiments_root, EXP_01, version=3)
-    with pytest.raises(evolution.BatchError, match=r"unsupported experiment record schema_version 3.*reads \[2\]"):
+    with pytest.raises(evolution.RecordError, match=r"unsupported experiment record schema_version 3.*reads \[2\]"):
         lineage.describe(config)
 
 
@@ -2054,7 +2060,7 @@ def test_an_outcome_naming_another_batch_is_refused(config: evolution.EvolutionC
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"])
     write_outcome(config.batches_root, SECOND_BATCH, reason="over here")
     (config.batches_root / SECOND_BATCH / "outcome.json").rename(config.batches_root / BATCH_ID / "outcome.json")
-    with pytest.raises(evolution.BatchError, match="cannot end another"):
+    with pytest.raises(evolution.RecordError, match="cannot end another"):
         lineage.describe(config)
 
 
@@ -2062,7 +2068,7 @@ def test_an_unreadable_outcome_does_not_quietly_leave_the_batch_current(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     (config.batches_root / BATCH_ID / "outcome.json").write_text("{not json", encoding="utf-8")
-    with pytest.raises(evolution.BatchError, match="unreadable"):
+    with pytest.raises(evolution.RecordError, match="unreadable"):
         lineage.describe(config)
 
 
@@ -2093,7 +2099,7 @@ def test_a_draft_declined_and_admitted_is_refused(config: evolution.EvolutionCon
     write_draft(config.batches_root, BATCH_ID, "loader-fallback")
     write_experiment(config.experiments_root, EXP_01)
     write_rejected_drafts(config.batches_root, BATCH_ID, [rejection("loader-fallback")])
-    with pytest.raises(evolution.BatchError, match="both terminal"):
+    with pytest.raises(evolution.RecordError, match="both terminal"):
         lineage.describe(config)
 
 
@@ -2106,7 +2112,7 @@ def test_a_draft_declined_twice_is_refused(config: evolution.EvolutionConfig, ba
         BATCH_ID,
         [rejection("hook-side-loader"), rejection("hook-side-loader", reason="again")],
     )
-    with pytest.raises(evolution.BatchError, match="declined twice"):
+    with pytest.raises(evolution.RecordError, match="declined twice"):
         lineage.describe(config)
 
 

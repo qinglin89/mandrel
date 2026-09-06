@@ -59,7 +59,7 @@ from .config import (
     batch_id_number,
     format_batch_id,
 )
-from .errors import BatchError
+from .errors import BatchError, RecordError, ValidationError, damaged_record
 from .schema import is_rfc3339_date_time, load_schema, validate_or_raise
 
 MANIFEST_FILENAME = "manifest.json"
@@ -277,12 +277,12 @@ def load_batches(config: EvolutionConfig) -> list[Batch]:
         if entry.name.startswith(".") or not entry.is_dir():
             continue
         if batch_id_number(entry.name) is None:
-            raise BatchError(
+            raise RecordError(
                 f"{entry}: not a batch identifier; only frozen batches belong under {config.storage.batches}/"
             )
         manifest = read_manifest(config, entry / MANIFEST_FILENAME)
         if manifest.get("batch_id") != entry.name:
-            raise BatchError(
+            raise RecordError(
                 f"{entry / MANIFEST_FILENAME}: manifest claims batch_id {manifest.get('batch_id')!r} "
                 f"but sits in {entry.name!r}; a manifest cannot name another batch's id"
             )
@@ -355,13 +355,13 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
         # and nothing on disk could ever be shown to have analyzed this batch.
         # Skipping the identity check here instead would let exactly that record
         # release the next cohort.
-        raise BatchError(
+        raise RecordError(
             f"{path}: {batch.manifest_path} names no analysis task, so this record attests to a completion "
             f"nothing can be checked against; restore the manifest's analysis_task_id, or remove the record "
             "and let the analysis this batch is still waiting for publish it"
         )
     if record["analysis_task_id"] != named:
-        raise BatchError(
+        raise RecordError(
             f"{path}: closure record attests to task {record['analysis_task_id']!r}, but "
             f"{batch.manifest_path} names {named!r} as this batch's analysis task"
         )
@@ -414,19 +414,19 @@ def read_outcome(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     # any promotion could be recorded — absent and null are the same answer.
     named = {key: record.get(key) for key in fields if record.get(key) is not None}
     if promoted and len(named) != len(fields):
-        raise BatchError(
+        raise RecordError(
             f"{path}: a {OUTCOME_PROMOTED!r} outcome states the experiment it promoted, the source-line "
             f"revision that carries it, and the merge unit it was promoted as; this one states "
             f"{sorted(named) or 'none of them'}"
         )
     if promoted and record["promotion"]["merge_input_revision"] == record["promotion_revision"]:
-        raise BatchError(
+        raise RecordError(
             f"{path}: promotes {record['promotion_revision'][:12]} and names it as the source line this "
             "promotion was made onto; the merge unit is the line before and the commit after, and a record "
             "where they are one commit describes a promotion that carried nothing"
         )
     if not promoted and named:
-        raise BatchError(
+        raise RecordError(
             f"{path}: a {record['outcome']!r} outcome promoted nothing and so fabricates no candidate, "
             f"promotion, or revision, but this one names {sorted(named)}"
         )
@@ -488,7 +488,7 @@ def read_rejected_drafts(config: EvolutionConfig, batch: Batch) -> tuple[Mapping
     for entry in rejected:
         draft_id = entry["draft_id"]
         if draft_id in seen:
-            raise BatchError(
+            raise RecordError(
                 f"{batch.rejected_drafts_path}: draft {draft_id!r} is declined twice; declining is terminal "
                 "for a proposal, so a re-proposal is a new draft id rather than a second entry"
             )
@@ -513,6 +513,12 @@ def read_batch_record(
     not: every caller here is deciding whether something has happened, and a
     record that cannot be read as this batch's answers that just as effectively
     as a valid one.
+
+    Nothing publishes through this one, so its whole surface is a file already
+    on disk and every door here is the record's own family. The validator is the
+    exception that proves it: it is the shared one, which says `invalid` about a
+    value because it is asked in both directions and cannot tell which — so the
+    translation is here, where the direction is known (`errors.RecordError`).
     """
 
     try:
@@ -520,17 +526,20 @@ def read_batch_record(
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"unreadable {description} {path}: {exc}") from exc
+        raise RecordError(_damaged(f"unreadable {description} {path}: {exc}", description=description)) from exc
     if not isinstance(record, dict):
-        raise BatchError(f"{description} is not a JSON object: {path}")
+        raise RecordError(_damaged(f"{description} is not a JSON object: {path}", description=description))
 
-    validate_or_raise(
-        record,
-        load_schema(config.schema_path(schema_filename)),
-        description=f"{description} {path}",
-    )
+    try:
+        validate_or_raise(
+            record,
+            load_schema(config.schema_path(schema_filename)),
+            description=f"{description} {path}",
+        )
+    except ValidationError as exc:
+        raise RecordError(_damaged(exc, description=description)) from exc
     if record["batch_id"] != batch.batch_id:
-        raise BatchError(
+        raise RecordError(
             f"{path}: {description} names batch {record['batch_id']!r} but sits in {batch.batch_id!r}; {foreign}"
         )
     return record
@@ -588,6 +597,12 @@ def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> No
     Called by `read_manifest` and by the freeze that writes one, in that order of
     importance: publishing through the reader is what keeps a writer from
     persisting a manifest its own build refuses.
+
+    Refuses in the freeze's terms, because that is the direction a caller can
+    still do something about — the manifest is being built, and it does not have
+    to be published. `read_manifest` translates for its own direction, where the
+    same disagreement is a frozen file and refusing to publish it is advice
+    about a decision made months ago.
 
     Assumes the schema has already validated: every key read here is required
     there, so this asks only about agreement between them.
@@ -654,31 +669,58 @@ def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> No
 
 
 def read_manifest(config: EvolutionConfig, path: Path) -> Mapping[str, Any]:
-    """One manifest, validated against the schema of the version it declares."""
+    """One manifest, validated against the schema of the version it declares.
+
+    The reader half of the pair `batches.py` freezes through, and the side that
+    owns the translation. Both the shared validator and the agreement rules
+    below answer in the freeze's terms — `invalid` about a value handed in, a
+    refusal to publish a manifest that contradicts itself — and neither is what
+    a manifest already frozen is. An immutable record cannot be retyped and no
+    state changes to make it load, so what a reader hits is the record's own
+    family (`errors.RecordError`).
+    """
 
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise BatchError(
+        raise RecordError(
             f"{path.parent} has no {MANIFEST_FILENAME}; a batch directory without its membership snapshot "
             "is not a batch — remove it or restore the manifest"
         ) from exc
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"unreadable batch manifest {path}: {exc}") from exc
+        raise RecordError(_damaged(f"unreadable batch manifest {path}: {exc}", description="batch manifest")) from exc
     if not isinstance(manifest, dict):
-        raise BatchError(f"batch manifest is not a JSON object: {path}")
+        raise RecordError(_damaged(f"batch manifest is not a JSON object: {path}", description="batch manifest"))
 
     version = manifest.get("schema_version")
     filename = BATCH_SCHEMA_FILENAMES.get(version) if isinstance(version, int) and not isinstance(version, bool) else None
     if filename is None:
-        raise BatchError(
-            f"{path}: unsupported batch manifest schema_version {version!r}; "
-            f"this build reads {sorted(BATCH_SCHEMA_FILENAMES)}"
+        raise RecordError(
+            _damaged(
+                f"{path}: unsupported batch manifest schema_version {version!r}; "
+                f"this build reads {sorted(BATCH_SCHEMA_FILENAMES)}",
+                description="batch manifest",
+            )
         )
-    validate_or_raise(
-        manifest,
-        load_schema(config.schema_path(filename)),
-        description=f"batch manifest {path} (schema version {version})",
-    )
-    require_coherent_selection(manifest, where=f"batch manifest {path}")
+    try:
+        validate_or_raise(
+            manifest,
+            load_schema(config.schema_path(filename)),
+            description=f"batch manifest {path} (schema version {version})",
+        )
+        require_coherent_selection(manifest, where=f"batch manifest {path}")
+    except (BatchError, ValidationError) as exc:
+        raise RecordError(_damaged(exc, description="batch manifest")) from exc
     return manifest
+
+
+def _damaged(complaint: object, *, description: str) -> str:
+    """What a reader here says about a record that will not load.
+
+    The description is the one its reader already uses for the file, so the
+    added half names the same document the complaint does — and names it as
+    something the repository carries, which is what says where a replacement
+    comes from.
+    """
+
+    return damaged_record(complaint, what=f"the {description} the repository carries")

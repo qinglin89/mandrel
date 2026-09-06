@@ -136,7 +136,7 @@ from typing import Any, Mapping, Sequence
 from ..deploy import deploys_canonical_path
 from ..lockfile import CanonicalIdentities, is_object_id
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, ValidationError
+from .errors import BatchError, InputError, RecordError, ValidationError, damaged_record
 from .guards import reason as require_reason
 from .guards import require_expected, settled
 from .ledger import append_records, build_record
@@ -1092,6 +1092,11 @@ def read(
     cohorts cannot support is refused rather than read — the last of those is the
     whole point of the artifact, and a rule only the writer keeps is one any file
     written beside it escapes.
+
+    And refused as the record it is. `parse` answers `_publish`, which is still
+    building one and can be told not to commit it; here the file is committed
+    already, so the same complaint is a document a person has to look at
+    (`errors.RecordError`).
     """
 
     record = read_batch_record(
@@ -1105,7 +1110,12 @@ def read(
     if record is None:
         return None
     derived = frame if frame is not None else describe(config, batch, lineage=lineage)
-    return parse(config, record, batch, frame=derived)
+    try:
+        return parse(config, record, batch, frame=derived)
+    except (BatchError, ValidationError) as exc:
+        raise RecordError(
+            damaged_record(exc, what="the release assessment record the repository carries")
+        ) from exc
 
 
 def obligation(
@@ -1173,6 +1183,10 @@ def parse(
     agreement with the repository is enforced as far as the checkout can answer:
     a report placed on a side Git contradicts is refused, and a report this clone
     cannot resolve at all is left as the unanswered question it is.
+
+    Refuses in the writer's terms, because `_publish` builds a record and asks
+    here before it lands, and at a rule in here the two directions are the same
+    mapping. `read` translates for its own (`errors.RecordError`).
     """
 
     path = batch.assessment_path
@@ -2118,7 +2132,7 @@ def settle(
 
     moment = _moment(now)
     if settlement not in SETTLEMENTS:
-        raise BatchError(
+        raise InputError(
             f"{settlement!r} is not an answer to a release assessment; the gate settles {SETTLEMENT_RETAIN!r} — "
             f"the release stays the line the next alternatives are built on — or {SETTLEMENT_ROLLED_BACK!r}, "
             "which takes "
@@ -2851,7 +2865,7 @@ def _moment(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(timezone.utc)
     if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-        raise BatchError(
+        raise InputError(
             "the moment a release assessment was formed must be timezone-aware; a naive datetime records an "
             "ambiguous instant, and the interval between the promotion, the freeze and this reading is what "
             "makes it a later judgement"
