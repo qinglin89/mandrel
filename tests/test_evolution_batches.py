@@ -629,7 +629,7 @@ def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
     entry = evolution.load_state(config).pending[0]
     (config.repo_root / entry.primary.artifacts_path / "report.json").unlink()
 
-    with pytest.raises(evolution.BatchError, match="cannot read the staged bundle"):
+    with pytest.raises(evolution.StateError, match="cannot read the staged bundle"):
         evolution.build_proposal(config, now=NOW)
 
 
@@ -925,7 +925,7 @@ def test_a_staged_bundle_that_no_longer_matches_its_hash_stops_the_freeze(
     tampered["evaluator"]["rubric_revision"] = "r-tampered"
     staged.write_text(json.dumps(tampered), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="no longer matches"):
+    with pytest.raises(evolution.StateError, match="no longer matches"):
         freeze(config)
 
     assert evolution.load_batches(config) == []
@@ -939,7 +939,7 @@ def test_a_missing_staged_bundle_stops_the_freeze(
     entry = evolution.load_state(config).pending[0]
     (config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME).unlink()
 
-    with pytest.raises(evolution.BatchError, match="staged bundle"):
+    with pytest.raises(evolution.StateError, match="staged bundle"):
         freeze(config)
 
     assert evolution.load_batches(config) == []
@@ -957,7 +957,7 @@ def test_a_changed_artifact_body_stops_the_freeze(
     body = config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / artifact
     body.write_bytes(body.read_bytes() + b" tampered")
 
-    with pytest.raises(evolution.BatchError, match="no longer match the record"):
+    with pytest.raises(evolution.StateError, match="no longer match the record"):
         freeze(config)
 
     assert evolution.load_batches(config) == []
@@ -971,7 +971,7 @@ def test_a_deleted_artifact_body_stops_the_freeze(
     entry = evolution.load_state(config).pending[0]
     (config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report").unlink()
 
-    with pytest.raises(evolution.BatchError, match="missing artifact semantic_report"):
+    with pytest.raises(evolution.StateError, match="missing artifact semantic_report"):
         freeze(config)
 
     assert evolution.load_batches(config) == []
@@ -997,7 +997,7 @@ def test_a_pool_entry_that_disagrees_with_its_bundle_stops_the_freeze(
     raw["pending"][0]["primary"].update(damage)
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="disagrees with its staged bundle"):
+    with pytest.raises(evolution.StateError, match="disagrees with its staged bundle"):
         freeze(config)
 
     assert evolution.load_batches(config) == []
@@ -1011,7 +1011,7 @@ def test_a_source_task_that_disagrees_with_its_bundle_stops_the_freeze(
     raw["pending"][0]["task_id"] = "2026-07-99-some-other-task"
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="disagrees with its staged bundle"):
+    with pytest.raises(evolution.StateError, match="disagrees with its staged bundle"):
         freeze(config)
 
 
@@ -1512,7 +1512,7 @@ def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
     raw["processed"][keys[0]]["batch_id"] = "evolution-batch-0002"
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="claimed by 'evolution-batch-0002'"):
+    with pytest.raises(evolution.StateError, match="claimed by 'evolution-batch-0002'"):
         freeze(config)
 
     assert read_manifest(result)["batch_id"] == "evolution-batch-0001"
@@ -1538,7 +1538,7 @@ def test_a_manifest_member_missing_from_the_pool_stops_the_reconcile(
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
     assert raw["cursor"] is not None, "the state is this machine's own record, not an absent one"
 
-    with pytest.raises(evolution.BatchError, match="neither pending nor claimed"):
+    with pytest.raises(evolution.StateError, match="neither pending nor claimed"):
         freeze(config)
 
     assert json.loads(config.state_path.read_text(encoding="utf-8"))["processed"] == raw["processed"]
@@ -2723,7 +2723,7 @@ def test_a_freeze_still_verifies_every_staged_record_behind_the_offer(
     staged = config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME
     staged.write_text(staged.read_text(encoding="utf-8").replace("repo-alpha", "repo-tampered"), encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError):
+    with pytest.raises(evolution.StateError):
         evolution.freeze(config, now=NOW)
 
     assert evolution.load_batches(config) == []

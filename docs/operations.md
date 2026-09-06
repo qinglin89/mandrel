@@ -581,7 +581,7 @@ contract's normal outcomes when evidence is still thin. Everything else:
 | 4 | `refused` | A legal operation the current state does not permit. | The message names what stands in the way; change it, or do something else. |
 | 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
 | 6 | `busy` | Another run holds `.ai-evolution/lock`. | Wait, or clear a lock whose holder is gone — see Recovery below. |
-| 7 | `corrupt` | A persisted record cannot be read as what it claims to be, or is a version this build has no reader for — this machine's pool state, a record the repository carries (a batch manifest, an outcome, an experiment record, an experiment's `replays.json`), or the generated analysis task a freeze reads a lifecycle from. Never repaired silently. | Restore the file from version control — or, for the analysis task, from the batch manifest. See Recovery below. |
+| 7 | `corrupt` | A persisted record cannot be read as what it claims to be, or is a version this build has no reader for — this machine's pool state (`state.json`, or a staged bundle it names), a record the repository carries (a batch manifest, an outcome, an experiment record, an experiment's `replays.json`), or the generated analysis task a freeze reads a lifecycle from. Never repaired silently. | Restore the file from version control — or, for the analysis task, from the batch manifest, and for the pool, by importing the reports again: `.ai-evolution/` is ignored, so nothing there is in version control. See Recovery below. |
 | 8 | `unavailable` | The report feed did not answer. Nothing was established, so nothing was recorded. | Retry, or supply `--feed-dir`. |
 | 9 | `misconfigured` | `evolution/config.toml` or a schema under `evolution/schemas/` is missing, malformed, or asks for behavior this build does not implement. | Fix the workspace. |
 | 10 | `toolchain` | A tool this operation needs is not usable here — a Git below the floor (below), or no runnable `git` at all. | Install or upgrade Git. Nothing was established about any revision. |
@@ -1068,13 +1068,16 @@ cannot observe that transition.
   confirmed no run is active.
 - **Corrupt runtime state.** `state.json` failures are reported, never
   repaired: a silent reset would rewind the discovery cursor and drop pending
-  evidence. Restore the file, or delete `.ai-evolution/` and re-run `start` to
-  rebuild the pool from the feed. The committed batches are what protect you
-  there: discovery skips every report a frozen manifest already names, so a
-  wipe re-imports only what no cohort has analyzed, and an open batch's claims
-  and analysis task are recreated from its manifest. Raw bundles that were
-  staged before the wipe are gone; `status` reports the batch's evidence as
-  absent from this machine rather than as damage.
+  evidence. A staged bundle the file names is the same record and the same exit
+  7 — gone, edited since import, or disagreeing with the pool entry pointing at
+  it, all of which stop the offer or the freeze rather than quietly forming a
+  smaller cohort. Restore the file, or delete `.ai-evolution/` and re-run
+  `start` to rebuild the pool from the feed. The committed batches are what
+  protect you there: discovery skips every report a frozen manifest already
+  names, so a wipe re-imports only what no cohort has analyzed, and an open
+  batch's claims and analysis task are recreated from its manifest. Raw bundles
+  that were staged before the wipe are gone; `status` reports the batch's
+  evidence as absent from this machine rather than as damage.
 - **`pool-incomplete`.** No discovery pass has reported the feed drained, so
   the pool may be a prefix and no batch may form from it. Run `sync` until it
   reports the feed drained.

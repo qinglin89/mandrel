@@ -100,6 +100,7 @@ from mandrel.evolution import (
     replay,
     revisions,
     rollback,
+    state,
 )
 
 TARGET = 2
@@ -2425,6 +2426,58 @@ def test_a_frozen_manifest_that_contradicts_itself_is_not_a_freeze_being_refused
     assert "restore it" in err, "the answer names what a person does with the file"
 
 
+def test_a_pool_that_lost_its_evidence_is_not_a_freeze_the_state_permits(
+    repo: Path, config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The third record this translation covers: not the repository's, and not a
+    file a person restores from it either.
+
+    A staged bundle and the `state.json` claim naming it are the pool's two
+    halves, and both are damaged the same way — the pool asserts evidence that is
+    not there. Read as a refusal, an operator is sent to change a lifecycle that
+    is intact, and told nothing about the one thing that answers it: `.ai-evolution/`
+    is ignored, so nothing here is restored from version control and importing
+    the reports again is the whole recovery.
+
+    Both halves are reached through `freeze`, which is where each is asked: the
+    bundle when the manifest's content is pinned, and the claim when a restarted
+    freeze reconciles the batch it already published.
+    """
+
+    fill_pool(config, feed_root, TARGET)
+    entry = evolution.load_state(config).pending[0]
+    body = config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report"
+    staged = body.read_bytes()
+    where = ["--repo", str(repo)]
+
+    # The evidence the manifest is about to pin is not the evidence that was
+    # imported.
+    body.write_bytes(staged + b" tampered")
+    evolution.build_proposal(config, now=NOW)
+    lost_bundle, _, bundle_err = run(["evolution", "freeze", *where], capsys)
+    unpinned = evolution.load_batches(config)
+    body.write_bytes(staged)
+
+    # And this machine's own record of what it staged, with a hole in it.
+    result = freeze(config)
+    raw = json.loads(config.state_path.read_text(encoding="utf-8"))
+    claimed = dict(raw["processed"])
+    del raw["processed"][sorted(claimed)[0]]
+    config.state_path.write_text(json.dumps(raw), encoding="utf-8")
+    lost_claim, _, claim_err = run(["evolution", "freeze", *where], capsys)
+
+    assert lost_bundle == exits(evolution.StateError)
+    assert lost_claim == exits(evolution.StateError)
+    assert exits(evolution.StateError) not in {exits(evolution.BatchError), exits(evolution.InputError)}
+    assert "no longer match the record" in bundle_err and "re-import" in bundle_err
+    assert "neither pending nor claimed" in claim_err and "import the reports again" in claim_err
+    # Neither run wrote: the first pinned no manifest over evidence nobody has,
+    # and the second left the hole rather than claiming the batch over it.
+    assert unpinned == []
+    assert [batch.batch_id for batch in evolution.load_batches(config)] == [result.batch_id]
+    assert json.loads(config.state_path.read_text(encoding="utf-8"))["processed"] == raw["processed"]
+
+
 # --- the change lineage, as commands -----------------------------------------
 #
 # The console's other half: `status` says what may be done next, and these are
@@ -2864,7 +2917,7 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
     for verb in ("list", "sync", "status", "start", "freeze"):
         assert f"evolution {verb}" in text
 
-    for state in (
+    for holding in (
         deployment.HOLDING_CARRIES,
         deployment.HOLDING_REVERSED,
         deployment.HOLDING_BEHIND,
@@ -2875,7 +2928,7 @@ def test_the_documented_console_is_the_console_this_build_offers() -> None:
         deployment.HOLDING_UNREGISTERED,
         deployment.HOLDING_AMBIGUOUS,
     ):
-        assert f"| `{state}` |" in text, f"{state} is a state this reading emits and nothing documents"
+        assert f"| `{holding}` |" in text, f"{holding} is a state this reading emits and nothing documents"
 
     for kind in errors.ERROR_KINDS:
         # The family and the number it exits with, in one row: an operator

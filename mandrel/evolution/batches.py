@@ -64,7 +64,7 @@ from ..lockfile import CanonicalIdentities, is_object_id
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
 from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, InputError, ProposalError, RecordError
+from .errors import BatchError, InputError, ProposalError, RecordError, StateError
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
@@ -1273,21 +1273,21 @@ def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry, ref: R
     freeze, which is the last moment before the membership becomes immutable and
     the only moment where catching it matters.
 
-    A bundle this machine cannot read at all is refused rather than excluded. It
-    is damage in machine-local state — the pool asserts evidence that is not
-    there — and the freeze already refuses it for every selected report; letting
-    the poll quietly record it as a non-member would turn a broken workspace
-    into a smaller batch nobody was told about.
+    A bundle this machine cannot read at all stops the offer rather than being
+    excluded from it. It is damage in machine-local state — the pool asserts
+    evidence that is not there — and the freeze already stops on it for every
+    selected report; letting the poll quietly record it as a non-member would
+    turn a broken workspace into a smaller batch nobody was told about.
     """
 
     path = config.repo_root / ref.artifacts_path / REPORT_JSON_FILENAME
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(
+        raise StateError(
             f"cannot read the staged bundle for report {ref.report_key} at {path}: {exc}; the pool names it as "
             f"the evidence for {entry.repo_id}/{entry.task_id}, and a batch cannot be selected around a report "
-            "whose provenance this machine no longer holds"
+            "whose provenance this machine no longer holds; import the reports again"
         ) from exc
     provenance = record.get("provenance") if isinstance(record, dict) else None
     stated = provenance.get("effective_revision") if isinstance(provenance, dict) else None
@@ -1915,6 +1915,11 @@ def _verified_bundle(
     this is the last moment either can be caught; afterwards the batch pins
     hashes describing bytes nobody has, and every later analysis reads whatever
     is there now.
+
+    Everything this stops on is `StateError`: the bundle is the pool's own
+    evidence, and gone, edited, or disagreeing with the entry that names it are
+    all one damaged machine-local record (`errors.StateError`). None of it is a
+    state a verb can legally change — re-importing is what answers every one.
     """
 
     directory = config.repo_root / ref.artifacts_path
@@ -1922,19 +1927,25 @@ def _verified_bundle(
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise BatchError(f"cannot read the staged bundle for report {ref.report_key} at {path}: {exc}") from exc
+        raise StateError(
+            f"cannot read the staged bundle for report {ref.report_key} at {path}: {exc}; re-import it before "
+            "freezing a batch that claims it"
+        ) from exc
     if not isinstance(record, dict):
-        raise BatchError(f"staged bundle for report {ref.report_key} is not a JSON object: {path}")
+        raise StateError(
+            f"staged bundle for report {ref.report_key} is not a JSON object: {path}; re-import it before "
+            "freezing a batch that claims it"
+        )
     digest = sha256_bytes(canonical_json(record))
     if digest != ref.bundle_sha256:
-        raise BatchError(
+        raise StateError(
             f"staged bundle for report {ref.report_key} no longer matches the hash recorded at import "
             f"({path}); re-import it before freezing a batch that claims it"
         )
 
     result = normalize(record, config, schema)
     if isinstance(result, Rejection):
-        raise BatchError(
+        raise StateError(
             f"staged bundle for report {ref.report_key} no longer satisfies the import contract "
             f"({result.reason}) at {path}; re-import it before freezing a batch that claims it"
         )
@@ -1942,7 +1953,7 @@ def _verified_bundle(
 
     mismatch = verify_artifact_bytes(result, _staged_bodies(config, ref, result))
     if mismatch is not None:
-        raise BatchError(
+        raise StateError(
             f"staged artifacts for report {ref.report_key} no longer match the record under {directory}: "
             f"{mismatch.detail}; re-import it before freezing a batch that claims it"
         )
@@ -1959,7 +1970,7 @@ def _staged_bodies(config: EvolutionConfig, ref: ReportRef, report: NormalizedRe
         try:
             blobs[artifact.name] = path.read_bytes()
         except OSError as exc:
-            raise BatchError(
+            raise StateError(
                 f"staged bundle for report {ref.report_key} is missing artifact {artifact.name} at {path}: {exc}; "
                 "re-import it before freezing a batch that claims it"
             ) from exc
@@ -1990,7 +2001,7 @@ def _require_same_identity(
         report.task_id,
     )
     if expected != actual:
-        raise BatchError(
+        raise StateError(
             f"the pool entry for report {ref.report_key} disagrees with its staged bundle at {path}: "
             f"state says {expected}, the bundle says {actual}; re-import it before freezing a batch that claims it"
         )
@@ -2134,6 +2145,12 @@ def _require_consistent_claims(
     missing claims, turning the loss into a state that reads as consistent with
     the manifest. Judging the gap against the rest of the batch, as this once
     did, made *total* loss the one size of hole that passed.
+
+    Both answers are `StateError`, including the one whose sentence names two
+    files. The manifest is immutable and this controller never rewrites one, so
+    the only party to a disagreement it can restore is the state file — and the
+    caller routing on the code needs the half it can act on, while the person
+    reading the sentence is still shown both.
     """
 
     if not state_present:
@@ -2144,7 +2161,7 @@ def _require_consistent_claims(
         claim = state.processed.get(report_key)
         if claim is None:
             if report_key not in pending:
-                raise BatchError(
+                raise StateError(
                     f"report {report_key} is named by {batch.manifest_path} but is neither pending nor claimed in "
                     f"{config.state_path}; this machine's runtime state does not account for the batch's evidence — "
                     "restore the state rather than freezing over the gap, or, if this machine never staged this "
@@ -2153,7 +2170,7 @@ def _require_consistent_claims(
             continue
         owner = claim.get("batch_id")
         if owner != batch.batch_id:
-            raise BatchError(
+            raise StateError(
                 f"report {report_key} is named by {batch.manifest_path} but claimed by {owner!r} in "
                 f"{config.state_path}; one report belongs to one batch — resolve which manifest owns it first"
             )

@@ -150,9 +150,17 @@ class InputError(EvolutionError):
 
 
 class StateError(EvolutionError):
-    """`.ai-evolution/state.json` is unreadable or malformed. Never repaired
-    silently: a reset cursor would re-import, a dropped pool would lose
-    evidence."""
+    """This machine's runtime pool is damaged — `.ai-evolution/state.json`, or a
+    staged bundle it names as the evidence for a pooled report.
+
+    One code for both because they are one record: the state file is a table of
+    pointers and hashes, and the bundles are what it points at, so a bundle that
+    is gone, changed, or disagrees with the entry naming it is the same loss as a
+    hole in the file itself. Never repaired silently — a reset cursor would
+    re-import, a dropped pool would lose evidence — and never restored from
+    version control either, because `.ai-evolution/` is ignored: what answers it
+    is importing the reports again.
+    """
 
     kind = KIND_CORRUPT
     code = "runtime-state-corrupt"
