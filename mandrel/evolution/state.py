@@ -459,7 +459,21 @@ class EvolutionState:
                 recorded_at=upgraded_at,
             )
             entries.append(entry)
-            replaced.update(losers)
+            # Merged one key at a time, because `dict.update` would keep only
+            # the last record for a key two legacy entries both claim and drop
+            # the first — and dropping it is what hides the contradiction.
+            # Version 2 put every one of an entry's report keys in front of
+            # `_require_disjoint_keys`, which is what refused a file saying two
+            # tasks own one report; only the survivors reach it now, so the
+            # upgrade answers for the reports it moves.
+            for report_key, record in losers.items():
+                previous = replaced.get(report_key)
+                if previous is not None:
+                    raise StateError(
+                        f"{path}: report {report_key} is held by both "
+                        f"{previous['repo_id']}/{previous['task_id']} and {entry.repo_id}/{entry.task_id}"
+                    )
+                replaced[report_key] = record
         seen: set[tuple[str, str]] = set()
         for entry in entries:
             if entry.dedup_key in seen:

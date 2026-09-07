@@ -619,6 +619,41 @@ def test_generated_at_is_compared_as_an_instant_and_not_as_a_string(
     assert loaded.superseded["arrival"]["superseded_by"] == "pooled"
 
 
+def test_two_packs_generated_at_one_instant_are_settled_by_sequence(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """`generated_at` decides, and `sequence` is the tie-break — so when the
+    instants match, the tie-break is the whole answer. It has to be, in both
+    directions: an answer that held only where the winner arrived second would
+    be arrival order wearing a rule's name, which is the accident this pool
+    stopped recording.
+
+    A directory feed serves ascending sequences, so the reverse direction is a
+    second repository whose pool already holds the higher position before the
+    lower one reaches it."""
+
+    together = "2026-07-30T10:00:00Z"
+    early = make_record(key="published-early", sequence=2, generated_at=together)
+    late = make_record(key="published-late", sequence=7, generated_at=together)
+
+    evolution.sync(config, write_feed(tmp_path / "ascending", [early, late]))
+
+    ascending = evolution.load_state(config)
+    assert ascending.pending[0].report.report_key == "published-late"
+    assert ascending.superseded["published-early"]["superseded_by"] == "published-late"
+
+    mirror = evolution.load_config(make_repo(tmp_path / "mirror"))
+    evolution.sync(mirror, write_feed(tmp_path / "late-only", [late]))
+    rewound = evolution.load_state(mirror)
+    rewound.cursor = None
+    evolution.save_state(mirror, rewound)
+    evolution.sync(mirror, write_feed(tmp_path / "descending", [early, late]))
+
+    descending = evolution.load_state(mirror)
+    assert descending.pending[0].report.report_key == "published-late"
+    assert descending.superseded["published-early"]["superseded_by"] == "published-late"
+
+
 @pytest.mark.parametrize(
     ("mutate", "reason"),
     [
@@ -1092,6 +1127,41 @@ def test_the_upgrade_re_picks_the_survivor_by_generated_at(config: evolution.Evo
 
     assert loaded.pending[0].report.report_key == "prompt"
     assert loaded.superseded["withheld"]["superseded_by"] == "prompt"
+
+
+def test_two_legacy_entries_cannot_both_claim_one_report(config: evolution.EvolutionConfig) -> None:
+    """One report has one decision, and version 2 stated that by putting every
+    key an entry held in front of the global check — two tasks claiming one
+    report was a file that would not load.
+
+    Version 3 keeps only the survivor on the entry, so the upgrade carries the
+    replaced packs to that check itself. Merging them into one map by key would
+    let the second record for a contested key overwrite the first: the check
+    would then be handed a state that no longer contradicts itself, because one
+    task's claim to the evidence had already been dropped on the way in."""
+
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    version_2 = legacy_state()
+    first = version_2["pending"][0]
+    first["reruns"] = [other_report(key="contested", sequence=2)]
+    version_2["pending"].append(
+        {
+            "repo_id": first["repo_id"],
+            "task_id": "2026-07-02-task",
+            "first_imported_at": first["first_imported_at"],
+            "primary": other_report(key="r2", sequence=4),
+            "reruns": [other_report(key="contested", sequence=2)],
+        }
+    )
+    config.state_path.write_text(json.dumps(version_2), encoding="utf-8")
+
+    with pytest.raises(evolution.StateError) as refused:
+        evolution.load_state(config)
+
+    message = str(refused.value)
+    assert "contested" in message
+    # Both claims named: the point of the refusal is that neither was dropped.
+    assert "2026-07-01-task" in message and "2026-07-02-task" in message
 
 
 def test_a_processed_claim_loads_only_when_a_manifest_names_the_report(
