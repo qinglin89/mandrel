@@ -64,7 +64,18 @@ from ..lockfile import CanonicalIdentities, is_object_id
 from . import analysis_task
 from .analysis_task import AnalysisTaskSpec
 from .config import BATCH_SCHEMA_FILENAME, CLOSURE_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, InputError, ProposalError, RecordError, StateError
+from .errors import (
+    AlreadyAnswered,
+    CheckoutUnusable,
+    EvolutionError,
+    InputError,
+    NothingToActOn,
+    ProposalError,
+    RecordError,
+    StandingWork,
+    StateError,
+    UnknownSubject,
+)
 from .feed import ReportFeed
 from .importer import DEFAULT_MAX_PAGES, DEFAULT_PAGE_SIZE, SyncResult, sync_locked
 from .ledger import append_records, build_record
@@ -743,7 +754,7 @@ def _move_locked(
 
     running = current_batch(config, batches=load_batches(config))
     if running is not None:
-        raise BatchError(frozen_membership_refusal(running.batch_id))
+        raise AlreadyAnswered(frozen_membership_refusal(running.batch_id))
     state = load_state(config)
     proposal = _require_current_proposal(config, state)
 
@@ -754,12 +765,12 @@ def _move_locked(
     # list holds it, that entry names the reports the move is about.
     answered = member if member is not None else exclusion
     if answered is None:
-        raise BatchError(_unanswered_refusal(config, repo_id, task_id))
+        raise UnknownSubject(_unanswered_refusal(config, repo_id, task_id))
 
     moved: Member | Exclusion
     if into:
         if member is not None and member.mode == MODE_AUTO:
-            raise BatchError(
+            raise AlreadyAnswered(
                 f"{repo_id}/{task_id} is already a member of the offered batch, selected by the identity test; "
                 "an inclusion records a human overriding that test, and one recorded here would tell a reader of "
                 "the manifest that a judgement was needed where none was"
@@ -778,7 +789,7 @@ def _move_locked(
         recorded: Member | Exclusion | None = member
     else:
         if exclusion is not None and exclusion.reason not in HUMAN_REASONS:
-            raise BatchError(
+            raise AlreadyAnswered(
                 f"{repo_id}/{task_id} is already left out of the offered batch ({exclusion.reason}); a human "
                 "exclusion takes out evidence the identity test selected, and recording one over a report the "
                 "test already refuses would report a judgement as the reason a fact is"
@@ -1110,7 +1121,7 @@ def _select(
     base = _source_line_revision(config)
     identities = CanonicalIdentities(config.repo_root, deploys=deploys_canonical_path)
     if identities.of(base) is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"this checkout resolves {config.source_line.ref} to {base} but cannot read that commit's canonical "
             "tree, so it cannot say which protocol the batch would be formed at; every membership test compares "
             "against it, and an unreadable base would answer 'different protocol' for every pooled report "
@@ -1359,7 +1370,7 @@ def freeze_locked(
     batch_id = next_batch_id(batches)
     task_id = analysis_task.analysis_task_id(batch_id, moment)
     if analysis_task.task_exists(config, task_id):
-        raise BatchError(
+        raise StandingWork(
             f"cannot create the analysis task for {batch_id}: {task_id} already exists in "
             f"{analysis_task.TASKS_DIRNAME}/; resolve it before freezing"
         )
@@ -1507,7 +1518,7 @@ def _source_line_revision(config: EvolutionConfig) -> str:
     revision = ref_tip(config.repo_root, config.source_line.ref)
     if revision is None:
         require_git(config.repo_root, reading=f"where {config.source_line.ref} stands")
-        raise BatchError(_unfetched_line_refusal(config))
+        raise CheckoutUnusable(_unfetched_line_refusal(config))
     return revision
 
 
@@ -1602,6 +1613,22 @@ def proposal_refusal(
     state: EvolutionState,
     proposal: BatchProposal | None,
 ) -> str | None:
+    """Why the standing offer is not one this freeze may fix, as a sentence.
+
+    The `str` projection of `proposal_failure`, kept for the console's gate,
+    which composes sentences and routes on nothing (`guards.evidence_refusal`
+    is the same pair for the same reason).
+    """
+
+    failure = proposal_failure(config, state, proposal)
+    return None if failure is None else str(failure)
+
+
+def proposal_failure(
+    config: EvolutionConfig,
+    state: EvolutionState,
+    proposal: BatchProposal | None,
+) -> EvolutionError | None:
     """Why the standing offer is not one this freeze may fix, or None where it is.
 
     Three things are re-read here rather than trusted, because the single-writer
@@ -1638,19 +1665,31 @@ def proposal_refusal(
     Read-only, and stated once for both directions: the freeze raises it and the
     console's gate reports it. Two spellings of these three rules is how a menu
     comes to advertise a freeze the operation refuses as stale.
+
+    Six sentences and three classes, drawn where the answer differs rather than
+    where the sentence does. Nothing offered is `NothingToActOn`: there is
+    something to build and no reading to retake. A line this checkout cannot
+    resolve is `CheckoutUnusable`, which is the one answer here that is not
+    `start` — the same fetch `_select` asks for, and the same class it raises.
+    Everything else is one stale reading (`ProposalError`): a moved line and a
+    pool that has grown or lost a member are the same fact about the offer, that
+    it no longer describes what it was built against, and the same command
+    answers both. Which of them it is stays in the sentence, where an operator
+    reads it; the exit an adapter routes on is `stale`, and that is what the
+    contract already promised a stale proposal would be.
     """
 
     if proposal is None:
-        return (
+        return NothingToActOn(
             f"no batch proposal stands in {config.proposal_path}; a freeze fixes an offer a human has seen, so "
             "build one with `mandrel evolution start`, review its membership, and freeze that"
         )
 
     tip = ref_tip(config.repo_root, config.source_line.ref)
     if tip is None:
-        return _unfetched_line_refusal(config)
+        return CheckoutUnusable(_unfetched_line_refusal(config))
     if tip != proposal.base_revision:
-        return (
+        return ProposalError(
             f"the proposal was built at {proposal.base_revision} on {proposal.source_line_ref} and that line now "
             f"stands at {tip}; the base is what every experiment of this batch starts from and what selects its "
             "evidence, so the offer is refused rather than re-based — run `mandrel evolution start` again and "
@@ -1662,12 +1701,12 @@ def proposal_refusal(
         item = considered[key]
         entry = state.find(item.repo_id, item.task_id)
         if entry is None:
-            return (
+            return ProposalError(
                 f"the proposal answered for {item.repo_id}/{item.task_id}, which is no longer in the pending "
                 "pool; rebuild the proposal with `mandrel evolution start` and review what it now offers"
             )
         if set(entry.report_keys()) != set(item.report_keys):
-            return (
+            return ProposalError(
                 f"{item.repo_id}/{item.task_id} holds different reports than the proposal offered; a later "
                 "evaluation arrived after it was built, so rebuild it with `mandrel evolution start` and review "
                 "the batch that reads"
@@ -1675,7 +1714,7 @@ def proposal_refusal(
     arrived = [entry for entry in state.pending if entry.dedup_key not in considered]
     if arrived:
         names = ", ".join(f"{entry.repo_id}/{entry.task_id}" for entry in sorted(arrived, key=lambda e: e.dedup_key))
-        return (
+        return ProposalError(
             f"the pool holds {len(arrived)} task(s) the proposal never considered ({names}); a batch states what "
             "it was selected out of, so rebuild the proposal with `mandrel evolution start` rather than freezing "
             "a denominator that predates them"
@@ -1732,8 +1771,8 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
     """
 
     proposal = load_proposal(config)
-    refusal = proposal_refusal(config, state, proposal)
-    if refusal is not None:
+    failure = proposal_failure(config, state, proposal)
+    if failure is not None:
         if proposal is not None:
             # An offer exists, so the refusal came from a rule below the first —
             # and the first of those asks Git where the source line stands. A
@@ -1742,8 +1781,8 @@ def _require_current_proposal(config: EvolutionConfig, state: EvolutionState) ->
             # rather than inside the predicate because the gate reads that one
             # and a gate may not raise (`revisions.require_git`).
             require_git(config.repo_root, reading=f"where {config.source_line.ref} stands")
-        raise BatchError(refusal)
-    # `proposal_refusal` answers on a missing offer before anything else, so a
+        raise failure
+    # `proposal_failure` answers on a missing offer before anything else, so a
     # None here is unreachable; asserted rather than assumed, since the
     # narrowing is what the caller's `proposal.base_revision` stands on.
     assert proposal is not None
@@ -2019,7 +2058,7 @@ def _write_manifest(config: EvolutionConfig, batch_id: str, manifest: Mapping[st
     root.mkdir(parents=True, exist_ok=True)
     final = root / batch_id
     if final.exists():
-        raise BatchError(f"{final} already exists; a frozen batch is never rewritten")
+        raise AlreadyAnswered(f"{final} already exists; a frozen batch is never rewritten")
 
     staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=root))
     try:

@@ -404,19 +404,19 @@ def test_an_unsafe_draft_id_never_reaches_a_path(
     kebab slug, which is what makes it one path segment under `proposed-tasks/`
     rather than a name that could reach anywhere else."""
 
-    with pytest.raises(evolution.UnknownSubject, match="cannot be draft ids"):
+    with pytest.raises(evolution.InputError, match="cannot be draft ids"):
         experiments.create(config, [draft_id], now=NOW)
 
 
 def test_a_draft_named_twice_in_one_selection_is_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    with pytest.raises(evolution.UnknownSubject, match="named twice"):
+    with pytest.raises(evolution.InputError, match="named twice"):
         experiments.create(config, ["loader-fallback", "loader-fallback"], now=NOW)
 
 
 def test_an_empty_selection_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
-    with pytest.raises(evolution.UnknownSubject, match="no draft was named"):
+    with pytest.raises(evolution.InputError, match="no draft was named"):
         experiments.create(config, [], now=NOW)
 
 
@@ -3126,7 +3126,7 @@ def test_a_target_planned_twice_refuses(
 ) -> None:
     prepared(config)
 
-    with pytest.raises(evolution.UnknownSubject, match="named more than once as a planned target"):
+    with pytest.raises(evolution.InputError, match="named more than once as a planned target"):
         experiments.promote(config, reason=WHY, targets=["orch-hub", "orch-hub"], now=PROMOTED)
 
 

@@ -71,6 +71,7 @@ from evolution_fixtures import (
     promote_candidate,
     promotion_of,
     rejection,
+    releasing_from,
     snapshot,
     write_closure,
     write_draft,
@@ -425,7 +426,7 @@ def test_a_line_that_moved_under_the_offer_is_refused_by_the_gate_too(
 
     assert not action.allowed
     assert "the offer is refused rather than re-based" in (action.refusal or "")
-    with pytest.raises(evolution.BatchError) as excinfo:
+    with pytest.raises(evolution.ProposalError) as excinfo:
         evolution.freeze(config, now=NOW)
     assert str(excinfo.value) == action.refusal
 
@@ -445,7 +446,7 @@ def test_a_pool_that_outgrew_the_offer_is_refused_by_the_gate_too(
 
     assert not action.allowed
     assert "the proposal never considered" in (action.refusal or "")
-    with pytest.raises(evolution.BatchError) as excinfo:
+    with pytest.raises(evolution.ProposalError) as excinfo:
         evolution.freeze(config, now=NOW)
     assert str(excinfo.value) == action.refusal
 
@@ -2103,7 +2104,7 @@ def test_every_family_has_its_own_number_and_every_failure_has_a_family() -> Non
 # than checking every module is that a module not yet on the list is work that
 # has not happened, and one on it that regresses is a refusal that quietly went
 # back to saying nothing.
-CLASSIFIED_MODULES = ("replay", "rollback", "guards", "experiments", "assessment")
+CLASSIFIED_MODULES = ("replay", "rollback", "guards", "experiments", "assessment", "batches")
 
 
 def test_the_classified_modules_raise_no_refusal_under_the_family_code() -> None:
@@ -2534,6 +2535,254 @@ def test_a_pool_that_lost_its_evidence_is_not_a_freeze_the_state_permits(
     assert unpinned == []
     assert [batch.batch_id for batch in evolution.load_batches(config)] == [result.batch_id]
     assert json.loads(config.state_path.read_text(encoding="utf-8"))["processed"] == raw["processed"]
+
+
+# --- the failure channel ------------------------------------------------------
+#
+# `--json` states what the taxonomy already knows, in a shape nothing has to
+# read a sentence to route on. Failure only: what a completed run prints is a
+# later contract, and inventing half of it here would be a second shape for the
+# same answers.
+
+
+def evolution_verbs() -> dict[str, argparse.ArgumentParser]:
+    """Every subcommand of the evolution console, off the parser itself.
+
+    Read from argparse rather than from a list written here, which is the point:
+    a verb added without the flag is what this catches, and a list restating the
+    console would be updated by the same commit that forgot it.
+    """
+
+    parser = build_evolution_parser()
+    return dict(parser.choices)
+
+
+def build_evolution_parser() -> argparse._SubParsersAction:
+    top = cli.build_parser()
+    commands = next(action for action in top._subparsers._group_actions if action.dest == "command")
+    evolution_parser = commands.choices["evolution"]
+    return next(
+        action for action in evolution_parser._subparsers._group_actions if action.dest == "evolution_command"
+    )
+
+
+def envelope(err: str) -> dict[str, object]:
+    """The failure the console stated, parsed the way an adapter would."""
+
+    return json.loads(err)
+
+
+def test_every_verb_of_the_console_states_its_failures_on_request() -> None:
+    """The flag is a property of the console and not of any verb.
+
+    A caller driving this thing has to be able to ask any of it for an answer it
+    can route on; one verb without the channel is one an adapter falls back to
+    reading prose for, which is the single case the taxonomy exists to remove.
+    Asserted over the parser rather than by running each verb, because what this
+    protects against is the verb written next.
+    """
+
+    verbs = evolution_verbs()
+
+    assert verbs, "the console has verbs"
+    for name, parser in sorted(verbs.items()):
+        assert "--json" in parser._option_string_actions, f"{name} cannot state a failure a machine reads"
+    # `status` keeps its own, which promises the whole reading rather than the
+    # failure channel — the one verb where the flag already meant something.
+    assert verbs["status"]._option_string_actions["--json"].help == "print the same shape as JSON"
+
+
+def test_a_failure_states_its_family_without_its_sentence(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What an adapter gets: the two attributes it routes on, and no prose to
+    parse for them.
+
+    The sentence rides along because a surface has a person to show it to, and
+    it is deliberately not the routing key — `message` is the field that moves
+    when an operation's explanation gets sharper, which is why `code` exists.
+    """
+
+    fill_pool(config, feed_root, TARGET)
+
+    code, out, err = run(["evolution", "freeze", "--repo", str(repo), "--json"], capsys)
+    stated = envelope(err)
+
+    assert code == exits(evolution.NothingToActOn)
+    # The exact key set, because that is what the version promises: a key added,
+    # removed or repurposed is a caller reading a shape nobody told it about.
+    assert set(stated) == {"schema_version", "verb", "kind", "code", "message"}
+    assert stated["schema_version"] == cli.EVOLUTION_FAILURE_SCHEMA_VERSION
+    assert stated["verb"] == "freeze"
+    assert stated["kind"] == evolution.NothingToActOn.kind
+    assert stated["code"] == evolution.NothingToActOn.code
+    assert "no batch proposal stands" in str(stated["message"])
+    # stdout is what a run produced, and this run produced nothing.
+    assert out == ""
+
+
+def test_the_flag_changes_the_shape_and_not_the_answer(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same refusal, twice: one sentence for a person, one envelope for a
+    caller, and nothing else different.
+
+    The exit status is the half that must not move — a shell already branching
+    on the number keeps branching on it — and the sentence is the half that must
+    survive verbatim, since it is the only thing either channel offers a human.
+    """
+
+    fill_pool(config, feed_root, TARGET)
+    where = ["evolution", "freeze", "--repo", str(repo)]
+
+    human_code, human_out, human_err = run(where, capsys)
+    machine_code, machine_out, machine_err = run([*where, "--json"], capsys)
+
+    assert human_code == machine_code
+    assert human_out == machine_out == ""
+    assert human_err == f"error: {envelope(machine_err)['message']}\n"
+
+
+def test_a_request_nobody_answered_reaches_a_machine_as_the_family_it_is(
+    lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The third response family through the machine channel.
+
+    A start with nothing stated is neither the success it is not nor a failure:
+    the request is durable and what is missing is the half only a person states.
+    The envelope says exactly that in `kind`, which is why there is no second
+    field claiming this is an error — a caller reading one would report a
+    request it is holding as one it never made.
+
+    What it does not carry is the request itself. That is this verb's success
+    projection and a later contract; the pinned integration is already in
+    `status --json`, which is where a surface reads what a verb did.
+    """
+
+    config = evolution.load_config(lineage_repo)
+    sealed(config, feed_root, capsys)
+    where = ["--repo", str(lineage_repo)]
+    asked = ["--source-ref", RELEASE_REF, "--expectation", "fewer remediation rounds"]
+
+    code, out, err = run(["evolution", "replay-start", *asked, *where, "--json"], capsys)
+    stated = envelope(err)
+
+    assert code == exits(harness.Unanswered)
+    assert code not in {0, exits(evolution.BatchError), exits(evolution.EvolutionError)}
+    assert stated["kind"] == errors.KIND_UNANSWERED and stated["code"] == harness.Unanswered.code
+    assert stated["verb"] == "replay-start"
+    assert out == "", "the request is not composed twice; a machine reads it from `status --json`"
+
+    experiment = lineage.describe(config).current.open_experiment
+    pending = replay.read_replays(config, experiment).pending
+    assert pending is not None, "the request is durable either way"
+    reading = phase.describe(config, now=NOW).to_json()
+    assert reading["replay"]["request"]["tree"] == pending.integration.tree
+
+
+def test_the_one_answer_with_no_envelope_is_the_one_with_no_family(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A caller has to know where the shape stops.
+
+    Exit 2 is a command the parser rejected or a failure carrying no family, and
+    neither has a `kind` to state — so `--json` prints nothing to parse and the
+    status is the whole answer. Stated here rather than left implicit, because an
+    adapter that parses stderr on every non-zero exit breaks on the one case it
+    cannot be handed a payload for.
+    """
+
+    with pytest.raises(SystemExit) as usage:
+        cli.main(["evolution", "freeze", "--repo", str(repo), "--json", "--no-such-flag"])
+    captured = capsys.readouterr()
+
+    assert usage.value.code == cli.UNCLASSIFIED_EXIT
+    assert captured.out == ""
+    assert "unrecognized arguments" in captured.err
+    with pytest.raises(json.JSONDecodeError):
+        envelope(captured.err)
+
+
+def test_the_freezes_refusals_are_three_answers_and_not_five_sentences(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What a caller does about each of the freeze's refusals, which is what the
+    classes are drawn at.
+
+    Four of its sentences here and three answers behind them: build an offer,
+    rebuild the one that stands, or fetch into this checkout. Two of the four are
+    the same command run for two reasons, so they are one class and the reason
+    stays in the sentence — splitting them would be a code an adapter routes on
+    and then does the same thing with. (The fifth, a base whose canonical tree
+    this checkout cannot read, is the same `checkout-unusable` answer and is
+    reached through the poll: `test_evolution_batches.py`.)
+
+    Three codes and two numbers, which is the taxonomy working rather than
+    leaking: an offer nobody built and a line nobody fetched are both a state
+    that permits nothing, so a shell branching on the status treats them alike
+    and a caller choosing a next command reads `code`. The stale pair is the one
+    that does move the number — a proposal that no longer describes the pool is a
+    reading to retake, which is what an `--expect` refusal already is, and the
+    contract has said so since before the freeze raised it.
+    """
+
+    where = ["--repo", str(repo), "--json"]
+    fill_pool(config, feed_root, TARGET)
+
+    nothing, _, nothing_err = run(["evolution", "freeze", *where], capsys)
+
+    evolution.build_proposal(config, now=NOW)
+    git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "the line moves"))
+    moved, _, moved_err = run(["evolution", "freeze", *where], capsys)
+
+    evolution.build_proposal(config, now=NOW)
+    evolution.sync(config, write_feed(feed_root, records(config, TARGET + 1)))
+    outgrown, _, outgrown_err = run(["evolution", "freeze", *where], capsys)
+
+    elsewhere = releasing_from(config, "refs/heads/never-fetched")
+    unfetched, _, unfetched_err = run(["evolution", "freeze", "--repo", str(elsewhere.repo_root), "--json"], capsys)
+
+    stated = [envelope(err) for err in (nothing_err, moved_err, outgrown_err, unfetched_err)]
+    assert [answer["code"] for answer in stated] == [
+        evolution.NothingToActOn.code,
+        evolution.ProposalError.code,
+        evolution.ProposalError.code,
+        evolution.CheckoutUnusable.code,
+    ]
+    assert len({answer["code"] for answer in stated}) == 3
+    assert nothing == unfetched == exits(evolution.NothingToActOn)
+    assert moved == outgrown == exits(evolution.ProposalError) == exits(evolution.StaleStateError)
+    assert nothing != moved
+    # One class, two reasons — which is what the sentences are for.
+    assert "rather than re-based" in str(stated[1]["message"])
+    assert "never considered" in str(stated[2]["message"])
+    assert "build one with `mandrel evolution start`" in str(stated[0]["message"])
+    assert "fetch that line" in str(stated[3]["message"])
+
+
+def test_a_selection_no_state_could_admit_is_the_command_and_not_the_lifecycle(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The line the exit-code contract draws between 3 and 4.
+
+    A draft id that is not a kebab-case slug is refused by every state this
+    lifecycle can reach, so telling an operator to change the state sends them to
+    read a status that will never name what they typed. A well-formed id the gate
+    does not hold is the opposite: the state is exactly what is wrong, and the
+    sentence names what it holds instead.
+    """
+
+    gate(config, feed_root, "loader-fallback")
+    where = ["--repo", str(repo)]
+
+    malformed, _, malformed_err = run(["evolution", "create", "Not A Slug", *where, "--json"], capsys)
+    absent, _, absent_err = run(["evolution", "create", "no-such-draft", *where, "--json"], capsys)
+
+    assert malformed == exits(evolution.InputError)
+    assert absent == exits(evolution.UnknownSubject)
+    assert malformed != absent
+    assert envelope(malformed_err)["code"] == evolution.InputError.code
+    assert envelope(absent_err)["code"] == evolution.UnknownSubject.code
 
 
 # --- the change lineage, as commands -----------------------------------------

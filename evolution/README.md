@@ -2160,6 +2160,92 @@ lineage before either writes: a conclusion its own experiments contradict leaves
 its batch current rather than releasing the next cohort, and two current batches
 stop the run instead of one of them being picked to continue.
 
+## Machine surface
+
+Every operation above is reached by one `mandrel evolution` verb, and the console
+is sufficient on its own: a Web surface, orch-hub, or a script is an adapter over
+these verbs and never a second implementation of the lifecycle. What this section
+fixes is the part of that boundary an adapter is entitled to depend on — how an
+answer is classified — so that routing a lifecycle never means reading a
+sentence written for a person.
+
+**Three response families, not two.** A verb completes, fails, or records a
+request only a person can answer. The third is not an error dressed as one: a
+`replay-start` or `assess-measure` with no run stated has already written its
+request, pinned its integration, and stopped, so a caller that reports it as a
+failure reports a request it is holding as one it never made — and makes it
+again. It is `unanswered`, and it is the reason the console's answers are
+classified by family rather than by success and failure.
+
+**Every answer carries `kind` and `code`.** `kind` is the family: what the
+operator does next. `code` is the class: which of that family's answers this is,
+unique across the whole taxonomy and stable across rewordings. Both are
+properties of what happened rather than of the site that noticed it. The
+implementation is `mandrel/evolution/errors.py`; what is normative here is that
+the pair exists, that `code` is unique and stable, and that no adapter may derive
+either from the message.
+
+**Message text is not an interface.** The sentences are written for a person
+about to act and are rewritten as the operations they explain get sharper.
+Anything keying on their words breaks silently when they do, and — worse —
+quietly reclassifies an answer when a sentence gains a word. `kind` and `code`
+are the two things that do not move.
+
+**The families, and the exit status each is drawn at.** The exit is the family's
+number, because a shell branching on it is choosing what to do next:
+
+| Exit | `kind` | What the caller does |
+|---|---|---|
+| 3 | `invalid` | Retype it. The command, not the state: a value no state this lifecycle can reach would make legal. |
+| 4 | `refused` | A legal operation this state does not permit. Change what the sentence names, or do something else. |
+| 5 | `stale` | The reading acted on is not the one that stands. Take it again and decide over what is there now. |
+| 6 | `busy` | Another writer holds the lock. Wait. |
+| 7 | `corrupt` | A persisted record cannot be read as what it claims to be. A person looks at the file. |
+| 8 | `unavailable` | Something outside this checkout did not answer. Nothing was established. |
+| 9 | `misconfigured` | `evolution/` asks for behavior this build does not implement. Fix the workspace. |
+| 10 | `toolchain` | A tool this operation needs is absent or too old here. A fact about this machine and about no revision. |
+| 11 | `failed` | An operation's own write did not complete and nothing above says why. |
+| 12 | `unanswered` | Not a failure. Go run what the request names, then state it. |
+
+0 is any completed run, including the two the admission policy makes normal
+outcomes: a `start` that offers no batch and a `freeze` that forms none. 2 is a
+command that was not understood, or a failure carrying no family at all.
+
+Two rules hold that table together. A family exists where a *response* differs,
+never where a cause does: two causes an operator answers the same way are one
+family, and one cause answered two ways is two. And the split between 3 and 4 is
+about what is wrong rather than about how far the operation got — a value no
+state could make legal is the command (3) even when nothing was read, and a
+well-formed value this state does not hold is the state (4) even when the check
+is the first thing that runs. An operator sent the wrong way reads a status that
+will never name what they typed, or edits a command that was spelled correctly.
+
+Two failures an operator handles identically share an exit, and must still differ
+by `code`. A freeze with no offer standing and a freeze whose configured source
+line this checkout never fetched are both `refused`; one is answered by building
+an offer and the other by fetching, and an adapter tells them apart by `code`
+alone.
+
+**`--json` states the answer instead of describing it.** Every verb accepts it.
+On `status` it is the whole reading, at that reading's own schema version. On
+every other verb it is the failure channel: an envelope carrying
+`schema_version`, the `verb` that answered, `kind`, `code`, and the human
+`message` verbatim. It is written to stderr, so the flag changes the shape of an
+answer and never the stream a completed run writes to, and it changes no exit
+status. The envelope has no field asserting that this is an error, because
+`kind` already says which family it is and one of them is not a failure.
+
+Exit 2 is the one answer with no envelope, and necessarily: a command the parser
+rejected, or a failure carrying no family, has no `kind` to state. A caller reads
+that status as "this console did not answer" rather than parsing for a shape that
+is not there.
+
+The success side of this boundary is deliberately not stated yet. A completed run
+prints what it has always printed, and what a verb *did* is read from
+`status --json`, which is derived from the same records the verb wrote — including
+the pinned request an `unanswered` answer leaves behind. A second shape for the
+same facts, invented one verb at a time, is what this section exists to prevent.
+
 ## Evolution task requirements
 
 Every evolution task must:

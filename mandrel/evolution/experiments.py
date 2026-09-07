@@ -2453,7 +2453,7 @@ def _planned_targets(config: EvolutionConfig, targets: Iterable[str]) -> tuple[s
     planned = tuple(str(name).strip() for name in targets)
     repeated = sorted({name for name in planned if planned.count(name) > 1})
     if repeated:
-        raise UnknownSubject(
+        raise InputError(
             f"{repeated} named more than once as a planned target; a promotion plans a target once, and a list "
             "that repeats one says nothing the single entry does not"
         )
@@ -2758,16 +2758,16 @@ def _requested(draft_ids: Iterable[str]) -> set[str]:
 
     requested = list(draft_ids)
     if not requested:
-        raise UnknownSubject("no draft was named; an admission or a rejection is a decision about specific proposals")
+        raise InputError("no draft was named; an admission or a rejection is a decision about specific proposals")
     unusable = sorted({value for value in requested if not is_draft_id(value)})
     if unusable:
-        raise UnknownSubject(
+        raise InputError(
             f"{unusable} cannot be draft ids; a draft id is a kebab-case slug, which is what makes it one path "
             f"segment under proposed-tasks/ rather than a name that could reach anywhere else"
         )
     repeated = sorted({value for value in requested if requested.count(value) > 1})
     if repeated:
-        raise UnknownSubject(
+        raise InputError(
             f"draft(s) {repeated} are named twice in one selection; a draft is consumed once, and naming it twice "
             "says nothing about which of the two was meant"
         )

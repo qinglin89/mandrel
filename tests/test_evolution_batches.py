@@ -642,7 +642,7 @@ def test_a_base_whose_canonical_tree_cannot_be_read_forms_no_batch(
     fill_pool(config, feed_root, TARGET)
     git_update_ref(config.repo_root, RELEASE_REF, git_unreadable_canonical_commit(repo, "a symlinked contract"))
 
-    with pytest.raises(evolution.BatchError, match="cannot read that commit's canonical tree"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot read that commit's canonical tree"):
         evolution.build_proposal(config, now=NOW)
 
 
@@ -2316,7 +2316,7 @@ def test_a_checkout_without_the_source_line_forms_no_batch(
     elsewhere = releasing_from(config, "refs/heads/never-fetched")
     before = snapshot(repo / "evolution")
 
-    with pytest.raises(evolution.BatchError, match="does not hold refs/heads/never-fetched"):
+    with pytest.raises(evolution.CheckoutUnusable, match="does not hold refs/heads/never-fetched"):
         evolution.build_proposal(elsewhere, now=NOW)
 
     assert snapshot(repo / "evolution") == before
@@ -2420,7 +2420,7 @@ def test_an_existing_task_id_stops_the_freeze_instead_of_overwriting_it(
     taken.parent.mkdir(parents=True)
     taken.write_text("# Not mine\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="already exists"):
+    with pytest.raises(evolution.StandingWork, match="already exists"):
         freeze(config)
 
     assert taken.read_text(encoding="utf-8") == "# Not mine\n"
@@ -2437,7 +2437,7 @@ def test_an_archived_analysis_task_is_never_recreated(
     archived.parent.mkdir(parents=True)
     archived.write_text("# Completed\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="already exists"):
+    with pytest.raises(evolution.StandingWork, match="already exists"):
         freeze(config)
 
 
@@ -2600,7 +2600,7 @@ def test_a_freeze_with_no_proposal_refuses_and_names_the_offer(
     fill_pool(config, feed_root, TARGET)
     before = snapshot(repo / "evolution")
 
-    with pytest.raises(evolution.BatchError, match="no batch proposal stands"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch proposal stands"):
         evolution.freeze(config, now=NOW)
 
     assert snapshot(repo / "evolution") == before
@@ -2621,7 +2621,7 @@ def test_a_freeze_refuses_a_proposal_built_before_the_line_moved(
     assert moved != offered.base_revision
     before = snapshot(repo / "evolution")
 
-    with pytest.raises(evolution.BatchError, match="rather than re-based"):
+    with pytest.raises(evolution.ProposalError, match="rather than re-based"):
         evolution.freeze(config, now=NOW)
 
     assert snapshot(repo / "evolution") == before
@@ -2643,7 +2643,7 @@ def test_a_freeze_refuses_a_proposal_the_pool_has_outgrown(
     write_feed(feed_root, at_line(config, [make_record(key="late", sequence=99, task_id="2026-07-99-task")]))
     evolution.sync(config, feed)
 
-    with pytest.raises(evolution.BatchError, match="never considered"):
+    with pytest.raises(evolution.ProposalError, match="never considered"):
         evolution.freeze(config, now=NOW)
 
     assert evolution.load_batches(config) == []
@@ -2659,7 +2659,7 @@ def test_a_freeze_refuses_a_member_whose_reports_changed(
     write_feed(feed_root, at_line(config, [make_record(key="rerun", sequence=99, task_id="2026-07-01-task")]))
     evolution.sync(config, feed)
 
-    with pytest.raises(evolution.BatchError, match="different reports than the proposal offered"):
+    with pytest.raises(evolution.ProposalError, match="different reports than the proposal offered"):
         evolution.freeze(config, now=NOW)
 
 
@@ -3091,7 +3091,7 @@ def test_a_move_that_would_change_no_answer_is_refused(
     evolution.build_proposal(config, now=NOW)
     before = config.proposal_path.read_bytes()
 
-    with pytest.raises(evolution.BatchError, match=message):
+    with pytest.raises(evolution.AlreadyAnswered, match=message):
         getattr(evolution, verb)(config, "repo-alpha", task_id, justification="why", actor=ACTOR, now=NOW)
 
     assert config.proposal_path.read_bytes() == before
@@ -3103,7 +3103,7 @@ def test_a_move_naming_a_task_the_offer_never_answered_for_is_refused(
     fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="answers for no task called"):
+    with pytest.raises(evolution.UnknownSubject, match="answers for no task called"):
         evolution.include(config, "repo-alpha", "2026-01-01-never-imported", justification=WHY_IN, actor=ACTOR)
 
 
@@ -3314,7 +3314,7 @@ def test_a_move_is_refused_once_the_batch_is_frozen(
     frozen = evolution.freeze(config, now=NOW)
     assert frozen.frozen
 
-    with pytest.raises(evolution.BatchError, match="was fixed when it was frozen"):
+    with pytest.raises(evolution.AlreadyAnswered, match="was fixed when it was frozen"):
         evolution.exclude(config, "repo-alpha", "2026-07-01-task", justification=WHY_OUT, actor=ACTOR, now=NOW)
 
 
@@ -3328,7 +3328,7 @@ def test_a_move_on_an_offer_the_line_outran_names_the_rebuild(
     evolution.build_proposal(config, now=NOW)
     git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "the line moves"))
 
-    with pytest.raises(evolution.BatchError, match="refused rather than re-based"):
+    with pytest.raises(evolution.ProposalError, match="refused rather than re-based"):
         evolution.include(config, "repo-alpha", absent, justification=WHY_IN, actor=ACTOR, now=NOW)
 
 

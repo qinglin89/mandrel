@@ -52,6 +52,52 @@ def _exit_code(exc: evolution_errors.EvolutionError) -> int:
     return EVOLUTION_EXIT_CODES.get(exc.kind, UNCLASSIFIED_EXIT)
 
 
+# The envelope `--json` states a failure as. Its own version, independent of the
+# `status` payload's and of the lifecycle record schemas: this describes one
+# answer the console gave, not a record anything persists, and it promises its
+# exact key set the way the status payload promises its own — a key added,
+# removed or repurposed bumps it.
+EVOLUTION_FAILURE_SCHEMA_VERSION = 1
+
+
+def _failure_payload(exc: evolution_errors.EvolutionError, *, verb: str) -> dict[str, Any]:
+    """What the console says went wrong, in the two attributes a caller routes on.
+
+    Flat, and with no field saying which of the three response families this is:
+    `kind` already says it, and `unanswered` is in that set — a wrapper called
+    `error` would have to be wrong for the one family that is not a failure, and
+    a second field repeating what `kind` carries is two names for one fact
+    (`errors.py`). What tells a caller this is not a completed run is the exit
+    status, which is drawn at `kind` and stays exactly what it is without the
+    flag.
+
+    `message` is the sentence the human channel prints, kept verbatim so a
+    surface has something to show a person, and `verb` names which command
+    answered so a captured envelope reads on its own. Neither is a routing key:
+    that is what `code` is for, and the sentences move.
+    """
+
+    return {
+        "schema_version": EVOLUTION_FAILURE_SCHEMA_VERSION,
+        "verb": verb,
+        "kind": exc.kind,
+        "code": exc.code,
+        "message": str(exc),
+    }
+
+
+def _failures_as_json(args: argparse.Namespace) -> bool:
+    """Whether this run was asked to state its failures as JSON.
+
+    Keyed on the command as well as the flag, because `--json` is not one
+    promise across this CLI: `mandrel status --json` prints a deploy reading,
+    and a failure there is not the evolution taxonomy's to describe. Only the
+    evolution console's verbs answer in this envelope.
+    """
+
+    return args.command == "evolution" and getattr(args, "json", False)
+
+
 def _add_workspace_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo", help="evolution workspace root (default: this checkout)")
 
@@ -195,7 +241,34 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     _add_lineage_commands(evolution_subparsers)
     _add_release_commands(evolution_subparsers)
     _add_harness_commands(evolution_subparsers)
+    _add_failure_channel(evolution_subparsers)
     return parser
+
+
+def _add_failure_channel(subparsers: argparse._SubParsersAction) -> None:
+    """`--json` on every verb of the console, added over the finished set.
+
+    Written as a sweep rather than one call per parser because the property is
+    about the console and not about any verb: a caller driving this thing has to
+    be able to ask *any* of it for an answer it can route on, and a verb added
+    later without the flag is one an adapter has to fall back to reading prose
+    for — the single case the taxonomy exists to remove. There is nothing to
+    remember when the next verb is written.
+
+    `status` is skipped because its `--json` is already a different promise: the
+    whole reading, at its own schema version. What is added here is the failure
+    channel alone (`_failure_payload`); on a run that completes, the flag changes
+    nothing, and the success envelope for each verb is a later contract.
+    """
+
+    for name, parser in subparsers.choices.items():
+        if name == "status":
+            continue
+        parser.add_argument(
+            "--json",
+            action="store_true",
+            help="state a failure as a JSON envelope on stderr; what a completed run prints is unchanged",
+        )
 
 
 def _add_window_commands(subparsers: argparse._SubParsersAction, phase) -> None:
@@ -1020,6 +1093,15 @@ def _harness(config, args: argparse.Namespace) -> tuple[str, int]:
                 0,
             )
         except harness.Unanswered as unanswered:
+            if args.json:
+                # Caught here only to spell the request for a person. A caller
+                # asking for the envelope is told what happened in the taxonomy's
+                # own terms and reads the request from `status --json`, which
+                # carries the same pinned integration under `replay.request`.
+                # Composing it here instead would be this verb's success
+                # projection, which is a later contract and not something to
+                # invent twice.
+                raise
             # Each boundary's request in its own vocabulary: a replay is a tree
             # to build and exercise, a counterfactual is two revisions the
             # promotion already produced.
@@ -1339,7 +1421,18 @@ def main(argv: list[str] | None = None) -> int:
         # what a caller routes on, and collapsing a stale reading, a held lock
         # and a damaged record into one number is what made every evolution
         # failure look like the same thing to anything but a human reader.
-        print(f"error: {exc}", file=sys.stderr)
+        #
+        # Both channels write to stderr, so `--json` changes the shape and not
+        # the stream: stdout stays what a run produced, which is what lets a
+        # caller pipe it without having to tell two payloads apart on one
+        # descriptor.
+        if _failures_as_json(args):
+            print(
+                json.dumps(_failure_payload(exc, verb=args.evolution_command), indent=2, sort_keys=True),
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return _exit_code(exc)
     except (
         FileNotFoundError,

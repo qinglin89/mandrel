@@ -138,11 +138,19 @@ class ValidationError(EvolutionError):
 class InputError(EvolutionError):
     """What a caller stated is not something this operation can read.
 
-    A number where the argument holds a number, a token in this build's scheme.
+    A number where the argument holds a number, a token in this build's scheme,
+    a selection no state could make admissible — a draft id that is not a
+    kebab-case slug, a name given twice where the record holds it once, nothing
+    named at all.
     Separate from `BatchError` because the two ask opposite things: a refusal
     describes a state and is answered by changing it, while this describes the
     command and is answered by retyping it — and an operator told to change the
     lifecycle over a mistyped figure changes the wrong thing.
+
+    The test is whether any state would make the value legal, not whether the
+    operation reached one: a shape check that runs before anything is read is
+    still about the command, and `UnknownSubject` is where a well-formed value
+    the state simply does not hold belongs.
     """
 
     kind = KIND_INVALID
@@ -369,12 +377,16 @@ class UnknownSubject(BatchError):
     argument — an operator told the value was malformed goes looking at their own
     typing for a name that is spelled exactly right.
 
-    One group here is parked rather than placed. A draft id that is not a
-    kebab-case slug, a draft named twice in one selection, a selection naming
-    nothing at all, a planned target listed twice — those describe the command
-    and no state, which is what `InputError` is for. Moving them changes the exit
-    an operator sees from 4 to 3, so they wait for the decision that writes the
-    exit-code rules down rather than being moved one at a time.
+    Where the line is drawn, now that the exit-code rules are written down: a
+    selection whose *shape* no state could make admissible is `InputError` and
+    exits 3 — a draft id that is not a kebab-case slug, a draft named twice in
+    one selection, a selection naming nothing at all, a planned target listed
+    twice. Nothing this lifecycle could ever hold makes those legal, so telling
+    an operator to change the state sends them to read a status that will never
+    name what they typed. What stays here is the mirror of that: a value spelled
+    exactly right that this state does not hold, and a `--source-ref` naming a
+    line the configuration or the evidence does not — configuration is state,
+    and the sentence names the line it holds.
     """
 
     code = "subject-unknown"

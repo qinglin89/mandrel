@@ -566,8 +566,11 @@ becomes — experiments, rounds, replays, a promotion, its reversal, and the nex
 cohort's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
 
-Every subcommand takes `--repo <path>` to work on another checkout, and
-`status` takes `--json` for the same shape a script can read.
+Every subcommand takes `--repo <path>` to work on another checkout, and every
+one of them takes `--json`. On `status` that flag is the whole reading; on every
+other verb it is the failure channel described under
+[the machine surface](#the-machine-surface) — a run that completes prints what it
+always printed.
 
 Exit status names the *family* of what happened, because that is what decides
 the next move. 0 is any completed run — including a `start` that offered no
@@ -577,9 +580,9 @@ contract's normal outcomes when evidence is still thin. Everything else:
 | Exit | Family | What it means | What to do |
 |---|---|---|---|
 | 2 | — | The command was not understood, or the failure has no family: argparse's own usage errors, and every non-evolution error `mandrel` reports. | Read the message. |
-| 3 | `invalid` | What you typed is not usable — a number where a number goes, a state token in this build's scheme. | Retype the command. |
+| 3 | `invalid` | What you typed is not usable — a number where a number goes, a state token in this build's scheme, or a selection no state could admit: a draft id that is not a kebab-case slug, a name given twice where the record holds it once, nothing named at all. | Retype the command. |
 | 4 | `refused` | A legal operation the current state does not permit. | The message names what stands in the way; change it, or do something else. |
-| 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
+| 5 | `stale` | The reading acted on is not the one that stands: an `--expect` token the records moved under, or a batch proposal that no longer describes the pool it was built against — the source line moved under it, a task it answered for left, or one arrived that it never considered. | Take the reading again (`status`, or `start` for a proposal) and decide over what is there now. |
 | 6 | `busy` | Another run holds `.ai-evolution/lock`. | Wait, or clear a lock whose holder is gone — see Recovery below. |
 | 7 | `corrupt` | A persisted record cannot be read as what it claims to be, or is a version this build has no reader for — this machine's pool state (`state.json`, or a staged bundle it names), a record the repository carries (a batch manifest, an outcome, an experiment record, an experiment's `replays.json`), or the generated analysis task a freeze reads a lifecycle from. Never repaired silently. | Restore the file from version control — or, for the analysis task, from the batch manifest, and for the pool, by importing the reports again: `.ai-evolution/` is ignored, so nothing there is in version control. See Recovery below. |
 | 8 | `unavailable` | The report feed did not answer. Nothing was established, so nothing was recorded. | Retry, or supply `--feed-dir`. |
@@ -591,7 +594,12 @@ contract's normal outcomes when evidence is still thin. Everything else:
 Nothing downstream should match message text: the sentences are written for a
 person and get rewritten as the operations they explain get sharper. Every
 failure also carries a stable `kind` and `code`
-(`mandrel/evolution/errors.py`), and the table above is the `kind` column.
+(`mandrel/evolution/errors.py`), and the table above is the `kind` column. `code`
+is the finer half and does not appear in that table: two failures an operator
+answers the same way share a number and stay different classes, which is why a
+caller choosing a next command reads `code` and a shell branching on the status
+reads the exit. `--json` states both — see
+[the machine surface](#the-machine-surface).
 
 `replay-start` and `rollback` need a Git newer than most: `merge-tree
 --write-tree` (Git 2.38) computes the integration a replay measures and a
@@ -958,8 +966,61 @@ token that expired overnight would refuse operations over a repository nobody
 wrote to, a task finishing is this machine's own work, and the ledger is an audit
 rather than flow state.
 
-Mutations print for humans and take no `--json`; `status` is the machine shape,
-and it is where a surface reads what a verb did.
+### The machine surface
+
+Every verb of this console takes `--json`. On `status` that is the reading above.
+On every other verb it is one thing today — the failure channel — and the reason
+it is only one thing is that `status` is still where a surface reads what a verb
+*did*: a run that completes prints exactly what it printed before, and the
+success envelope naming the objects each verb touched is a separate contract that
+does not exist yet.
+
+What `--json` changes is the shape of a failure and not the stream it goes to.
+Both channels write to stderr, so stdout stays what the run produced:
+
+```bash
+./bin/mandrel evolution freeze --json     # exit 5, and this on stderr
+```
+
+```json
+{
+  "schema_version": 1,
+  "verb": "freeze",
+  "kind": "stale",
+  "code": "proposal-unusable",
+  "message": "the proposal was built at 3ed93a7a0c1f on refs/heads/dev and that line now stands at ..."
+}
+```
+
+- **`kind` is the family**, exactly as the exit-status table above draws it, and
+  the exit is unchanged by the flag.
+- **`code` is the class**, unique across the taxonomy and stable across
+  rewordings. This is the routing key. Two failures an operator answers the same
+  way share a `kind` and a number and stay different codes — a freeze with no
+  offer standing (`nothing-to-act-on`) and one whose source line this checkout
+  never fetched (`checkout-unusable`) both exit 4, and they are not the same next
+  command.
+- **`message` is the sentence the human channel prints**, kept verbatim so a
+  surface has something to show a person. It is not a routing key; it moves.
+- **`verb` names the command that answered**, so a captured envelope reads on its
+  own.
+- **There is no field saying "this failed."** `kind` already says which of the
+  three response families this is, and `unanswered` is one of them: a
+  `replay-start` with nothing stated comes back as an envelope of kind
+  `unanswered`, code `run-unstated`, at exit 12, because the request is on record
+  and only the harness's half is missing. Under `--json` the request itself is
+  not composed — read it from `status --json`, which carries the same pinned
+  integration under `replay.request`.
+
+`schema_version` promises the exact key set: a key added, removed or repurposed
+bumps it. It is independent of `status --json`'s version and of the lifecycle
+record schemas, because it describes one answer this console gave rather than
+anything persisted.
+
+Exit 2 is the one answer with no envelope — a command argparse rejected, or a
+failure carrying no family, has no `kind` to state. Read that status as "this
+console did not answer" rather than parsing stderr for a shape that is not
+there.
 
 ### Report source
 
