@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-06
-verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
+last-updated: 2026-09-07
+verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 ---
 
 # APIs and Interfaces
@@ -34,9 +34,19 @@ token hashes authoritative record bytes plus the configured source line and
 every ref those records name; it deliberately excludes `HEAD`, because no
 evolution write resolves the operator's checkout.
 
+Every evolution verb accepts `--json`. A completed `status` emits its schema-v11
+reading; any classified non-completion emits the flat schema-v1
+`schema_version` / `verb` / `kind` / `code` / `message` envelope on stderr.
+Completed runs of other verbs retain human output until the separate success
+protocol lands. Exit 2 has no envelope because argparse and non-evolution
+failures carry no taxonomy family.
+
 Evolution failures carry stable class attributes: `kind` is the recovery
 family and CLI exit-code key, while unique `code` identifies the error class;
-callers never classify by message text. The ten kinds map to exits 3–12.
+callers never classify by message text. Refusal codes split where the next
+command or answering machine differs; malformed command shapes are `invalid`,
+while well-formed subjects absent from lifecycle/configuration state are
+`refused`. The ten kinds map to exits 3–12.
 `unanswered` / exit 12 is the third response family: a harness request was
 durably recorded, so the result is neither success nor failure. Persisted-file
 readers translate shared parser refusals/validation failures to

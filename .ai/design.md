@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-06
-verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
+last-updated: 2026-09-07
+verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 ---
 
 # Design Principles and Decisions
@@ -24,8 +24,15 @@ verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
   sealed candidate; whole-commit equality, stored digests, the maintainer's
   checkout, and uncommitted canonical bytes are not readiness inputs.
 - Prefer one existing semantic carrier over layered duplicate mechanisms.
-- Evolution failures are classified by type attributes, never prose: `kind`
-  names the operator recovery/exit family and unique `code` names the class.
+- Evolution non-completions are classified by type attributes, never prose:
+  `kind` names the recovery/exit family and unique `code` names the class.
+  Refusal codes split where the next command or answering machine differs;
+  persisted readers translate shared parser answers, while writers retain the
+  parser's refusal/validation direction.
+- Every evolution verb's `--json` non-completion channel is the flat schema-v1
+  stderr envelope (`schema_version`, `verb`, `kind`, `code`, `message`). Exit 2
+  has no family/envelope; completed mutations keep human output until the
+  separate success protocol lands.
 - Deterministic verification is single-sourced in `scripts/check.sh`; CI and
   optional Git hooks invoke it without restating individual checks.
 - Protocol evolution uses repeated unique-task evidence, immutable batches,

@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-06
-verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
+last-updated: 2026-09-07
+verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 ---
 
 # Modules
@@ -22,7 +22,7 @@ verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `mandrel/evolution/batches.py`, `proposals.py`, `manifests.py`, `state.py`, `errors.py`, `phase.py`, `render.py`; `mandrel/cli.py` | Canonical-identity proposal selection and human window, immutable semantic manifest publication, schema-v11 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, stable kind/code failure taxonomy with differentiated exits, and standalone CLI routing |
+| Evolution controller | `mandrel/evolution/batches.py`, `proposals.py`, `manifests.py`, `state.py`, `errors.py`, `phase.py`, `render.py`; `mandrel/cli.py` | Canonical-identity proposal selection and human window, immutable semantic manifest publication, schema-v11 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, stable kind/code taxonomy with refusal codes split by recovery, schema-v1 JSON non-completion envelopes, and standalone CLI routing |
 | Evolution lineage | `mandrel/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `mandrel/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback, interruption recovery, and base-keyed ending of the zero-attempt batch standing on the reversed release |
 | Evolution release assessment | `mandrel/evolution/assessment.py`, `lockfile.py`, `experiments.py` | Canonical-identity before/after cohorts, visible exclusions, and unstated/differing facet split; assessment formation/read validation with settlement recommendation; pinned counterfactual recovery; human retain/rollback settlement; first-base sequencing |
@@ -40,8 +40,10 @@ verified-against: d6e04862a0382771b09a8996f9435f00754c05ec
   precedence; dashboard policy is not hardcoded here.
 - Evolution raw artifacts/state stay under `.ai-evolution/`; versioned
   evolution files contain only safe normalized/audit material.
-- Evolution error routing uses typed `kind`/`code` attributes: persisted readers
-  translate shared parser failures, while ignored pool state and its referenced
-  bundles share the runtime-state corruption class.
+- Evolution error routing uses typed `kind`/`code` attributes: refusal classes
+  split where the next command or answering machine differs; persisted readers
+  translate shared parser failures while writers retain their refusal/validation
+  direction; ignored pool state and its referenced bundles share the
+  runtime-state corruption class.
 - orch-hub report publication and local protocol-evolution decisions remain
   separate modules and repositories.
