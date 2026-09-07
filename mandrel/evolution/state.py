@@ -347,6 +347,26 @@ class EvolutionState:
     superseded: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def find(self, repo_id: str, task_id: str) -> PoolEntry | None:
+        """The pooled entry for one completed task, where it is still pending.
+
+        **The pending pool only, and that is the whole second-entry rule.** A
+        report claimed by a frozen batch leaves the pool with its entry
+        (`batches._claim_reports`), so a later evaluation of the same task finds
+        nothing here and opens a new entry — evidence for a later batch, which
+        is what invariant 3 says later reports are. Were the claimed entry kept
+        instead, the arriving pack would take its slot and push the manifest's
+        own report into `superseded` — a second decision about a report that
+        already holds one, which `_require_disjoint_keys` refuses to load, while
+        the immutable manifest goes on naming it.
+
+        The new entry is then admissible on its own terms against whatever base
+        stands when the next batch is proposed. Nothing here or in the proposal
+        asks which tasks earlier batches counted, so the same task can be a
+        member of two batches — at two different commits carrying one protocol,
+        and at one and the same base after a batch that concluded no change
+        (`tests/test_evolution_batches.py`, the two rejoin cases).
+        """
+
         for entry in self.pending:
             if entry.dedup_key == (repo_id, task_id):
                 return entry

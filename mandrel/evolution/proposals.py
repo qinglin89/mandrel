@@ -351,7 +351,15 @@ def _ordered(items: Iterable[Member] | Iterable[Exclusion]) -> tuple[Any, ...]:
 
 
 def _entry_fields(data: Any, where: str, *, allowed: frozenset[str]) -> dict[str, Any]:
-    """The identity every selected and non-selected entry states the same way."""
+    """The identity every selected and non-selected entry states the same way.
+
+    `report_keys` is a list holding one key: a pooled task's evidence is one
+    pack (`state.PoolEntry`), and the plural stays because every consumer of
+    these entries unions or compares the keys against another decision's rather
+    than reading a single one. The duplicate check below therefore guards a file
+    no build here writes — which is the same reason the manifest reader keeps
+    its own.
+    """
 
     if not isinstance(data, dict):
         raise ProposalError(f"{where}: entry must be an object")

@@ -227,8 +227,14 @@ class Batch:
 
     @property
     def task_count(self) -> int:
-        """Unique completed tasks — the unit invariant 1 counts in. Reruns share
-        a `(repo_id, task_id)` with their primary and so do not inflate it."""
+        """Unique completed tasks — the unit invariant 1 counts in.
+
+        A member's evidence is one pack (`state.PoolEntry`), so on every batch
+        this build freezes this is also the report count. It stays a count of
+        distinct pairs anyway: the schema permits several reports per task, and
+        a manifest that is not one this build wrote is still read here rather
+        than trusted to hold one apiece.
+        """
 
         return len({(report["repo_id"], report["task_id"]) for report in self.reports})
 

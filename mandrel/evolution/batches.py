@@ -1165,11 +1165,17 @@ def _carried(standing: BatchProposal | None) -> dict[tuple[str, str], Member | E
     every time, so carrying one would pin an answer to the reading that produced
     it rather than to the evidence.
 
-    Keyed by `(repo_id, task_id)` and not by the reports the task owned, because
-    a judgement is about the task. A rerun arriving under a member a human
-    argued in does not un-make the argument — the offer's own reports are
-    refreshed from the pool when the move is re-applied, which is the same set
-    the freeze would put in the manifest.
+    Keyed by `(repo_id, task_id)` and not by the report the task owned, because
+    a judgement is about the task. A further evaluation taking that task's slot
+    under a member a human argued in does not un-make the argument — the move
+    carries, and the report it names is refreshed from the pool when it is
+    re-applied, so it stays the report the freeze would put in the manifest.
+
+    What the move does not survive is the identity test answering differently:
+    a rebuild drops an inclusion the base now selects on its own, and an
+    exclusion the base now refuses on its own, because either would misstate the
+    denominator (invariant 1's exception is a member somebody added, not a
+    member who qualified).
     """
 
     if standing is None:

@@ -502,7 +502,13 @@ Three fields decide more than their size suggests:
 - `source.repo_id` + `source.task_id` is the *pooling* identity. Batches count
   unique completed tasks (invariant 1), so a second report for one task is a
   second evaluation of it: it takes the entry's one slot if it is the later of
-  the two, the other is kept superseded, and the count does not move.
+  the two, the other is kept superseded, and the count does not move. Where the
+  task holds no entry — a frozen batch claimed its report, and the entry left
+  the pool with it — the second evaluation opens a new one instead, which is
+  what invariant 3 means by a later report belonging to a later batch. That
+  entry is then offered like any other, so one task can be a member of two
+  batches: at two commits carrying one protocol, and at one and the same base
+  where the batch before it concluded no change and left the line standing.
 - `sequence` is the first component of the directory feed's global order, and
   discovery is a cursor over the full `(sequence, report_key, file name)`
   position. A record added later is served only when that position sorts after

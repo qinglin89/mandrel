@@ -37,10 +37,12 @@ A manifest states its own denominator as well as its membership. `selection`
 records how many unique completed tasks the formation answered for, how the
 members split between the identity test and human judgement, and why each
 considered task that is not a member was left out; each report restates its own
-task's answer, the same answer on every report of that task. That is what makes
-a cohort's recurrence claim checkable from committed content: the pool it was
-selected out of is ignored machine-local state and has moved by the time anyone
-reads the batch.
+task's answer. A member's evidence is one pack, so a batch frozen here has one
+report per member — and where a manifest holds several for a task anyway, the
+reader requires the same answer on all of them. That is what makes a cohort's
+recurrence claim checkable from committed content: the pool it was selected out
+of is ignored machine-local state and has moved by the time anyone reads the
+batch.
 
 Those are cross-field facts, and JSON Schema can only constrain one field at a
 time — so the reader checks the agreement itself and refuses a manifest whose

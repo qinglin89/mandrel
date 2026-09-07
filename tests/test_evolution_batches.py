@@ -1130,6 +1130,107 @@ def test_a_later_report_for_a_batched_task_starts_a_new_pool_entry(
     assert read_manifest(result) == manifest_before
 
 
+def reevaluated(*, at: str, task_id: str = "2026-07-01-task") -> list[dict]:
+    """A second evaluation of an already-batched task, and two tasks nobody has
+    batched, all produced at `at`.
+
+    The re-evaluation states the revision the *task* ran under, not the one the
+    line stands at now: `provenance.effective_revision` is what the target held
+    when it did the work, and evaluating an archived task a second time does not
+    move it (`evolution/README.md`, the report record).
+    """
+
+    return [
+        make_record(
+            key="late",
+            sequence=200,
+            task_id=task_id,
+            evaluation_id="eval-late",
+            generated_at="2026-08-05T10:00:00Z",
+            effective_revision=at,
+        ),
+        *(
+            make_record(key=f"n{index}", sequence=200 + index, task_id=f"2026-08-{index:02d}-task",
+                        effective_revision=at)
+            for index in (1, 2)
+        ),
+    ]
+
+
+def frozen_report_keys(manifest: dict, task_id: str) -> list[str]:
+    return [report["report_key"] for report in manifest["reports"] if report["task_id"] == task_id]
+
+
+def test_a_batched_task_rejoins_a_later_batch_at_a_different_base(
+    config: evolution.EvolutionConfig, repo: Path, feed_root: Path
+) -> None:
+    """The second entry a late evaluation opens is a later batch's member, and
+    the batch it joins is formed at a different commit than the one that already
+    counted the task.
+
+    The bases differ as commits and agree as protocols, which is the shape the
+    line actually moves in: membership is equality of deployable canonical
+    identity and never commit equality (invariant 5), so the batch after a
+    commit that changes nothing a target receives still holds the same protocol.
+    The evidence is a different pack each time — one report per member, and the
+    frozen manifest of the first batch is untouched by any of it (invariant 3).
+    """
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    frozen_first = read_manifest(first)
+    first_base = frozen_first["runner_protocol_revision"]
+    conclude_batch(config, first.batch_id or "")
+
+    git_release_commit(repo, "a note the deployed payload never sees")
+    later_base = runner_revision(config)
+    assert later_base != first_base
+
+    evolution.sync(config, write_feed(feed_root, reevaluated(at=first_base)))
+    second = freeze(config, now=NOW + timedelta(days=1))
+    frozen_second = read_manifest(second)
+
+    assert read_manifest(first) == frozen_first
+    assert frozen_second["runner_protocol_revision"] == later_base
+    assert frozen_report_keys(frozen_first, "2026-07-01-task") == ["r1"]
+    assert frozen_report_keys(frozen_second, "2026-07-01-task") == ["late"]
+    assert frozen_second["selection"]["not_selected"] == []
+
+
+def test_a_batched_task_is_counted_again_by_a_batch_at_the_same_base(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The measured other half, and it is not the one the pack collapse was
+    expected to produce: nothing keys admission on which tasks an earlier batch
+    counted, so a task re-evaluated after its batch concluded rejoins the next
+    one at *the same* base as readily as at a different one.
+
+    Reachable without contrivance. A batch that concludes no change ends without
+    moving the line (invariant 7), so the batch after it is formed at the very
+    commit the first was — and the re-evaluation states the same revision it
+    always did. Both manifests then count `2026-07-01-task` toward a recurrence
+    claim at one protocol, and neither records that the other did.
+
+    Pinned as the behaviour that stands, not as the behaviour that is wanted:
+    invariant 1 makes uniqueness a property of one batch and this is the case
+    where that stops short of the claim a reader takes from it. Whether a batch
+    should refuse, or record, a task an earlier batch already counted at the same
+    protocol is `2026-09-07-evolution-cross-batch-task-recurrence`.
+    """
+    fill_pool(config, feed_root, TARGET)
+    first = freeze(config)
+    base = read_manifest(first)["runner_protocol_revision"]
+    conclude_batch(config, first.batch_id or "")
+
+    evolution.sync(config, write_feed(feed_root, reevaluated(at=base)))
+    second = freeze(config, now=NOW + timedelta(days=1))
+    frozen_second = read_manifest(second)
+
+    assert frozen_second["runner_protocol_revision"] == base
+    assert frozen_report_keys(read_manifest(first), "2026-07-01-task") == ["r1"]
+    assert frozen_report_keys(frozen_second, "2026-07-01-task") == ["late"]
+    assert frozen_second["selection"]["considered"] == 3
+
+
 # --- idempotency and the open-batch guard ------------------------------------
 
 
