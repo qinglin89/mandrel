@@ -54,13 +54,12 @@ complete an evaluation.
    the protocol the batch's base carries — equality of deployable canonical
    identity (`lockfile.canonical_identity`), never commit equality, because the
    source line moves for work no target receives. The decision is the task's
-   (invariant 1) and it is taken over **every report that task owns**, reruns
-   included, because the freeze puts all of them into the manifest under that
-   one answer: a task whose evaluations disagree about the protocol they were
-   produced under is not a member, and no report is ever marked automatic on
-   another report's evidence. In a coherent pool the question does not arise —
-   a rerun is a second reading of one run (invariant 4), so every report of a
-   task states the same production revision. The other two facets are recorded
+   (invariant 1) and it is taken over **the one report that is the task's
+   evidence** — its latest evaluation, which is the report the freeze puts into
+   the manifest. Those are the same report, so no report is ever marked
+   automatic on another report's evidence. A superseded evaluation is asked
+   nothing: it enters no manifest, so the batch makes no claim about it, and it
+   is kept whole outside the pool (invariant 4). The other two facets are recorded
    per report and read by the analysis. Every frozen manifest states its own
    denominator in `selection`: how many tasks the formation considered, how the
    membership split between the identity test and human judgement, and why each
@@ -270,7 +269,9 @@ evolution/
 refs/evolution/experiments/<experiment-id>  durable candidate ref, fast-forward only
 
 .ai-evolution/                      ignored machine-local runtime state
-  state.json                        discovery cursor and pending pool
+  state.json                        discovery cursor, pending pool, and the
+                                    reports already refused, claimed, or
+                                    superseded by a later evaluation
   batch-proposal.json               the batch offered and not yet frozen: its base, its
                                     members, what was considered and left out, and
                                     every move a human has made on it
@@ -500,7 +501,8 @@ Three fields decide more than their size suggests:
   what "already decided about this one" is keyed on. It is never reused.
 - `source.repo_id` + `source.task_id` is the *pooling* identity. Batches count
   unique completed tasks (invariant 1), so a second report for one task is a
-  rerun that enriches the entry without raising the count.
+  second evaluation of it: it takes the entry's one slot if it is the later of
+  the two, the other is kept superseded, and the count does not move.
 - `sequence` is the first component of the directory feed's global order, and
   discovery is a cursor over the full `(sequence, report_key, file name)`
   position. A record added later is served only when that position sorts after

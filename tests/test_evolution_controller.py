@@ -469,10 +469,10 @@ def test_sync_imports_verified_reports_into_the_pending_pool(
     pool = evolution.load_state(config).pending
     entry = pool[0]
     assert entry.dedup_key == ("repo-alpha", "2026-07-01-task")
-    assert entry.primary.bundle_sha256 == reports.normalize(
+    assert entry.report.bundle_sha256 == reports.normalize(
         make_record(key="r1", sequence=1), config, reports.load_import_schema(config)
     ).bundle_sha256
-    staged = config.repo_root / entry.primary.artifacts_path
+    staged = config.repo_root / entry.report.artifacts_path
     assert (staged / state.REPORT_JSON_FILENAME).is_file()
     for name, body in ARTIFACT_BODIES.items():
         assert (staged / state.ARTIFACTS_SUBDIR / name).read_bytes() == body
@@ -507,17 +507,20 @@ def test_a_rewound_cursor_still_imports_each_report_once(
     assert again.skipped == ("r1",)
     assert again.imported == ()
     assert again.pool_size == 1
-    assert len(evolution.load_state(config).pending[0].reruns) == 0
+    assert evolution.load_state(config).superseded == {}
 
 
-def test_reruns_stay_provenance_and_never_raise_the_task_count(
+def test_a_second_evaluation_takes_the_slot_and_the_replaced_pack_is_kept(
     config: evolution.EvolutionConfig, tmp_path: Path
 ) -> None:
+    """One task owns one pack. A second evaluation does not raise the task count
+    (invariant 1); the pack it displaces moves to `superseded` whole, so its
+    identity, hash and staged bundle are all still named (invariant 4)."""
     feed = write_feed(
         tmp_path / "feed",
         [
-            make_record(key="r1", sequence=1, evaluation_id="eval-first"),
-            make_record(key="r2", sequence=5, evaluation_id="eval-rerun"),
+            make_record(key="r1", sequence=1, evaluation_id="eval-first", generated_at="2026-07-30T10:00:00Z"),
+            make_record(key="r2", sequence=5, evaluation_id="eval-second", generated_at="2026-07-31T10:00:00Z"),
         ],
     )
 
@@ -527,10 +530,93 @@ def test_reruns_stay_provenance_and_never_raise_the_task_count(
     assert result.reruns == ("r2",)
     assert result.pool_size == 1
 
-    entry = evolution.load_state(config).pending[0]
-    assert entry.primary.report_key == "r2"  # latest evaluation wins the slot
-    assert [ref.report_key for ref in entry.reruns] == ["r1"]
-    assert entry.report_keys() == {"r1", "r2"}
+    loaded = evolution.load_state(config)
+    entry = loaded.pending[0]
+    assert entry.report.report_key == "r2"  # the later evaluation is the task's evidence
+    assert entry.report_keys() == {"r2"}
+    replaced = loaded.superseded["r1"]
+    assert replaced["superseded_by"] == "r2"
+    assert replaced["repo_id"] == "repo-alpha"
+    assert replaced["report"]["evaluation_id"] == "eval-first"
+    assert (config.repo_root / replaced["report"]["artifacts_path"] / state.REPORT_JSON_FILENAME).is_file()
+
+
+def test_a_superseded_pack_is_never_imported_again(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """Dropping the replaced report's key would take it out of
+    `known_report_keys`, and every later sync that reaches it again would fetch
+    and stage it as new. Losing the slot is a decision about the report, so the
+    record of that decision is what keeps it decided."""
+    feed = write_feed(
+        tmp_path / "feed",
+        [
+            make_record(key="r1", sequence=1, generated_at="2026-07-30T10:00:00Z"),
+            make_record(key="r2", sequence=5, generated_at="2026-07-31T10:00:00Z"),
+        ],
+    )
+    evolution.sync(config, feed)
+
+    rewound = evolution.load_state(config)
+    assert "r1" in rewound.known_report_keys()
+    rewound.cursor = None
+    evolution.save_state(config, rewound)
+    again = evolution.sync(config, feed)
+
+    assert again.imported == ()
+    assert again.reruns == ()
+    assert sorted(again.skipped) == ["r1", "r2"]
+    assert evolution.load_state(config).pending[0].report_keys() == {"r2"}
+
+
+def test_the_survivor_is_the_later_evaluation_not_the_later_publication(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """orch-hub publishes a report only once the task it evaluated is archived,
+    so a pack written while that task was still active is withheld and enters
+    the feed *behind* packs generated after it. `sequence` is that release
+    order. Where the two disagree the pool keeps the evaluation, not the
+    release: ordering on `sequence` would hand the slot to whichever pack the
+    publisher's gate happened to let out last."""
+    feed = write_feed(
+        tmp_path / "feed",
+        [
+            # Generated second, published first: its task was already archived.
+            make_record(key="prompt", sequence=4, generated_at="2026-07-25T09:00:00Z"),
+            # Generated first, withheld, and published at the position where it
+            # became publishable.
+            make_record(key="withheld", sequence=9, generated_at="2026-07-20T09:00:00Z"),
+        ],
+    )
+
+    evolution.sync(config, feed)
+
+    loaded = evolution.load_state(config)
+    assert loaded.pending[0].report.report_key == "prompt"
+    assert loaded.superseded["withheld"]["superseded_by"] == "prompt"
+
+
+def test_generated_at_is_compared_as_an_instant_and_not_as_a_string(
+    config: evolution.EvolutionConfig, tmp_path: Path
+) -> None:
+    """`generated_at` carries whatever offset its producer wrote — this
+    repository's own pool holds `+00:00` where the fixtures hold `Z` — and
+    lexical order across two offsets is not time order. Here the string
+    comparison and the `sequence` tie-break both point at the arrival, and it is
+    still half an hour older than what is pooled."""
+    feed = write_feed(
+        tmp_path / "feed",
+        [
+            make_record(key="pooled", sequence=1, generated_at="2026-07-25T09:00:00Z"),
+            make_record(key="arrival", sequence=2, generated_at="2026-07-25T10:30:00+02:00"),
+        ],
+    )
+
+    evolution.sync(config, feed)
+
+    loaded = evolution.load_state(config)
+    assert loaded.pending[0].report.report_key == "pooled"
+    assert loaded.superseded["arrival"]["superseded_by"] == "pooled"
 
 
 @pytest.mark.parametrize(
@@ -683,7 +769,7 @@ def valid_state() -> dict:
         "artifacts_path": ".ai-evolution/imported-artifacts/r1-0123456789abcdef",
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "cursor": None,
         "feed_exhausted": True,
         "pending": [
@@ -691,12 +777,50 @@ def valid_state() -> dict:
                 "repo_id": "repo-alpha",
                 "task_id": "2026-07-01-task",
                 "first_imported_at": "2026-07-30T10:00:01Z",
-                "primary": reference,
-                "reruns": [],
+                "report": reference,
             }
         ],
         "rejected": {"r9": a_rejection()},
         "processed": {},
+        "superseded": {},
+    }
+
+
+def legacy_state() -> dict:
+    """The complete version-2 shape: two report slots per pooled task, and no
+    `superseded` map to put the loser of the pair in. Kept as its own fixture
+    because the upgrade is a supported read path, not a corruption case."""
+
+    current = valid_state()
+    entry = current["pending"][0]
+    return {
+        "schema_version": 2,
+        "cursor": current["cursor"],
+        "feed_exhausted": current["feed_exhausted"],
+        "pending": [
+            {
+                "repo_id": entry["repo_id"],
+                "task_id": entry["task_id"],
+                "first_imported_at": entry["first_imported_at"],
+                "primary": entry["report"],
+                "reruns": [],
+            }
+        ],
+        "rejected": current["rejected"],
+        "processed": current["processed"],
+    }
+
+
+def a_supersession(**overrides) -> dict:
+    """The record `state.superseded_record` writes for a replaced report."""
+
+    return {
+        "repo_id": "repo-alpha",
+        "task_id": "2026-07-01-task",
+        "report": other_report(key="r0", sequence=2),
+        "superseded_by": "r1",
+        "recorded_at": "2026-07-30T10:00:04Z",
+        **overrides,
     }
 
 
@@ -722,7 +846,15 @@ def a_claim(**overrides) -> dict:
 
 
 def other_report(*, key: str, sequence: int) -> dict:
-    return {**valid_state()["pending"][0]["primary"], "report_key": key, "sequence": sequence}
+    reference = {
+        "report_key": "r1",
+        "sequence": 4,
+        "evaluation_id": "eval-r1",
+        "generated_at": "2026-07-30T10:00:00Z",
+        "bundle_sha256": "a" * 64,
+        "artifacts_path": ".ai-evolution/imported-artifacts/r1-0123456789abcdef",
+    }
+    return {**reference, "report_key": key, "sequence": sequence}
 
 
 def corrupt(mutate) -> str:
@@ -731,54 +863,82 @@ def corrupt(mutate) -> str:
     return json.dumps(data)
 
 
+def corrupt_legacy(mutate) -> str:
+    data = legacy_state()
+    mutate(data)
+    return json.dumps(data)
+
+
 @pytest.mark.parametrize(
     "content",
     [
         "{ not json",
-        json.dumps({"schema_version": 3, "cursor": None}),
-        json.dumps({"schema_version": 2, "pending": [{"repo_id": "a"}]}),
-        json.dumps({"schema_version": 2, "pending": "everything"}),
+        json.dumps({"schema_version": 4, "cursor": None}),
+        json.dumps({"schema_version": 3, "pending": [{"repo_id": "a"}]}),
+        json.dumps({"schema_version": 3, "pending": "everything"}),
         # A state file reduced to its version header: every field that carries
         # evidence is gone, and reading the gaps as empty is the silent reset.
-        json.dumps({"schema_version": 2}),
+        json.dumps({"schema_version": 3}),
         corrupt(lambda data: data.pop("cursor")),
         corrupt(lambda data: data.pop("feed_exhausted")),
         corrupt(lambda data: data.pop("pending")),
         corrupt(lambda data: data.pop("rejected")),
         corrupt(lambda data: data.pop("processed")),
+        corrupt(lambda data: data.pop("superseded")),
         corrupt(lambda data: data.update(unknown_field=1)),
         corrupt(lambda data: data.update(feed_exhausted="yes")),
-        # Version 1 has its own complete shape; `feed_exhausted` is not part of
-        # it, and a file mixing the two says nothing certain about either.
+        # Each version has its own complete shape, and a file mixing two says
+        # nothing certain about either: version 1 has no `feed_exhausted`, and
+        # neither 1 nor 2 has anywhere to put a `superseded` map.
         corrupt(lambda data: data.update(schema_version=1)),
+        corrupt(lambda data: data.update(schema_version=2)),
         # Shapes that are the right Python types and still cannot be true.
-        corrupt(lambda data: data["pending"][0]["primary"].update(sequence=0)),
-        corrupt(lambda data: data["pending"][0]["primary"].update(bundle_sha256="not-a-digest")),
-        corrupt(lambda data: data["pending"][0]["primary"].update(generated_at="30 July 2026")),
-        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="../../etc")),
-        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="/etc/passwd")),
+        corrupt(lambda data: data["pending"][0]["report"].update(sequence=0)),
+        corrupt(lambda data: data["pending"][0]["report"].update(bundle_sha256="not-a-digest")),
+        corrupt(lambda data: data["pending"][0]["report"].update(generated_at="30 July 2026")),
+        corrupt(lambda data: data["pending"][0]["report"].update(artifacts_path="../../etc")),
+        corrupt(lambda data: data["pending"][0]["report"].update(artifacts_path="/etc/passwd")),
         # Repository-relative but outside the configured bundle root: a
         # reference the importer could not have written, aiming a later evidence
         # read at committed content.
-        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path="evolution/cases")),
+        corrupt(lambda data: data["pending"][0]["report"].update(artifacts_path="evolution/cases")),
         # A sibling whose name merely starts the same way is not a child.
         corrupt(
-            lambda data: data["pending"][0]["primary"].update(
+            lambda data: data["pending"][0]["report"].update(
                 artifacts_path=".ai-evolution/imported-artifacts-elsewhere/r1"
             )
         ),
-        corrupt(lambda data: data["pending"][0]["primary"].update(artifacts_path=".ai-evolution/imported-artifacts")),
-        # Reruns hold references too, and are checked the same way.
+        corrupt(lambda data: data["pending"][0]["report"].update(artifacts_path=".ai-evolution/imported-artifacts")),
+        corrupt(lambda data: data["pending"][0].update(first_imported_at="yesterday")),
+        # A superseded record holds a reference, and it is checked exactly like
+        # a pooled one: the replaced pack is still staged evidence.
+        corrupt(lambda data: data["superseded"].update(r0="r1")),
+        corrupt(lambda data: data["superseded"].update(r0={})),
+        corrupt(lambda data: data["superseded"].update(r0=a_supersession(note="extra"))),
+        corrupt(lambda data: data["superseded"].update(r0=a_supersession(recorded_at="yesterday"))),
         corrupt(
-            lambda data: data["pending"][0]["reruns"].append(
-                {**other_report(key="r2", sequence=2), "artifacts_path": "evolution/cases"}
+            lambda data: data["superseded"].update(
+                r0=a_supersession(report={**other_report(key="r0", sequence=2), "artifacts_path": "evolution/cases"})
             )
         ),
-        corrupt(lambda data: data["pending"][0].update(first_imported_at="yesterday")),
-        # A rerun outranking `primary` would report a superseded evaluation as
-        # the current one; the same report twice would double-count provenance.
-        corrupt(lambda data: data["pending"][0]["reruns"].append(other_report(key="r2", sequence=9))),
-        corrupt(lambda data: data["pending"][0]["reruns"].append(other_report(key="r1", sequence=2))),
+        # The map key is the identity; a record describing some other report
+        # suppresses one key from discovery while accounting for another.
+        corrupt(lambda data: data["superseded"].update(r0=a_supersession(report=other_report(key="r7", sequence=2)))),
+        corrupt(lambda data: data["superseded"].update(r0=a_supersession(superseded_by="r0"))),
+        # A replacement this state holds no report for: the record removes r0
+        # from every future sync while nothing on disk holds what displaced it.
+        corrupt(lambda data: data["superseded"].update(r0=a_supersession(superseded_by="r404"))),
+        # Two records naming each other reach no pending or claimed report at
+        # all, so both packs are out of the pool and out of the feed.
+        corrupt(
+            lambda data: data["superseded"].update(
+                r0=a_supersession(superseded_by="r5"),
+                r5=a_supersession(report=other_report(key="r5", sequence=3), superseded_by="r0"),
+            )
+        ),
+        # One report holds one decision: a key that is both refused and replaced
+        # says two contradictory things about why it left discovery.
+        corrupt(lambda data: data["superseded"].update(r9=a_supersession(report=other_report(key="r9", sequence=2)))),
         corrupt(lambda data: data["rejected"].update(r1={"reason": "schema-invalid"})),
         corrupt(lambda data: data["rejected"].update(r9="schema-invalid")),
         # A rejection that kept its key and lost its evidence: the report stays
@@ -802,6 +962,20 @@ def corrupt(mutate) -> str:
         # `evolution/batches/` names r8, so the claim suppresses the report from
         # every future sync while no cohort accounts for it.
         corrupt(lambda data: data["processed"].update(r8=a_claim())),
+        # The version-2 shape is upgraded on read, which is not the same as
+        # being read loosely: what it says has to be true before it is reshaped.
+        corrupt_legacy(
+            lambda data: data["pending"][0]["reruns"].append(
+                {**other_report(key="r2", sequence=2), "artifacts_path": "evolution/cases"}
+            )
+        ),
+        # A rerun outranking `primary` meant the old file was already describing
+        # its own pool wrongly; upgrading it would launder that away into a
+        # shape where the disagreement can no longer be seen.
+        corrupt_legacy(lambda data: data["pending"][0]["reruns"].append(other_report(key="r2", sequence=9))),
+        corrupt_legacy(lambda data: data["pending"][0]["reruns"].append(other_report(key="r1", sequence=2))),
+        corrupt_legacy(lambda data: data["pending"][0].update(reruns="none")),
+        corrupt_legacy(lambda data: data["pending"][0].update(superseded={})),
     ],
 )
 def test_corrupt_state_is_reported_never_silently_reset(
@@ -827,13 +1001,29 @@ def test_the_complete_state_shape_loads(config: evolution.EvolutionConfig) -> No
     assert loaded.to_json() == valid_state()
 
 
+def test_a_superseded_record_loads_and_round_trips(config: evolution.EvolutionConfig) -> None:
+    """Guards the superseded corruption cases above from passing vacuously, and
+    pins that a replaced report is still a report this repository has decided
+    about — the whole point of keeping the record."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    holding = valid_state()
+    holding["superseded"] = {"r0": a_supersession()}
+    config.state_path.write_text(json.dumps(holding), encoding="utf-8")
+
+    loaded = evolution.load_state(config)
+
+    assert loaded.superseded == {"r0": a_supersession()}
+    assert "r0" in loaded.known_report_keys()
+    assert loaded.to_json() == holding
+
+
 def test_a_version_1_state_is_upgraded_rather_than_refused(config: evolution.EvolutionConfig) -> None:
     """Version 1 predates `feed_exhausted`, so it cannot say whether its
     discovery drained the feed. The upgrade assumes it did not — one sync
     corrects that, where refusing the file would cost the cursor and the pool
     behind it, and re-import evidence the feed may no longer serve."""
     config.runtime_root.mkdir(parents=True, exist_ok=True)
-    version_1 = {key: value for key, value in valid_state().items() if key != "feed_exhausted"}
+    version_1 = {key: value for key, value in legacy_state().items() if key != "feed_exhausted"}
     version_1["schema_version"] = 1
     version_1["cursor"] = '[7, "r1", "r1.json"]'
     config.state_path.write_text(json.dumps(version_1), encoding="utf-8")
@@ -846,10 +1036,62 @@ def test_a_version_1_state_is_upgraded_rather_than_refused(config: evolution.Evo
     # Rewritten at the current version on the next save, with nothing lost.
     evolution.save_state(config, loaded)
     assert json.loads(config.state_path.read_text(encoding="utf-8")) == {
-        **version_1,
-        "schema_version": 2,
+        **valid_state(),
+        "cursor": '[7, "r1", "r1.json"]',
         "feed_exhausted": False,
     }
+
+
+def test_a_version_2_entry_keeps_both_its_reports_across_the_upgrade(
+    config: evolution.EvolutionConfig,
+) -> None:
+    """Version 2 held two report slots per task and version 3 holds one, so the
+    upgrade has a report to place. Dropping it would take its key out of
+    `known_report_keys`, and the next sync that reaches it would fetch and stage
+    it again — forever, since every later sync would do the same."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    version_2 = legacy_state()
+    version_2["pending"][0]["reruns"] = [other_report(key="r0", sequence=2)]
+    config.state_path.write_text(json.dumps(version_2), encoding="utf-8")
+
+    loaded = evolution.load_state(config)
+
+    entry = loaded.pending[0]
+    assert entry.report.report_key == "r1"
+    assert loaded.superseded["r0"]["superseded_by"] == "r1"
+    assert loaded.superseded["r0"]["report"] == other_report(key="r0", sequence=2)
+    assert loaded.superseded["r0"]["repo_id"] == "repo-alpha"
+    assert loaded.known_report_keys() == {"r0", "r1", "r9"}
+
+    evolution.save_state(config, loaded)
+    rewritten = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert rewritten["schema_version"] == 3
+    assert rewritten["pending"] == valid_state()["pending"]
+    assert set(rewritten["superseded"]) == {"r0"}
+
+
+def test_the_upgrade_re_picks_the_survivor_by_generated_at(config: evolution.EvolutionConfig) -> None:
+    """Version 2 filed by `sequence`, which is publication order, so a v2 file
+    can hold a `primary` that is the later-*published* half of a pair and the
+    earlier-generated one. The upgrade applies the current rule rather than
+    preserving that slot, which is what makes it a correction."""
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+    version_2 = legacy_state()
+    # Published last, generated first — orch-hub withheld it while its task was
+    # still active, so version 2 gave it the slot.
+    version_2["pending"][0]["primary"] = {
+        **other_report(key="withheld", sequence=9),
+        "generated_at": "2026-07-20T09:00:00Z",
+    }
+    version_2["pending"][0]["reruns"] = [
+        {**other_report(key="prompt", sequence=4), "generated_at": "2026-07-25T09:00:00Z"}
+    ]
+    config.state_path.write_text(json.dumps(version_2), encoding="utf-8")
+
+    loaded = evolution.load_state(config)
+
+    assert loaded.pending[0].report.report_key == "prompt"
+    assert loaded.superseded["withheld"]["superseded_by"] == "prompt"
 
 
 def test_a_processed_claim_loads_only_when_a_manifest_names_the_report(
@@ -1031,5 +1273,5 @@ def test_no_report_body_reaches_the_versioned_ledger(config: evolution.Evolution
     evolution.sync(config, feed)
 
     assert b"SECRET-TOKEN" not in config.ledger_path.read_bytes()
-    assert b"SECRET-TOKEN" in (config.repo_root / evolution.load_state(config).pending[0].primary.artifacts_path
+    assert b"SECRET-TOKEN" in (config.repo_root / evolution.load_state(config).pending[0].report.artifacts_path
                                / state.ARTIFACTS_SUBDIR / "semantic_report").read_bytes()

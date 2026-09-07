@@ -105,7 +105,7 @@ def format_list(result: ListResult) -> str:
 
     lines = [f"feed: {len(result.candidates)} record(s) inspected, {_drained(result.exhausted)}"]
     lines.append(_field("new", f"{counts[STATUS_NEW]} report(s), {result.new_task_count} unique completed task(s)"))
-    lines.append(_field("rerun", f"{counts[STATUS_RERUN]} report(s) for tasks already pending"))
+    lines.append(_field("rerun", f"{counts[STATUS_RERUN]} further evaluation(s) of tasks already pending"))
     lines.append(_field("known", f"{counts[STATUS_KNOWN]} report(s) already decided"))
     lines.append(_field("rejected", f"{counts[STATUS_REJECTED]} report(s)"))
     for candidate in result.candidates:
@@ -119,7 +119,7 @@ def format_list(result: ListResult) -> str:
 def format_sync(result: SyncResult) -> str:
     lines = [f"sync: {result.inspected} record(s) inspected, {_drained(result.exhausted)}"]
     lines.append(_field("imported", f"{len(result.imported)} new unique completed task(s)"))
-    lines.append(_field("reruns", f"{len(result.reruns)} later report(s) for tasks already pending"))
+    lines.append(_field("reruns", f"{len(result.reruns)} further evaluation(s) of tasks already pending"))
     lines.append(_field("skipped", f"{len(result.skipped)} report(s) already decided"))
     lines.append(_field("rejected", f"{len(result.rejected)} report(s)"))
     for report_key, reason in result.rejected:

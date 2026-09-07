@@ -4,7 +4,7 @@ Everything here is ignored by Git by design (contract invariant 11): the
 discovery cursor, the pending pool, and the raw imported bundles are runtime
 data, not repository content.
 
-Five things are kept deliberately separate, because they answer five different
+Six things are kept deliberately separate, because they answer six different
 questions and collapsing them loses the answer to one of them:
 
 | Field           | Answers                                             |
@@ -14,6 +14,16 @@ questions and collapsing them loses the answer to one of them:
 | `pending`       | which unique tasks are *eligible and unbatched*     |
 | `rejected`      | which reports were seen and refused, and why        |
 | `processed`     | which reports a frozen batch already claimed        |
+| `superseded`    | which valid reports a later evaluation of the same  |
+|                 | task replaced, and which one replaced them          |
+
+`superseded` is separate from `rejected` because the two say opposite things
+about the same report. A rejection is a validity answer out of a bounded
+vocabulary the ledger publishes (`reports.REJECTION_REASONS`); a superseded
+report was valid, was staged, and lost its task's slot only because a later
+evaluation of that task exists. Filing one under the other would put a
+judgement about the report into a vocabulary that describes the report's own
+defects.
 
 `feed_exhausted` is separate from the cursor because a cursor says only where
 discovery stopped, never why. Discovery that stopped at its page bound leaves
@@ -45,22 +55,29 @@ from .config import EvolutionConfig, batch_id_number
 from .errors import LockError, StateError
 from .manifests import claimed_reports
 from .reports import REJECTION_REASONS, NormalizedReport, canonical_json
-from .schema import is_rfc3339_date_time
+from .schema import is_rfc3339_date_time, parse_rfc3339
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 
 # The complete shape of every version this build reads. `to_json` writes the
 # current one; `from_json` requires exactly the fields of the version the file
-# declares. Version 1 is the shape written before discovery recorded whether it
-# had drained the feed; it is upgraded on read rather than refused, because
+# declares. Older versions are upgraded on read rather than refused, because
 # this state is a machine's own runtime record and losing its cursor and pool
 # would re-import evidence the feed may no longer serve.
+#
+# Version 1 predates `feed_exhausted`. Versions 1 and 2 both hold two report
+# slots per pooled task — a `primary` and its `reruns` — where version 3 holds
+# one; the entry parser takes the version for exactly that reason, and the
+# upgrade files the losing reports under `superseded` rather than dropping
+# them.
 _STATE_FIELDS = {
     1: ("cursor", "pending", "rejected", "processed"),
     2: ("cursor", "feed_exhausted", "pending", "rejected", "processed"),
+    3: ("cursor", "feed_exhausted", "pending", "rejected", "processed", "superseded"),
 }
 _STATE_KEYS = {version: frozenset(fields) | {"schema_version"} for version, fields in _STATE_FIELDS.items()}
-_POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "primary", "reruns"})
+_POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "report"})
+_LEGACY_POOL_ENTRY_FIELDS = frozenset({"repo_id", "task_id", "first_imported_at", "primary", "reruns"})
 _REPORT_REF_FIELDS = frozenset(
     {"report_key", "sequence", "evaluation_id", "generated_at", "bundle_sha256", "artifacts_path"}
 )
@@ -68,6 +85,8 @@ _REPORT_REF_FIELDS = frozenset(
 _REJECTION_FIELDS = frozenset({"reason", "detail", "recorded_at"})
 # Exactly what `batches._claim_reports` writes.
 _PROCESSED_FIELDS = frozenset({"batch_id", "recorded_at"})
+# Exactly what `superseded_record` writes.
+_SUPERSEDED_FIELDS = frozenset({"repo_id", "task_id", "report", "superseded_by", "recorded_at"})
 
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z", re.ASCII)
 
@@ -122,73 +141,196 @@ class ReportRef:
             artifacts_path=_require_artifacts_path(data, "artifacts_path", where, artifacts_root=artifacts_root),
         )
 
+    def supersedes(self, other: "ReportRef") -> bool:
+        """Whether this report replaces `other` as its task's evidence.
+
+        **The later evaluation wins, and `generated_at` is what says which one
+        that is.** `sequence` is the feed's publication order, and orch-hub
+        publishes a report only once the task it evaluated is archived — so a
+        report written while its task was still active is withheld and enters
+        the feed at the position where it *became* publishable, behind reports
+        generated after it. Ordering on `sequence` would hand the slot to
+        whichever pack the feed happened to release last, which is a fact about
+        the publisher's gate rather than about the evaluations.
+
+        Compared as instants, not as strings: `generated_at` carries whatever
+        offset its producer wrote (the live pool holds `+00:00`, the fixtures
+        hold `Z`), and lexical order across two offsets is not time order.
+
+        `sequence` breaks a tie only. Two distinct reports share a publication
+        position nowhere in the feed, so this is the arbitrary-but-total half of
+        the rule: it exists so the answer never depends on arrival order.
+        """
+
+        return (parse_rfc3339(self.generated_at), self.sequence) > (
+            parse_rfc3339(other.generated_at),
+            other.sequence,
+        )
+
+
+def superseded_record(
+    *,
+    repo_id: str,
+    task_id: str,
+    ref: ReportRef,
+    superseded_by: str,
+    recorded_at: str,
+) -> dict[str, Any]:
+    """The record `superseded` holds for one replaced report.
+
+    The whole reference, not just its key. The key alone would satisfy the one
+    thing this map has to do — keep the report out of `known_report_keys` so a
+    later `sync` does not fetch and stage it again forever — and would leave its
+    staged bundle on disk with nothing in state able to name it. Keeping the
+    reference costs six fields and means the replaced pack stays as findable as
+    it was while it was pooled (invariant 4).
+
+    `superseded_by` names the report that took the task's slot, so the chain
+    from any replaced pack reaches the evidence that is actually in play.
+    """
+
+    return {
+        "repo_id": repo_id,
+        "task_id": task_id,
+        "report": ref.to_json(),
+        "superseded_by": superseded_by,
+        "recorded_at": recorded_at,
+    }
+
 
 @dataclass
 class PoolEntry:
-    """One unique completed task awaiting a batch.
+    """One unique completed task awaiting a batch, and the one report that is
+    its evidence.
 
-    A batch counts tasks, not reports (invariant 1), but an evaluator rerun is
-    still provenance worth keeping (invariant 4) — so reruns stay attached to
-    the entry instead of being dropped or counted. `primary` is the
-    highest-sequence report seen for the task: the most recent evaluation.
+    A batch counts tasks, not reports (invariant 1), and a task's evidence is
+    its latest evaluation. A second evaluation of a pooled task does not make
+    the entry hold two: the later one takes the slot and the other moves to
+    `superseded`, whole (`superseded_record`), so provenance is preserved
+    (invariant 4) without any reader having to decide which of two packs it is
+    looking at.
+
+    Invariant 4 asks for identity, revisions, models, hashes and explicit
+    missing fields to be kept. It does not ask for two of them on one entry, and
+    keeping two is what made every downstream reader — the membership test, the
+    manifest, the claim — restate which one it meant.
     """
 
     repo_id: str
     task_id: str
-    primary: ReportRef
+    report: ReportRef
     first_imported_at: str
-    reruns: list[ReportRef] = field(default_factory=list)
 
     @property
     def dedup_key(self) -> tuple[str, str]:
         return (self.repo_id, self.task_id)
 
     def report_keys(self) -> set[str]:
-        return {self.primary.report_key} | {ref.report_key for ref in self.reruns}
+        """This entry's report keys — one of them. A set because every caller
+        unions or compares it against another decision's keys."""
+
+        return {self.report.report_key}
 
     def to_json(self) -> dict[str, Any]:
         return {
             "repo_id": self.repo_id,
             "task_id": self.task_id,
             "first_imported_at": self.first_imported_at,
-            "primary": self.primary.to_json(),
-            "reruns": [ref.to_json() for ref in sorted(self.reruns, key=lambda ref: ref.sequence)],
+            "report": self.report.to_json(),
         }
 
     @classmethod
-    def from_json(cls, data: Any, where: str, *, artifacts_root: str) -> "PoolEntry":
+    def from_json(
+        cls,
+        data: Any,
+        where: str,
+        *,
+        artifacts_root: str,
+        version: int,
+        recorded_at: str,
+    ) -> tuple["PoolEntry", dict[str, dict[str, Any]]]:
+        """Rebuild one entry of the shape `version` declares, with the
+        supersessions an older shape implies.
+
+        Versions 1 and 2 wrote a `primary` and a list of `reruns`, so an entry
+        of theirs can carry reports this build's entry has no slot for. They are
+        returned rather than dropped: a dropped key leaves `known_report_keys`,
+        and a report that leaves it is re-fetched and re-staged by every later
+        `sync`. `recorded_at` is when this build made that call — the old file
+        recorded no such decision, so there is no earlier moment to claim.
+
+        The survivor is chosen by the same rule the importer applies to a live
+        arrival (`ReportRef.supersedes`), which is what makes the upgrade a
+        correction and not merely a reshape: a v2 entry whose `primary` was the
+        later-published pack of an earlier-generated evaluation comes out of
+        this holding the pack that was actually generated last.
+        """
+
         if not isinstance(data, dict):
             raise StateError(f"{where}: pool entry must be an object")
-        unexpected = set(data) - _POOL_ENTRY_FIELDS
+        if version >= 3:
+            unexpected = set(data) - _POOL_ENTRY_FIELDS
+            if unexpected:
+                raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
+            entry = cls(
+                repo_id=_require_str(data, "repo_id", where),
+                task_id=_require_str(data, "task_id", where),
+                report=ReportRef.from_json(data.get("report"), f"{where}.report", artifacts_root=artifacts_root),
+                first_imported_at=_require_timestamp(data, "first_imported_at", where),
+            )
+            return entry, {}
+
+        unexpected = set(data) - _LEGACY_POOL_ENTRY_FIELDS
         if unexpected:
             raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
         reruns = data.get("reruns")
         if not isinstance(reruns, list):
             raise StateError(f"{where}: reruns must be a list")
-        entry = cls(
-            repo_id=_require_str(data, "repo_id", where),
-            task_id=_require_str(data, "task_id", where),
-            primary=ReportRef.from_json(data.get("primary"), f"{where}.primary", artifacts_root=artifacts_root),
-            first_imported_at=_require_timestamp(data, "first_imported_at", where),
-            reruns=[
-                ReportRef.from_json(item, f"{where}.reruns[{i}]", artifacts_root=artifacts_root)
-                for i, item in enumerate(reruns)
-            ],
-        )
+        repo_id = _require_str(data, "repo_id", where)
+        task_id = _require_str(data, "task_id", where)
+        primary = ReportRef.from_json(data.get("primary"), f"{where}.primary", artifacts_root=artifacts_root)
+        others = [
+            ReportRef.from_json(item, f"{where}.reruns[{i}]", artifacts_root=artifacts_root)
+            for i, item in enumerate(reruns)
+        ]
 
-        keys = [entry.primary.report_key] + [ref.report_key for ref in entry.reruns]
+        keys = [primary.report_key] + [ref.report_key for ref in others]
         if len(set(keys)) != len(keys):
             raise StateError(f"{where}: the same report appears twice on this entry")
-        # `primary` is defined as the latest evaluation seen for the task; an
-        # entry whose rerun outranks it would report a superseded evaluation as
-        # current for every batch decision made from this pool.
-        for ref in entry.reruns:
-            if ref.sequence > entry.primary.sequence:
+        # The old shape's own rule, still enforced on the way out of it:
+        # `primary` was defined as the highest sequence seen, so a file whose
+        # rerun outranks it was already describing its pool incorrectly, and
+        # upgrading it would launder that into a shape where the disagreement
+        # is no longer visible.
+        for ref in others:
+            if ref.sequence > primary.sequence:
                 raise StateError(
                     f"{where}: rerun {ref.report_key} has sequence {ref.sequence}, "
-                    f"above primary {entry.primary.report_key} at {entry.primary.sequence}"
+                    f"above primary {primary.report_key} at {primary.sequence}"
                 )
-        return entry
+
+        survivor = primary
+        for ref in others:
+            if ref.supersedes(survivor):
+                survivor = ref
+        entry = cls(
+            repo_id=repo_id,
+            task_id=task_id,
+            report=survivor,
+            first_imported_at=_require_timestamp(data, "first_imported_at", where),
+        )
+        replaced = {
+            ref.report_key: superseded_record(
+                repo_id=repo_id,
+                task_id=task_id,
+                ref=ref,
+                superseded_by=survivor.report_key,
+                recorded_at=recorded_at,
+            )
+            for ref in (primary, *others)
+            if ref.report_key != survivor.report_key
+        }
+        return entry, replaced
 
 
 @dataclass
@@ -202,6 +344,7 @@ class EvolutionState:
     pending: list[PoolEntry] = field(default_factory=list)
     rejected: dict[str, dict[str, Any]] = field(default_factory=dict)
     processed: dict[str, dict[str, Any]] = field(default_factory=dict)
+    superseded: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def find(self, repo_id: str, task_id: str) -> PoolEntry | None:
         for entry in self.pending:
@@ -212,9 +355,13 @@ class EvolutionState:
     def known_report_keys(self) -> set[str]:
         """Every report this repository has already decided about. The importer
         checks this before fetching, which is what makes a re-run of `sync`
-        over an unchanged feed a no-op."""
+        over an unchanged feed a no-op.
 
-        keys: set[str] = set(self.rejected) | set(self.processed)
+        Superseded reports count. Losing a task's slot is a decision about the
+        report, not an absence of one, and a key missing here is a key the feed
+        offers again on every pass."""
+
+        keys: set[str] = set(self.rejected) | set(self.processed) | set(self.superseded)
         for entry in self.pending:
             keys |= entry.report_keys()
         return keys
@@ -226,10 +373,11 @@ class EvolutionState:
             "feed_exhausted": self.feed_exhausted,
             "pending": [
                 entry.to_json()
-                for entry in sorted(self.pending, key=lambda entry: (entry.primary.sequence, entry.repo_id, entry.task_id))
+                for entry in sorted(self.pending, key=lambda entry: (entry.report.sequence, entry.repo_id, entry.task_id))
             ],
             "rejected": self.rejected,
             "processed": self.processed,
+            "superseded": self.superseded,
         }
 
     @classmethod
@@ -249,11 +397,15 @@ class EvolutionState:
         reset this module exists to prevent: the cursor rewinds, the pool
         empties, and the run looks successful.
 
-        A version-1 file is upgraded here instead: it predates `feed_exhausted`,
-        so it cannot say whether its discovery drained the feed, and the
-        upgrade assumes it did not. That is the same answer a fresh state
-        gives, and it costs one sync to correct — where refusing the file would
-        cost the cursor and the pool behind it.
+        An older file is upgraded here instead. A version-1 file predates
+        `feed_exhausted`, so it cannot say whether its discovery drained the
+        feed, and the upgrade assumes it did not. That is the same answer a
+        fresh state gives, and it costs one sync to correct — where refusing
+        the file would cost the cursor and the pool behind it. Versions 1 and 2
+        also hold two report slots per pooled task; the entry parser takes the
+        version and files the replaced reports under `superseded`, so an
+        upgrade loses no report from `known_report_keys` and no report is
+        fetched twice.
 
         `artifacts_root` is the repository-relative bundle root from the config
         governing this run; staged references are checked against it, so state
@@ -292,10 +444,22 @@ class EvolutionState:
         pending = data["pending"]
         if not isinstance(pending, list):
             raise StateError(f"{path}: pending must be a list")
-        entries = [
-            PoolEntry.from_json(item, f"{path}: pending[{i}]", artifacts_root=artifacts_root)
-            for i, item in enumerate(pending)
-        ]
+        # One reading of the clock for the whole file: an upgrade dates every
+        # supersession it derives from the moment this build derived them, and
+        # entries of one file were not decided at different moments.
+        upgraded_at = utc_timestamp()
+        entries: list[PoolEntry] = []
+        replaced: dict[str, dict[str, Any]] = {}
+        for index, item in enumerate(pending):
+            entry, losers = PoolEntry.from_json(
+                item,
+                f"{path}: pending[{index}]",
+                artifacts_root=artifacts_root,
+                version=version,
+                recorded_at=upgraded_at,
+            )
+            entries.append(entry)
+            replaced.update(losers)
         seen: set[tuple[str, str]] = set()
         for entry in entries:
             if entry.dedup_key in seen:
@@ -304,10 +468,16 @@ class EvolutionState:
 
         rejected = _require_rejections(data, path)
         processed = _require_processed(data, path, claimed)
+        superseded = (
+            _require_superseded(data, path, artifacts_root=artifacts_root)
+            if version >= 3
+            else replaced
+        )
         # One report has one decision. The same key in two of these means the
         # state contradicts itself about what was already done with it, and
         # `known_report_keys` would flatten the contradiction away.
-        _require_disjoint_keys(entries, rejected, processed, path=path)
+        _require_disjoint_keys(entries, rejected, processed, superseded, path=path)
+        _require_settled_supersessions(entries, processed, superseded, path=path)
 
         return cls(
             cursor=cursor,
@@ -315,6 +485,7 @@ class EvolutionState:
             pending=entries,
             rejected=rejected,
             processed=processed,
+            superseded=superseded,
         )
 
 
@@ -621,15 +792,110 @@ def _require_processed(
     return value
 
 
+def _require_superseded(data: Mapping[str, Any], path: Path, *, artifacts_root: str) -> dict[str, Any]:
+    """`superseded` records the valid reports a later evaluation of the same
+    task replaced.
+
+    The shape is exactly what `superseded_record` writes, and the reference it
+    carries is checked like any other: a replaced pack is still staged evidence
+    on this machine, and a record naming a bundle nowhere under the configured
+    root would aim a later read at whatever it names instead.
+
+    The map key is the identity, so the reference's own `report_key` has to
+    agree with it. Two spellings of one fact that can disagree is how a report
+    ends up suppressed from discovery under one key while its record describes
+    another.
+    """
+
+    value = data["superseded"]
+    if not isinstance(value, dict):
+        raise StateError(f"{path}: superseded must be an object")
+    for report_key, entry in value.items():
+        where = f"{path}: superseded[{report_key!r}]"
+        if not report_key:
+            raise StateError(f"{path}: superseded has an empty report key")
+        if not isinstance(entry, dict):
+            raise StateError(f"{where}: must be an object")
+        unexpected = set(entry) - _SUPERSEDED_FIELDS
+        if unexpected:
+            raise StateError(f"{where}: unexpected fields {sorted(unexpected)}")
+        _require_str(entry, "repo_id", where)
+        _require_str(entry, "task_id", where)
+        ref = ReportRef.from_json(entry.get("report"), f"{where}.report", artifacts_root=artifacts_root)
+        if ref.report_key != report_key:
+            raise StateError(f"{where}: the record describes report {ref.report_key}, not the key it is filed under")
+        replacement = _require_str(entry, "superseded_by", where)
+        if replacement == report_key:
+            raise StateError(f"{where}: a report cannot supersede itself")
+        _require_timestamp(entry, "recorded_at", where)
+    return value
+
+
+def _require_settled_supersessions(
+    entries: list[PoolEntry],
+    processed: Mapping[str, Any],
+    superseded: Mapping[str, Any],
+    *,
+    path: Path,
+) -> None:
+    """Every replaced report names a replacement this state still accounts for.
+
+    A supersession is only a decision if the report that won is somewhere: in
+    the pool, claimed by a batch, or replaced in its turn by one that is. A
+    `superseded_by` naming nothing removes the report from discovery while
+    nothing on disk holds the evidence that displaced it — the same hole
+    `_require_processed` refuses for a claim with no manifest behind it.
+
+    Then the chain has to end. A group of records pointing at each other
+    satisfies the check above and still leaves every report in it out of the
+    pool, out of every batch, and out of the feed: evidence this machine has
+    quietly stopped being able to reach.
+    """
+
+    live = set(processed)
+    for entry in entries:
+        live |= entry.report_keys()
+    for report_key, record in superseded.items():
+        replacement = record["superseded_by"]
+        if replacement not in live and replacement not in superseded:
+            raise StateError(
+                f"{path}: superseded[{report_key!r}] names {replacement} as its replacement, and this state holds "
+                "no such report — pending, claimed, or superseded in turn; a supersession with no surviving "
+                "evidence behind it hides the report from every future sync"
+            )
+
+    # Peel the chains that reach live evidence; whatever cannot be peeled is in
+    # a cycle, or feeds one.
+    settled = set(live)
+    unsettled = {key: record["superseded_by"] for key, record in superseded.items()}
+    while True:
+        resolved = [key for key, replacement in unsettled.items() if replacement in settled]
+        if not resolved:
+            break
+        settled.update(resolved)
+        for key in resolved:
+            del unsettled[key]
+    if unsettled:
+        raise StateError(
+            f"{path}: superseded reports {sorted(unsettled)} replace each other in a cycle, so none of them "
+            "reaches a report that is still pending or claimed"
+        )
+
+
 def _require_disjoint_keys(
     entries: list[PoolEntry],
     rejected: Mapping[str, Any],
     processed: Mapping[str, Any],
+    superseded: Mapping[str, Any],
     *,
     path: Path,
 ) -> None:
     seen: dict[str, str] = {}
-    groups: list[tuple[str, Any]] = [("rejected", rejected), ("processed", processed)]
+    groups: list[tuple[str, Any]] = [
+        ("rejected", rejected),
+        ("processed", processed),
+        ("superseded", superseded),
+    ]
     for entry in entries:
         groups.append((f"pending {entry.repo_id}/{entry.task_id}", entry.report_keys()))
     for where, keys in groups:

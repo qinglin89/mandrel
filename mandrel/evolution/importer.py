@@ -40,7 +40,16 @@ from .reports import (
     publishable_reason,
     verify_artifact_bytes,
 )
-from .state import EvolutionState, PoolEntry, ReportRef, load_state, save_state, single_writer_lock, stage_artifacts
+from .state import (
+    EvolutionState,
+    PoolEntry,
+    ReportRef,
+    load_state,
+    save_state,
+    single_writer_lock,
+    stage_artifacts,
+    superseded_record,
+)
 
 DEFAULT_PAGE_SIZE = 50
 # A drain bound, not a policy: a feed that keeps producing pages without ever
@@ -369,10 +378,18 @@ def _record_rejection(state: EvolutionState, rejection: Rejection) -> Candidate:
 def _stage_in_pool(state: EvolutionState, report: NormalizedReport, artifacts_path: str) -> str:
     """Place one validated report in the pending pool.
 
-    The pool holds unique source tasks. A second report for a task already
-    pooled is an evaluator rerun: it is kept as provenance (invariant 4) and
-    does not raise the batch count (invariant 1). The higher sequence wins the
-    `primary` slot, so the entry always describes the latest evaluation.
+    The pool holds unique source tasks, and a task's entry holds the one report
+    that is its evidence. A second report for a task already pooled is a second
+    evaluation of it: it does not raise the batch count (invariant 1), and the
+    one it does not replace moves to `state.superseded` whole, so the pack that
+    lost is still identified, hashed and locatable (invariant 4).
+
+    **Which one loses is the evaluations' own answer, not the feed's.** The
+    later `generated_at` takes the slot (`ReportRef.supersedes`). Filing by
+    arrival, or by the publication `sequence` that arrival tracks, would record
+    the order orch-hub released the packs in — and it releases a report only
+    once the task it evaluated is archived, so a pack written first can be
+    published last.
     """
 
     ref = ReportRef(
@@ -389,15 +406,19 @@ def _stage_in_pool(state: EvolutionState, report: NormalizedReport, artifacts_pa
             PoolEntry(
                 repo_id=report.repo_id,
                 task_id=report.task_id,
-                primary=ref,
+                report=ref,
                 first_imported_at=utc_timestamp(),
             )
         )
         return STATUS_NEW
 
-    if ref.sequence > entry.primary.sequence:
-        entry.reruns.append(entry.primary)
-        entry.primary = ref
-    else:
-        entry.reruns.append(ref)
+    replaced, survivor = (entry.report, ref) if ref.supersedes(entry.report) else (ref, entry.report)
+    state.superseded[replaced.report_key] = superseded_record(
+        repo_id=entry.repo_id,
+        task_id=entry.task_id,
+        ref=replaced,
+        superseded_by=survivor.report_key,
+        recorded_at=utc_timestamp(),
+    )
+    entry.report = survivor
     return STATUS_RERUN

@@ -1193,30 +1193,23 @@ def _non_selection(
     """Why this pooled task is not a member of a batch formed at `base`, or None
     where it is.
 
-    **Every report the entry owns is asked, and all of them have to answer the
-    base.** The revision asked about is each report's
-    `provenance.effective_revision` — the evaluated target's own deploy-lock
-    commit, which is what says which protocol produced the work. Invariant 5
-    states membership per report; membership is *decided* per completed task
-    (invariant 1), and a freeze puts every report of a member into the manifest
-    stamped with that one decision. So the decision has to be true of all of
-    them: testing the primary alone would freeze an off-base rerun marked
-    `auto`, a claim about that report nobody derived, and it would make the
-    answer depend on which of two disagreeing evaluations happened to arrive
-    last.
+    **The entry's report is asked, and it is the only report there is.** The
+    revision asked about is its `provenance.effective_revision` — the evaluated
+    target's own deploy-lock commit, which is what says which protocol produced
+    the work. Invariant 5 states membership per report; membership is *decided*
+    per completed task (invariant 1), and a freeze puts the member's report into
+    the manifest stamped with that one decision. Those are the same report, so
+    the decision cannot be true of the set and false of what is frozen: nothing
+    enters a batch carrying a marker derived from another pack's evidence.
 
-    A rerun is a second reading of the same run rather than a second run
-    (invariant 4), so in a coherent pool every report of a task states the same
-    production revision and this test is the primary's. Where they disagree the
-    task is not a member, and the human window is the door — the same door the
-    reports that state nothing at all go through.
+    A superseded evaluation of the same task is not asked, and does not have to
+    be. It is not in the manifest, so no claim is being made about it; the
+    entry's report is the task's evidence and the whole of it (`state.py`).
 
-    The reason recorded is the **first** failure over the entry's reports, taken
-    in a fixed order (`_entry_reports`: the primary, then the reruns by
-    evaluation order). One task gets one reason, so it has to be a report's own
-    reason to keep the denominator's portability intact: `revision-absent` and
-    `revision-malformed` are settled identically in every clone, while
-    `revision-unresolvable` is a fact about this one.
+    The reason recorded is that report's own, which is what keeps the
+    denominator's portability intact: `revision-absent` and `revision-malformed`
+    are settled identically in every clone, while `revision-unresolvable` is a
+    fact about this one.
 
     The four ways to fail, kept apart because an operator's next move differs
     for each:
@@ -1242,30 +1235,16 @@ def _non_selection(
     of the equality.
     """
 
-    for ref in _entry_reports(entry):
-        stated = _staged_effective_revision(config, entry, ref)
-        if stated is None:
-            return REASON_REVISION_ABSENT
-        if not is_object_id(stated):
-            return REASON_REVISION_MALFORMED
-        if identities.of(stated) is None:
-            return REASON_REVISION_UNRESOLVABLE
-        if not identities.same(base, stated):
-            return REASON_IDENTITY_DIFFERS
+    stated = _staged_effective_revision(config, entry, entry.report)
+    if stated is None:
+        return REASON_REVISION_ABSENT
+    if not is_object_id(stated):
+        return REASON_REVISION_MALFORMED
+    if identities.of(stated) is None:
+        return REASON_REVISION_UNRESOLVABLE
+    if not identities.same(base, stated):
+        return REASON_IDENTITY_DIFFERS
     return None
-
-
-def _entry_reports(entry: PoolEntry) -> tuple[ReportRef, ...]:
-    """Every report one pooled task owns, in one fixed order.
-
-    The primary first — it is the latest evaluation, so its answer is the task's
-    headline answer — then the reruns in evaluation order. One spelling, shared
-    by the membership test and the freeze, because the set a task is judged over
-    and the set frozen into its manifest have to be the same set: a report the
-    test never saw would enter the batch carrying a decision it was not part of.
-    """
-
-    return (entry.primary, *sorted(entry.reruns, key=lambda ref: (ref.sequence, ref.report_key)))
 
 
 def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry, ref: ReportRef) -> str | None:
@@ -1810,7 +1789,7 @@ def _batched_entries(state: EvolutionState) -> list[PoolEntry]:
     those tasks wait for a second full target.
     """
 
-    return sorted(state.pending, key=lambda entry: (entry.primary.sequence, entry.repo_id, entry.task_id))
+    return sorted(state.pending, key=lambda entry: (entry.report.sequence, entry.repo_id, entry.task_id))
 
 
 def _build_manifest(
@@ -1827,11 +1806,12 @@ def _build_manifest(
 ) -> dict[str, Any]:
     """Assemble and validate the membership snapshot before anything is written.
 
-    Every report the batched tasks own goes in, reruns included: they are
-    provenance (invariant 4) and they do not raise the task count (invariant 1),
-    which is derived from the distinct `(repo_id, task_id)` pairs. It is the same
-    set `_non_selection` judged, through the same `_entry_reports` — each of
-    these reports earned the marker it is stamped with.
+    One report per member: the entry's own, which is the report `_non_selection`
+    judged. The task count and the report count are therefore the same number,
+    and neither is an accident — a batch counts distinct `(repo_id, task_id)`
+    pairs (invariant 1), and each of those pairs has exactly one pack of
+    evidence (`state.PoolEntry`). Every report here earned the marker it is
+    stamped with, because it is the report the marker was derived from.
 
     The offer's whole answer is copied in, not just the half that was selected.
     A frozen batch has to state its own denominator — what was considered, what
@@ -1842,10 +1822,9 @@ def _build_manifest(
 
     members = {member.dedup_key: member for member in proposal.selected}
     schema = load_import_schema(config)
-    reports: list[dict[str, Any]] = []
-    for entry in entries:
-        for ref in _entry_reports(entry):
-            reports.append(_manifest_report(config, entry, ref, schema, members[entry.dedup_key]))
+    reports = [
+        _manifest_report(config, entry, entry.report, schema, members[entry.dedup_key]) for entry in entries
+    ]
     reports.sort(key=lambda report: (report["sequence"], report["report_key"]))
 
     manifest = {
@@ -1904,10 +1883,9 @@ def _manifest_report(
     """One report's membership entry, with its cohort provenance read back from
     the staged bundle and the whole bundle re-verified against the pool.
 
-    `selection` is the task's, repeated on each of its reports: membership is
-    decided per completed task (invariant 1) and a rerun is the same task's
-    evidence, so every report of a member carries the same answer. Carried on
-    the report rather than derived from a lookup elsewhere in the manifest so
+    `selection` is the task's: membership is decided per completed task
+    (invariant 1), and this is the report that decision was taken over. Carried
+    on the report rather than derived from a lookup elsewhere in the manifest so
     that a reader holding one entry can see why it is here at all.
     """
 
@@ -2079,31 +2057,32 @@ def _claim_reports(state: EvolutionState, report_keys: set[str], *, batch_id: st
     record, the manifest is the membership record.
 
     Keyed on reports rather than tasks because a task can outlive its batched
-    reports. A `start` whose freeze was interrupted syncs again before it
+    report. A `start` whose freeze was interrupted syncs again before it
     resumes, so a fresh evaluation of an already-batched task can land in the
-    pool between the manifest and the state commit. Claiming per report leaves
-    that late report pending — a later batch's evidence (invariant 3) — instead
-    of burying it under a batch that never named it.
+    pool between the manifest and the state commit. That arrival supersedes the
+    entry's report, and claiming per report is what lets the entry stay — its
+    evidence is now the late pack, a later batch's (invariant 3), rather than a
+    task buried under a batch that never named what it holds.
+
+    An entry whose report was claimed leaves the pool outright. There is no
+    second pack to fall back to and no slot to re-pick: one pack is the whole
+    entry (`state.PoolEntry`), so a claimed report is a task with nothing left
+    to batch until the next evaluation of it arrives and opens a new entry.
+
+    A claimed report also leaves `superseded`, which is where the interrupted
+    freeze above puts it: the late evaluation took the task's slot before the
+    repair claimed what the manifest names. One report holds one decision
+    (`state.py`), and the claim is the stronger of the two — the supersession
+    kept the report out of discovery and nameable, and a frozen manifest does
+    both with a committed record behind it.
     """
 
     recorded_at = format_rfc3339(now)
     for report_key in report_keys:
         state.processed[report_key] = {"batch_id": batch_id, "recorded_at": recorded_at}
+        state.superseded.pop(report_key, None)
 
-    survivors: list[PoolEntry] = []
-    for entry in state.pending:
-        remaining = [ref for ref in (entry.primary, *entry.reruns) if ref.report_key not in report_keys]
-        if not remaining:
-            continue
-        if len(remaining) <= len(entry.reruns):
-            # Something was claimed. The highest sequence left takes `primary`,
-            # which is what the slot means; `first_imported_at` stays as it was,
-            # because it records when this task entered the pool and it did.
-            primary = max(remaining, key=lambda ref: ref.sequence)
-            entry.primary = primary
-            entry.reruns = [ref for ref in remaining if ref.report_key != primary.report_key]
-        survivors.append(entry)
-    state.pending = survivors
+    state.pending = [entry for entry in state.pending if entry.report.report_key not in report_keys]
 
 
 def _complete_freeze(
@@ -2167,8 +2146,14 @@ def _require_consistent_claims(
     *,
     state_present: bool,
 ) -> None:
-    """The manifest's members must be accounted for: pending, or claimed by this
-    batch and no other.
+    """The manifest's members must be accounted for: pending, superseded, or
+    claimed by this batch and no other.
+
+    Superseded counts as accounted for. A fresh evaluation of a batched task can
+    land between the manifest and the state commit, and it takes the task's slot
+    — so the report this batch named is in `superseded` rather than on an entry.
+    That is this machine's own record of having staged it, which is what the gap
+    below is looking for; the claim `_claim_reports` then writes replaces it.
 
     A claim naming a different batch means two cohorts believe they own one
     report, and this controller cannot arbitrate which manifest is right.
@@ -2195,11 +2180,11 @@ def _require_consistent_claims(
     if not state_present:
         return
 
-    pending = {report_key for entry in state.pending for report_key in entry.report_keys()}
+    staged = {report_key for entry in state.pending for report_key in entry.report_keys()} | set(state.superseded)
     for report_key in sorted(batch.report_keys):
         claim = state.processed.get(report_key)
         if claim is None:
-            if report_key not in pending:
+            if report_key not in staged:
                 raise StateError(
                     f"report {report_key} is named by {batch.manifest_path} but is neither pending nor claimed in "
                     f"{config.state_path}; this machine's runtime state does not account for the batch's evidence — "

@@ -148,7 +148,7 @@
   },
   "$defs": {
     "selection": {
-      "description": "How this report's task came to be a member. The same answer on every report of one task, checked by the reader: membership is decided per unique completed task (invariant 1) and a rerun is that task's evidence, not a second candidate — which is also why the identity test is taken over every report the task owns, so that no report is marked automatic on another report's evidence. Carried on the report so an entry read on its own says why it is in the batch.",
+      "description": "How this report's task came to be a member. Membership is decided per unique completed task (invariant 1), and this is the report that decision was taken over: a task's evidence is its one latest evaluation, so the identity test and the manifest read the same report and no report is marked automatic on another report's evidence. Carried on the report so an entry read on its own says why it is in the batch.",
       "type": "object",
       "required": [
         "mode",

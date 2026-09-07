@@ -527,33 +527,37 @@ def two_evaluations(
 ) -> None:
     """Import two evaluations of one completed task, produced at two revisions.
 
-    Two syncs rather than one, in the given order: the pool takes the highest
-    sequence it has seen as the entry's primary and the feed cursor never goes
-    back, so this is the arrival order a real pool has. `second` ends up the
-    primary and `first` its rerun. `None` is a report whose provenance states no
-    revision at all.
+    Two syncs rather than one, in the given order, because that is the arrival
+    order a real pool has: the feed cursor never goes back. `second` is the
+    later evaluation and so becomes the task's evidence; `first` is superseded
+    and leaves the entry. `None` is a report whose provenance states no revision
+    at all.
     """
 
-    for key, sequence, revision in (("first-pass", 10, first), ("second-pass", 20, second)):
+    for key, sequence, generated_at, revision in (
+        ("first-pass", 10, "2026-07-29T10:00:00Z", first),
+        ("second-pass", 20, "2026-07-30T10:00:00Z", second),
+    ):
         record = make_record(
             key=key,
             sequence=sequence,
             task_id=task_id,
             evaluation_id=f"eval-{key}",
+            generated_at=generated_at,
             effective_revision=revision,
         )
         evolution.sync(config, write_feed(feed_root, [record]))
 
 
-def test_an_off_base_rerun_keeps_its_task_out_of_the_batch(
+def test_a_superseded_off_base_evaluation_does_not_keep_its_task_out(
     config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
-    """A member's whole evidence set is frozen into the manifest under the task's
-    one decision, so the decision has to be true of every report it owns.
+    """A member's evidence is the one pack the freeze puts in the manifest, so
+    that is the pack the decision is taken over.
 
-    Deciding from the latest evaluation alone would stamp `auto` on a report
-    produced under another protocol — a claim about that report nobody derived,
-    inside the immutable record a cohort's coherence claim is read from.
+    The earlier evaluation ran under another protocol and is superseded: it is
+    not in the manifest, nothing is stamped `auto` on its behalf, and there is
+    no claim about it for the cohort's coherence to be read against.
     """
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     fill_pool(config, feed_root, TARGET)
@@ -563,26 +567,20 @@ def test_an_off_base_rerun_keeps_its_task_out_of_the_batch(
 
     manifest = read_manifest(freeze(config))
 
-    assert manifest["selection"]["not_selected"] == [
-        {
-            "repo_id": "repo-alpha",
-            "task_id": "2026-08-01-task",
-            "report_keys": ["first-pass", "second-pass"],
-            "reason": manifests.REASON_IDENTITY_DIFFERS,
-            "justification": None,
-            "actor": None,
-            "moved_at": None,
-        }
-    ]
-    assert {report["report_key"] for report in manifest["reports"]}.isdisjoint({"first-pass", "second-pass"})
+    assert manifest["selection"]["not_selected"] == []
+    frozen = {report["report_key"] for report in manifest["reports"]}
+    assert "second-pass" in frozen
+    assert "first-pass" not in frozen
+    # Kept, and out of discovery: superseded is a decision about the report.
+    assert evolution.load_state(config).superseded["first-pass"]["superseded_by"] == "second-pass"
 
 
-def test_the_order_two_disagreeing_evaluations_arrived_in_does_not_decide_membership(
+def test_an_off_base_current_evaluation_keeps_its_task_out(
     config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
-    """The same task and the same two revisions the other way round, and the same
-    answer: whether a cohort holds this evidence cannot be a fact about which
-    reading of it happened to land last."""
+    """The same task and the same two revisions the other way round. The answer
+    differs because the evidence differs: what a cohort holds for this task is
+    its latest evaluation, and this one was produced under another protocol."""
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     fill_pool(config, feed_root, TARGET)
     two_evaluations(
@@ -594,19 +592,19 @@ def test_the_order_two_disagreeing_evaluations_arrived_in_does_not_decide_member
     assert offered is not None
     assert [item.task_id for item in offered.not_selected] == ["2026-08-01-task"]
     assert offered.not_selected[0].reason == manifests.REASON_IDENTITY_DIFFERS
-    assert offered.not_selected[0].report_keys == ("first-pass", "second-pass")
+    assert offered.not_selected[0].report_keys == ("second-pass",)
 
 
-def test_the_reason_a_task_is_left_out_is_one_of_its_own_reports_reasons(
+def test_a_superseded_evaluation_that_states_no_revision_does_not_exclude_its_task(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """One task gets one reason, and it has to be a reason some report of it
-    actually gave.
+    """One task gets one reason, and it has to be a reason its own evidence
+    gave.
 
     That is what keeps the denominator portable: `revision-absent` is settled
     identically in every clone while `revision-unresolvable` is a fact about this
-    one, so a task whose rerun states nothing must not borrow the
-    `identity-differs` its primary would never have given.
+    one. A superseded pack that states nothing is not the task's evidence, so it
+    lends the task neither its reason nor an exclusion.
     """
     fill_pool(config, feed_root, TARGET)
     two_evaluations(config, feed_root, task_id="2026-08-01-task", first=None, second=runner_revision(config))
@@ -614,9 +612,8 @@ def test_the_reason_a_task_is_left_out_is_one_of_its_own_reports_reasons(
     offered = evolution.build_proposal(config, now=NOW).proposal
 
     assert offered is not None
-    assert {item.task_id: item.reason for item in offered.not_selected} == {
-        "2026-08-01-task": manifests.REASON_REVISION_ABSENT
-    }
+    assert offered.not_selected == ()
+    assert "2026-08-01-task" in [member.task_id for member in offered.selected]
 
 
 def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
@@ -627,7 +624,7 @@ def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
     into a cohort nobody was told was short."""
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    (config.repo_root / entry.primary.artifacts_path / "report.json").unlink()
+    (config.repo_root / entry.report.artifacts_path / "report.json").unlink()
 
     with pytest.raises(evolution.StateError, match="cannot read the staged bundle"):
         evolution.build_proposal(config, now=NOW)
@@ -816,26 +813,36 @@ def test_the_generated_task_states_the_membership_it_reads_recurrence_against(
 
 
 
-def test_membership_counts_unique_tasks_and_keeps_reruns_as_provenance(
+def test_membership_counts_unique_tasks_and_freezes_one_report_each(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """A rerun is evidence about an already-counted task (invariants 1 and 4):
-    it belongs in the manifest and must not raise the task count."""
-    rerun = make_record(key="rerun", sequence=99, task_id="2026-07-01-task", evaluation_id="eval-second-pass")
+    """A second evaluation is evidence about an already-counted task (invariants
+    1 and 4). It does not raise the task count, and it does not add a second
+    report to the manifest: it replaces the one the task had."""
+    rerun = make_record(
+        key="rerun",
+        sequence=99,
+        task_id="2026-07-01-task",
+        evaluation_id="eval-second-pass",
+        generated_at="2026-07-31T10:00:00Z",
+    )
     fill_pool(config, feed_root, TARGET, extra=[rerun])
 
     result = freeze(config)
 
     manifest = read_manifest(result)
-    assert len(manifest["reports"]) == TARGET + 1
+    assert len(manifest["reports"]) == TARGET
     batch = evolution.load_batches(config)[0]
     assert batch.task_count == TARGET
-    assert "rerun" in [report["report_key"] for report in manifest["reports"]]
-    # Both reports for the reruns task are present, under the one task identity.
+    # One report for that task, and it is the later evaluation.
     assert [report["report_key"] for report in manifest["reports"] if report["task_id"] == "2026-07-01-task"] == [
-        "r1",
-        "rerun",
+        "rerun"
     ]
+    # The replaced pack is in no batch and still out of discovery.
+    persisted = evolution.load_state(config)
+    assert persisted.superseded["r1"]["superseded_by"] == "rerun"
+    assert "r1" not in persisted.processed
+    assert "r1" in persisted.known_report_keys()
     sequences = [report["sequence"] for report in manifest["reports"]]
     assert sequences == sorted(sequences), "membership order is deterministic"
 
@@ -856,9 +863,7 @@ def test_the_manifest_carries_the_provenance_a_cohort_comparison_needs(
     )
     fill_pool(config, feed_root, MINIMUM, extra=[mixed])
     hashes = {
-        ref.report_key: ref.bundle_sha256
-        for entry in evolution.load_state(config).pending
-        for ref in (entry.primary, *entry.reruns)
+        entry.report.report_key: entry.report.bundle_sha256 for entry in evolution.load_state(config).pending
     }
 
     manifest = read_manifest(freeze(config))
@@ -920,7 +925,7 @@ def test_a_staged_bundle_that_no_longer_matches_its_hash_stops_the_freeze(
     batch."""
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    staged = config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME
+    staged = config.repo_root / entry.report.artifacts_path / state.REPORT_JSON_FILENAME
     tampered = json.loads(staged.read_text(encoding="utf-8"))
     tampered["evaluator"]["rubric_revision"] = "r-tampered"
     staged.write_text(json.dumps(tampered), encoding="utf-8")
@@ -937,7 +942,7 @@ def test_a_missing_staged_bundle_stops_the_freeze(
 ) -> None:
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    (config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME).unlink()
+    (config.repo_root / entry.report.artifacts_path / state.REPORT_JSON_FILENAME).unlink()
 
     with pytest.raises(evolution.StateError, match="staged bundle"):
         freeze(config)
@@ -954,7 +959,7 @@ def test_a_changed_artifact_body_stops_the_freeze(
     and both L2 layers are re-verified, because a batch pins all four."""
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    body = config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / artifact
+    body = config.repo_root / entry.report.artifacts_path / state.ARTIFACTS_SUBDIR / artifact
     body.write_bytes(body.read_bytes() + b" tampered")
 
     with pytest.raises(evolution.StateError, match="no longer match the record"):
@@ -969,7 +974,7 @@ def test_a_deleted_artifact_body_stops_the_freeze(
 ) -> None:
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    (config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report").unlink()
+    (config.repo_root / entry.report.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report").unlink()
 
     with pytest.raises(evolution.StateError, match="missing artifact semantic_report"):
         freeze(config)
@@ -994,7 +999,7 @@ def test_a_pool_entry_that_disagrees_with_its_bundle_stops_the_freeze(
     claim the analysis makes from it."""
     fill_pool(config, feed_root, TARGET)
     raw = json.loads(config.state_path.read_text(encoding="utf-8"))
-    raw["pending"][0]["primary"].update(damage)
+    raw["pending"][0]["report"].update(damage)
     config.state_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(evolution.StateError, match="disagrees with its staged bundle"):
@@ -1121,7 +1126,7 @@ def test_a_later_report_for_a_batched_task_starts_a_new_pool_entry(
 
     persisted = evolution.load_state(config)
     assert [entry.dedup_key for entry in persisted.pending] == [("repo-alpha", "2026-07-01-task")]
-    assert persisted.pending[0].primary.report_key == "late"
+    assert persisted.pending[0].report.report_key == "late"
     assert read_manifest(result) == manifest_before
 
 
@@ -1240,8 +1245,10 @@ def test_a_restart_keeps_a_report_that_arrived_after_the_manifest_pending(
     assert batches.COMPLETED_STATE in resumed.proposal.completed
     persisted = evolution.load_state(config)
     assert [entry.dedup_key for entry in persisted.pending] == [("repo-alpha", "2026-07-01-task")]
-    assert persisted.pending[0].primary.report_key == "late"
-    assert persisted.pending[0].reruns == []
+    assert persisted.pending[0].report.report_key == "late"
+    # r1 lost the slot to the late arrival and was then claimed by the manifest
+    # that named it: one report, one decision, and the claim is the stronger.
+    assert persisted.superseded == {}
     batch = evolution.load_batches(config)[0]
     assert set(persisted.processed) == set(batch.report_keys)
     assert "late" not in batch.report_keys
@@ -2720,7 +2727,7 @@ def test_a_freeze_still_verifies_every_staged_record_behind_the_offer(
     fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
     entry = evolution.load_state(config).pending[0]
-    staged = config.repo_root / entry.primary.artifacts_path / state.REPORT_JSON_FILENAME
+    staged = config.repo_root / entry.report.artifacts_path / state.REPORT_JSON_FILENAME
     staged.write_text(staged.read_text(encoding="utf-8").replace("repo-alpha", "repo-tampered"), encoding="utf-8")
 
     with pytest.raises(evolution.StateError):
@@ -3388,29 +3395,30 @@ def test_a_damaged_offer_refuses_a_move_the_way_it_refuses_a_freeze(
         evolution.include(config, "repo-alpha", "2026-08-01-absent", justification=WHY_IN, actor=ACTOR, now=NOW)
 
 
-def test_a_task_whose_evaluations_disagree_comes_in_through_the_same_door(
+def test_a_task_whose_current_evaluation_states_no_revision_comes_in_through_the_same_door(
     config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
-    """The claim the whole-entry membership rule left to this window: a task
-    whose reports disagree about the protocol they were produced under is not a
-    member, and a human is what puts it in.
+    """A task re-evaluated by a publisher that had not begun stating identity is
+    not an automatic member — its evidence says nothing to compare — and a human
+    is what puts it in.
 
-    Every report it owns is then stamped with that one answer, which is the same
-    rule the automatic side follows — membership is the task's (invariant 1) and
-    a rerun is that task's evidence."""
+    The earlier evaluation states a revision, and a different one; it is
+    superseded, so it neither answers for the task nor enters the manifest under
+    the human's judgement."""
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     fill_pool(config, feed_root, TARGET)
     two_evaluations(config, feed_root, task_id="2026-08-05-split", first=elsewhere, second=None)
     offered = evolution.build_proposal(config, now=NOW).proposal
     assert offered is not None
     assert [item.task_id for item in offered.not_selected] == ["2026-08-05-split"]
+    assert offered.not_selected[0].reason == manifests.REASON_REVISION_ABSENT
 
     evolution.include(config, "repo-alpha", "2026-08-05-split", justification=WHY_IN, actor=ACTOR, now=NOW)
     manifest = read_manifest(evolution.freeze(config, now=NOW))
 
-    stamped = [report["selection"] for report in manifest["reports"] if report["task_id"] == "2026-08-05-split"]
-    assert len(stamped) == 2
-    assert {item["mode"] for item in stamped} == {manifests.MODE_HUMAN_INCLUDED}
-    assert {item["justification"] for item in stamped} == {WHY_IN}
+    stamped = [report for report in manifest["reports"] if report["task_id"] == "2026-08-05-split"]
+    assert [report["report_key"] for report in stamped] == ["second-pass"]
+    assert stamped[0]["selection"]["mode"] == manifests.MODE_HUMAN_INCLUDED
+    assert stamped[0]["selection"]["justification"] == WHY_IN
     assert manifest["selection"]["human_included"] == 1
     assert manifest["selection"]["not_selected"] == []

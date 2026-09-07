@@ -2505,7 +2505,7 @@ def test_a_pool_that_lost_its_evidence_is_not_a_freeze_the_state_permits(
 
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
-    body = config.repo_root / entry.primary.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report"
+    body = config.repo_root / entry.report.artifacts_path / state.ARTIFACTS_SUBDIR / "semantic_report"
     staged = body.read_bytes()
     where = ["--repo", str(repo)]
 
