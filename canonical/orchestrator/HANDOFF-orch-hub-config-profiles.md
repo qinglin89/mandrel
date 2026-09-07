@@ -120,10 +120,10 @@ them.
 
 | Profile/backend | Dev | Review |
 |---|---|---|
-| Standard / Cursor | `claude-opus-4-8 @ max` | `gpt-5.5 @ xhigh` |
-| Standard / cc-codex | `claude:claude-opus-4-8 @ max` | `codex:gpt-5.5 @ xhigh` |
-| Excellent / Cursor | `claude-fable-5 @ max` | `gpt-5.6-sol @ xhigh` |
-| Excellent / cc-codex | `claude:claude-fable-5 @ max` | `codex:gpt-5.6-sol @ xhigh` |
+| Standard / Cursor | `claude-opus-5 @ max` | `gpt-5.6-sol @ xhigh` |
+| Standard / cc-codex | `claude:claude-opus-5 @ max` | `codex:gpt-5.6-sol @ xhigh` |
+| Excellent / Cursor | `claude-fable-5-1 @ max` | `gpt-6-astra @ xhigh` |
+| Excellent / cc-codex | `claude:claude-fable-5-1 @ max` | `codex:gpt-6-astra @ xhigh` |
 
 Model namespaces differ by backend; this is why profiles are resolved in the
 orchestrator.
