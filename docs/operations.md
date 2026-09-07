@@ -567,10 +567,10 @@ cohort's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
 
 Every subcommand takes `--repo <path>` to work on another checkout, and every
-one of them takes `--json`. On `status` that flag is the whole reading; on every
-other verb it is the failure channel described under
-[the machine surface](#the-machine-surface) — a run that completes prints what it
-always printed.
+one of them takes `--json`. A completed `status` prints the whole reading; a
+non-completion from any verb uses the classified-answer envelope described under
+[the machine surface](#the-machine-surface). A completed run of every other verb
+prints what it always printed.
 
 Exit status names the *family* of what happened, because that is what decides
 the next move. 0 is any completed run — including a `start` that offered no
@@ -968,14 +968,14 @@ rather than flow state.
 
 ### The machine surface
 
-Every verb of this console takes `--json`. On `status` that is the reading above.
-On every other verb it is one thing today — the failure channel — and the reason
-it is only one thing is that `status` is still where a surface reads what a verb
-*did*: a run that completes prints exactly what it printed before, and the
-success envelope naming the objects each verb touched is a separate contract that
-does not exist yet.
+Every verb of this console takes `--json`. A completed `status` prints the
+reading above. A non-completion from any verb, including `status`, uses the
+classified-answer envelope below. A completed run of every other verb prints
+exactly what it printed before: `status` is still where a surface reads what a
+verb *did*, and the success envelope naming the objects each verb touched is a
+separate contract that does not exist yet.
 
-What `--json` changes is the shape of a failure and not the stream it goes to.
+What `--json` changes is the shape of a non-completion and not the stream it goes to.
 Both channels write to stderr, so stdout stays what the run produced:
 
 ```bash
@@ -1000,8 +1000,10 @@ Both channels write to stderr, so stdout stays what the run produced:
   offer standing (`nothing-to-act-on`) and one whose source line this checkout
   never fetched (`checkout-unusable`) both exit 4, and they are not the same next
   command.
-- **`message` is the sentence the human channel prints**, kept verbatim so a
-  surface has something to show a person. It is not a routing key; it moves.
+- **`message` is a sentence for a person.** For a failure family it is the
+  sentence the default human channel prints, kept verbatim. For `unanswered` it
+  explains that the harness half is missing; the human channel instead composes
+  the durable request described below. It is not a routing key; it moves.
 - **`verb` names the command that answered**, so a captured envelope reads on its
   own.
 - **There is no field saying "this failed."** `kind` already says which of the

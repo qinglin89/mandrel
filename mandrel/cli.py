@@ -52,11 +52,11 @@ def _exit_code(exc: evolution_errors.EvolutionError) -> int:
     return EVOLUTION_EXIT_CODES.get(exc.kind, UNCLASSIFIED_EXIT)
 
 
-# The envelope `--json` states a failure as. Its own version, independent of the
-# `status` payload's and of the lifecycle record schemas: this describes one
-# answer the console gave, not a record anything persists, and it promises its
-# exact key set the way the status payload promises its own — a key added,
-# removed or repurposed bumps it.
+# The envelope `--json` uses for a non-completion answer has its own version,
+# independent of the `status` payload's and of the lifecycle record schemas:
+# this describes one answer the console gave, not a record anything persists,
+# and it promises its exact key set the way the status payload promises its own
+# — a key added, removed or repurposed bumps it.
 EVOLUTION_FAILURE_SCHEMA_VERSION = 1
 
 
@@ -71,10 +71,12 @@ def _failure_payload(exc: evolution_errors.EvolutionError, *, verb: str) -> dict
     status, which is drawn at `kind` and stays exactly what it is without the
     flag.
 
-    `message` is the sentence the human channel prints, kept verbatim so a
-    surface has something to show a person, and `verb` names which command
-    answered so a captured envelope reads on its own. Neither is a routing key:
-    that is what `code` is for, and the sentences move.
+    For a failure family, `message` is the sentence the default human channel
+    prints, kept verbatim so a surface has something to show a person. For
+    `unanswered`, it explains the missing harness half while the human channel
+    composes the durable request instead (`_harness`). `verb` names which
+    command answered so a captured envelope reads on its own. Neither is a
+    routing key: that is what `code` is for, and the sentences move.
     """
 
     return {
@@ -256,9 +258,10 @@ def _add_failure_channel(subparsers: argparse._SubParsersAction) -> None:
     remember when the next verb is written.
 
     `status` is skipped because its `--json` is already a different promise: the
-    whole reading, at its own schema version. What is added here is the failure
-    channel alone (`_failure_payload`); on a run that completes, the flag changes
-    nothing, and the success envelope for each verb is a later contract.
+    whole reading, at its own schema version. What is added here is the
+    classified non-completion channel alone (`_failure_payload`); on a run that
+    completes, the flag changes nothing, and the success envelope for each verb
+    is a later contract.
     """
 
     for name, parser in subparsers.choices.items():

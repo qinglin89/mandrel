@@ -2177,9 +2177,9 @@ failure reports a request it is holding as one it never made — and makes it
 again. It is `unanswered`, and it is the reason the console's answers are
 classified by family rather than by success and failure.
 
-**Every answer carries `kind` and `code`.** `kind` is the family: what the
-operator does next. `code` is the class: which of that family's answers this is,
-unique across the whole taxonomy and stable across rewordings. Both are
+**Every non-completion answer carries `kind` and `code`.** `kind` is the family:
+what the operator does next. `code` is the class: which of that family's answers
+this is, unique across the whole taxonomy and stable across rewordings. Both are
 properties of what happened rather than of the site that noticed it. The
 implementation is `mandrel/evolution/errors.py`; what is normative here is that
 the pair exists, that `code` is unique and stable, and that no adapter may derive
@@ -2227,13 +2227,15 @@ an offer and the other by fetching, and an adapter tells them apart by `code`
 alone.
 
 **`--json` states the answer instead of describing it.** Every verb accepts it.
-On `status` it is the whole reading, at that reading's own schema version. On
-every other verb it is the failure channel: an envelope carrying
-`schema_version`, the `verb` that answered, `kind`, `code`, and the human
-`message` verbatim. It is written to stderr, so the flag changes the shape of an
-answer and never the stream a completed run writes to, and it changes no exit
-status. The envelope has no field asserting that this is an error, because
-`kind` already says which family it is and one of them is not a failure.
+A completed `status` is the whole reading, at that reading's own schema version.
+A non-completion from any verb is an envelope carrying `schema_version`, the
+`verb` that answered, `kind`, `code`, and a human-readable `message`. For a
+failure family that message is verbatim what the default channel prints; for
+`unanswered` it explains the missing harness half while the default channel
+composes the durable request. The envelope is written to stderr, so the flag
+changes the shape of an answer and never the stream a completed run writes to,
+and it changes no exit status. It has no field asserting that this is an error,
+because `kind` already says which family it is and one of them is not a failure.
 
 Exit 2 is the one answer with no envelope, and necessarily: a command the parser
 rejected, or a failure carrying no family, has no `kind` to state. A caller reads
