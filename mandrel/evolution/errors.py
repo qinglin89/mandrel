@@ -387,13 +387,14 @@ class CheckoutUnusable(BatchError):
     the default refspec, a base nobody fetched, one side of a pair the question is
     about — or Git will not make the commit or the ref this operation has to
     create in it, or cannot say whether a work tree is sitting on the line about
-    to move.
+    to move. Not only Git: `.ai-tasks/` is machine-local too, so an admitted task
+    no copy here holds is a completion this machine cannot observe either.
 
     A fact about this machine and about no revision, which is what separates it
-    from every other refusal here: the same command in a complete clone answers.
-    Not `toolchain`, because the tool is fine — it is this copy of the repository
-    that cannot answer, and fetching is a different next command from installing a
-    newer Git.
+    from every other refusal here: the same command run where the missing thing
+    is answers, whether that is a complete clone or the machine the work was done
+    on. Not `toolchain`, because the tool is fine — it is this copy that cannot
+    answer, and fetching is a different next command from installing a newer Git.
     """
 
     code = "checkout-unusable"
@@ -436,16 +437,19 @@ class EvidenceUnfit(BatchError):
 
     A round nothing has replayed, a run whose reading no longer describes the
     tree a promotion would carry, an integration this checkout recomputes
-    differently from the one that was measured, a counterfactual that never
-    completed. What answers it is producing evidence — replay this round as the
-    line now stands, measure the pair again — and nothing about the lifecycle.
+    differently from the one that was measured, a counterfactual nobody started
+    or one that ended without measuring anything. What answers it is producing
+    evidence — replay this round as the line now stands, measure the pair again —
+    and nothing about the lifecycle.
 
     Missing evidence and stale evidence are one class deliberately. They differ
     in the sentence and not in the answer: both are settled by measuring what is
     there now, and a caller told "there is none" does exactly what a caller told
     "it no longer fits" does. Distinct from `IntegrationUnusable`, which is Git
     saying these trees do not combine at all — that one is resolved by a person
-    with a working tree, this one by a run.
+    with a working tree, this one by a run. Distinct from `StandingWork` in the
+    same way at the other end: a measurement still going is not evidence that
+    fell short, and the run answering it is the one already in flight.
     """
 
     code = "evidence-unfit"

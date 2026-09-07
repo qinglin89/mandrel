@@ -1619,13 +1619,35 @@ def test_sealing_refuses_a_task_this_machine_does_not_hold(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
     """`.ai-tasks/` is machine-local, so absence is not evidence: a clone that
-    never had the task would otherwise seal a candidate for work it cannot see."""
+    never had the task would otherwise seal a candidate for work it cannot see.
+
+    Not the in-flight refusal's class either. Nothing done here finishes a task
+    this machine does not hold; the seal run where the work happened answers, and
+    that is what `checkout-unusable` says and `standing-work` does not."""
 
     admission = experiments.create(config, ["loader-fallback"], now=NOW)
     admission.admitted[0].task_path.unlink()
 
-    with pytest.raises(evolution.StandingWork, match="2026-08-01-loader-fallback \\(not on this machine\\)"):
+    with pytest.raises(evolution.CheckoutUnusable, match="2026-08-01-loader-fallback \\(not on this machine\\)"):
         experiments.seal_round(config, now=LATER)
+
+
+def test_a_task_no_machine_here_holds_outranks_one_still_in_flight(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """Both are listed in one sentence, and the class is the one an operator can
+    act on: finishing the task being worked here still leaves a round this
+    checkout cannot answer for."""
+
+    admission = experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
+    absent = next(item for item in admission.admitted if item.task_id == "2026-08-01-loader-fallback")
+    absent.task_path.unlink()
+
+    with pytest.raises(evolution.CheckoutUnusable) as error:
+        experiments.seal_round(config, now=LATER)
+
+    assert "2026-08-01-loader-fallback (not on this machine)" in str(error.value)
+    assert "2026-08-01-hook-side-loader (still in flight)" in str(error.value)
 
 
 def test_the_completion_is_read_from_the_copy_the_record_admitted(
@@ -2948,10 +2970,11 @@ def outcome_of(config: evolution.EvolutionConfig) -> dict:
     return json.loads((config.batches_root / BATCH_ID / "outcome.json").read_text(encoding="utf-8"))
 
 
-def repoint(config: evolution.EvolutionConfig, ref: str) -> None:
+def repoint(config: evolution.EvolutionConfig, ref: str | None) -> None:
     """Say the recorded run integrated onto another line. For the cases where
     what is being tested is which ref a promotion would move, rather than which
-    one the replay fixture happened to use."""
+    one the replay fixture happened to use. `None` says it named no line at all —
+    a run driven from a detached revision."""
 
     path = config.experiments_root / EXP_01 / "replays.json"
     written = json.loads(path.read_text(encoding="utf-8"))
@@ -3221,13 +3244,33 @@ def test_a_check_this_checkout_cannot_make_is_not_one_that_passed(
     config: evolution.EvolutionConfig, batch: Path, release: str
 ) -> None:
     """A clone without the source-line ref cannot say whether the merge input
-    moved, and an unanswered check is not agreement."""
+    moved, and an unanswered check is not agreement.
+
+    The class is this checkout's and not the evidence's: the run on record is
+    complete and still describes its pair, so fetching the ref is what makes it
+    promotable — nothing here needs measuring again."""
 
     prepared(config)
     git_delete_ref(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.EvidenceUnfit, match="cannot be answered here"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot be answered here"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+
+def test_a_run_that_named_no_line_is_the_evidence_falling_short(
+    config: evolution.EvolutionConfig, batch: Path, release: str
+) -> None:
+    """The other half of the unanswered check, and the other class: a run driven
+    from a detached revision names no ref for any checkout to fetch, so what is
+    missing is a run measuring the line rather than a clone holding it."""
+
+    prepared(config)
+    repoint(config, None)
+
+    with pytest.raises(evolution.EvidenceUnfit, match="detached revision"):
+        experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
+
+    assert git_rev(config.repo_root, RELEASE_REF) == release
 
 
 def test_a_revised_round_leaves_its_evidence_behind(

@@ -2022,9 +2022,9 @@ def resolve(
         reading = _recorded(config, frame, "resolve")
         _require_unsettled(frame, reading, "a reading recorded now")
 
-        refusal = resolve_refusal(frame, reading)
-        if refusal is not None:
-            raise EvidenceUnfit(refusal)
+        failure = resolve_failure(frame, reading)
+        if failure is not None:
+            raise failure
 
         if (reading.verdict, reading.confidence, reading.rationale, reading.recommendation) == (
             verdict,
@@ -2559,13 +2559,34 @@ def measure_refusal(frame: Frame, reading: Assessment) -> str | None:
     return None if failure is None else str(failure)
 
 
-def resolve_refusal(frame: Frame, reading: Assessment) -> str | None:
-    """Why the reading is not one a completed run settles the direction of."""
+def resolve_failure(frame: Frame, reading: Assessment) -> BatchError | None:
+    """Why the reading is not one a completed run settles the direction of.
+
+    Four states and two classes, split by what the operator does rather than by
+    what is missing. A run still going and a request the harness was never
+    answered for are measurements in flight: what stands in the way is that run
+    being concluded or ended, that request being resumed or withdrawn — and a
+    release is measured once, so a caller sent to produce evidence instead would
+    be starting a second answer to the question already being asked. Nothing
+    started and a run that ended failed are the evidence answers: measure the
+    pair.
+
+    An outstanding request outranks the failed run it stands after, the way
+    `run_failure` reports it. The request is the newest thing on record, and a
+    sentence naming only the earlier failure hides a run that may be producing
+    numbers right now.
+    """
 
     run = reading.counterfactual
     if run is not None and run.completed:
         return None
-    if run is None:
+    requested = reading.requested
+    if requested is not None:
+        found = (
+            f"{_describe(requested.position)} is outstanding with no run recorded against it — start the run "
+            "again to record what the harness began, or withdraw the request"
+        )
+    elif run is None:
         found = (
             "none has been started, and the pinned run is the comparison in which the release is the "
             "only difference"
@@ -2575,11 +2596,20 @@ def resolve_refusal(frame: Frame, reading: Assessment) -> str | None:
     else:
         ended = run.result.detail if run.result is not None else ""
         found = f"{_describe(run.position)} ended {RESULT_FAILED!r}: {ended}"
-    return (
+    sentence = (
         f"{frame.batch_id} has no completed counterfactual of the {frame.subject.batch_id} release, so "
         f"there is nothing for a reading to be settled by — {found}; what the cohorts allow on their own "
         f"is {VERDICT_INCONCLUSIVE!r}"
     )
+    in_flight = requested is not None or (run is not None and run.running)
+    return StandingWork(sentence) if in_flight else EvidenceUnfit(sentence)
+
+
+def resolve_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """The same question as `resolve_failure`, for the console's gate."""
+
+    failure = resolve_failure(frame, reading)
+    return None if failure is None else str(failure)
 
 
 def settleable_refusal(frame: Frame, reading: Assessment) -> str | None:

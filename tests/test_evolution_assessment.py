@@ -3400,6 +3400,51 @@ def test_nothing_is_settled_by_a_run_that_measured_nothing(
     assert f"ended {replay.RESULT_FAILED!r}" in str(error.value)
 
 
+def test_a_measurement_still_in_flight_is_not_evidence_to_produce_again(
+    config: evolution.EvolutionConfig,
+    promoted: experiments.PromotionResult,
+) -> None:
+    """The two live states, and what separates them from a reading with no
+    evidence under it: the release is measured once, so what answers these is
+    finishing the measurement already going rather than starting a second one.
+
+    An outstanding request outranks the failed attempt it stands after. A
+    sentence naming only that failure would send an operator to measure again
+    while a run this record never heard back about may be producing numbers."""
+
+    freeze_second(config, promoted)
+    form_reading(config)
+    assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
+
+    with pytest.raises(evolution.StandingWork) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_REGRESSED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale=WORSE,
+            recommendation=assessment.SETTLEMENT_RETAIN,
+            now=RESOLVED_AT,
+        )
+    assert "is still going" in str(error.value)
+
+    assessment.abandon(config, reason=DIED, now=CONCLUDED_AT)
+    with pytest.raises(RuntimeError):
+        assessment.measure(config, Unanswering(), expectation=EXPECTATION, now=CONCLUDED_AT)
+
+    with pytest.raises(evolution.StandingWork) as error:
+        assessment.resolve(
+            config,
+            verdict=assessment.VERDICT_REGRESSED,
+            confidence=assessment.CONFIDENCE_HIGH,
+            rationale=WORSE,
+            recommendation=assessment.SETTLEMENT_RETAIN,
+            now=RESOLVED_AT,
+        )
+    assert "is outstanding with no run recorded against it" in str(error.value)
+    assert "withdraw the request" in str(error.value)
+    assert f"ended {replay.RESULT_FAILED!r}" not in str(error.value)
+
+
 def test_nothing_is_added_to_a_reading_the_gate_has_answered(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,

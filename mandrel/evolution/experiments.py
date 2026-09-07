@@ -1962,13 +1962,18 @@ def _require_promotable(config: EvolutionConfig, experiment: Experiment, evidenc
     """The round's evidence describes the tree this promotion would carry
     (`promotable_refusal`).
 
-    `unverified` is the reader reporting a question it could not put to Git: the
-    ref the run integrated onto is not in this checkout, or nothing here runs
-    `git` at all. A reader answers those the same way and should — neither is an
-    answer about the evidence — but this is the promotion, which is about to move
-    that ref, and only one of the two is the fetch its refusal offers. So the
-    machine's own silence is named here rather than inside the reading every
-    `status` shares (`revisions.require_git`).
+    `unverified` is the reader reporting a question it could not put to Git, and
+    it stands for three states with three different repairs: nothing here runs
+    `git` at all, the ref the run integrated onto is not in this checkout, or the
+    run was driven from a detached revision and named no ref to ask after. A
+    reader answers all three the same way and should — none of them is an answer
+    about the evidence — but this is the promotion, which is about to move that
+    ref, and each sends an operator somewhere else. So they are told apart here
+    rather than inside the reading every `status` shares: the machine's own
+    silence is the toolchain's (`revisions.require_git`), a named ref nobody
+    fetched is this clone's and the evidence on record becomes promotable as it
+    stands once the ref arrives, and only the detached run is the evidence itself
+    unable to say where the line stands — which no fetch mends and a replay does.
     """
 
     refusal = promotable_refusal(experiment, evidence)
@@ -1976,6 +1981,11 @@ def _require_promotable(config: EvolutionConfig, experiment: Experiment, evidenc
         return
     if evidence.unverified:
         require_git(config.repo_root, reading="whether the source line has moved since the run measured it")
+        # `unverified` is only ever set beside the completed run it is about
+        # (`replay.describe_evidence`), so the integration to ask is that run's.
+        measured = evidence.replay
+        if measured is not None and measured.integration.merge_input_ref is not None:
+            raise CheckoutUnusable(refusal)
     raise EvidenceUnfit(refusal)
 
 
@@ -2629,6 +2639,7 @@ def _observe_completions(
     tasks: list[AdmittedTask] = []
     observed: list[str] = []
     outstanding: list[str] = []
+    unheld = False
     for task in round_.tasks:
         if task.complete:
             tasks.append(task)
@@ -2637,6 +2648,7 @@ def _observe_completions(
         if path is None:
             tasks.append(task)
             outstanding.append(f"{task.task_id} (not on this machine)")
+            unheld = True
             continue
         _require_admitted_copy(config, current, experiment, round_, task, path)
         if not analysis_task.task_finished(config, task.task_id):
@@ -2647,15 +2659,19 @@ def _observe_completions(
         observed.append(task.task_id)
 
     if outstanding:
-        # A task still in flight and a task no clone here holds are listed
-        # together, so they are one class: both leave the round unfinished, and
-        # both are answered where the work is being done.
-        raise StandingWork(
+        sentence = (
             f"round {round_.number} of {experiment.experiment_id} is not ready to seal: {outstanding}; a "
             "candidate that does not contain the change it was admitted for is not what anyone means to measure "
             "(invariant 16), and `.ai-tasks/` is machine-local — a task nobody here holds is observed on the "
             "machine that worked it rather than assumed finished"
         )
+        # One sentence and two classes, split by which machine can answer it. A
+        # task still in flight is work standing in the way of a seal that will
+        # run here once it is done; a task `.ai-tasks/` does not hold is a
+        # question this clone cannot put at all, and the same seal run where the
+        # work happened answers it. A set holding both is the second, because
+        # nothing finished here clears it.
+        raise (CheckoutUnusable if unheld else StandingWork)(sentence)
     return tuple(tasks), tuple(observed)
 
 
