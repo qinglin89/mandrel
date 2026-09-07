@@ -2103,7 +2103,7 @@ def test_every_family_has_its_own_number_and_every_failure_has_a_family() -> Non
 # than checking every module is that a module not yet on the list is work that
 # has not happened, and one on it that regresses is a refusal that quietly went
 # back to saying nothing.
-CLASSIFIED_MODULES = ("replay", "rollback", "guards")
+CLASSIFIED_MODULES = ("replay", "rollback", "guards", "experiments", "assessment")
 
 
 def test_the_classified_modules_raise_no_refusal_under_the_family_code() -> None:

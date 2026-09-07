@@ -2276,7 +2276,7 @@ def test_a_verdict_the_evidence_cannot_carry_writes_nothing(
 
     second = freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordRefused) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_IMPROVED,
@@ -2436,7 +2436,7 @@ def test_advising_a_reversal_over_a_reading_that_measured_nothing_is_refused(
 
     second = freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordRefused) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2470,7 +2470,7 @@ def test_the_same_formation_advising_something_else_is_a_second_reading(
         recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2495,7 +2495,7 @@ def test_a_second_reading_of_one_release_is_refused(
         recommendation=assessment.SETTLEMENT_RETAIN,
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2512,7 +2512,7 @@ def test_nothing_is_formed_where_there_is_no_release(
 ) -> None:
     write_manifest(config.batches_root, FIRST, ["r1"], analysis_task_id="2026-07-31-first")
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.NothingToActOn) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2544,7 +2544,7 @@ def test_a_later_cohort_may_not_reread_a_release_that_was_answered(
     write_outcome(config.batches_root, SECOND, outcome="no-change")
     third = freeze_second(config, promoted, batch_id=THIRD)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2564,7 +2564,7 @@ def test_no_current_cohort_reads_nothing(
     """Every batch concluded: there is a release on the line and no cohort whose
     reading it would be."""
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.NothingToActOn) as error:
         assessment.form(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -2808,7 +2808,7 @@ def test_a_resume_may_not_restate_the_prediction(
     with pytest.raises(RuntimeError):
         assessment.measure(config, Unanswering(), expectation=EXPECTATION, now=MEASURED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.measure(config, FakeHarness(), expectation="no change either way", now=CONCLUDED_AT)
     assert "outstanding, expected to show" in str(error.value)
 
@@ -2821,7 +2821,7 @@ def test_a_run_started_under_one_still_going_is_refused(
     form_reading(config)
     assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=CONCLUDED_AT)
     assert "still running" in str(error.value)
     assert "conclude that run first" in str(error.value)
@@ -2837,7 +2837,7 @@ def test_the_release_is_measured_once(
     assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
     assessment.conclude(config, harness, now=CONCLUDED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=RESOLVED_AT)
     assert "the release is measured once" in str(error.value)
 
@@ -2920,7 +2920,7 @@ def test_a_report_this_record_cannot_hold_leaves_the_run_where_it_was(
     assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
     harness.report = completed_report(outcome=replay.RESULT_FAILED, metrics=(slower(),))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.HarnessAnswerUnusable) as error:
         assessment.conclude(config, harness, now=CONCLUDED_AT)
 
     assert "end the run and record why" in str(error.value)
@@ -3097,13 +3097,13 @@ def test_a_request_the_harness_cannot_describe_is_taken_back(
     form_reading(config)
     nameless = nameless_harness()
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.HarnessAnswerUnusable) as error:
         assessment.measure(config, nameless, expectation=EXPECTATION, now=MEASURED_AT)
     assert "withdraw the request" in str(error.value)
 
     # The same key, the same answer: the request is what a harness recognises, so
     # re-asking cannot be the repair.
-    with pytest.raises(evolution.BatchError):
+    with pytest.raises(evolution.HarnessAnswerUnusable):
         assessment.measure(config, nameless, expectation=EXPECTATION, now=CONCLUDED_AT)
     assert [request.attempt for request in nameless.requests] == [1, 1]
     assert read_reading(config, second).counterfactual is None
@@ -3112,7 +3112,7 @@ def test_a_request_the_harness_cannot_describe_is_taken_back(
         lambda: assessment.conclude(config, FakeHarness(report=completed_report()), now=CONCLUDED_AT),
         lambda: assessment.abandon(config, reason=DIED, now=CONCLUDED_AT),
     ):
-        with pytest.raises(evolution.BatchError) as error:
+        with pytest.raises(evolution.StandingWork) as error:
             ending()
         assert "no run recorded for it" in str(error.value)
 
@@ -3259,7 +3259,7 @@ def test_nothing_is_measured_before_the_cohorts_are_read(
 
     second = freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.NothingToActOn) as error:
         assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
     assert "recorded no reading" in str(error.value)
     assert second.assessment_path.exists() is False
@@ -3323,7 +3323,7 @@ def test_the_verdict_the_run_settles_is_recorded(
     # the measured regression carried — the reversal loses the reading it rested
     # on. (`neutral` would not reach here: a direction the run contradicts is
     # refused by the verdict rule first, which is the stricter of the two.)
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordRefused) as error:
         assessment.resolve(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -3349,7 +3349,7 @@ def test_a_verdict_the_run_contradicts_reaches_no_record(
     assessment.measure(config, harness, expectation=EXPECTATION, now=MEASURED_AT)
     assessment.conclude(config, harness, now=CONCLUDED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.RecordRefused) as error:
         assessment.resolve(
             config,
             verdict=assessment.VERDICT_IMPROVED,
@@ -3374,7 +3374,7 @@ def test_nothing_is_settled_by_a_run_that_measured_nothing(
     freeze_second(config, promoted)
     form_reading(config)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.EvidenceUnfit) as error:
         assessment.resolve(
             config,
             verdict=assessment.VERDICT_REGRESSED,
@@ -3388,7 +3388,7 @@ def test_nothing_is_settled_by_a_run_that_measured_nothing(
     assessment.measure(config, FakeHarness(report=None), expectation=EXPECTATION, now=MEASURED_AT)
     assessment.abandon(config, reason=DIED, now=CONCLUDED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.EvidenceUnfit) as error:
         assessment.resolve(
             config,
             verdict=assessment.VERDICT_REGRESSED,
@@ -3428,11 +3428,11 @@ def test_nothing_is_added_to_a_reading_the_gate_has_answered(
         ),
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
     assert "was settled 'retain'" in str(error.value)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.resolve(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
@@ -3528,15 +3528,15 @@ def test_a_settled_reading_is_neither_concluded_nor_ended(
     written = second.assessment_path.read_bytes()
     harness = FakeHarness(report=completed_report())
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.conclude(config, harness, now=RESOLVED_AT)
     assert "was settled 'retain'" in str(error.value)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.abandon(config, reason=DIED, now=RESOLVED_AT)
     assert "was settled 'retain'" in str(error.value)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.withdraw(config, now=RESOLVED_AT)
     assert "was settled 'retain'" in str(error.value)
 
@@ -3601,7 +3601,7 @@ def test_a_release_this_checkout_does_not_hold_is_not_measured(
     absent = build_absent_release(config)
     form_reading(config)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.CheckoutUnusable) as error:
         assessment.measure(config, FakeHarness(), expectation=EXPECTATION, now=MEASURED_AT)
     assert "does not hold" in str(error.value)
     assert f"fetch {RELEASE_REF}" in str(error.value)
@@ -3774,7 +3774,7 @@ def test_a_release_already_off_the_line_is_not_retained(
     suspected(config, second)
     rollback.rollback(config, reason=REVERSAL, now=REVERSED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.UnknownSubject) as error:
         assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
     assert "is no longer on" in str(error.value)
     assert read_reading(config, second).settled is False
@@ -3880,7 +3880,7 @@ def test_the_gate_answers_once(
     assert second.assessment_path.read_bytes() == written
     assert len(ledger_records(config, assessment.RECORD_RELEASE_SETTLED)) == 1
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.settle(
             config,
             settlement=assessment.SETTLEMENT_RETAIN,
@@ -3889,7 +3889,7 @@ def test_the_gate_answers_once(
         )
     assert "answers once" in str(error.value)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=CONCLUDED_AT
         )
@@ -3918,7 +3918,7 @@ def test_nothing_is_settled_over_evidence_still_in_flight(
     unsettled = dataclasses.replace(settled_reading(frame), decision=None)
     publish(second, dataclasses.replace(unsettled, counterfactual=dataclasses.replace(run, result=None)))
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
         )
@@ -3937,7 +3937,7 @@ def test_nothing_is_settled_over_evidence_still_in_flight(
             ),
         ),
     )
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
     assert "of its counterfactual outstanding" in str(error.value)
     assert read_reading(config, second).settled is False
@@ -3952,7 +3952,7 @@ def test_a_release_no_cohort_has_read_is_not_settled(
 
     freeze_second(config, promoted)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.NothingToActOn) as error:
         assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
     assert "has recorded no reading" in str(error.value)
 
@@ -4011,7 +4011,7 @@ def test_only_the_last_promotion_is_reversed_by_this_gate(
         reason="the approach needs a loader change this batch cannot justify",
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.UnknownSubject) as error:
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=RESOLVED_AT
         )
@@ -4037,7 +4037,7 @@ def test_no_experiment_is_admitted_before_the_release_is_judged(
     second = freeze_second(config, promoted)
     drafts = open_second(config, second)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     assert "has recorded no reading" in str(error.value)
     # What it refuses is the admission, not a freeze: telling an operator the
@@ -4045,7 +4045,7 @@ def test_no_experiment_is_admitted_before_the_release_is_judged(
     assert "nothing may be admitted on" in str(error.value)
 
     form_reading(config)
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     assert "nobody has settled it" in str(error.value)
     assert "nothing may be admitted on" in str(error.value)
@@ -4102,7 +4102,7 @@ def test_a_rolled_back_settlement_ends_the_batch_that_read_the_release(
         render.format_settlement(answered, config.repo_root)
     )
 
-    with pytest.raises(evolution.BatchError, match="no batch is current"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch is current"):
         experiments.create(config, drafts, now=RESOLVED_AT)
 
 
@@ -4193,7 +4193,7 @@ def test_a_rollback_a_later_attempt_stands_on_is_refused_and_retaining_stays_ope
     standing = experiments.create(config, drafts, base=RELEASE_REF, now=RESOLVED_AT)
     publish(second, reading)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=CONCLUDED_AT
         )
@@ -4273,7 +4273,7 @@ def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
     third = ended_without_settling(config, promoted, reading=True)
     drafts = open_second(config, third)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
     assert SECOND in str(error.value) and "nobody has settled it" in str(error.value)
     # The rule it is refusing under, named for an operator who is holding a batch
@@ -4309,7 +4309,7 @@ def test_a_cohort_that_ended_unread_still_gates_the_next_base(
     third = ended_without_settling(config, promoted, reading=False)
     drafts = open_second(config, third)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         experiments.create(config, drafts, base=RELEASE_REF, now=CONCLUDED_AT)
     assert SECOND in str(error.value) and "has recorded no reading" in str(error.value)
     assert "invariant 17" in str(error.value)
@@ -4359,7 +4359,7 @@ def test_a_settlement_taken_where_the_obligation_sits_is_redone_there_too(
 
     # The gate still answers once: a different answer is refused where it sits,
     # and refused before anything is reversed for it.
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.AlreadyAnswered) as error:
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_ROLLED_BACK, reason=REVERSAL, now=CONCLUDED_AT
         )
@@ -4400,7 +4400,7 @@ def test_an_answered_obligation_is_still_closed_to_everything_but_its_own_redo(
             now=MEASURED_AT,
         ),
     ):
-        with pytest.raises(evolution.BatchError) as error:
+        with pytest.raises(evolution.AlreadyAnswered) as error:
             act()
         assert f"the first batch frozen after that promotion is {SECOND}" in str(error.value)
 
@@ -4512,7 +4512,7 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     drafts = open_second(config, second)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.LineMoved) as error:
         experiments.create(config, drafts, now=RESOLVED_AT)
 
     assert "does not carry" in str(error.value)
@@ -4613,7 +4613,7 @@ def test_a_reversal_ends_the_batch_holding_the_base_and_not_the_one_that_owes_it
     assert json.loads(second.outcome_path.read_text(encoding="utf-8"))["outcome"] == "no-change"
     assert json.loads(third.outcome_path.read_text(encoding="utf-8"))["outcome"] == "rolled-back"
     assert lineage.describe(config).current is None
-    with pytest.raises(evolution.BatchError, match="no batch is current"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch is current"):
         experiments.create(config, drafts, now=RESOLVED_AT)
 
 
@@ -4652,7 +4652,7 @@ def test_a_settlement_that_ended_its_batch_still_reports_itself(
     assert len(ledger_records(config, assessment.RECORD_RELEASE_SETTLED)) == 1
     assert len(ledger_records(config, "batch-concluded")) == 2
 
-    with pytest.raises(evolution.BatchError, match="was settled"):
+    with pytest.raises(evolution.AlreadyAnswered, match="was settled"):
         assessment.settle(
             config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=CONCLUDED_AT
         )
@@ -4715,7 +4715,7 @@ def test_a_base_this_checkout_cannot_place_on_the_settled_line_is_refused(
     form_reading(config)
     assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason=KEPT, now=RESOLVED_AT)
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.CheckoutUnusable) as error:
         experiments.create(config, ["status-orphans"], base=RELEASE_REF, now=RESOLVED_AT)
 
     assert "cannot be answered in this checkout" in str(error.value)

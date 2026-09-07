@@ -59,6 +59,7 @@ from evolution_fixtures import (
 from mandrel import evolution
 from mandrel.evolution import (
     analysis_task,
+    errors,
     experiments,
     guards,
     lineage,
@@ -276,7 +277,7 @@ def test_a_base_that_is_not_the_batchs_is_refused_rather_than_reconciled(
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
     git_commit(config.repo_root, "unrelated source work")
 
-    with pytest.raises(evolution.BatchError, match="was formed at base"):
+    with pytest.raises(evolution.UnknownSubject, match="was formed at base"):
         experiments.create(config, ["hook-side-loader"], base="HEAD", now=NOW)
 
 
@@ -333,7 +334,7 @@ def test_a_named_base_that_is_not_the_batchs_is_refused_at_the_first_experiment_
     the first experiment as much as at every later one — the base was fixed
     before any of them, so there is no admission that chooses it."""
 
-    with pytest.raises(evolution.BatchError, match="was formed at base"):
+    with pytest.raises(evolution.UnknownSubject, match="was formed at base"):
         experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
     assert not (config.experiments_root / EXP_01).exists()
@@ -347,14 +348,14 @@ def test_a_redo_naming_a_different_base_is_refused_rather_than_ignored(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="was formed at base"):
+    with pytest.raises(evolution.UnknownSubject, match="was formed at base"):
         experiments.create(config, ["loader-fallback"], base="v2.2.0", now=NOW)
 
 
 def test_a_base_this_repository_does_not_hold_is_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    with pytest.raises(evolution.BatchError, match="cannot resolve"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot resolve"):
         experiments.create(config, ["loader-fallback"], base="v9.9.9", now=NOW)
 
 
@@ -368,26 +369,26 @@ def test_a_draft_is_consumed_once(config: evolution.EvolutionConfig, batch: Path
     experiments.create(config, ["loader-fallback"], now=NOW)
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
 
-    with pytest.raises(evolution.BatchError, match=f"already admitted by {EXP_01}"):
+    with pytest.raises(evolution.AlreadyAnswered, match=f"already admitted by {EXP_01}"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
 def test_a_declined_draft_is_never_admitted(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_rejected_drafts(config.batches_root, BATCH_ID, [rejection("not-worth-it")])
 
-    with pytest.raises(evolution.BatchError, match="was declined at"):
+    with pytest.raises(evolution.AlreadyAnswered, match="was declined at"):
         experiments.create(config, ["not-worth-it"], now=NOW)
 
 
 def test_an_admitted_draft_is_never_declined(config: evolution.EvolutionConfig, batch: Path) -> None:
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="already admitted"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already admitted"):
         experiments.reject(config, ["loader-fallback"], reason="second thoughts", now=NOW)
 
 
 def test_a_draft_nobody_proposed_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
-    with pytest.raises(evolution.BatchError, match="does not exist"):
+    with pytest.raises(evolution.UnknownSubject, match="does not exist"):
         experiments.create(config, ["never-proposed"], now=NOW)
 
 
@@ -403,19 +404,19 @@ def test_an_unsafe_draft_id_never_reaches_a_path(
     kebab slug, which is what makes it one path segment under `proposed-tasks/`
     rather than a name that could reach anywhere else."""
 
-    with pytest.raises(evolution.BatchError, match="cannot be draft ids"):
+    with pytest.raises(evolution.UnknownSubject, match="cannot be draft ids"):
         experiments.create(config, [draft_id], now=NOW)
 
 
 def test_a_draft_named_twice_in_one_selection_is_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    with pytest.raises(evolution.BatchError, match="named twice"):
+    with pytest.raises(evolution.UnknownSubject, match="named twice"):
         experiments.create(config, ["loader-fallback", "loader-fallback"], now=NOW)
 
 
 def test_an_empty_selection_is_refused(config: evolution.EvolutionConfig, batch: Path) -> None:
-    with pytest.raises(evolution.BatchError, match="no draft was named"):
+    with pytest.raises(evolution.UnknownSubject, match="no draft was named"):
         experiments.create(config, [], now=NOW)
 
 
@@ -433,14 +434,14 @@ def test_an_admission_records_an_unambiguous_moment(
 
 
 def test_admission_needs_a_current_batch(config: evolution.EvolutionConfig) -> None:
-    with pytest.raises(evolution.BatchError, match="no batch is current"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch is current"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
 def test_a_concluded_batch_has_no_gate_left(config: evolution.EvolutionConfig, batch: Path) -> None:
     write_outcome(config.batches_root, BATCH_ID)
 
-    with pytest.raises(evolution.BatchError, match="no batch is current"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch is current"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -463,7 +464,7 @@ def test_admission_waits_for_the_analysis_stage_to_end(
 
     batch.joinpath("analysis-complete.json").unlink()
 
-    with pytest.raises(evolution.BatchError, match="still in its analysis stage"):
+    with pytest.raises(evolution.StandingWork, match="still in its analysis stage"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -496,7 +497,7 @@ def test_a_second_experiment_while_one_is_open_is_refused(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="already has an open experiment"):
+    with pytest.raises(evolution.StandingWork, match="already has an open experiment"):
         experiments.create(config, ["hook-side-loader"], now=NOW)
 
 
@@ -573,7 +574,7 @@ def test_further_drafts_join_the_open_round(config: evolution.EvolutionConfig, b
 
 
 def test_add_tasks_needs_an_open_experiment(config: evolution.EvolutionConfig, batch: Path) -> None:
-    with pytest.raises(evolution.BatchError, match="no open experiment to admit into"):
+    with pytest.raises(evolution.NothingToActOn, match="no open experiment to admit into"):
         experiments.add_tasks(config, ["loader-fallback"], now=NOW)
 
 
@@ -589,7 +590,7 @@ def test_a_candidate_ready_round_takes_no_further_work(
     sealed[0]["seal"] = {"sealed_at": "2026-08-06T10:00:00Z", "candidate_revision": git_rev(config.repo_root, "HEAD")}
     rewrite(config, EXP_01, rounds=sealed)
 
-    with pytest.raises(evolution.BatchError, match="is candidate-ready"):
+    with pytest.raises(evolution.AlreadyAnswered, match="is candidate-ready"):
         experiments.add_tasks(config, ["hook-side-loader"], now=NOW)
 
 
@@ -601,7 +602,7 @@ def test_admitting_one_new_draft_beside_a_consumed_one_is_refused(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="already admitted into round 1"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already admitted into round 1"):
         experiments.add_tasks(config, ["loader-fallback", "hook-side-loader"], now=NOW)
 
 
@@ -723,7 +724,7 @@ def test_a_draft_that_is_not_an_inert_task_file_is_refused(
 
     write_draft(config.batches_root, BATCH_ID, "malformed", body=body)
 
-    with pytest.raises(evolution.BatchError, match=message):
+    with pytest.raises(evolution.DraftInadmissible, match=message):
         experiments.create(config, ["malformed"], now=NOW)
 
     assert not analysis_task.tasks_root(config).exists()
@@ -742,7 +743,7 @@ def test_a_field_declared_twice_never_reaches_the_active_pool(
         body=malformed().replace("blockers: []\n", "blockers: []\nstatus: completed\n"),
     )
 
-    with pytest.raises(evolution.BatchError, match="declares \\['status'\\] more than once"):
+    with pytest.raises(evolution.DraftInadmissible, match="declares \\['status'\\] more than once"):
         experiments.create(config, ["malformed"], now=NOW)
 
 
@@ -755,7 +756,7 @@ def test_an_unterminated_frontmatter_never_takes_the_admission_block_into_itself
 
     write_draft(config.batches_root, BATCH_ID, "malformed", body=draft_body("malformed", closed=False))
 
-    with pytest.raises(evolution.BatchError, match="has no body to admit"):
+    with pytest.raises(evolution.DraftInadmissible, match="has no body to admit"):
         experiments.create(config, ["malformed"], now=NOW)
 
     assert not (config.experiments_root / EXP_01).exists()
@@ -805,7 +806,7 @@ def test_a_task_already_in_flight_is_never_overwritten(
 
     analysis_task.publish_task(config, "2026-08-01-loader-fallback", "---\nid: x\n---\n", description="task")
 
-    with pytest.raises(evolution.BatchError, match="already exists at"):
+    with pytest.raises(evolution.DraftInadmissible, match="already exists at"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -819,7 +820,7 @@ def test_a_task_id_the_archive_already_holds_is_refused(
     archived.parent.mkdir(parents=True, exist_ok=True)
     archived.write_text("---\nid: 2026-08-01-loader-fallback\nstatus: completed\n---\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="already exists at"):
+    with pytest.raises(evolution.DraftInadmissible, match="already exists at"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -832,7 +833,7 @@ def test_two_drafts_declaring_one_task_id_are_refused(
     write_draft(config.batches_root, BATCH_ID, "first-idea", body=draft_body("shared", task_id="2026-08-01-shared"))
     write_draft(config.batches_root, BATCH_ID, "second-idea", body=draft_body("shared", task_id="2026-08-01-shared"))
 
-    with pytest.raises(evolution.BatchError, match="both declare task id"):
+    with pytest.raises(evolution.DraftInadmissible, match="both declare task id"):
         experiments.create(config, ["first-idea", "second-idea"], now=NOW)
 
 
@@ -851,7 +852,7 @@ def test_a_task_id_this_batch_already_admitted_is_refused(
         body=draft_body("loader-fallback-v2", task_id="2026-08-01-loader-fallback"),
     )
 
-    with pytest.raises(evolution.BatchError, match="already admitted by"):
+    with pytest.raises(evolution.DraftInadmissible, match="already admitted by"):
         experiments.create(config, ["loader-fallback-v2"], now=NOW)
 
 
@@ -997,7 +998,7 @@ def test_a_ref_standing_anywhere_else_stops_the_creation(
     other = git_commit(config.repo_root, "someone else's work")
     git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), other)
 
-    with pytest.raises(evolution.BatchError, match="already exists at"):
+    with pytest.raises(evolution.LineMoved, match="already exists at"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -1031,7 +1032,7 @@ def test_a_ref_off_the_history_its_record_pins_stops_further_admission(
         git_unrelated_commit(config.repo_root, "a history of its own"),
     )
 
-    with pytest.raises(evolution.BatchError, match="not on the history of"):
+    with pytest.raises(evolution.LineMoved, match="not on the history of"):
         experiments.add_tasks(config, ["hook-side-loader"], now=NOW)
 
 
@@ -1056,7 +1057,7 @@ def test_a_round_that_does_not_build_on_the_one_before_it_stops_further_admissio
         ],
     )
 
-    with pytest.raises(evolution.BatchError, match="does not descend from"):
+    with pytest.raises(evolution.LineMoved, match="does not descend from"):
         experiments.add_tasks(config, ["hook-side-loader"], now=NOW)
 
 
@@ -1099,7 +1100,7 @@ def test_a_draft_edited_after_admission_stops_the_restore(
         encoding="utf-8",
     )
 
-    with pytest.raises(evolution.BatchError, match="no longer matches the bytes"):
+    with pytest.raises(evolution.DraftInadmissible, match="no longer matches the bytes"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
 
@@ -1163,7 +1164,7 @@ def test_a_ref_off_its_recorded_history_stops_the_redo_of_a_create(
         git_unrelated_commit(config.repo_root, "a history of its own"),
     )
 
-    with pytest.raises(evolution.BatchError, match="not on the history of"):
+    with pytest.raises(evolution.LineMoved, match="not on the history of"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert analysis_task.existing_task_path(config, "2026-08-01-loader-fallback") is None
@@ -1189,7 +1190,7 @@ def test_an_unrelated_task_at_the_admitted_id_is_never_adopted(
     unrelated = "---\nid: 2026-08-01-loader-fallback\nstatus: in_progress\n---\n\n# Someone else's work\n"
     analysis_task.publish_task(config, "2026-08-01-loader-fallback", unrelated, description="task")
 
-    with pytest.raises(evolution.BatchError, match="is not the copy"):
+    with pytest.raises(evolution.DraftInadmissible, match="is not the copy"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == unrelated
@@ -1225,7 +1226,7 @@ def test_a_file_wearing_the_admitted_copy_s_markers_is_never_adopted(
     )
     analysis_task.publish_task(config, "2026-08-01-loader-fallback", lookalike, description="task")
 
-    with pytest.raises(evolution.BatchError, match="is not the copy"):
+    with pytest.raises(evolution.DraftInadmissible, match="is not the copy"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert analysis_task.task_path(config, "2026-08-01-loader-fallback").read_text(encoding="utf-8") == lookalike
@@ -1251,7 +1252,7 @@ def test_a_copy_of_another_admission_moved_to_this_id_is_never_adopted(
         encoding="utf-8",
     )
 
-    with pytest.raises(evolution.BatchError, match="admission section does not carry"):
+    with pytest.raises(evolution.DraftInadmissible, match="admission section does not carry"):
         experiments.create(config, ["loader-fallback", "hook-side-loader"], now=NOW)
 
 
@@ -1273,7 +1274,7 @@ def test_a_copy_declaring_a_second_task_id_is_never_adopted(
     path.write_text(two_ids, encoding="utf-8")
     analysis_task.index_path(config).unlink()
 
-    with pytest.raises(evolution.BatchError, match=r"declares \['id'\] more than once"):
+    with pytest.raises(evolution.DraftInadmissible, match=r"declares \['id'\] more than once"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert path.read_text(encoding="utf-8") == two_ids
@@ -1298,7 +1299,7 @@ def test_a_copy_carrying_an_unrecorded_admission_line_is_never_adopted(
     path.write_text(extended, encoding="utf-8")
     analysis_task.index_path(config).unlink()
 
-    with pytest.raises(evolution.BatchError, match="admission section also carries"):
+    with pytest.raises(evolution.DraftInadmissible, match="admission section also carries"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert path.read_text(encoding="utf-8") == extended
@@ -1328,7 +1329,7 @@ def test_a_copy_hiding_a_line_behind_an_indented_pseudo_heading_is_never_adopted
     path.write_text(hidden, encoding="utf-8")
     analysis_task.index_path(config).unlink()
 
-    with pytest.raises(evolution.BatchError, match="admission section also carries"):
+    with pytest.raises(evolution.DraftInadmissible, match="admission section also carries"):
         experiments.create(config, ["loader-fallback"], now=NOW)
 
     assert path.read_text(encoding="utf-8") == hidden
@@ -1489,7 +1490,7 @@ def test_a_second_reason_never_replaces_the_one_on_record(
 
     experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="for a different reason"):
+    with pytest.raises(evolution.AlreadyAnswered, match="for a different reason"):
         experiments.reject(config, ["not-worth-it"], reason="still not worth it", now=NOW)
 
     written = json.loads((batch / "rejected-drafts.json").read_text(encoding="utf-8"))
@@ -1536,7 +1537,7 @@ def test_a_rejection_redo_names_the_drafts_already_declined(
 
     experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match=r"\['not-worth-it'\] were already declined"):
+    with pytest.raises(evolution.AlreadyAnswered, match=r"\['not-worth-it'\] were already declined"):
         experiments.reject(
             config,
             ["not-worth-it", "hook-side-loader"],
@@ -1608,7 +1609,7 @@ def test_sealing_refuses_while_an_admitted_task_is_in_flight(
     finish(config, "2026-08-01-loader-fallback")
     advance(config, admission.ref)
 
-    with pytest.raises(evolution.BatchError, match="2026-08-01-hook-side-loader \\(still in flight\\)"):
+    with pytest.raises(evolution.StandingWork, match="2026-08-01-hook-side-loader \\(still in flight\\)"):
         experiments.seal_round(config, now=LATER)
 
     assert record(config, EXP_01)["rounds"][0]["seal"] is None
@@ -1623,7 +1624,7 @@ def test_sealing_refuses_a_task_this_machine_does_not_hold(
     admission = experiments.create(config, ["loader-fallback"], now=NOW)
     admission.admitted[0].task_path.unlink()
 
-    with pytest.raises(evolution.BatchError, match="2026-08-01-loader-fallback \\(not on this machine\\)"):
+    with pytest.raises(evolution.StandingWork, match="2026-08-01-loader-fallback \\(not on this machine\\)"):
         experiments.seal_round(config, now=LATER)
 
 
@@ -1640,7 +1641,7 @@ def test_the_completion_is_read_from_the_copy_the_record_admitted(
         encoding="utf-8",
     )
 
-    with pytest.raises(evolution.BatchError, match="is not the copy .* admitted"):
+    with pytest.raises(evolution.DraftInadmissible, match="is not the copy .* admitted"):
         experiments.seal_round(config, now=LATER)
 
     assert record(config, EXP_01)["rounds"][0]["seal"] is None
@@ -1670,7 +1671,7 @@ def test_sealing_refuses_when_the_ref_is_not_in_this_checkout(
     finish(config, admission.admitted[0].task_id)
     git_delete_ref(config.repo_root, admission.ref)
 
-    with pytest.raises(evolution.BatchError, match="is not in this checkout"):
+    with pytest.raises(evolution.CheckoutUnusable, match="is not in this checkout"):
         experiments.seal_round(config, now=LATER)
 
 
@@ -1684,7 +1685,7 @@ def test_sealing_refuses_a_ref_that_left_the_pinned_history(
     finish(config, admission.admitted[0].task_id)
     git_update_ref(config.repo_root, admission.ref, git_unrelated_commit(config.repo_root, "elsewhere"))
 
-    with pytest.raises(evolution.BatchError, match="not on the history"):
+    with pytest.raises(evolution.LineMoved, match="not on the history"):
         experiments.seal_round(config, now=LATER)
 
 
@@ -1756,7 +1757,7 @@ def test_a_ref_that_moved_past_a_sealed_round_stops_the_seal_being_reported(
     experiments.seal_round(config, now=LATER)
     advance(config, admission.ref)
 
-    with pytest.raises(evolution.BatchError, match="ahead"):
+    with pytest.raises(evolution.LineMoved, match="ahead"):
         experiments.seal_round(config, now=LATEST)
 
 
@@ -1764,7 +1765,7 @@ def test_sealing_needs_an_open_experiment(config: evolution.EvolutionConfig, bat
     experiments.create(config, ["loader-fallback"], now=NOW)
     rewrite(config, EXP_01, decision=experiment_decision("abandoned"))
 
-    with pytest.raises(evolution.BatchError, match="no open experiment"):
+    with pytest.raises(evolution.NothingToActOn, match="no open experiment"):
         experiments.seal_round(config, now=LATER)
 
 
@@ -1820,7 +1821,7 @@ def test_revise_refuses_while_the_round_is_still_open(
 
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="round 1 .* is still open"):
+    with pytest.raises(evolution.StandingWork, match="round 1 .* is still open"):
         experiments.revise(config, reason="replay lost two runs", now=LATER)
 
     assert len(record(config, EXP_01)["rounds"]) == 1
@@ -1842,7 +1843,7 @@ def test_revise_refuses_a_ref_that_moved_past_the_pinned_candidate(
     seal(config, ["loader-fallback"])
     advance(config, lineage.experiment_ref(EXP_01))
 
-    with pytest.raises(evolution.BatchError, match="ahead"):
+    with pytest.raises(evolution.LineMoved, match="ahead"):
         experiments.revise(config, reason="replay lost two runs", now=LATEST)
 
 
@@ -1871,7 +1872,7 @@ def test_revise_refuses_a_second_reason_for_the_round_already_open(
     seal(config, ["loader-fallback"])
     experiments.revise(config, reason="replay lost two runs", now=LATEST)
 
-    with pytest.raises(evolution.BatchError, match="already opened for 'replay lost two runs'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already opened for 'replay lost two runs'"):
         experiments.revise(config, reason="on reflection, the hook order", now=LATEST)
 
     assert len(record(config, EXP_01)["rounds"]) == 2
@@ -1888,7 +1889,7 @@ def test_a_revised_round_that_admitted_nothing_is_not_sealed(
     experiments.revise(config, reason="replay lost two runs", now=LATEST)
     advance(config, lineage.experiment_ref(EXP_01))
 
-    with pytest.raises(evolution.BatchError, match="round 2 .* has admitted nothing"):
+    with pytest.raises(evolution.NothingToActOn, match="round 2 .* has admitted nothing"):
         experiments.seal_round(config, now=LATEST)
 
 
@@ -1979,7 +1980,7 @@ def test_sealing_refuses_a_ref_that_moved_since_it_was_read(
     checked = advance(config, admission.ref)
     landed = arrives_after_the_derivation(monkeypatch, config, admission.ref)
 
-    with pytest.raises(evolution.BatchError, match="a seal is decided from where that ref stood"):
+    with pytest.raises(evolution.LineMoved, match="a seal is decided from where that ref stood"):
         experiments.seal_round(config, now=LATER)
 
     assert landed[0] != checked
@@ -1999,7 +2000,7 @@ def test_revising_refuses_a_ref_that_moved_since_it_was_read(
     pinned = seal(config, ["loader-fallback"])
     landed = arrives_after_the_derivation(monkeypatch, config, experiments.experiment_ref(EXP_01))
 
-    with pytest.raises(evolution.BatchError, match="a revision is decided from where that ref stood"):
+    with pytest.raises(evolution.LineMoved, match="a revision is decided from where that ref stood"):
         experiments.revise(config, reason="replay lost two runs", now=LATEST)
 
     assert len(record(config, EXP_01)["rounds"]) == 1
@@ -2011,7 +2012,7 @@ def test_revising_refuses_a_ref_that_moved_since_it_was_read(
     assert derived.ref is not None
     assert derived.ref.tip == landed[0] != pinned
     assert derived.ref.consistent is False
-    with pytest.raises(evolution.BatchError, match="moved past a candidate-ready round|not on the history"):
+    with pytest.raises(evolution.LineMoved, match="moved past a candidate-ready round|not on the history"):
         experiments.revise(config, reason="replay lost two runs", now=LATEST)
 
 
@@ -2176,7 +2177,7 @@ def test_ending_an_attempt_records_why(config: evolution.EvolutionConfig, batch:
 
 
 def test_ending_an_attempt_needs_one_to_be_open(config: evolution.EvolutionConfig, batch: Path) -> None:
-    with pytest.raises(evolution.BatchError, match="has no open experiment"):
+    with pytest.raises(evolution.NothingToActOn, match="has no open experiment"):
         experiments.abandon(config, reason="nothing to end", now=NOW)
 
 
@@ -2190,7 +2191,7 @@ def test_ending_an_attempt_refuses_a_ref_that_left_the_pinned_history(
     seal(config, ["loader-fallback"])
     git_update_ref(config.repo_root, lineage.experiment_ref(EXP_01), git_unrelated_commit(config.repo_root, "forced elsewhere"))
 
-    with pytest.raises(evolution.BatchError, match="not on the history of"):
+    with pytest.raises(evolution.LineMoved, match="not on the history of"):
         experiments.abandon(config, reason="the loader order cannot be fixed", now=LATEST)
 
     assert record(config, EXP_01)["decision"] is None
@@ -2230,9 +2231,9 @@ def test_a_second_decision_never_edits_the_one_on_record(
     experiments.create(config, ["loader-fallback"], now=NOW)
     experiments.abandon(config, reason="the disposition was wrong about the cause", now=LATER)
 
-    with pytest.raises(evolution.BatchError, match="already ended as 'abandoned'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended as 'abandoned'"):
         experiments.abandon(config, reason="on reflection, the hook was the problem", now=LATEST)
-    with pytest.raises(evolution.BatchError, match="already ended as 'abandoned'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended as 'abandoned'"):
         experiments.supersede(config, reason="the disposition was wrong about the cause", now=LATEST)
 
 
@@ -2339,7 +2340,7 @@ def test_a_moved_ref_stops_the_redo_before_it_reports_the_supersession(
         git_unrelated_commit(config.repo_root, "forced elsewhere"),
     )
 
-    with pytest.raises(evolution.BatchError, match="not on the history of"):
+    with pytest.raises(evolution.LineMoved, match="not on the history of"):
         experiments.supersede(config, reason="the hook-side approach replaces it", now=LATEST)
 
 
@@ -2422,7 +2423,7 @@ def test_a_different_reason_never_finishes_someone_elses_supersession(
         experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
     monkeypatch.undo()
 
-    with pytest.raises(evolution.BatchError, match="was never created"):
+    with pytest.raises(evolution.AlreadyAnswered, match="was never created"):
         experiments.supersede(config, reason="something else entirely", now=LATEST)
 
     assert not (config.experiments_root / EXP_02).exists()
@@ -2462,7 +2463,7 @@ def test_nothing_but_the_supersession_itself_acts_on_a_batch_owing_a_successor(
         experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
     monkeypatch.undo()
 
-    with pytest.raises(evolution.BatchError, match=f"was superseded by {EXP_02}, which does not exist"):
+    with pytest.raises(evolution.StandingWork, match=f"was superseded by {EXP_02}, which does not exist"):
         operation(config)
 
 
@@ -2522,7 +2523,7 @@ def test_ending_an_attempt_refuses_a_ref_that_moved_since_it_was_read(
     pinned = seal(config, ["loader-fallback"])
     landed = arrives_after_the_derivation(monkeypatch, config, experiments.experiment_ref(EXP_01))
 
-    with pytest.raises(evolution.BatchError, match="a terminal decision is the last reading anyone takes"):
+    with pytest.raises(evolution.LineMoved, match="a terminal decision is the last reading anyone takes"):
         ending(config)
 
     assert record(config, EXP_01)["decision"] is None
@@ -2536,7 +2537,7 @@ def test_ending_an_attempt_refuses_a_ref_that_moved_since_it_was_read(
     assert derived.ref is not None
     assert derived.ref.tip == landed[0] != pinned
     assert derived.ref.consistent is False
-    with pytest.raises(evolution.BatchError, match="moved past a candidate-ready round|not on the history"):
+    with pytest.raises(evolution.LineMoved, match="moved past a candidate-ready round|not on the history"):
         ending(config)
 
 
@@ -2635,7 +2636,7 @@ def test_a_decision_naming_an_attempt_this_batch_never_had_is_refused(
 ) -> None:
     experiments.create(config, ["loader-fallback"], now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="has no experiment"):
+    with pytest.raises(evolution.UnknownSubject, match="has no experiment"):
         experiments.abandon(config, reason="drop it", experiment_id=EXP_02, now=LATER)
 
     assert record(config, EXP_01)["decision"] is None
@@ -2704,9 +2705,9 @@ def test_a_named_redo_holds_to_the_decision_that_is_on_record(
     experiments.create(config, ["loader-fallback"], now=NOW)
     experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
 
-    with pytest.raises(evolution.BatchError, match="already ended as 'superseded'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended as 'superseded'"):
         experiments.supersede(config, reason="something else entirely", experiment_id=EXP_01, now=LATEST)
-    with pytest.raises(evolution.BatchError, match="already ended as 'superseded'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended as 'superseded'"):
         experiments.abandon(config, reason="the hook-side approach replaces it", experiment_id=EXP_01, now=LATEST)
 
     assert record(config, EXP_02)["decision"] is None
@@ -2723,7 +2724,7 @@ def test_a_decision_naming_an_attempt_older_than_the_one_that_ended_is_refused(
     experiments.supersede(config, reason="the hook-side approach replaces it", now=LATER)
     experiments.abandon(config, reason="the hook side turned out worse", now=LATEST)
 
-    with pytest.raises(evolution.BatchError, match="is not the attempt"):
+    with pytest.raises(evolution.UnknownSubject, match="is not the attempt"):
         experiments.abandon(config, reason="the loader order cannot be fixed", experiment_id=EXP_01, now=LATEST)
 
 
@@ -2809,7 +2810,7 @@ def test_concluding_refuses_while_an_attempt_is_open(
     experiments.create(config, ["loader-fallback"], now=NOW)
     experiments.reject(config, ["hook-side-loader", "not-worth-it"], reason="not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="still has an open experiment"):
+    with pytest.raises(evolution.StandingWork, match="still has an open experiment"):
         experiments.conclude_no_change(config, reason="nothing justified", now=LATER)
 
     assert not (batch / "outcome.json").exists()
@@ -2823,7 +2824,7 @@ def test_concluding_refuses_while_a_proposal_is_still_waiting(
 
     experiments.reject(config, ["loader-fallback"], reason="one report is not recurrence", now=NOW)
 
-    with pytest.raises(evolution.BatchError, match="waiting at its admission gate"):
+    with pytest.raises(evolution.StandingWork, match="waiting at its admission gate"):
         experiments.conclude_no_change(config, reason="nothing justified", now=LATER)
 
 
@@ -2848,7 +2849,7 @@ def test_concluding_no_change_refuses_over_a_promoted_attempt(
         promotion=prepared_promotion(candidate_revision=candidate_of(config, EXP_01), reason=why),
     )
 
-    with pytest.raises(evolution.BatchError, match="record a promotion"):
+    with pytest.raises(evolution.StandingWork, match="record a promotion"):
         experiments.conclude_no_change(config, reason="nothing justified", now=LATEST)
 
 
@@ -2862,7 +2863,7 @@ def test_concluding_records_why(config: evolution.EvolutionConfig, batch: Path) 
 
 
 def test_concluding_needs_a_current_batch(config: evolution.EvolutionConfig) -> None:
-    with pytest.raises(evolution.BatchError, match="nothing to conclude"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to conclude"):
         experiments.conclude_no_change(config, reason="nothing justified", now=NOW)
 
 
@@ -2899,7 +2900,7 @@ def test_a_conclusion_nobody_recorded_is_not_read_as_one(
     experiments.reject(config, list(DRAFTS), reason="one report each is not recurrence", now=NOW)
     experiments.conclude_no_change(config, reason="no cluster reached recurrence", now=LATER)
 
-    with pytest.raises(evolution.BatchError, match="nothing to conclude"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to conclude"):
         experiments.conclude_no_change(config, reason="on reflection, something else", now=LATEST)
 
 
@@ -3102,7 +3103,7 @@ def test_a_target_planned_twice_refuses(
 ) -> None:
     prepared(config)
 
-    with pytest.raises(evolution.BatchError, match="named more than once as a planned target"):
+    with pytest.raises(evolution.UnknownSubject, match="named more than once as a planned target"):
         experiments.promote(config, reason=WHY, targets=["orch-hub", "orch-hub"], now=PROMOTED)
 
 
@@ -3147,7 +3148,7 @@ def test_a_promotion_refuses_a_stated_line_its_evidence_does_not_name(
 
     prepared(config)
 
-    with pytest.raises(evolution.BatchError, match="moves the line its evidence names"):
+    with pytest.raises(evolution.UnknownSubject, match="moves the line its evidence names"):
         experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=ELSEWHERE, now=PROMOTED)
     assert git_rev(config.repo_root, RELEASE_REF) == release
     assert not (config.batches_root / BATCH_ID / "outcome.json").exists()
@@ -3166,7 +3167,7 @@ def test_a_redone_promotion_is_held_to_the_same_stated_line(
     prepared(config)
     first = experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="moves the line its evidence names"):
+    with pytest.raises(evolution.UnknownSubject, match="moves the line its evidence names"):
         experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=ELSEWHERE, now=LATEST)
 
     again = experiments.promote(config, reason=WHY, targets=TARGETS, source_ref=RELEASE_REF, now=LATEST)
@@ -3181,7 +3182,7 @@ def test_a_round_nobody_replayed_cannot_be_promoted(
     experiments.reject(config, ["not-worth-it"], reason="one report is not recurrence", now=NOW)
     seal(config, ["loader-fallback", "hook-side-loader"])
 
-    with pytest.raises(evolution.BatchError, match="is incomplete and cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="is incomplete and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3193,7 +3194,7 @@ def test_a_run_that_failed_cannot_be_promoted(
 ) -> None:
     prepared(config, report=completed_report(outcome="failed", metrics=(), elapsed_seconds=None))
 
-    with pytest.raises(evolution.BatchError, match="is failed and cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="is failed and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3210,7 +3211,7 @@ def test_a_source_line_that_moved_since_the_run_cannot_be_promoted(
     git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "later\n", "release work"))
     moved = git_rev(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match="is stale and cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="is stale and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == moved
@@ -3225,7 +3226,7 @@ def test_a_check_this_checkout_cannot_make_is_not_one_that_passed(
     prepared(config)
     git_delete_ref(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match="cannot be answered here"):
+    with pytest.raises(evolution.EvidenceUnfit, match="cannot be answered here"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
 
@@ -3238,7 +3239,7 @@ def test_a_revised_round_leaves_its_evidence_behind(
     prepared(config)
     experiments.revise(config, reason="the excluded case needs the loader fallback too", now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="round 2 .* cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="round 2 .* cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3255,7 +3256,7 @@ def test_a_run_still_going_holds_the_promotion_back(
     prepared(config)
     replay.start(config, FakeHarness(), source_ref=RELEASE_REF, expectation=EXPECTED, now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="round 1 attempt 2 .* is still running"):
+    with pytest.raises(evolution.StandingWork, match="round 1 attempt 2 .* is still running"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3286,7 +3287,7 @@ def test_an_outstanding_request_holds_the_promotion_back(
     with pytest.raises(RuntimeError):
         replay.start(config, Unanswering(), source_ref=RELEASE_REF, expectation=EXPECTED, now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="round 1 attempt 2 outstanding"):
+    with pytest.raises(evolution.StandingWork, match="round 1 attempt 2 outstanding"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3303,7 +3304,7 @@ def test_a_proposal_still_waiting_holds_the_promotion_back(
     replay.start(config, harness, source_ref=RELEASE_REF, expectation=EXPECTED, now=LATEST)
     replay.conclude(config, harness, now=LATEST)
 
-    with pytest.raises(evolution.BatchError, match="waiting at its admission gate"):
+    with pytest.raises(evolution.StandingWork, match="waiting at its admission gate"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3322,7 +3323,7 @@ def test_only_the_tree_that_was_measured_is_promoted(
     written["replays"][0]["integration"]["tree"] = "b" * 40
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    with pytest.raises(evolution.BatchError, match="what is promoted is the tree that was exercised"):
+    with pytest.raises(evolution.EvidenceUnfit, match="what is promoted is the tree that was exercised"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3347,7 +3348,7 @@ def test_a_source_line_that_moves_under_the_promotion_refuses(
 
     monkeypatch.setattr(experiments, "_standing", interleaved)
 
-    with pytest.raises(evolution.BatchError, match=f"{RELEASE_REF} did not take"):
+    with pytest.raises(evolution.LineMoved, match=f"{RELEASE_REF} did not take"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert record(config, EXP_01)["decision"] is None
@@ -3375,7 +3376,7 @@ def test_a_line_that_moved_before_the_merge_landed_gives_up_the_promotion(
 
     monkeypatch.setattr(experiments, "commit_tree", interleaved)
 
-    with pytest.raises(evolution.BatchError, match="never reached"):
+    with pytest.raises(evolution.LineMoved, match="never reached"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert record(config, EXP_01)["promotion"] is None
@@ -3400,7 +3401,7 @@ def test_the_line_a_working_tree_is_on_is_not_promoted_onto(
     git_update_ref(config.repo_root, branch, run.integration.merge_input_revision)
     repoint(config, branch)
 
-    with pytest.raises(evolution.BatchError, match="is checked out at"):
+    with pytest.raises(evolution.CheckoutUnusable, match="is checked out at"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, branch) == run.integration.merge_input_revision
@@ -3420,7 +3421,7 @@ def test_a_line_checked_out_by_another_worktree_is_not_promoted_onto(
     linked = git_worktree(config.repo_root, tmp_path / "linked", RELEASE_REF)
     assert Path(revisions.checked_out_refs(config.repo_root)[RELEASE_REF]).resolve() == linked
 
-    with pytest.raises(evolution.BatchError, match=f"{RELEASE_REF} is checked out at"):
+    with pytest.raises(evolution.CheckoutUnusable, match=f"{RELEASE_REF} is checked out at"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -3436,7 +3437,7 @@ def test_promoting_needs_an_open_experiment(
     prepared(config)
     experiments.abandon(config, reason="the regression is in the approach", now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="has no open experiment"):
+    with pytest.raises(evolution.NothingToActOn, match="has no open experiment"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
 
@@ -3555,7 +3556,7 @@ def test_an_attempt_is_not_ended_under_a_prepared_promotion(
         # promotion nothing could afterwards record.
         lambda: experiments.revise(config, reason="one more pass", now=LATEST),
     ):
-        with pytest.raises(evolution.BatchError, match="moving on now would retire"):
+        with pytest.raises(evolution.StandingWork, match="moving on now would retire"):
             ending()
 
 
@@ -3613,7 +3614,7 @@ def test_a_line_that_moved_for_somebody_else_is_not_this_promotion(
     prepared(config)
     git_update_ref(config.repo_root, RELEASE_REF, git_sibling_commit(config.repo_root, release, "other\n", "release work"))
 
-    with pytest.raises(evolution.BatchError, match="is stale and cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="is stale and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
 
@@ -3636,7 +3637,7 @@ def test_a_merge_this_operation_did_not_make_is_not_its_promotion(
     assert by_hand is not None, complaint
     git_update_ref(config.repo_root, RELEASE_REF, by_hand)
 
-    with pytest.raises(evolution.BatchError, match="is stale and cannot be promoted"):
+    with pytest.raises(evolution.EvidenceUnfit, match="is stale and cannot be promoted"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
     assert record(config, EXP_01)["decision"] is None
@@ -3694,7 +3695,7 @@ def test_an_admission_over_a_promotion_owing_its_outcome_refuses_and_the_redo_fi
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
     monkeypatch.undo()
 
-    with pytest.raises(evolution.BatchError, match="concluded by promoting it") as refused:
+    with pytest.raises(evolution.StandingWork, match="concluded by promoting it") as refused:
         experiments.create(config, ["loader-fallback"], now=LATEST)
     # The attempt that promoted, and the record still to be written.
     assert EXP_01 in str(refused.value)
@@ -3738,10 +3739,10 @@ def test_a_batch_owing_its_outcome_meets_that_promotion_wherever_it_is_written_i
         lambda: experiments.reject(config, ["loader-fallback"], reason="not recurrence", now=LATEST),
         lambda: replay.start(config, harness, source_ref=RELEASE_REF, expectation=EXPECTED, now=LATEST),
     ):
-        with pytest.raises(evolution.BatchError, match="concluded by promoting it"):
+        with pytest.raises(evolution.StandingWork, match="concluded by promoting it"):
             operation()
 
-    with pytest.raises(evolution.BatchError, match="record a promotion"):
+    with pytest.raises(evolution.StandingWork, match="record a promotion"):
         experiments.conclude_no_change(config, reason="nothing justified", now=LATEST)
 
     assert experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST).recorded is True
@@ -3812,7 +3813,7 @@ def test_a_different_reason_after_the_decision_is_not_that_promotion_redone(
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
     monkeypatch.undo()
 
-    with pytest.raises(evolution.BatchError, match="already ended as 'promoted'"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended as 'promoted'"):
         experiments.promote(config, reason="on reflection, something else", targets=TARGETS, now=LATEST)
 
 
@@ -3830,7 +3831,7 @@ def test_the_outcome_states_the_plan_the_promotion_was_made_under(
         experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
     monkeypatch.undo()
 
-    with pytest.raises(evolution.BatchError, match="prepared for .* planning"):
+    with pytest.raises(evolution.AlreadyAnswered, match="prepared for .* planning"):
         experiments.promote(config, reason=WHY, targets=("orch-hub",), now=LATEST)
 
     result = experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
@@ -3853,7 +3854,7 @@ def test_a_promotion_from_a_cycle_that_closed_is_not_this_request_redone(
     (config.batches_root / SECOND_BATCH / "findings.md").write_text("# Findings\n", encoding="utf-8")
     experiments.conclude_no_change(config, reason="the second cohort justified nothing", now=LATEST)
 
-    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to promote"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)
 
     # And the promotion it would have reported is untouched history.
@@ -3870,7 +3871,7 @@ def test_a_finished_promotion_is_reported_only_to_the_request_that_made_it(
     prepared(config)
     experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to promote"):
         experiments.promote(config, reason=WHY, targets=("orch-hub",), now=LATEST)
 
 
@@ -3899,12 +3900,12 @@ def test_a_promotion_nobody_recorded_is_not_read_as_one(
     prepared(config)
     experiments.promote(config, reason=WHY, targets=TARGETS, now=PROMOTED)
 
-    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to promote"):
         experiments.promote(config, reason="a different candidate entirely", targets=TARGETS, now=LATEST)
 
 
 def test_promoting_needs_a_current_batch(config: evolution.EvolutionConfig) -> None:
-    with pytest.raises(evolution.BatchError, match="nothing to promote"):
+    with pytest.raises(evolution.NothingToActOn, match="nothing to promote"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=NOW)
 
 
@@ -3979,6 +3980,29 @@ def test_a_record_the_reader_would_refuse_is_never_published(
 
     assert refused == [EXP_01]
     assert not (config.experiments_root / EXP_01).exists()
+    assert not analysis_task.tasks_root(config).exists()
+
+
+def test_something_standing_where_an_experiment_goes_is_a_damaged_record(
+    config: evolution.EvolutionConfig, batch: Path
+) -> None:
+    """A loose file at an experiment's id, which is the one way this is reached.
+
+    A *directory* there is read by the lineage, which allocates past it; a file
+    is skipped by design — one experiment is one directory, and the tree ships
+    with a README beside them. So what is left standing in the way is something
+    under `experiments/` that is not a record, and the answer is the record
+    family rather than a refusal: no verb an operator could run next makes that
+    path go away, and a refusal would send them looking for one.
+    """
+
+    config.experiments_root.mkdir(parents=True, exist_ok=True)
+    (config.experiments_root / EXP_01).write_text("not an experiment\n", encoding="utf-8")
+
+    with pytest.raises(evolution.RecordError, match="already exists") as raised:
+        experiments.create(config, ["loader-fallback"], now=NOW)
+
+    assert raised.value.kind == errors.KIND_CORRUPT
     assert not analysis_task.tasks_root(config).exists()
 
 

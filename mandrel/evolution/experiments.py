@@ -103,7 +103,20 @@ from ..hashing import sha256_bytes
 from . import analysis_task, assessment
 from . import rollback as rollback_ops
 from .config import EvolutionConfig
-from .errors import BatchError, InputError, ToolchainError
+from .errors import (
+    AlreadyAnswered,
+    BatchError,
+    CheckoutUnusable,
+    DraftInadmissible,
+    EvidenceUnfit,
+    InputError,
+    LineMoved,
+    NothingToActOn,
+    RecordError,
+    StandingWork,
+    ToolchainError,
+    UnknownSubject,
+)
 from .guards import (
     current_cycle,
     held,
@@ -865,7 +878,7 @@ def add_tasks(
 
         experiment = current.open_experiment
         if experiment is None:
-            raise BatchError(_no_attempt_to_admit_into(current))
+            raise NothingToActOn(_no_attempt_to_admit_into(current))
         round_ = _open_round(experiment)
         require_consistent_ref(current)
         admitted = {task.draft_id: task for task in round_.tasks}
@@ -881,7 +894,7 @@ def add_tasks(
                     round_,
                     tuple(admitted[draft_id] for draft_id in sorted(requested)),
                 )
-            raise BatchError(
+            raise AlreadyAnswered(
                 f"draft(s) {already} are already admitted into round {round_.number} of "
                 f"{experiment.experiment_id}; a draft is consumed once, so redo the same selection to finish an "
                 "interrupted admission, or admit only the drafts that are still waiting"
@@ -1005,14 +1018,14 @@ def _redo_reject(
     """
 
     if set(already) != requested:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"draft(s) {already} were already declined at {batch.batch_id}'s gate; declining is terminal for a "
             "proposal, so redo the same selection to finish an interrupted rejection, or decline only the drafts "
             "still waiting"
         )
     differing = sorted(draft_id for draft_id in already if recorded[draft_id]["reason"] != reason)
     if differing:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"draft(s) {differing} were declined at {batch.batch_id}'s gate for a different reason "
             f"({recorded[differing[0]]['reason']!r}); declining is terminal for a proposal, so the reason on "
             "record stands — re-proposing the idea means a new draft id whose own bytes say what changed"
@@ -1073,7 +1086,11 @@ def seal_round(config: EvolutionConfig, *, expect: str | None = None, now: datet
         # just above as this operation's own redo.
         refusal = sealable_refusal(experiment)
         if refusal is not None:
-            raise BatchError(refusal)
+            # One class though that reading answers for two states: the sealed
+            # one was returned above as this operation's own redo, so what is
+            # left here is a round with nothing admitted into it, and what comes
+            # next is the admission that fills it.
+            raise NothingToActOn(refusal)
 
         stamp = format_rfc3339(moment)
         candidate = _pinnable_tip(experiment, current.ref)
@@ -1213,12 +1230,12 @@ def _redo_revise(experiment: Experiment, last: Round, reason: str) -> ReviseResu
                 revised_from=pinned,
                 opened=False,
             )
-        raise BatchError(
+        raise AlreadyAnswered(
             f"round {last.number} of {experiment.experiment_id} was already opened for {last.reason!r}; a round "
             f"is opened once, so redo the same revision to finish an interrupted one — {reason!r} would be a "
             "second reason for a round that already exists, and what goes into that round is an admission"
         )
-    raise BatchError(_round_still_open(experiment))
+    raise StandingWork(_round_still_open(experiment))
 
 
 # --- terminal decisions ------------------------------------------------------
@@ -1387,7 +1404,7 @@ def _require_no_prepared_promotion(experiment: Experiment) -> None:
 
     refusal = prepared_promotion_refusal(experiment)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def _named_attempt(current: BatchLineage, experiment_id: str | None) -> Experiment | None:
@@ -1405,7 +1422,7 @@ def _named_attempt(current: BatchLineage, experiment_id: str | None) -> Experime
         if experiment.experiment_id == experiment_id:
             return experiment
     known = [experiment.experiment_id for experiment in current.experiments]
-    raise BatchError(
+    raise UnknownSubject(
         f"{current.batch_id} has no experiment {experiment_id!r}; its attempts are {known or 'none yet'} — a "
         "decision names the attempt it ends, and an id this batch never allocated names none of them"
     )
@@ -1423,7 +1440,7 @@ def _require_named_ending(current: BatchLineage, named: Experiment | None) -> No
     last = current.experiments[-1] if current.experiments else None
     if last is not None and named.experiment_id == last.experiment_id:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{named.experiment_id} is not the attempt {current.batch_id} last ended"
         + (f" ({last.experiment_id})" if last is not None else "")
         + "; a terminal decision is recorded once and never edited, so what a decision naming an earlier attempt "
@@ -1462,7 +1479,7 @@ def _require_redone_supersession(
     ):
         return _supersession_on_record(current, named, decision, experiment)
     recorded = f"{decision.outcome!r} ({decision.reason!r})" if decision is not None else "no decision"
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{named.experiment_id} already ended as {recorded}, and {experiment.experiment_id} is open; a decision "
         f"is recorded once and never edited, so naming {named.experiment_id} asks to finish that one — to end "
         f"the attempt that is open, name {experiment.experiment_id}"
@@ -1564,7 +1581,7 @@ def _finish_supersession(
     superseded = current.experiments[-1]
     decision = superseded.decision
     if decision is None or decision.reason != reason:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{superseded.experiment_id} was superseded for "
             f"{(decision.reason if decision else '')!r}, and {current.pending_successor} was never created; a "
             f"decision is recorded once, so redo that supersession for the same reason to finish it — {reason!r} "
@@ -1661,7 +1678,7 @@ def _redo_decision(current: BatchLineage, outcome: str, reason: str) -> Decision
     if last is None or decision is None:
         raise no_open_experiment(current, "end")
     if redone_decision(current, outcome) is None or decision.reason != reason:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
             "recorded once and never edited, so redo the same one to finish an interrupted decision — what "
             "continues this batch is the next attempt"
@@ -1923,7 +1940,7 @@ def _promotable_integration(
         # Unreachable through `promotable`, which is a reading about a named ref
         # this checkout resolved; stated because what follows records that name
         # as the line it will move.
-        raise BatchError(
+        raise EvidenceUnfit(
             f"{experiment.experiment_id}: the run justifying this promotion integrated onto a detached revision, "
             "so there is no source line to move"
         )
@@ -1938,7 +1955,7 @@ def _require_nothing_in_flight(experiment: Experiment, history: History) -> None
 
     refusal = in_flight_refusal(experiment, history)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def _require_promotable(config: EvolutionConfig, experiment: Experiment, evidence: Evidence) -> None:
@@ -1959,7 +1976,7 @@ def _require_promotable(config: EvolutionConfig, experiment: Experiment, evidenc
         return
     if evidence.unverified:
         require_git(config.repo_root, reading="whether the source line has moved since the run measured it")
-    raise BatchError(refusal)
+    raise EvidenceUnfit(refusal)
 
 
 def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, integration: Integration) -> None:
@@ -1988,7 +2005,7 @@ def _require_measured_tree(config: EvolutionConfig, experiment: Experiment, inte
             "not made on a check that could not be run"
         )
     found = merged.tree[:12] if merged.tree is not None else f"no tree at all ({merged.complaint})"
-    raise BatchError(
+    raise EvidenceUnfit(
         f"{experiment.experiment_id}: integrating {integration.candidate_revision[:12]} onto "
         f"{integration.merge_input_revision[:12]} produces {found} here, and the run that justifies this "
         f"promotion measured {integration.tree[:12]}; what is promoted is the tree that was exercised, so a "
@@ -2019,7 +2036,7 @@ def _require_same_promotion(
 
     if prepared.reason == reason and prepared.planned_targets == planned:
         return
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared for {prepared.reason!r} "
         f"planning {list(prepared.planned_targets)}, and this request is {reason!r} planning {list(planned)}; a "
         "promotion is prepared once and finished as it was prepared, so redo it with what is outstanding rather "
@@ -2059,7 +2076,7 @@ def _standing(config: EvolutionConfig, experiment: Experiment, prepared: Prepare
     tip = ref_tip(config.repo_root, ref)
     if tip is None:
         require_git(config.repo_root, reading=f"where {ref} stands")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{experiment.experiment_id} has a promotion of {prepared.revision[:12]} prepared onto {ref}, and "
             "this checkout does not hold that ref; whether the promotion reached the source line is what says "
             "whether this finishes one or makes one, so finish it from a checkout that has the line"
@@ -2070,7 +2087,7 @@ def _standing(config: EvolutionConfig, experiment: Experiment, prepared: Prepare
         return _UNMOVED
     carried = contains(config.repo_root, prepared.revision, tip)
     if carried is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{experiment.experiment_id}: whether {prepared.revision[:12]} is on {ref} (now at {tip[:12]}) cannot "
             "be answered in this checkout, which does not hold both commits; that answer is what says whether "
             "this promotion happened, so nothing is written until a checkout holding them says so"
@@ -2109,7 +2126,7 @@ def _prepare_promotion(
         _promotion_message(current, experiment, integration, reason),
     )
     if revision is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{experiment.experiment_id} has nothing to promote with: {complaint}; the merge unit is a commit "
             "carrying the measured tree, and it is made by whoever promotes — a checkout Git will not commit in "
             "is one this promotion cannot be recorded from"
@@ -2148,7 +2165,7 @@ def _land(config: EvolutionConfig, experiment: Experiment, prepared: PreparedPro
     moved = move_ref(config.repo_root, prepared.merge_input_ref, prepared.revision, prepared.merge_input_revision)
     if moved is None:
         return
-    raise BatchError(
+    raise LineMoved(
         f"{prepared.merge_input_ref} did not take {prepared.revision[:12]}: {moved}; the source line is moved "
         f"from the commit the replay integrated onto ({prepared.merge_input_revision[:12]}) and from no other, "
         f"so {experiment.experiment_id} is replayed against where the line now stands and promoted from that"
@@ -2177,7 +2194,7 @@ def _discard_promotion(
     """
 
     _write_record(config, replace(experiment, promotion=None))
-    raise BatchError(
+    raise LineMoved(
         f"{experiment.experiment_id}: the promotion prepared as {prepared.revision[:12]} never reached "
         f"{prepared.merge_input_ref}, which no longer stands at the {prepared.merge_input_revision[:12]} it was "
         "to be made from; that prepared promotion is discarded, and the evidence behind it now describes a line "
@@ -2302,13 +2319,17 @@ def _finish_promotion(
         # has the unit and the plan it was made under. Narrowing, not a second
         # rule — and the state it once covered was a version-1 record, which no
         # reader accepts now.
-        raise BatchError(
+        #
+        # The record family rather than a refusal, for what the sentence already
+        # says: nothing an operator types about this lifecycle makes that file
+        # load, and a refusal would send them to change one.
+        raise RecordError(
             f"{last.experiment_id} is promoted and states no merge unit; the outcome that ends this batch "
             "states the merge unit and the targets that promotion was planned for, so the record is unreadable "
             "rather than merely incomplete"
         )
     if decision.reason != reason:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{last.experiment_id} already ended as {decision.outcome!r} ({decision.reason!r}); a decision is "
             "recorded once and never edited, so redo the same one to finish an interrupted promotion — the "
             "batch it ends is concluded by the same reason it was promoted for"
@@ -2341,7 +2362,7 @@ def _require_promotion_line(experiment_id: str, ref: str | None, requested: str 
 
     if requested is None or requested == ref:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{experiment_id} was measured integrating onto {ref}, and a promotion moves the line its evidence "
         f"names — not {requested!r}. `--source-ref` states which line that was read as rather than choosing "
         "one; promote what was replayed, or replay the candidate onto the line this is meant for"
@@ -2373,14 +2394,14 @@ def _redo_promotion(
     latest = lineage.batches[-1] if lineage.batches else None
     outcome = latest.outcome if latest is not None else None
     if latest is None or outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
-        raise BatchError(
+        raise NothingToActOn(
             "no batch is current, so there is nothing to promote; a batch is current from the freeze of its "
             "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
             "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
         )
     merge = outcome["promotion"]
     if outcome["reason"] != reason or tuple(merge["planned_targets"]) != planned:
-        raise BatchError(
+        raise NothingToActOn(
             f"no batch is current, so there is nothing to promote; the newest, {latest.batch_id}, was promoted "
             f"for {outcome['reason']!r} planning {merge['planned_targets']}, which is not this request "
             f"({reason!r} planning {list(planned)}) redone — the next cohort is offered by "
@@ -2422,7 +2443,7 @@ def _planned_targets(config: EvolutionConfig, targets: Iterable[str]) -> tuple[s
     planned = tuple(str(name).strip() for name in targets)
     repeated = sorted({name for name in planned if planned.count(name) > 1})
     if repeated:
-        raise BatchError(
+        raise UnknownSubject(
             f"{repeated} named more than once as a planned target; a promotion plans a target once, and a list "
             "that repeats one says nothing the single entry does not"
         )
@@ -2540,16 +2561,19 @@ def _require_gate_settled(current: BatchLineage, action: str) -> None:
 
     refusal = gate_refusal(current, action)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def _require_nothing_outstanding(current: BatchLineage) -> None:
     """A batch concludes `no-change` only when nothing about it is still open
     (`conclusion_refusal`)."""
 
+    # One class for all three of that reading's answers: an open attempt, a
+    # promotion whose outcome is not written yet, and a draft nobody decided are
+    # each a thing to finish, and the sentence names which.
     refusal = conclusion_refusal(current)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
@@ -2565,7 +2589,7 @@ def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
     latest = redone_conclusion(lineage, reason=reason)
     outcome = latest.outcome or {} if latest is not None else {}
     if latest is None:
-        raise BatchError(
+        raise NothingToActOn(
             "no batch is current, so there is nothing to conclude; a batch is current from the freeze of its "
             "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
             "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
@@ -2623,7 +2647,10 @@ def _observe_completions(
         observed.append(task.task_id)
 
     if outstanding:
-        raise BatchError(
+        # A task still in flight and a task no clone here holds are listed
+        # together, so they are one class: both leave the round unfinished, and
+        # both are answered where the work is being done.
+        raise StandingWork(
             f"round {round_.number} of {experiment.experiment_id} is not ready to seal: {outstanding}; a "
             "candidate that does not contain the change it was admitted for is not what anyone means to measure "
             "(invariant 16), and `.ai-tasks/` is machine-local — a task nobody here holds is observed on the "
@@ -2649,13 +2676,17 @@ def _pinnable_tip(experiment: Experiment, ref: RefState | None) -> str:
     """
 
     if ref is None or ref.tip is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{experiment.ref} is not in this checkout, so this round has no tip to pin; the seal records the "
             "revision the work actually reached, which is a fact only the repository holding that ref has — "
             "fetch it, or seal where the work happened"
         )
     if ref.consistent is not True:
-        raise BatchError(
+        # `False` is a ref standing off the record's history, and `seal_round`
+        # meets that at `require_consistent_ref` before it reaches here — so what
+        # is left is `None`, a clone that cannot answer rather than a ref that is
+        # wrong.
+        raise CheckoutUnusable(
             f"{ref.ref} stands at {ref.tip[:12]}, and this checkout cannot confirm it descends from the "
             f"{ref.pinned[:12]} the record pins ({ref.state}); a candidate revision is pinned once and every "
             "later piece of evidence names it, so it is pinned from a history Git can answer for"
@@ -2711,16 +2742,16 @@ def _requested(draft_ids: Iterable[str]) -> set[str]:
 
     requested = list(draft_ids)
     if not requested:
-        raise BatchError("no draft was named; an admission or a rejection is a decision about specific proposals")
+        raise UnknownSubject("no draft was named; an admission or a rejection is a decision about specific proposals")
     unusable = sorted({value for value in requested if not is_draft_id(value)})
     if unusable:
-        raise BatchError(
+        raise UnknownSubject(
             f"{unusable} cannot be draft ids; a draft id is a kebab-case slug, which is what makes it one path "
             f"segment under proposed-tasks/ rather than a name that could reach anywhere else"
         )
     repeated = sorted({value for value in requested if requested.count(value) > 1})
     if repeated:
-        raise BatchError(
+        raise UnknownSubject(
             f"draft(s) {repeated} are named twice in one selection; a draft is consumed once, and naming it twice "
             "says nothing about which of the two was meant"
         )
@@ -2767,16 +2798,16 @@ def _collect(
             continue
         owner = gate.consumed.get(draft_id)
         if owner is not None:
-            raise BatchError(
+            raise AlreadyAnswered(
                 f"draft {draft_id!r} was already admitted by {owner}; admitting is terminal for a proposal, and "
                 "proposing the idea again means a new draft id whose own bytes say what the second proposal was"
             )
         if draft_id in gate.declined:
-            raise BatchError(
+            raise AlreadyAnswered(
                 f"draft {draft_id!r} was declined at {current.batch_id}'s gate; declining is terminal for a "
                 "proposal, and re-proposing means a new draft id"
             )
-        raise BatchError(
+        raise UnknownSubject(
             f"{_draft_path(current.batch, draft_id)} does not exist; the drafts waiting at "
             f"{current.batch_id}'s gate are {list(gate.waiting)}"
         )
@@ -2807,11 +2838,11 @@ def _read_draft(batch: Batch, draft_id: str, *, for_tasks: bool) -> _Draft:
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise BatchError(f"unreadable draft {path}: {exc}") from exc
+        raise DraftInadmissible(f"unreadable draft {path}: {exc}") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise BatchError(f"{path} is not UTF-8 text; a change-task draft is a task file: {exc}") from exc
+        raise DraftInadmissible(f"{path} is not UTF-8 text; a change-task draft is a task file: {exc}") from exc
 
     block = analysis_task.parse_frontmatter(text)
     if for_tasks:
@@ -2853,48 +2884,48 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
     """
 
     if not block.present:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: no frontmatter block; a draft is a schema-conforming task file, and the lifecycle its copy "
             "is dispatched under — the id it takes, the status the gate decides about — is what that block carries"
         )
     if not block.closed:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: the frontmatter block is never closed by a '---' line; everything below an unterminated one "
             "is still frontmatter, so this file declares no lifecycle to claim and has no body to admit"
         )
     if block.duplicated:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: frontmatter declares {list(block.duplicated)} more than once; a field stated twice says two "
             "things about one task, and every reader takes whichever it reaches first"
         )
 
     task_id = _field(path, block, "id")
     if not _TASK_ID.match(task_id):
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: frontmatter id {task_id!r} is not a date-prefixed task slug; admission copies the draft to "
             "the task id it declares, and that id is also the file name the copy takes"
         )
     status = _field(path, block, "status")
     if status != DRAFT_STATUS:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: a draft waiting at the gate carries status {DRAFT_STATUS!r}, not {status!r}; a proposal "
             "worked on where nothing dispatches it is not the inert draft the gate decides about"
         )
     estimate = _field(path, block, "session-est")
     if not _UNCONSUMED_SESSION_EST.match(estimate):
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: session-est {estimate!r} is not '0/<total>'; a session claims a task by incrementing that "
             "count, so a draft nobody has worked on yet is at zero of an estimate it does state"
         )
     blockers = _field(path, block, "blockers")
     if blockers != EMPTY_BLOCKERS:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: blockers {blockers!r} is not {EMPTY_BLOCKERS!r}; a proposal that is already waiting on "
             "something is not work the gate can admit, and a blocked task in the active pool blocks nothing"
         )
     claimed = _field(path, block, "claimed-by")
     if claimed:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: claimed-by {claimed!r} names a session; a draft is claimed by the session that picks its "
             "copy up out of the active pool, which is a thing that has not happened to a proposal"
         )
@@ -2905,18 +2936,18 @@ def _require_task_file(path: Path, text: str, block: analysis_task.Frontmatter) 
     names = [name for name, _ in sections]
     missing = [heading for heading in REQUIRED_SECTIONS if heading not in names]
     if missing:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: no {missing} section(s); an admitted copy is worked from its scope and reviewed against its "
             "acceptance, and the session log is where each session records what it did"
         )
     repeated = [heading for heading in REQUIRED_SECTIONS if names.count(heading) > 1]
     if repeated:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: {repeated} section(s) declared more than once; a task worked from two scopes or reviewed "
             "against two acceptances has no one shape, and each reader takes whichever it reaches first"
         )
     if ADMISSION_HEADING in names:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: the draft already carries an {ADMISSION_HEADING!r} section; that section is what admission "
             "itself adds, and a copy carrying two of them is one no later run can identify as this admission's"
         )
@@ -2943,7 +2974,7 @@ def _require_plain_headings(path: Path, body: Sequence[str]) -> None:
 
     for line in body:
         if line.strip().startswith("## ") and not _is_section(line):
-            raise BatchError(
+            raise DraftInadmissible(
                 f"{path}: {line.strip()!r} is indented; a task section stands at column 0, and a line that only "
                 "looks like a heading is read as one by the session working the copy and as text by everything "
                 "that checks it"
@@ -2966,7 +2997,7 @@ def _require_empty_log(path: Path, body: Sequence[str], sections: Sequence[tuple
     start = next(index for name, index in sections if name == SESSION_LOG_HEADING)
     entry = next((line for line in _section_at(body, sections, start)[1:] if line.strip()), None)
     if entry is not None:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: {SESSION_LOG_HEADING} already carries {entry.strip()!r}; a session log is appended to by the "
             "sessions that work the task, so an entry in a proposal nothing has dispatched records work on a task "
             "that does not exist yet"
@@ -3028,7 +3059,7 @@ def _field(path: Path, block: analysis_task.Frontmatter, name: str) -> str:
     """One frontmatter field of a draft, or a refusal naming what is missing."""
 
     if name not in block.fields:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path}: frontmatter carries no {name!r}; a draft is a schema-conforming task file, and its copy is "
             "dispatched as one the moment it is admitted"
         )
@@ -3053,19 +3084,19 @@ def _require_free_task_ids(config: EvolutionConfig, current: BatchLineage, draft
     for draft in drafts:
         owner = admitted.get(draft.task_id)
         if owner is not None:
-            raise BatchError(
+            raise DraftInadmissible(
                 f"{draft.path}: task {draft.task_id!r} is already admitted by {owner}; one task implements one "
                 "proposal, and a second draft admitted into it means a task id nothing can be traced through"
             )
         previous = claimed.setdefault(draft.task_id, draft.draft_id)
         if previous != draft.draft_id:
-            raise BatchError(
+            raise DraftInadmissible(
                 f"drafts {previous!r} and {draft.draft_id!r} both declare task id {draft.task_id!r}; one of them "
                 "would take the other's file, and the record could name neither"
             )
         existing = analysis_task.existing_task_path(config, draft.task_id)
         if existing is not None:
-            raise BatchError(
+            raise DraftInadmissible(
                 f"{draft.path}: task {draft.task_id!r} already exists at {existing}; admission never overwrites a "
                 "task file — give the draft an id of its own, or resolve the existing task first"
             )
@@ -3136,7 +3167,7 @@ def _base_revision(
     _require_requested_base(config, current, frozen, requested)
     if resolve_commit(config.repo_root, frozen) is None:
         require_git(config.repo_root, reading=f"{current.batch_id}'s base revision {frozen[:12]}")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"this checkout does not hold {current.batch_id}'s base revision {frozen[:12]}; fetch it before "
             "starting an experiment, since the new ref has to be created at exactly that commit"
         )
@@ -3191,14 +3222,14 @@ def _require_release_settled(
     owed = assessment.obligation(config, current.batch, lineage=known)
     refusal = admission_release_refusal(current, owed)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
-def base_on_the_line_refusal(
+def base_on_the_line_failure(
     config: EvolutionConfig,
     known: Lineage,
     current: BatchLineage,
-) -> str | None:
+) -> BatchError | None:
     """Why this batch's base is not the source line as the release before it left it.
 
     The other half of invariant 17, and without it the gate only asks that
@@ -3234,10 +3265,13 @@ def base_on_the_line_refusal(
     they are refused rather than assumed away — and what the refusal says is which
     command finishes the ending, since the reversal redone writes it.
 
-    Stated as a refusal rather than raised, so the console's gate asks the
-    operation this question instead of keeping a second spelling of it in step by
-    hand (`phase._base_refusal`): a menu offering `create` here would advertise a
-    verb whose own refusal is already written.
+    Stated rather than raised, so the console's gate asks the operation this
+    question instead of keeping a second spelling of it in step by hand
+    (`phase._base_refusal`): a menu offering `create` here would advertise a verb
+    whose own refusal is already written. In the failure shape, because the four
+    ways the base and the answer come apart are three classes, and a caller
+    routing on one of them cannot recover it from the sentence
+    (`guards.evidence_failure` made the same split for the same reason).
 
     The other direction is the same question asked of a release still standing:
     the base has to carry it. A formation reads the configured line, so this
@@ -3263,7 +3297,7 @@ def base_on_the_line_refusal(
 
     promoted, unanswered = rollback_ops.standing_on_reversal(config, known, current)
     if unanswered is not None:
-        return (
+        return CheckoutUnusable(
             f"{unanswered}; that answer is what says whether {current.batch_id} is standing on a release that "
             "came off the source line, so this refuses rather than admit on a base it cannot place "
             "(invariant 17)"
@@ -3274,7 +3308,7 @@ def base_on_the_line_refusal(
         # those records to the other.
         revision = (promoted.outcome or {})["promotion_revision"]
         reversal = (promoted.rollback or {})["revision"]
-        return (
+        return StandingWork(
             f"{current.batch_id} was formed at {current.base_revision[:12]}, which carries the "
             f"{promoted.batch_id} release {revision[:12]} that {reversal[:12]} has since taken back off the "
             "source line; nothing is admitted on a base carrying a promotion nobody kept (invariant 17), and a "
@@ -3287,7 +3321,7 @@ def base_on_the_line_refusal(
         return None
     carried = contains(config.repo_root, release.revision, current.base_revision)
     if carried is None:
-        return (
+        return CheckoutUnusable(
             f"whether {current.batch_id}'s base {current.base_revision[:12]} carries the {release.batch_id} "
             f"release {release.revision[:12]} cannot be answered in this checkout, which does not hold both "
             "commits; that answer is what says whether every alternative in this batch would start from the "
@@ -3295,7 +3329,7 @@ def base_on_the_line_refusal(
             "(invariant 17)"
         )
     if not carried:
-        return (
+        return LineMoved(
             f"{current.batch_id}'s base {current.base_revision[:12]} does not carry the {release.batch_id} "
             f"release {release.revision[:12]}; every alternative in this batch starts from that base "
             "(invariant 15), and one off the line the release is on makes each of them an attempt against a "
@@ -3304,16 +3338,27 @@ def base_on_the_line_refusal(
     return None
 
 
+def base_on_the_line_refusal(
+    config: EvolutionConfig,
+    known: Lineage,
+    current: BatchLineage,
+) -> str | None:
+    """The same question as `base_on_the_line_failure`, for the console's gate."""
+
+    failure = base_on_the_line_failure(config, known, current)
+    return None if failure is None else str(failure)
+
+
 def _require_base_on_the_line(
     config: EvolutionConfig,
     known: Lineage,
     current: BatchLineage,
 ) -> None:
-    """`base_on_the_line_refusal` as the admission asks it."""
+    """`base_on_the_line_failure` as the admission asks it."""
 
-    refusal = base_on_the_line_refusal(config, known, current)
-    if refusal is not None:
-        raise BatchError(refusal)
+    failure = base_on_the_line_failure(config, known, current)
+    if failure is not None:
+        raise failure
 
 
 def _require_requested_base(
@@ -3333,7 +3378,7 @@ def _require_requested_base(
 
     if requested is None or _resolve(config, requested) == frozen:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{current.batch_id} was formed at base {frozen[:12]}, recorded in "
         f"{current.batch.manifest_path.name}, so {requested!r} cannot be this experiment's base; every "
         "alternative starts from the same commit or they are not alternatives (invariant 15)"
@@ -3344,7 +3389,7 @@ def _resolve(config: EvolutionConfig, revision: str) -> str:
     resolved = resolve_commit(config.repo_root, revision)
     if resolved is None:
         require_git(config.repo_root, reading=f"the commit {revision!r} names")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"cannot resolve {revision!r} to a commit in {config.repo_root}; an experiment records the exact "
             "revision it starts from, so the base has to be a commit this repository holds"
         )
@@ -3365,14 +3410,14 @@ def _create_experiment_ref(config: EvolutionConfig, experiment: Experiment) -> N
     if tip == experiment.base_revision:
         return
     if tip is not None:
-        raise BatchError(
+        raise LineMoved(
             f"{experiment.ref} already exists at {tip[:12]}, not at {experiment.base_revision[:12]}; an "
             f"experiment id is never reused, so a ref standing where {experiment.experiment_id} is about to be "
             "created belongs to work this controller cannot account for"
         )
     failure = create_ref(config.repo_root, experiment.ref, experiment.base_revision)
     if failure is not None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"cannot create {experiment.ref} at {experiment.base_revision[:12]} for "
             f"{experiment.experiment_id}: {failure}"
         )
@@ -3395,7 +3440,12 @@ def _publish_record(config: EvolutionConfig, experiment: Experiment) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     final = root / experiment.experiment_id
     if final.exists():
-        raise BatchError(
+        # A *directory* here would have been read by the lineage, which allocates
+        # past it; what reaches this is a loose file the reader skips by design.
+        # So it is the tree under `experiments/` carrying something that is not a
+        # record, and what answers it is a person looking at that path — the
+        # same family `lineage` gives a name there it cannot read.
+        raise RecordError(
             f"{final} already exists; an experiment id is allocated one past the highest its batch ever used and "
             "is never reused"
         )
@@ -3422,7 +3472,10 @@ def _write_record(config: EvolutionConfig, experiment: Experiment) -> Path:
     _validate(config, record, experiment)
     path = experiment.directory / EXPERIMENT_FILENAME
     if not path.is_file():
-        raise BatchError(f"{path} is gone; an experiment record is never recreated from a partial reading")
+        # The condition `lineage._read_experiment` meets from the other side and
+        # answers the same way: a record that is not there is restored, never
+        # written around.
+        raise RecordError(f"{path} is gone; an experiment record is never recreated from a partial reading")
     atomic_write_text(path, _json(record))
     return path
 
@@ -3493,7 +3546,7 @@ def _redo_create(
     if round_ is not None and set(admitted) == requested:
         return _finish(config, current, experiment, round_, tuple(admitted[key] for key in sorted(admitted)))
 
-    raise BatchError(second_attempt_refusal(current, experiment))
+    raise StandingWork(second_attempt_refusal(current, experiment))
 
 
 def _finish(
@@ -3549,13 +3602,13 @@ def _restore_task(
 
     draft = _read_draft(current.batch, task.draft_id, for_tasks=True)
     if draft.sha256 != task.draft_sha256:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{draft.path} no longer matches the bytes {experiment.experiment_id} admitted (recorded "
             f"{task.draft_sha256[:12]}, found {draft.sha256[:12]}); the copy owed to {task.task_id!r} has to be "
             "the proposal that was admitted, so restore the draft rather than admitting a different one under it"
         )
     if draft.task_id != task.task_id:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{draft.path} declares task id {draft.task_id!r}, but {experiment.experiment_id} admitted it as "
             f"{task.task_id!r}; the record names the task the copy took"
         )
@@ -3633,11 +3686,11 @@ def _require_admitted_copy(
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise BatchError(f"cannot read the admitted task {path}: {exc}") from exc
+        raise DraftInadmissible(f"cannot read the admitted task {path}: {exc}") from exc
 
     detail = _unlike_admitted_copy(config, current, experiment, round_, task, text)
     if detail is not None:
-        raise BatchError(
+        raise DraftInadmissible(
             f"{path} is not the copy {experiment.experiment_id} admitted as {task.task_id!r} ({detail}); an "
             "admission never overwrites a task file, and a file this record cannot identify is not the work it "
             "accounts for — resolve what is at that id"
@@ -3704,7 +3757,7 @@ def _admitted(draft: _Draft, *, admitted_at: str) -> AdmittedTask:
 def _open_round(experiment: Experiment) -> Round:
     round_ = experiment.open_round
     if round_ is None:
-        raise BatchError(_candidate_ready(experiment))
+        raise AlreadyAnswered(_candidate_ready(experiment))
     return round_
 
 
@@ -3853,7 +3906,7 @@ def _render_task(
             head = "".join(lines[:index])
             separator = "" if head.endswith("\n\n") or not head else "\n"
             return head + separator + block + "".join(lines[index:])
-    raise BatchError(
+    raise DraftInadmissible(
         f"{draft.path}: no body section to admit before; a draft is a schema-conforming task file, and the "
         "admission provenance goes above its first section"
     )

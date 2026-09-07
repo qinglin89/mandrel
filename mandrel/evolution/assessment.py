@@ -136,7 +136,21 @@ from typing import Any, Mapping, Sequence
 from ..deploy import deploys_canonical_path
 from ..lockfile import CanonicalIdentities, is_object_id
 from .config import ASSESSMENT_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, InputError, RecordError, ValidationError, damaged_record
+from .errors import (
+    AlreadyAnswered,
+    BatchError,
+    CheckoutUnusable,
+    EvidenceUnfit,
+    HarnessAnswerUnusable,
+    InputError,
+    NothingToActOn,
+    RecordError,
+    RecordRefused,
+    StandingWork,
+    UnknownSubject,
+    ValidationError,
+    damaged_record,
+)
 from .guards import reason as require_reason
 from .guards import require_expected, settled
 from .ledger import append_records, build_record
@@ -1149,7 +1163,11 @@ def obligation(
         # `batch` is itself after that promotion, so the promotion has at least
         # one batch after it — this is unreachable, and returning "nothing owed"
         # rather than raising would be the one answer that quietly skips a gate.
-        raise BatchError(
+        #
+        # The record family rather than a refusal: what disagrees is the
+        # committed lineage, and there is no state an operator could change to
+        # make these two readings of it agree.
+        raise RecordError(
             f"{batch.batch_id} follows the {assessed.batch_id} release ({assessed.revision[:12]}), and no batch "
             "is recorded as frozen after that promotion; the cohort that owes the reading is the first one after "
             "it, so this lineage cannot say who answers for a release its own batches follow"
@@ -1158,7 +1176,7 @@ def obligation(
     if frame is None:
         # Same shape: the owner follows that promotion by construction, so a
         # frame it cannot derive is a lineage disagreeing with itself.
-        raise BatchError(
+        raise RecordError(
             f"{owner.batch_id} is the cohort that owes a reading of the {assessed.batch_id} release, and no "
             "release can be derived for it; the batches form a series (invariant 14), so the promotion this "
             "batch follows is the one that cohort follows too"
@@ -1191,7 +1209,7 @@ def parse(
 
     path = batch.assessment_path
     if frame is None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: this batch follows no promotion, so there is no release for an assessment to be about; "
             "a repository that promoted nothing before this cohort has nothing to assess, and a record here "
             "names a release its own lineage does not have"
@@ -1422,11 +1440,11 @@ def _owing_frame(
 
     current = known.current
     if current is None:
-        raise BatchError(no_cohort_refusal())
+        raise NothingToActOn(no_cohort_refusal())
 
     frame = describe(config, current.batch, lineage=known)
     if frame is None:
-        raise BatchError(no_release_refusal(current.batch_id))
+        raise NothingToActOn(no_release_refusal(current.batch_id))
     if frame.owed:
         return frame
 
@@ -1436,7 +1454,7 @@ def _owing_frame(
     owed = obligation(config, current.batch, lineage=known)
     if owed is not None and (follow_answered or not owed.settled):
         return owed.frame
-    raise BatchError(_not_the_owner(frame.batch_id, frame.subject, owed))
+    raise AlreadyAnswered(_not_the_owner(frame.batch_id, frame.subject, owed))
 
 
 def _settling_frame(config: EvolutionConfig, known: Lineage) -> Frame:
@@ -1465,12 +1483,12 @@ def _settling_frame(config: EvolutionConfig, known: Lineage) -> Frame:
         return _owing_frame(config, known, follow_answered=True)
     ended = _ended_by_reversal(known)
     if ended is None:
-        raise BatchError(no_cohort_refusal())
+        raise NothingToActOn(no_cohort_refusal())
     owed = obligation(config, ended.batch, lineage=known)
     if owed is None:
         # Unreachable: a batch ends `rolled-back` only where a release it stood
         # on came off the line, so there is a promotion before it.
-        raise BatchError(no_release_refusal(ended.batch_id))
+        raise NothingToActOn(no_release_refusal(ended.batch_id))
     return owed.frame
 
 
@@ -1534,7 +1552,7 @@ def _redone(
             record_path=frame.batch.assessment_path,
             recorded=False,
         )
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{frame.batch_id} already reads the {frame.subject.batch_id} release {already.verdict!r}, and this "
         f"request is {verdict!r}; a cohort reads a release once, and that record is what the counterfactual "
         "and the human settlement are added to — two readings of one release would leave a later reader "
@@ -1724,7 +1742,7 @@ def measure(
                 frame,
             )
         except (BatchError, ValidationError) as exc:
-            raise BatchError(
+            raise HarnessAnswerUnusable(
                 f"{frame.batch_id}: {plan.harness.id} began {described} as handle {plan.harness.handle!r} and "
                 f"described it in a way this record cannot hold ({exc}); the request for that run is still on "
                 "record, so nothing that may be running has been lost — but a harness answers one key with the "
@@ -1794,7 +1812,7 @@ def conclude(
         try:
             recorded = _write_assessment(config, batch, replace(reading, counterfactual=concluded), frame)
         except (BatchError, ValidationError) as exc:
-            raise BatchError(
+            raise HarnessAnswerUnusable(
                 f"{frame.batch_id}: {going.harness.id} reported {_describe(going.position)} in a way this record "
                 f"cannot hold ({exc}); the run is still recorded as going, so nothing has been lost — ask again "
                 "once the harness can state what it measured, or end the run and record why"
@@ -1855,7 +1873,7 @@ def abandon(
             result = going.result
             if result is not None and result.outcome == RESULT_FAILED and result.detail == text:
                 return Concluded(batch_id=frame.batch_id, assessment=reading, run=going, recorded=False)
-            raise BatchError(_already_ended(frame, going))
+            raise _already_ended(frame, going)
 
         stamp = format_rfc3339(moment)
         concluded = replace(
@@ -2006,7 +2024,7 @@ def resolve(
 
         refusal = resolve_refusal(frame, reading)
         if refusal is not None:
-            raise BatchError(refusal)
+            raise EvidenceUnfit(refusal)
 
         if (reading.verdict, reading.confidence, reading.rationale, reading.recommendation) == (
             verdict,
@@ -2311,7 +2329,7 @@ def _redone_settlement(
             record_path=frame.batch.assessment_path,
             recorded=False,
         )
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decided.settlement!r} "
         f"at {decided.decided_at}: {decided.reason!r}; this gate answers once, because what it releases is the "
         "next first experiment and the line its base is held to — a release judged again after that is the next "
@@ -2324,7 +2342,7 @@ def _require_settleable(frame: Frame, reading: Assessment) -> None:
 
     refusal = settleable_refusal(frame, reading)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 # --- what a fresh run refuses -------------------------------------------------
@@ -2419,7 +2437,7 @@ def unsettled_refusal(frame: Frame, reading: Assessment, described: str) -> str 
     )
 
 
-def run_refusal(frame: Frame, reading: Assessment, action: str) -> str | None:
+def run_failure(frame: Frame, reading: Assessment, action: str) -> BatchError | None:
     """Why there is no run for these two verbs to answer for.
 
     A request outstanding is the state where the newest thing on record is not a
@@ -2427,10 +2445,16 @@ def run_refusal(frame: Frame, reading: Assessment, action: str) -> str | None:
     Reporting "no run" there would hide that something may be measuring right
     now — so what is reported instead is the two ways forward: start the run
     again, which records what the harness began, or give the request up.
+
+    Two states and therefore two classes, which is what the failure shape is for
+    (`errors.py`: the refusals, by what stands in the way). A request nobody
+    recorded a run against is finished by resuming that start; a release nothing
+    was ever measured for is not something to finish at all, and a caller handed
+    one sentence for both has to read it to tell which.
     """
 
     if reading.requested is not None:
-        return (
+        return StandingWork(
             f"{frame.batch_id} has {_describe(reading.requested.position)} of its counterfactual outstanding, "
             f"and no run recorded for it; the harness was asked for that run and its answer never reached this "
             f"record, so there is nothing here to be {action} — start the run again to record what it began, or "
@@ -2439,7 +2463,20 @@ def run_refusal(frame: Frame, reading: Assessment, action: str) -> str | None:
     return None if reading.counterfactual is not None else _nothing_started(frame, action)
 
 
-def end_refusal(frame: Frame, reading: Assessment) -> str | None:
+def run_refusal(frame: Frame, reading: Assessment, action: str) -> str | None:
+    """The same question as `run_failure`, for the console's gate.
+
+    The gate composes sentences and routes on nothing, so it takes the sentence;
+    an operation about to refuse re-raises the failure, because a family
+    flattened into a string cannot be recovered from it (`guards.evidence_failure`
+    made the same split for the same reason).
+    """
+
+    failure = run_failure(frame, reading, action)
+    return None if failure is None else str(failure)
+
+
+def end_failure(frame: Frame, reading: Assessment) -> BatchError | None:
     """Why there is no run for an abandonment to record the end of.
 
     One state more than a conclusion's, and it is the asymmetry between the two
@@ -2449,18 +2486,25 @@ def end_refusal(frame: Frame, reading: Assessment) -> str | None:
     the two an ended run is turns on the reason it is given.
     """
 
-    refusal = run_refusal(frame, reading, "ended")
-    if refusal is not None:
-        return refusal
+    failure = run_failure(frame, reading, "ended")
+    if failure is not None:
+        return failure
     run = reading.counterfactual
     if run is None or run.running:
         return None
     return _already_ended(frame, run)
 
 
-def _already_ended(frame: Frame, run: Counterfactual) -> str:
+def end_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """The same question as `end_failure`, for the console's gate."""
+
+    failure = end_failure(frame, reading)
+    return None if failure is None else str(failure)
+
+
+def _already_ended(frame: Frame, run: Counterfactual) -> AlreadyAnswered:
     result = run.result
-    return (
+    return AlreadyAnswered(
         f"{_describe(run.position)} of {frame.batch_id}'s counterfactual already ended "
         f"{(result.outcome if result is not None else '')!r}: {(result.detail if result is not None else '')!r}; "
         "a run ends once, and what is on record is what it measured — start another attempt rather than "
@@ -2468,27 +2512,32 @@ def _already_ended(frame: Frame, run: Counterfactual) -> str:
     )
 
 
-def _nothing_started(frame: Frame, action: str) -> str:
-    return (
+def _nothing_started(frame: Frame, action: str) -> NothingToActOn:
+    return NothingToActOn(
         f"{frame.batch_id} has started no counterfactual of the {frame.subject.batch_id} release, so there "
         f"is no run to be {action}; what these record is the end of a run this controller started, and a "
         "harness invocation nothing here named is not one it can speak for"
     )
 
 
-def measure_refusal(frame: Frame, reading: Assessment) -> str | None:
+def measure_failure(frame: Frame, reading: Assessment) -> BatchError | None:
     """Why a further run is not started under the one already on record.
 
     Not asked of a request already outstanding: a measurement run again with one
     on record is that request resumed rather than a second run (`measure`). A
     failed run is what a further attempt is for, and is not one either.
+
+    Two classes, and the split is the point rather than the sentence: a run still
+    going is finished by concluding it, while a completed one is the release's
+    single measurement and nothing makes room for a second. One waits, the other
+    never becomes allowed.
     """
 
     previous = reading.counterfactual
     if reading.requested is not None or previous is None or previous.failed:
         return None
     subject = frame.subject
-    return (
+    sentence = (
         f"{frame.batch_id} has {_describe(previous.position)} of its counterfactual "
         + ("still running" if previous.running else "completed")
         + f" against the {subject.batch_id} release; "
@@ -2500,6 +2549,14 @@ def measure_refusal(frame: Frame, reading: Assessment) -> str | None:
             "which of two answers the reading rests on"
         )
     )
+    return StandingWork(sentence) if previous.running else AlreadyAnswered(sentence)
+
+
+def measure_refusal(frame: Frame, reading: Assessment) -> str | None:
+    """The same question as `measure_failure`, for the console's gate."""
+
+    failure = measure_failure(frame, reading)
+    return None if failure is None else str(failure)
 
 
 def resolve_refusal(frame: Frame, reading: Assessment) -> str | None:
@@ -2566,7 +2623,7 @@ def _require_standing(frame: Frame) -> None:
     assessed = frame.subject
     if not assessed.reversed_promotion:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{assessed.batch_id}'s promotion {assessed.revision[:12]} is no longer on {assessed.merge_input_ref}: "
         f"{(assessed.rollback_revision or '')[:12]} took it back out. {SETTLEMENT_RETAIN!r} says the release "
         f"stays the line the next alternatives are built on, and that line now carries the reversal instead — "
@@ -2592,7 +2649,7 @@ def _require_reversible(known: Lineage, frame: Frame) -> None:
     promoted = known.last_promoted
     if promoted is not None and promoted.batch_id == frame.subject.batch_id:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{SETTLEMENT_ROLLED_BACK!r} reverses the newest promotion this repository recorded, which is "
         + ("none at all" if promoted is None else f"{promoted.batch_id}'s")
         + f", and this reading is of the {frame.subject.batch_id} release ({frame.subject.revision[:12]}); a "
@@ -2615,7 +2672,7 @@ def _recorded(config: EvolutionConfig, frame: Frame, action: str) -> Assessment:
 
     reading = read(config, frame.batch, frame=frame)
     if reading is None:
-        raise BatchError(_nothing_read(frame, action))
+        raise NothingToActOn(_nothing_read(frame, action))
     return reading
 
 
@@ -2625,16 +2682,16 @@ def _require_unsettled(frame: Frame, reading: Assessment, described: str) -> Non
 
     refusal = unsettled_refusal(frame, reading, described)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise AlreadyAnswered(refusal)
 
 
 def _require_run(frame: Frame, reading: Assessment, action: str) -> Counterfactual:
-    """The run these operations act on, or why there is none (`run_refusal`)."""
+    """The run these operations act on, or why there is none (`run_failure`)."""
 
-    refusal = run_refusal(frame, reading, action)
+    failure = run_failure(frame, reading, action)
     run = reading.counterfactual
-    if refusal is not None or run is None:
-        raise BatchError(refusal or _nothing_started(frame, action))
+    if failure is not None or run is None:
+        raise failure or _nothing_started(frame, action)
     return run
 
 
@@ -2663,9 +2720,9 @@ def _request(
 
     subject = frame.subject
     previous = reading.counterfactual
-    refusal = measure_refusal(frame, reading)
-    if refusal is not None:
-        raise BatchError(refusal)
+    failure = measure_failure(frame, reading)
+    if failure is not None:
+        raise failure
 
     pinned = Pinned(
         base_revision=subject.merge_input_revision,
@@ -2730,7 +2787,7 @@ def _require_measurable(config: EvolutionConfig, frame: Frame, pinned: Pinned) -
     ):
         if resolve_commit(config.repo_root, revision) is None:
             require_git(config.repo_root, reading=f"{described} ({revision[:12]})")
-            raise BatchError(
+            raise CheckoutUnusable(
                 f"{config.repo_root} does not hold {described} ({revision[:12]}) of the {frame.subject.batch_id} "
                 "release, so there is no pair here to measure; a counterfactual exercises both revisions as they "
                 f"are — fetch {pinned.source_ref} and the objects behind it, or run this where they are"
@@ -2749,7 +2806,7 @@ def _require_same_request(frame: Frame, requested: CounterfactualRequest, expect
 
     if requested.expectation == expectation:
         return
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{frame.batch_id} has {_describe(requested.position)} of its counterfactual outstanding, expected to "
         f"show {requested.expectation!r}; an expectation is recorded before the numbers exist and this run may "
         "already be producing them, so the one on record stands — a second prediction over a run in flight is "
@@ -3231,7 +3288,7 @@ def _read_subject(path: Path, stated: Mapping[str, Any], derived: Subject) -> Su
     )
     for name, expected in fields:
         if stated[name] != expected:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the assessment states {name} {stated[name]!r} for the release it assessed, but the "
                 f"promotion this batch follows records {expected!r}; an assessment of another release is not "
                 "this batch's reading of the one before it"
@@ -3240,18 +3297,18 @@ def _read_subject(path: Path, stated: Mapping[str, Any], derived: Subject) -> Su
     standing = stated["standing"]
     reversal = stated["rollback_revision"]
     if standing and reversal is not None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the assessment records the promotion as standing and names the inverse commit "
             f"{reversal[:12]} that reversed it; one of the two is what was assessed"
         )
     if not standing:
         if reversal is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the assessment records the promotion as no longer standing and names no inverse "
                 "commit; a reversal is a commit, and an assessment of one states which"
             )
         if derived.rollback_revision != reversal:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the assessment says the promotion was reversed by {reversal[:12]}, which "
                 + (
                     "no rollback record beside that batch's outcome names"
@@ -3316,7 +3373,7 @@ def _read_counterfactual(
         )
         outcome = result["outcome"]
         if outcome == RESULT_COMPLETED and not metrics:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the counterfactual is recorded {RESULT_COMPLETED!r} and measured nothing; a run that "
                 "reached the end of the cohort has numbers to state, and one that did not is a failure with a reason"
             )
@@ -3331,7 +3388,7 @@ def _read_counterfactual(
                 if present
             ]
             if stated_anyway:
-                raise BatchError(
+                raise RecordRefused(
                     f"{path}: the counterfactual is recorded {RESULT_FAILED!r} and still states {stated_anyway}; "
                     "a run that did not measure both revisions reports why it stopped, and partial numbers read "
                     "as a result nobody produced"
@@ -3351,7 +3408,7 @@ def _read_counterfactual(
     evaluator = stated["evaluator"]
     harness = stated["harness"]
     if parsed is None and harness["handle"] is None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the counterfactual is still running and carries no harness handle; the handle is what a "
             "later process polls, so a run recorded without one can never be concluded — record the handle the "
             "harness issued, or record why the run ended"
@@ -3433,7 +3490,7 @@ def _require_allocated_once(
         key = (position.round_number, position.attempt)
         earlier = holders.get(key)
         if earlier is not None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {name} and {earlier} both hold round {position.round_number} attempt "
                 f"{position.attempt} of the counterfactual; a position is allocated once and names one request "
                 "for good, because that is what the harness is keyed on — a second request wearing it would be "
@@ -3466,14 +3523,14 @@ def _require_settled_over_evidence(
     if decision is None or settleable(run, requested):
         return
     if requested is not None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the reading is settled {decision.settlement!r} at {decision.decided_at} while "
             f"{_describe(requested.position)} of its counterfactual is outstanding; the harness was asked for "
             "that run and its answer never reached this record, and nothing is added to a reading its gate has "
             "answered — record the run or withdraw the request, and settle over what came back"
         )
     if run is not None and run.running:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the reading is settled {decision.settlement!r} at {decision.decided_at} while "
             f"{_describe(run.position)} of its counterfactual is still going; nothing is added to a reading its "
             "gate has answered, so numbers arriving after the settlement could never be recorded — conclude the "
@@ -3515,7 +3572,7 @@ def _read_request(
     position = _read_position(path, stated["position"], assessed, "the counterfactual request")
     if run is not None:
         if not run.failed:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {_describe(run.position)} of the counterfactual is "
                 + ("still running" if run.running else "completed")
                 + f", and {_describe(position)} is outstanding beside it; the write that records the run a "
@@ -3523,14 +3580,14 @@ def _read_request(
                 "which of the two the harness is measuring this release with"
             )
         if position.round_number != run.position.round_number:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {_describe(run.position)} of the counterfactual failed and {_describe(position)} is "
                 f"outstanding; another attempt answers that run in its own round {run.position.round_number}, "
                 "and one in a later round is a second comparison rather than the retry of this one"
             )
     expected = _allocated(run, withdrawn, position.round_number) + 1
     if position.attempt != expected:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {_describe(position)} of the counterfactual is outstanding, and round "
             f"{position.round_number}'s next attempt is {expected}; a request holds the position its run will "
             "take, and one holding any other position either skips an allocation or claims one a recorded run "
@@ -3561,7 +3618,7 @@ def _read_pinned(path: Path, stated: Mapping[str, Any], assessed: Subject, descr
     )
     for name, value in expected:
         if stated[name] != value:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} pinned {name} {stated[name]!r}, but this release's {name} is {value!r}; "
                 "a run of another pair of revisions measured another question"
             )
@@ -3597,13 +3654,13 @@ def _read_position(path: Path, stated: Mapping[str, Any], assessed: Subject, des
         attempt=stated["attempt"],
     )
     if position.experiment_id != assessed.experiment_id:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} was keyed on {position.experiment_id}, and this release was promoted from "
             f"{assessed.experiment_id}; the key names the experiment whose positions it has to stay clear of, "
             "and one naming another experiment says nothing about that"
         )
     if position.round_number <= assessed.round_number:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} was keyed on round {position.round_number} of {position.experiment_id}, which "
             f"promoted round {assessed.round_number}; a harness answers one key with one run, so a key inside "
             "the experiment's own rounds is answered with the run that round was measured by — a candidate "
@@ -3638,18 +3695,18 @@ def _read_decision(path: Path, stated: Mapping[str, Any] | None, derived: Subjec
     settlement = stated["settlement"]
     revision = stated["rollback_revision"]
     if settlement == SETTLEMENT_RETAIN and revision is not None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the assessment is settled {SETTLEMENT_RETAIN!r} and names the inverse commit "
             f"{revision[:12]}; a retained release has nothing taken back off the line"
         )
     if settlement == SETTLEMENT_ROLLED_BACK:
         if revision is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the assessment is settled {SETTLEMENT_ROLLED_BACK!r} and names no inverse commit; "
                 "a rollback is a commit, and the settlement states which one it made"
             )
         if derived.rollback_revision != revision:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the settlement names the inverse commit {revision[:12]}, which "
                 + (
                     "no rollback record beside the promoted batch's outcome names"
@@ -3687,7 +3744,7 @@ def _require_reversal_landed(path: Path, revision: str, derived: Subject, descri
 
     if not derived.standing:
         return
-    raise BatchError(
+    raise RecordRefused(
         f"{path}: {described} the inverse commit {revision[:12]}, and the rollback record beside the promoted "
         "batch's outcome has that commit prepared without the source line recorded as carrying it; the promotion "
         "is still what the line has until the rollback operation finishes that record, and a reversal is a commit "
@@ -3721,7 +3778,7 @@ def _require_stated_comparability(
     expected = {facet.facet: facet for facet in derived.facets}
     recorded = {facet.facet: facet for facet in comparability.facets}
     if set(recorded) != set(expected):
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: the assessment records the comparability facets {sorted(recorded)}, and the cohorts it "
             f"states are compared in {sorted(expected)}; the facets are derived from the frozen manifests, so "
             "a record states the reading rather than choosing it"
@@ -3729,7 +3786,7 @@ def _require_stated_comparability(
     for name, facet in expected.items():
         found = recorded[name]
         if (found.coherent, found.before, found.after) != (facet.coherent, facet.before, facet.after):
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the {name!r} facet is recorded coherent={found.coherent!r} over before "
                 f"{list(found.before)} / after {list(found.after)}, and the frozen manifests of "
                 f"{frame.subject.batch_id} and {frame.batch_id} give coherent={facet.coherent!r} over before "
@@ -3737,7 +3794,7 @@ def _require_stated_comparability(
             )
 
     if stated["coherent"] != comparability.coherent:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: comparability is recorded {stated['coherent']!r} while its own facets say "
             f"{comparability.coherent!r}"
             + (f" ({', '.join(comparability.incoherent)} differ)" if comparability.incoherent else "")
@@ -3749,7 +3806,7 @@ def _require_stated_comparability(
     # would put that consumer's answer beyond every other reader's.
     for key, derived_split in (("unstated", comparability.unstated), ("differing", comparability.differing)):
         if tuple(stated[key]) != derived_split:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: comparability records {key} as {list(stated[key])} while its own facets give "
                 f"{list(derived_split)}; a facet at least one side does not state and a facet both sides "
                 "state and disagree on are the two ways a comparison fails, and which of them each one is "
@@ -3774,7 +3831,7 @@ def _require_one_side(
     seen: set[str] = set()
     for key in keys:
         if key in seen:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: report {key!r} is placed more than once; one report is evidence on one side, or "
                 "excluded with a reason, and never both"
             )
@@ -3808,7 +3865,7 @@ def _require_counts(
         stated = record["cohorts"][side]["task_count"]
         known = {tasks[key] for key in keys}
         if len(known) != stated:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: the {side} cohort states {stated} unique completed task(s) and its reports come to "
                 f"{len(known)}; the denominator is unique tasks, not reports (invariant 1)"
             )
@@ -3836,21 +3893,21 @@ def _require_membership(
 
     unknown = sorted(named - set(members))
     if unknown:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {unknown} named by this assessment belong to no frozen manifest of "
             f"{frame.subject.batch_id} or {frame.batch_id}; a comparison is drawn from frozen cohorts alone "
             "(invariant 3)"
         )
     missing = sorted(set(members) - named)
     if missing:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {missing} are frozen members of {frame.subject.batch_id} or {frame.batch_id} and this "
             "assessment places them nowhere; every report lands in a cohort or is excluded with a reason, so "
             "the denominator stays visible (invariant 2)"
         )
     for item in excluded:
         if item.batch_id != members[item.report_key]:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: report {item.report_key!r} is excluded as a member of {item.batch_id}, but it is "
                 f"frozen in {members[item.report_key]}"
             )
@@ -3895,13 +3952,13 @@ def _require_placement(
         for key in keys:
             derived = frame.placement(key)
             if derived is not None and derived != side:
-                raise BatchError(
+                raise RecordRefused(
                     f"{path}: report {key!r} is placed in the {side} cohort, but the effective revision its "
                     f"manifest states places it {derived}; a cohort is what the targets actually held"
                 )
             exclusion = frame.exclusion(key)
             if exclusion is not None and exclusion.reason != EXCLUDED_REVISION_UNRESOLVABLE:
-                raise BatchError(
+                raise RecordRefused(
                     f"{path}: report {key!r} is placed in the {side} cohort, but this checkout excludes it "
                     f"({exclusion.reason}): {exclusion.detail}"
                 )
@@ -3925,7 +3982,7 @@ def _require_placement(
             found = f"excludes it as {derived.reason!r}"
         else:
             found = "places it nowhere at all"
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: report {item.report_key!r} is excluded as {item.reason!r}, but this checkout {found}; "
             + (
                 "whether a frozen manifest states a revision, and whether what it states is a commit id, are "
@@ -3982,7 +4039,7 @@ def _require_supported_verdict(
 
     run = counterfactual.result if counterfactual is not None and counterfactual.completed else None
     if verdict == VERDICT_REGRESSED and run is None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {verdict!r} rests on the counterfactual, and this record has "
             + ("none" if counterfactual is None else "one that did not complete")
             + "; a suspected regression is settled by measuring the pre-promotion and promoted revisions "
@@ -3991,14 +4048,14 @@ def _require_supported_verdict(
     if run is not None:
         goals = tuple(measurement for measurement in run.metrics if measurement.directional)
         if not goals:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {verdict!r} rests on the counterfactual, and the run it records measured no goal "
                 f"quantity on both revisions — every number it states is an observation ({BETTER_NEITHER!r}) "
                 f"or missing a side, which settles nothing about the release (invariant 13)"
             )
         supported = measured_direction(goals)
         if supported is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {verdict!r} rests on the counterfactual, and its goal quantities point both ways "
                 f"({_reading(goals)}); a run whose goals disagree settles no direction, and which of them "
                 f"the release is judged on is chosen when the run is configured — the rest are recorded as "
@@ -4006,7 +4063,7 @@ def _require_supported_verdict(
                 f"evidence allows is {VERDICT_INCONCLUSIVE!r}"
             )
         if supported != verdict:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {verdict!r} rests on the counterfactual, and the run it records measured "
                 f"{supported!r} ({_reading(goals)}); a direction is what its own evidence came to, and a "
                 "verdict the only comparison supporting it contradicts is an opinion with a run attached"
@@ -4039,7 +4096,7 @@ def _require_supported_verdict(
             "no measurement carries one — a goal quantity with a before and an after, rather than an "
             f"observation recorded as {BETTER_NEITHER!r} or a side never measured (invariant 13)"
         )
-    raise BatchError(
+    raise RecordRefused(
         f"{path}: {verdict!r} is a directional claim resting on the cohorts alone, and they do not "
         "support one — "
         + "; ".join(unmet)
@@ -4069,7 +4126,7 @@ def _require_supported_recommendation(path: Path, *, recommendation: str, verdic
     """
 
     if recommendation == SETTLEMENT_ROLLED_BACK and verdict != VERDICT_REGRESSED:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: this reading recommends {SETTLEMENT_ROLLED_BACK!r} over a {verdict!r} verdict; taking a "
             f"promoted change back off the source line is advised on the reading that measured it worse "
             f"({VERDICT_REGRESSED!r}, which rests on a completed counterfactual), and every other reading — "
@@ -4120,13 +4177,13 @@ def _require_distinct_metrics(path: Path, described: str, metrics: Sequence[Meas
     seen: set[str] = set()
     for measurement in metrics:
         if measurement.metric in seen:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} measures {measurement.metric!r} twice; one reading reports one value per "
                 "quantity, and two of them leave a reader to pick which the release is judged on"
             )
         seen.add(measurement.metric)
         if measurement.goal and measurement.before is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} calls {measurement.better!r} better for {measurement.metric!r} with no "
                 f"before value to compare against; a quantity measured only after the release is recorded as "
                 f"{BETTER_NEITHER!r}"

@@ -368,6 +368,13 @@ class UnknownSubject(BatchError):
     names what it holds and the answer is read off a status rather than off the
     argument — an operator told the value was malformed goes looking at their own
     typing for a name that is spelled exactly right.
+
+    One group here is parked rather than placed. A draft id that is not a
+    kebab-case slug, a draft named twice in one selection, a selection naming
+    nothing at all, a planned target listed twice — those describe the command
+    and no state, which is what `InputError` is for. Moving them changes the exit
+    an operator sees from 4 to 3, so they wait for the decision that writes the
+    exit-code rules down rather than being moved one at a time.
     """
 
     code = "subject-unknown"
@@ -378,8 +385,9 @@ class CheckoutUnusable(BatchError):
 
     A commit or ref the answer depends on is not here — an experiment ref outside
     the default refspec, a base nobody fetched, one side of a pair the question is
-    about — or Git will not make the commit this operation has to make in it, or
-    cannot say whether a work tree is sitting on the line about to move.
+    about — or Git will not make the commit or the ref this operation has to
+    create in it, or cannot say whether a work tree is sitting on the line about
+    to move.
 
     A fact about this machine and about no revision, which is what separates it
     from every other refusal here: the same command in a complete clone answers.
@@ -423,6 +431,26 @@ class IntegrationUnusable(BatchError):
     code = "integration-unusable"
 
 
+class EvidenceUnfit(BatchError):
+    """The evidence a decision would rest on does not say what the decision needs.
+
+    A round nothing has replayed, a run whose reading no longer describes the
+    tree a promotion would carry, an integration this checkout recomputes
+    differently from the one that was measured, a counterfactual that never
+    completed. What answers it is producing evidence — replay this round as the
+    line now stands, measure the pair again — and nothing about the lifecycle.
+
+    Missing evidence and stale evidence are one class deliberately. They differ
+    in the sentence and not in the answer: both are settled by measuring what is
+    there now, and a caller told "there is none" does exactly what a caller told
+    "it no longer fits" does. Distinct from `IntegrationUnusable`, which is Git
+    saying these trees do not combine at all — that one is resolved by a person
+    with a working tree, this one by a run.
+    """
+
+    code = "evidence-unfit"
+
+
 class RecordRefused(BatchError):
     """The document a writer handed to a record's own rules is not one that
     record may hold.
@@ -441,6 +469,27 @@ class RecordRefused(BatchError):
     """
 
     code = "record-refused"
+
+
+class DraftInadmissible(BatchError):
+    """A change-task draft, or the copy an admission made of one, is not the
+    inert task file this gate admits.
+
+    Frontmatter that never closes, a status other than the draft's, a session log
+    already carrying an entry, a task id another draft or another task holds, a
+    copy whose bytes are no longer the ones the record says were admitted. What
+    answers it is editing that file — in `proposed-tasks/` for a draft, at its
+    task id for a copy — and running the same selection again.
+
+    Its own class rather than `RecordRefused` because of who wrote the file. A
+    draft is authored by a person and read here before anything durable happens,
+    so what is refused is a document still being written; a record refused is
+    this controller's own next state, handed to the rules of a file it publishes.
+    An operator sent to the wrong one of those goes looking for a write to redo
+    instead of for the paragraph they have to fix.
+    """
+
+    code = "draft-inadmissible"
 
 
 class HarnessAnswerUnusable(BatchError):
