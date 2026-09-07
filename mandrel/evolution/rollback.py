@@ -64,7 +64,17 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import OUTCOME_SCHEMA_FILENAME, ROLLBACK_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, InputError, ToolchainError
+from .errors import (
+    AlreadyAnswered,
+    CheckoutUnusable,
+    IntegrationUnusable,
+    InputError,
+    LineMoved,
+    NothingToActOn,
+    StandingWork,
+    ToolchainError,
+    UnknownSubject,
+)
 from .guards import held
 from .guards import reason as require_reason
 from .guards import require_expected, require_line_not_checked_out, require_readable_evidence, settled
@@ -265,7 +275,7 @@ def reverse(
     lineage = settled(config, now=moment)
     promoted = lineage.last_promoted
     if promoted is None:
-        raise BatchError(nothing_promoted_refusal())
+        raise NothingToActOn(nothing_promoted_refusal())
     outcome = promoted.outcome or {}
     merge = outcome["promotion"]
     line = merge["merge_input_ref"]
@@ -292,7 +302,7 @@ def reverse(
     tip = ref_tip(config.repo_root, line)
     if tip is None:
         require_git(config.repo_root, reading=f"where {line} stands")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{promoted.batch_id} promoted {outcome['promotion_revision'][:12]} onto {line}, and this "
             "checkout does not hold that ref; a rollback moves the source line, so it is run from a checkout "
             "that has the line"
@@ -652,7 +662,7 @@ def _require_nothing_admitted(current: BatchLineage, promoted: BatchLineage) -> 
 
     refusal = _admitted_refusal(current, promoted)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def _admitted_refusal(current: BatchLineage, promoted: BatchLineage) -> str | None:
@@ -686,7 +696,7 @@ def _require_stated_line(promoted: BatchLineage, ref: str, requested: str | None
 
     if requested is None or requested == ref:
         return
-    raise BatchError(
+    raise UnknownSubject(
         f"{promoted.batch_id} promoted onto {ref}, and a rollback puts its inverse on the line the promotion "
         f"reached — not {requested!r}. `--source-ref` states which line that was read as rather than choosing "
         "one, so reverse the promotion where it landed"
@@ -726,7 +736,7 @@ def _standing(
         return _WAITING
     carried = contains(config.repo_root, prepared["revision"], tip)
     if carried is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{promoted.batch_id}: whether {prepared['revision'][:12]} is on {prepared['source_ref']} (now at "
             f"{tip[:12]}) cannot be answered in this checkout, which does not hold both commits; that answer is "
             "what says whether this rollback already happened, so nothing is written until a checkout holding "
@@ -775,14 +785,14 @@ def _require_nothing_built_on(config: EvolutionConfig, lineage: Lineage, promote
             for pinned in dict.fromkeys((experiment.base_revision, experiment.pinned_revision)):
                 built = contains(config.repo_root, revision, pinned)
                 if built is None:
-                    raise BatchError(
+                    raise CheckoutUnusable(
                         f"whether {experiment.experiment_id} stands on the promotion {revision[:12]} cannot be "
                         f"answered in this checkout, which does not hold both {pinned[:12]} and that commit; a "
                         "rollback that took the change out from under a later attempt would leave its evidence "
                         "describing a line that no longer exists, so this refuses rather than assume it does not"
                     )
                 if built:
-                    raise BatchError(
+                    raise StandingWork(
                         f"{experiment.experiment_id} ({later.batch_id}) stands on {pinned[:12]}, which has the "
                         f"promotion {revision[:12]} in its history; only the latest promotion is rolled back, and "
                         "a later attempt built on this one is work whose evidence would describe a source line "
@@ -821,13 +831,13 @@ def _prepare(
     revision = outcome["promotion_revision"]
     carried = contains(config.repo_root, revision, tip)
     if carried is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"whether the promotion {revision[:12]} is on {merge['merge_input_ref']} (now at {tip[:12]}) cannot "
             "be answered in this checkout, which does not hold both commits; a rollback takes a commit back off "
             "the line it is on, so it is run from a checkout that holds them"
         )
     if not carried:
-        raise BatchError(
+        raise LineMoved(
             f"{merge['merge_input_ref']} stands at {tip[:12]}, which does not have the promotion "
             f"{revision[:12]} in its history; there is nothing on that line to take back — the line was reset, "
             "rewritten, or is not the one this promotion was made onto, and none of those is something a "
@@ -849,14 +859,14 @@ def _prepare(
         )
     tree = reverted.tree
     if tree is None:
-        raise BatchError(
+        raise IntegrationUnusable(
             f"{promoted.batch_id}: taking {revision[:12]} back out of {merge['merge_input_ref']} at "
             f"{tip[:12]} produces no tree here: {reverted.complaint}; a revert that does not apply cleanly is a "
             "decision about what the line should hold, which is a person's job with a working tree in front of them"
         )
     standing = commit_shape(config.repo_root, tip)
     if standing is not None and standing[0] == tree:
-        raise BatchError(
+        raise LineMoved(
             f"{merge['merge_input_ref']} at {tip[:12]} already carries none of the promotion {revision[:12]}, so "
             "the inverse commit would change nothing; something outside this controller took that change off the "
             "line, and recording a rollback for it would say this operation did what it did not"
@@ -864,7 +874,7 @@ def _prepare(
 
     made, complaint = commit_tree(config.repo_root, tree, [tip], _message(promoted, outcome, tip, reason))
     if made is None:
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{promoted.batch_id} has nothing to roll back with: {complaint}; the inverse is a commit made by "
             "whoever reverses, and a checkout Git will not commit in is one this rollback cannot be recorded from"
         )
@@ -904,7 +914,7 @@ def _land(config: EvolutionConfig, promoted: BatchLineage, prepared: Mapping[str
     moved = move_ref(config.repo_root, prepared["source_ref"], prepared["revision"], prepared["reverted_from"])
     if moved is None:
         return
-    raise BatchError(
+    raise LineMoved(
         f"{prepared['source_ref']} did not take {prepared['revision'][:12]}: {moved}; the inverse is put on the "
         f"line from the commit it was made against ({prepared['reverted_from'][:12]}) and from no other, so a "
         f"line that moved since is rolled back by running this again — {promoted.batch_id}'s promotion stays "
@@ -932,7 +942,7 @@ def _require_confirmed_inverse(
     unanswered = require_inverse(config, promoted.batch.rollback_path, outcome, prepared)
     if unanswered is None:
         return
-    raise BatchError(
+    raise CheckoutUnusable(
         f"{promoted.batch_id}: whether {prepared['revision'][:12]} is {outcome['promotion_revision'][:12]} taken "
         f"back out of {prepared['reverted_from'][:12]} cannot be settled here — {unanswered}; this record is what "
         f"moves {prepared['source_ref']} and what says the promotion came off it, so it is acted on from a "
@@ -1044,7 +1054,7 @@ def _require_same_rollback(promoted: BatchLineage, prepared: Mapping[str, Any], 
 
     if prepared["reason"] == reason:
         return
-    raise BatchError(
+    raise AlreadyAnswered(
         f"{promoted.batch_id} has a rollback of {prepared['promotion_revision'][:12]} prepared as "
         f"{prepared['revision'][:12]} for {prepared['reason']!r}, and this request is {reason!r}; a rollback is "
         "prepared once and finished as it was prepared, because that commit may already be on the source line"
@@ -1063,7 +1073,7 @@ def _redone(promoted: BatchLineage, recorded: Mapping[str, Any], reason: str) ->
     """
 
     if recorded["reason"] != reason:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{promoted.batch_id}'s promotion {recorded['promotion_revision'][:12]} was already rolled back as "
             f"{recorded['revision'][:12]} for {recorded['reason']!r}, which is not this request ({reason!r}); a "
             "promotion is reversed once, and what follows a rollback is the next batch rather than a second "

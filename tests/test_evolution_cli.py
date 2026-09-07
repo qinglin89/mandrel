@@ -21,6 +21,7 @@ shipped file's real numbers load.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import io
 import json
@@ -2095,6 +2096,63 @@ def test_every_family_has_its_own_number_and_every_failure_has_a_family() -> Non
         assert failure.kind in errors.ERROR_KINDS, f"{failure.__name__} has no family"
         assert found.setdefault(failure.code, failure) is failure, f"{failure.code} names two classes"
     assert harness.Unanswered in found.values(), "the harness family is reached by importing its module"
+
+
+# The domain modules whose refusals have been drawn out of `BatchError`'s single
+# code. Grows as the classification does; the point of naming them here rather
+# than checking every module is that a module not yet on the list is work that
+# has not happened, and one on it that regresses is a refusal that quietly went
+# back to saying nothing.
+CLASSIFIED_MODULES = ("replay", "rollback", "guards")
+
+
+def test_the_classified_modules_raise_no_refusal_under_the_family_code() -> None:
+    """Nothing in them reaches a caller as the bare refusal family.
+
+    Read off the source rather than driven through the operations, because what
+    this protects against is a raise site added later — a new refusal written the
+    way its neighbours used to be written, on a path no test happens to reach,
+    which is exactly the one an adapter then cannot route.
+
+    The second half is the same rot one level up: a subclass added without a
+    `code` of its own inherits `state-refused` and passes the first check while
+    saying nothing more than `BatchError` did.
+    """
+
+    for name in CLASSIFIED_MODULES:
+        source = Path(evolution.__file__).parent / f"{name}.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        raised = {
+            node.exc.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name)
+        }
+        assert "BatchError" not in raised, f"{name}.py still raises the undifferentiated refusal"
+        for raised_name in sorted(raised):
+            failure = getattr(errors, raised_name, None)
+            if not (isinstance(failure, type) and issubclass(failure, errors.BatchError)):
+                continue
+            assert "code" in vars(failure), f"{failure.__name__} inherits {errors.BatchError.code!r}"
+
+
+def test_a_narrowed_refusal_says_more_and_exits_the_same(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Splitting the refusal family moved nothing an operator sees.
+
+    The point of the split is a caller that routes, so the two halves under test
+    are the two that must not have travelled together: the `code` is narrower
+    than the family's, and the number the process leaves and the sentence it
+    prints are what they were. A refusal that started exiting differently because
+    it was classified would have been a change to every shell already branching
+    on it.
+    """
+
+    code, _, err = run(["evolution", "rollback", "--reason", "nothing was promoted here", "--repo", str(repo)], capsys)
+
+    assert code == exits(evolution.BatchError) == exits(evolution.NothingToActOn)
+    assert evolution.NothingToActOn.code != evolution.BatchError.code
+    assert "no batch has promoted anything" in err
 
 
 def test_a_stale_reading_a_refusal_and_a_damaged_record_are_three_answers(

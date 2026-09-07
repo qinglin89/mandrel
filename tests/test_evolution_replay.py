@@ -1633,7 +1633,7 @@ def test_a_run_refuses_a_round_whose_candidate_is_not_pinned(
     experiments.create(config, [DRAFT], now=CREATED)
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="still open"):
+    with pytest.raises(evolution.StandingWork, match="still open"):
         run(config, harness)
 
     assert harness.requests == []
@@ -1651,7 +1651,7 @@ def test_a_second_run_refuses_while_one_is_still_going(
     harness = FakeHarness()
     run(config, harness)
 
-    with pytest.raises(evolution.BatchError, match="still running"):
+    with pytest.raises(evolution.StandingWork, match="still running"):
         run(config, harness)
 
     assert len(harness.requests) == 1
@@ -1670,7 +1670,7 @@ def test_a_run_refuses_a_candidate_that_does_not_merge_onto_the_source_line(
     git_update_ref(repo, RELEASE_REF, git_sibling_commit(repo, release, "conflicting\n", "release work"))
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="CONFLICT|conflict"):
+    with pytest.raises(evolution.IntegrationUnusable, match="CONFLICT|conflict"):
         run(config, harness)
 
     assert harness.requests == []
@@ -1691,7 +1691,7 @@ def test_a_run_refuses_a_source_line_this_checkout_does_not_hold(
     elsewhere = releasing_from(config, OTHER_REF)
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="not in this checkout"):
+    with pytest.raises(evolution.CheckoutUnusable, match="not in this checkout"):
         run(elsewhere, harness)
 
     assert harness.requests == []
@@ -1709,7 +1709,7 @@ def test_a_run_takes_the_configured_line_and_refuses_an_argument_naming_another(
     pinned(config)
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="is not the source line"):
+    with pytest.raises(evolution.UnknownSubject, match="is not the source line"):
         run(config, harness, source_ref=OTHER_REF)
     assert harness.requests == []
 
@@ -1736,7 +1736,7 @@ def test_a_run_refuses_a_source_line_that_is_not_a_ref_meaning_one_thing_everywh
     impossible = releasing_from(config, "refs/heads/release.")
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="not a name Git can hold"):
+    with pytest.raises(evolution.RecordRefused, match="not a name Git can hold"):
         run(impossible, harness)
 
     assert harness.requests == []
@@ -1754,7 +1754,7 @@ def test_a_run_refuses_a_lineage_whose_ref_left_its_recorded_history(
     git_update_ref(repo, f"refs/evolution/experiments/{LIVE_EXPERIMENT}", git_unrelated_commit(repo, "elsewhere"))
     harness = FakeHarness()
 
-    with pytest.raises(evolution.BatchError, match="does not descend|not on the history"):
+    with pytest.raises(evolution.LineMoved, match="does not descend|not on the history"):
         run(config, harness)
 
     assert harness.requests == []
@@ -1870,7 +1870,7 @@ def test_a_report_the_record_cannot_hold_leaves_the_run_recorded_as_going(
     harness = FakeHarness(report=completed_report(metrics=()))
     run(config, harness)
 
-    with pytest.raises(evolution.BatchError, match="measured nothing"):
+    with pytest.raises(evolution.RecordRefused, match="measured nothing"):
         replay.conclude(config, harness, now=ENDED)
 
     assert written(config)["replays"][0]["result"] is None
@@ -1890,7 +1890,7 @@ def test_a_plan_the_record_cannot_hold_names_the_run_it_left_going(
     replay.conclude(config, FakeHarness(report=completed_report()), now=ENDED)
 
     reuses_the_handle = FakeHarness(plan=_plan_of(first))
-    with pytest.raises(evolution.BatchError, match="run-0101"):
+    with pytest.raises(evolution.HarnessAnswerUnusable, match="run-0101"):
         run(config, reuses_the_handle, now=ENDED)
 
     assert len(written(config)["replays"]) == 1
@@ -2066,7 +2066,7 @@ def test_a_harness_that_issues_no_handle_leaves_the_request_naming_its_run(
     pinned(config)
     nameless = nameless_harness()
 
-    with pytest.raises(evolution.BatchError, match="carries no harness handle"):
+    with pytest.raises(evolution.HarnessAnswerUnusable, match="carries no harness handle"):
         run(config, nameless)
 
     assert len(nameless.requests) == 1
@@ -2085,7 +2085,7 @@ def test_a_request_the_harness_cannot_describe_is_taken_back(
     still be running is reported back for the operator to stop at the harness."""
 
     pinned(config)
-    with pytest.raises(evolution.BatchError, match="carries no harness handle"):
+    with pytest.raises(evolution.HarnessAnswerUnusable, match="carries no harness handle"):
         run(config, nameless_harness())
 
     taken = replay.withdraw(config, now=ENDED)
@@ -2405,9 +2405,9 @@ def test_a_resume_answers_the_request_that_stands_or_refuses(
     # The line is configured rather than argued now, so the way it differs from
     # what is outstanding is a policy edit — and the request still stands for the
     # line it was made on.
-    with pytest.raises(evolution.BatchError, match="outstanding"):
+    with pytest.raises(evolution.AlreadyAnswered, match="outstanding"):
         run(releasing_from(config, OTHER_REF), harness, now=ENDED)
-    with pytest.raises(evolution.BatchError, match="outstanding"):
+    with pytest.raises(evolution.AlreadyAnswered, match="outstanding"):
         run(config, harness, expectation="something else entirely", now=ENDED)
 
     assert len(harness.requests) == 1
@@ -2427,9 +2427,9 @@ def test_a_conclusion_and_an_ending_both_refuse_while_a_request_stands(
     with pytest.raises(RuntimeError):
         run(config, harness)
 
-    with pytest.raises(evolution.BatchError, match="outstanding"):
+    with pytest.raises(evolution.StandingWork, match="outstanding"):
         replay.conclude(config, harness, now=ENDED)
-    with pytest.raises(evolution.BatchError, match="outstanding"):
+    with pytest.raises(evolution.StandingWork, match="outstanding"):
         replay.abandon(config, reason="the harness host was rebuilt", now=ENDED)
 
     assert harness.polled == []
@@ -2504,7 +2504,7 @@ def test_ending_a_run_again_reports_the_failure_already_on_record(
     assert again.recorded is False
     assert audit(config).count("replay-completed") == 1
 
-    with pytest.raises(evolution.BatchError, match="already ended"):
+    with pytest.raises(evolution.AlreadyAnswered, match="already ended"):
         replay.abandon(config, reason="a different story about the same run", now=ENDED)
 
 

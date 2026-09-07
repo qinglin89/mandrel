@@ -152,7 +152,7 @@ def test_a_rollback_refuses_a_stated_line_the_promotion_did_not_reach(
     having reached, and is told rather than followed. Nothing is written, so the
     same reversal naming the line the outcome records goes through."""
 
-    with pytest.raises(evolution.BatchError, match="puts its inverse on the line"):
+    with pytest.raises(evolution.UnknownSubject, match="puts its inverse on the line"):
         rollback.rollback(config, reason=WHY, source_ref=ELSEWHERE, now=REVERSED)
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
     assert not (config.batches_root / BATCH_ID / "rollback.json").exists()
@@ -170,7 +170,7 @@ def test_a_redone_rollback_is_held_to_the_same_stated_line(
 
     first = rollback.rollback(config, reason=WHY, now=REVERSED)
 
-    with pytest.raises(evolution.BatchError, match="puts its inverse on the line"):
+    with pytest.raises(evolution.UnknownSubject, match="puts its inverse on the line"):
         rollback.rollback(config, reason=WHY, source_ref=ELSEWHERE, now=LATER)
 
     again = rollback.rollback(config, reason=WHY, source_ref=RELEASE_REF, now=LATER)
@@ -311,7 +311,7 @@ def test_a_second_reason_is_not_a_second_reversal(
     rollback.rollback(config, reason=WHY, now=REVERSED)
     tip = git_rev(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match="was already rolled back"):
+    with pytest.raises(evolution.AlreadyAnswered, match="was already rolled back"):
         rollback.rollback(config, reason="on reflection, something else", now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == tip
@@ -465,7 +465,7 @@ def test_a_line_that_moved_before_the_inverse_landed_drops_nothing(
         return result
 
     monkeypatch.setattr(rollback, "commit_tree", interleaved)
-    with pytest.raises(evolution.BatchError, match="did not take"):
+    with pytest.raises(evolution.LineMoved, match="did not take"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
     interrupted = git_rev(config.repo_root, RELEASE_REF)
     assert rollback_record(config)["reverted_at"] is None
@@ -493,7 +493,7 @@ def test_a_line_reset_after_the_move_leaves_the_rollback_in_flight(
         git_update_ref(config.repo_root, RELEASE_REF, promoted.promotion_revision)
 
     monkeypatch.setattr(rollback, "_land", interleaved)
-    with pytest.raises(evolution.BatchError, match="a finished rollback says the source line carries"):
+    with pytest.raises(evolution.LineMoved, match="a finished rollback says the source line carries"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     assert rollback_record(config)["reverted_at"] is None
@@ -531,7 +531,7 @@ def test_a_line_reset_before_an_interrupted_rollback_is_finished_leaves_it_in_fl
         return answer
 
     monkeypatch.setattr(rollback, "_standing", interleaved)
-    with pytest.raises(evolution.BatchError, match="a finished rollback says the source line carries"):
+    with pytest.raises(evolution.LineMoved, match="a finished rollback says the source line carries"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert rollback_record(config)["reverted_at"] is None
@@ -592,7 +592,7 @@ def test_a_prepared_rollback_is_finished_as_it_was_prepared(
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     monkeypatch.undo()
-    with pytest.raises(evolution.BatchError, match="prepared once and finished as it was prepared"):
+    with pytest.raises(evolution.AlreadyAnswered, match="prepared once and finished as it was prepared"):
         rollback.rollback(config, reason="something else entirely", now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -773,7 +773,7 @@ def test_a_rollback_this_checkout_cannot_recompute_moves_nothing(
     latest = lineage.describe(config).last_promoted
     assert latest is not None and latest.rollback is not None
 
-    with pytest.raises(evolution.BatchError, match="cannot be settled here"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot be settled here"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -807,7 +807,7 @@ def test_a_line_this_checkout_cannot_describe_settles_no_inverse_either(
     latest = lineage.describe(config).last_promoted
     assert latest is not None and latest.rollback is not None
 
-    with pytest.raises(evolution.BatchError, match="cannot be settled here"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot be settled here"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -822,7 +822,7 @@ def test_a_repository_that_promoted_nothing_has_nothing_to_roll_back(
 ) -> None:
     write_manifest(config.batches_root, BATCH_ID, ["r1"])
 
-    with pytest.raises(evolution.BatchError, match="no batch has promoted anything"):
+    with pytest.raises(evolution.NothingToActOn, match="no batch has promoted anything"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
 
@@ -853,7 +853,7 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     assert settle_release(config, at=LATER) is True
     experiments.create(config, ["second-idea"], base=promoted.promotion_revision, now=LATER)
 
-    with pytest.raises(evolution.BatchError, match="stands on"):
+    with pytest.raises(evolution.StandingWork, match="stands on"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -876,7 +876,7 @@ def test_a_later_attempt_this_checkout_cannot_place_stops_it(
         rounds=[experiment_round(1)],
     )
 
-    with pytest.raises(evolution.BatchError, match="cannot be answered in this checkout"):
+    with pytest.raises(evolution.CheckoutUnusable, match="cannot be answered in this checkout"):
         rollback.rollback(config, reason=WHY, now=LATER)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -1130,7 +1130,7 @@ def test_a_batch_that_admitted_work_on_that_base_is_refused_rather_than_ended(
         rounds=[experiment_round(1)],
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         rollback.rollback(config, reason=WHY, now=LATER)
     assert admitted in str(error.value)
 
@@ -1169,7 +1169,7 @@ def test_the_same_refusal_stands_once_the_record_says_the_line_took_it(
         rounds=[experiment_round(1)],
     )
 
-    with pytest.raises(evolution.BatchError) as error:
+    with pytest.raises(evolution.StandingWork) as error:
         rollback.rollback(config, reason=WHY, now=LATER)
     assert admitted in str(error.value)
 
@@ -1217,7 +1217,7 @@ def test_a_source_line_some_worktree_is_on_is_not_rolled_back(
 
     git_worktree(config.repo_root, tmp_path / "linked", RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match=f"{RELEASE_REF} is checked out at"):
+    with pytest.raises(evolution.CheckoutUnusable, match=f"{RELEASE_REF} is checked out at"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == promoted.promotion_revision
@@ -1233,7 +1233,7 @@ def test_a_line_that_no_longer_carries_the_promotion_is_not_rolled_back(
 
     git_update_ref(config.repo_root, RELEASE_REF, release)
 
-    with pytest.raises(evolution.BatchError, match="does not have the promotion"):
+    with pytest.raises(evolution.LineMoved, match="does not have the promotion"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == release
@@ -1257,7 +1257,7 @@ def test_a_promotion_taken_off_the_line_by_hand_is_not_recorded_as_a_rollback(
     git_update_ref(config.repo_root, RELEASE_REF, by_hand)
     assert git_tree(config.repo_root, by_hand) == git_tree(config.repo_root, release)
 
-    with pytest.raises(evolution.BatchError, match="already carries none of the promotion"):
+    with pytest.raises(evolution.LineMoved, match="already carries none of the promotion"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == by_hand
@@ -1276,7 +1276,7 @@ def test_a_revert_that_does_not_apply_is_a_persons_job(
     )
     git_update_ref(config.repo_root, RELEASE_REF, conflicting)
 
-    with pytest.raises(evolution.BatchError, match="produces no tree here"):
+    with pytest.raises(evolution.IntegrationUnusable, match="produces no tree here"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
     assert git_rev(config.repo_root, RELEASE_REF) == conflicting
@@ -1291,7 +1291,7 @@ def test_a_checkout_without_the_source_line_rolls_nothing_back(
 
     git_delete_ref(config.repo_root, RELEASE_REF)
 
-    with pytest.raises(evolution.BatchError, match="does not hold that ref"):
+    with pytest.raises(evolution.CheckoutUnusable, match="does not hold that ref"):
         rollback.rollback(config, reason=WHY, now=REVERSED)
 
 

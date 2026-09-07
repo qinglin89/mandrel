@@ -88,7 +88,22 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from . import guards
 from .config import REPLAYS_SCHEMA_FILENAME, EvolutionConfig
-from .errors import BatchError, InputError, RecordError, ToolchainError, ValidationError, damaged_record
+from .errors import (
+    AlreadyAnswered,
+    BatchError,
+    CheckoutUnusable,
+    HarnessAnswerUnusable,
+    IntegrationUnusable,
+    InputError,
+    NothingToActOn,
+    RecordError,
+    RecordRefused,
+    StandingWork,
+    ToolchainError,
+    UnknownSubject,
+    ValidationError,
+    damaged_record,
+)
 from .ledger import append_records, build_record
 from .lineage import BatchLineage, Experiment
 from .revisions import merge_tree, ref_tip, require_git
@@ -549,7 +564,7 @@ def parse_replays(
     )
 
     if record["experiment_id"] != experiment.experiment_id:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: names experiment {record['experiment_id']!r} but sits in "
             f"{experiment.experiment_id!r}; one experiment's evidence cannot measure another's candidate"
         )
@@ -863,7 +878,7 @@ def start_refusal(experiment: Experiment, history: History) -> str | None:
     )
 
 
-def request_refusal(experiment: Experiment, history: History, action: str) -> str | None:
+def request_failure(experiment: Experiment, history: History, action: str) -> StandingWork | None:
     """Why a run is concluded or ended, never a request for one.
 
     Both operations act on the newest recorded run, and a request standing over
@@ -878,24 +893,43 @@ def request_refusal(experiment: Experiment, history: History, action: str) -> st
     pending = history.pending
     if pending is None:
         return None
-    return (
+    return StandingWork(
         f"{experiment.experiment_id} has {_describe_pending(pending)} outstanding, and no run recorded for it; "
         f"the harness was asked for that run and its answer never reached this record, so there is nothing here "
         f"to be {action} — start the replay again to record the run it began, or withdraw the request"
     )
 
 
-def conclude_refusal(experiment: Experiment, history: History) -> str | None:
+def conclude_failure(experiment: Experiment, history: History) -> BatchError | None:
     """Why there is no run for a conclusion to write the result of.
 
     A run that has already ended is not one of them: whatever it ended as, a
     conclusion redone reports that result (`redone_conclusion`).
+
+    Two states and therefore two classes, which is what the failure shape is for
+    (`errors.py`: the refusals, by what stands in the way). A request nobody
+    recorded a run against is finished by resuming that start; a round no run was
+    ever requested for is not something to finish at all, and a caller handed one
+    sentence for both has to read it to tell which.
     """
 
-    return request_refusal(experiment, history, "concluded") or _no_recorded_run(experiment, history, "concluded")
+    return request_failure(experiment, history, "concluded") or _no_recorded_run(experiment, history, "concluded")
 
 
-def end_refusal(experiment: Experiment, history: History) -> str | None:
+def conclude_refusal(experiment: Experiment, history: History) -> str | None:
+    """The same question as `conclude_failure`, for the console's gate.
+
+    The gate composes sentences and routes on nothing, so it takes the sentence;
+    an operation about to refuse re-raises the failure, because a family
+    flattened into a string cannot be recovered from it (`guards.evidence_failure`
+    made the same split for the same reason).
+    """
+
+    failure = conclude_failure(experiment, history)
+    return None if failure is None else str(failure)
+
+
+def end_failure(experiment: Experiment, history: History) -> BatchError | None:
     """Why there is no run for an abandonment to record the end of.
 
     One state more than a conclusion's, and it is the asymmetry between the two
@@ -907,25 +941,32 @@ def end_refusal(experiment: Experiment, history: History) -> str | None:
     ended run is turns on the reason it is given rather than on the record.
     """
 
-    refusal = request_refusal(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
-    if refusal is not None:
-        return refusal
+    failure = request_failure(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
+    if failure is not None:
+        return failure
     newest = history.replays[-1]
     return None if newest.running else _already_ended(experiment, newest)
 
 
-def _no_recorded_run(experiment: Experiment, history: History, action: str) -> str | None:
+def end_refusal(experiment: Experiment, history: History) -> str | None:
+    """The same question as `end_failure`, for the console's gate."""
+
+    failure = end_failure(experiment, history)
+    return None if failure is None else str(failure)
+
+
+def _no_recorded_run(experiment: Experiment, history: History, action: str) -> NothingToActOn | None:
     if history.replays:
         return None
-    return (
+    return NothingToActOn(
         f"{experiment.experiment_id} has no recorded run to be {action}; what these write is the end of a run "
         "this controller started, and a harness invocation nothing here named is not one it can speak for"
     )
 
 
-def _already_ended(experiment: Experiment, replay: Replay) -> str:
+def _already_ended(experiment: Experiment, replay: Replay) -> AlreadyAnswered:
     result = replay.result
-    return (
+    return AlreadyAnswered(
         f"{_describe_replay(replay)} of {experiment.experiment_id} already ended "
         f"{(result.outcome if result is not None else '')!r}: {(result.detail if result is not None else '')!r}; "
         "a run ends once, and what is on record is what it measured — start another attempt rather than "
@@ -1044,7 +1085,7 @@ def start(
         try:
             path = _write_replays(config, experiment, replace(history, replays=replays + (started,), pending=None))
         except (BatchError, ValidationError) as exc:
-            raise BatchError(
+            raise HarnessAnswerUnusable(
                 f"{experiment.experiment_id}: {plan.harness.id} began {described} as handle "
                 f"{plan.harness.handle!r} and described it in a way this record cannot hold ({exc}); the request "
                 "for that run is still on record, so run this again once the harness can describe what it holds "
@@ -1092,7 +1133,7 @@ def _request(
     # it the round has a seal, which is what the position below is pinned from.
     refusal = start_refusal(experiment, history)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
     replays = history.replays
     round_ = experiment.last_round
@@ -1132,7 +1173,7 @@ def _source_line(config: EvolutionConfig, requested: str | None) -> str:
     configured = config.source_line.ref
     if requested is None or requested == configured:
         return configured
-    raise BatchError(
+    raise UnknownSubject(
         f"{requested!r} is not the source line {config.path} names ({configured}), and a replay measures the "
         "candidate as a promotion would carry it — onto the line this batch's base was frozen off. "
         "`--source-ref` says which line was read rather than choosing one, so drop it, or change the configured "
@@ -1161,14 +1202,14 @@ def _require_same_request(
     described = _describe_pending(requested)
     integration = requested.integration
     if integration.merge_input_ref != source_ref:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{experiment.experiment_id} has {described} outstanding, integrating onto "
             f"{integration.merge_input_ref} at {integration.merge_input_revision[:12]}; a request is answered as "
             f"it was made, because the harness may already be running it — name {integration.merge_input_ref} to "
             f"resume it, or withdraw it to ask for {source_ref} instead"
         )
     if requested.expectation != expectation:
-        raise BatchError(
+        raise AlreadyAnswered(
             f"{experiment.experiment_id} has {described} outstanding, expected to show "
             f"{requested.expectation!r}; an expectation is recorded before the numbers exist and this run may "
             "already be producing them, so the one on record stands — a second prediction over a run in flight "
@@ -1211,9 +1252,9 @@ def conclude(
         experiment = guards.require_open_experiment(current, "conclude a replay of")
 
         history = read_replays(config, experiment)
-        refusal = conclude_refusal(experiment, history)
-        if refusal is not None:
-            raise BatchError(refusal)
+        failure = conclude_failure(experiment, history)
+        if failure is not None:
+            raise failure
         replays = history.replays
 
         going = replays[-1]
@@ -1305,9 +1346,9 @@ def abandon(
         # itself is looked at: its own redo stands between them and the third,
         # and which of the two an ended run is turns on the reason — an argument,
         # so it is answered here rather than by the shared predicate.
-        refusal = request_refusal(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
-        if refusal is not None:
-            raise BatchError(refusal)
+        failure = request_failure(experiment, history, "ended") or _no_recorded_run(experiment, history, "ended")
+        if failure is not None:
+            raise failure
         replays = history.replays
 
         going = replays[-1]
@@ -1315,7 +1356,7 @@ def abandon(
             result = going.result
             if redone_end(history) is not None and result is not None and result.detail == text:
                 return RunConcluded(experiment_id=experiment.experiment_id, replay=going, recorded=False)
-            raise BatchError(_already_ended(experiment, going))
+            raise _already_ended(experiment, going)
 
         stamp = format_rfc3339(moment)
         concluded = replace(
@@ -1442,7 +1483,7 @@ def _pin(
     merge_input = ref_tip(config.repo_root, source_ref)
     if merge_input is None:
         require_git(config.repo_root, reading=f"where {source_ref} stands")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"{source_ref} is not in this checkout, so there is no source line to integrate {candidate[:12]} "
             "onto; a replay measures the candidate as a promotion would carry it, which is that candidate "
             "merged onto the release line rather than the candidate on its own — fetch the ref, or run the "
@@ -1458,7 +1499,7 @@ def _pin(
             "was and the replay is run where the tooling can answer"
         )
     if merged.tree is None:
-        raise BatchError(
+        raise IntegrationUnusable(
             f"{described} of {experiment.experiment_id} has no integration to measure: {merged.complaint}; a "
             f"candidate that does not merge cleanly onto {source_ref} at {merge_input[:12]} is not one a promotion "
             "could carry either, so the conflict is resolved in a further round rather than measured around"
@@ -1847,7 +1888,7 @@ def _read_result(path: Path, result: Mapping[str, Any] | None, described: str) -
     )
     outcome = result["outcome"]
     if outcome == RESULT_COMPLETED and not metrics:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} is recorded {RESULT_COMPLETED!r} and measured nothing; a run that reached the "
             "end of the cohort has numbers to state, and one that did not is a failure with a reason"
         )
@@ -1858,7 +1899,7 @@ def _read_result(path: Path, result: Mapping[str, Any] | None, described: str) -
             if present
         ]
         if stated:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} is recorded {RESULT_FAILED!r} and still states {stated}; a run that did not "
                 "measure the cohort reports why it stopped, and partial numbers read as a result nobody produced"
             )
@@ -1890,13 +1931,13 @@ def _require_comparable(path: Path, described: str, metrics: Sequence[Measuremen
     seen: set[str] = set()
     for measurement in metrics:
         if measurement.metric in seen:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} measures {measurement.metric!r} twice; one run reports one value per "
                 "quantity, and two of them leave a reader to pick which the change is judged on"
             )
         seen.add(measurement.metric)
         if measurement.goal and measurement.baseline is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} calls {measurement.better!r} better for {measurement.metric!r} with no "
                 "baseline to compare against; a candidate is measured against the base it changed (invariant "
                 f"10), and a quantity measured only on the candidate is recorded as {BETTER_NEITHER!r}"
@@ -1913,7 +1954,7 @@ def _require_distinct_exclusions(path: Path, replay: Replay) -> None:
     seen: set[str] = set()
     for exclusion in replay.cases.excluded:
         if exclusion.case_id in seen:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {_describe_replay(replay)} excludes case {exclusion.case_id!r} twice; a case is held "
                 "out once, and a second entry is a second reason for one exclusion"
             )
@@ -1954,7 +1995,7 @@ def _require_source_line_ref(path: Path, described: str, ref: str | None) -> Non
         or ref.endswith(".")
         or any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/"))
     ):
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} names {ref!r} as the source line, which is not a name Git can hold "
             "(`git check-ref-format`); no ref will ever resolve to it, so whether the source line has moved "
             "since this run could not be answered in any checkout"
@@ -1986,7 +2027,7 @@ def _require_distinct_handles(path: Path, replays: Sequence[Replay]) -> None:
         key = (replay.harness.id, handle)
         earlier = seen.get(key)
         if earlier is not None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {_describe_replay(replay)} and {earlier} are both recorded under {replay.harness.id} "
                 f"handle {handle!r}; the handle is what a later process polls, so one naming two runs concludes "
                 "the second from the first one's report — a retry is a new run, with the new handle its harness "
@@ -2006,7 +2047,7 @@ def _require_pollable(path: Path, replay: Replay) -> None:
     """
 
     if replay.running and replay.harness.handle is None:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {_describe_replay(replay)} is still running and carries no harness handle; the handle is "
             "what a later process polls, so a run recorded without one can never be concluded — record the "
             "handle the harness issued, or record why the run ended"
@@ -2024,7 +2065,7 @@ def _require_appended_runs(path: Path, replays: Sequence[Replay]) -> None:
 
     positions = [(replay.round_number, replay.attempt) for replay in replays]
     if positions != sorted(set(positions)):
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: runs are recorded at {positions}; they are appended one at a time, in round order and "
             "then attempt order, and none is ever removed or rewritten"
         )
@@ -2057,7 +2098,7 @@ def _require_allocated_once(
         held = holders.setdefault(round_number, {})
         earlier = held.get(attempt)
         if earlier is not None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} and {earlier} both hold round {round_number} attempt {attempt}; a "
                 "position is allocated once and names one request for good, because that is what the harness "
                 "is keyed on — a second request wearing it would be answered with the first one's run"
@@ -2066,7 +2107,7 @@ def _require_allocated_once(
     for round_number, held in holders.items():
         numbered = sorted(held)
         if numbered != list(range(1, len(numbered) + 1)):
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: round {round_number} holds attempts {numbered}; they are allocated one at a time from "
                 "1 — to a run, or to a request withdrawn before it became one — so a gap is an allocation whose "
                 "record is missing rather than one that never happened"
@@ -2088,13 +2129,13 @@ def _require_one_unfinished(path: Path, replays: Sequence[Replay]) -> None:
     if not running:
         return
     if len(running) > 1:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {running} are all recorded as still running; one round is measured against one "
             "integration at a time, so a second run started under an unfinished one leaves two answers about "
             "one tree — conclude the run that is going before starting another"
         )
     if not replays[-1].running:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {running[0]} is still running while later runs are recorded after it; a run that was "
             "overtaken is one nothing will ever conclude — record how it ended"
         )
@@ -2122,7 +2163,7 @@ def _require_requestable(
         return
     described = _describe_pending(pending)
     if replays and replays[-1].running:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} is outstanding while {_describe_replay(replays[-1])} is still running; a round "
             "is measured against one integration at a time, so a request made under an unfinished run is a "
             "second answer about one tree waiting to be recorded"
@@ -2135,14 +2176,14 @@ def _require_requestable(
         default=0,
     )
     if pending.round_number < behind:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} is outstanding while round {behind} has already been measured or requested; "
             "runs are appended in round order, so the run this request becomes could never be written after the "
             "ones already recorded"
         )
     attempt = _allocated(replays, withdrawn, pending.round_number) + 1
     if pending.attempt != attempt:
-        raise BatchError(
+        raise RecordRefused(
             f"{path}: {described} is outstanding, and round {pending.round_number}'s next attempt is {attempt}; "
             "a request holds the position its run will take, and one holding any other position either skips an "
             "allocation or claims one a recorded run or withdrawal already has"
@@ -2187,25 +2228,25 @@ def _require_pinned_candidates(
     ]:
         round_ = rounds.get(round_number)
         if round_ is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} measures a round {experiment.experiment_id} does not have (it has "
                 f"{sorted(rounds)}); a run belongs to the round whose candidate it exercised"
             )
         if round_.seal is None:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} measures a round that carries no seal; a round is measured only once its "
                 "candidate is pinned, because an open round's tip moves and evidence taken against it describes "
                 "a tree the record cannot afterwards identify (invariant 16)"
             )
         pinned = round_.seal.candidate_revision
         if integration.candidate_revision != pinned:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} exercised {integration.candidate_revision[:12]}, while round "
                 f"{round_.number} pinned {pinned[:12]}; a round's evidence names the revision that round's seal "
                 "fixed, so evidence for one candidate is never carried over to another"
             )
         if integration.base_revision != experiment.base_revision:
-            raise BatchError(
+            raise RecordRefused(
                 f"{path}: {described} states base {integration.base_revision[:12]}, while "
                 f"{experiment.experiment_id} was created on {experiment.base_revision[:12]}; a candidate is "
                 "measured against the base its batch froze (invariant 15)"

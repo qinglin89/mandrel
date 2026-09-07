@@ -56,7 +56,16 @@ from typing import Any, Iterator
 
 from .batches import awaiting_analysis, record_closures
 from .config import EvolutionConfig
-from .errors import BatchError, EvolutionError, InputError, RefHoldError, StaleStateError
+from .errors import (
+    CheckoutUnusable,
+    EvolutionError,
+    InputError,
+    LineMoved,
+    NothingToActOn,
+    RefHoldError,
+    StaleStateError,
+    StandingWork,
+)
 from .lineage import BatchLineage, Experiment, Lineage
 from .lineage import describe as describe_lineage
 from .revisions import checked_out_refs, held_at, ref_tip, require_git
@@ -96,7 +105,7 @@ def current_cycle(
 
     current = (known if known is not None else settled(config, now=now)).current
     if current is None:
-        raise BatchError(no_current_batch())
+        raise NothingToActOn(no_current_batch())
     require_stage_ended(config, current)
     if not finishing:
         require_no_pending_successor(current)
@@ -215,7 +224,7 @@ def require_stage_ended(config: EvolutionConfig, current: BatchLineage) -> None:
 
     refusal = stage_refusal(current, stage_open=awaiting_analysis(config, current.batch))
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def stage_refusal(current: BatchLineage, *, stage_open: bool) -> str | None:
@@ -249,7 +258,7 @@ def require_no_pending_successor(current: BatchLineage) -> None:
 
     refusal = successor_refusal(current)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def successor_refusal(current: BatchLineage) -> str | None:
@@ -283,7 +292,7 @@ def require_outcome_recorded(current: BatchLineage) -> None:
 
     refusal = outcome_refusal(current)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise StandingWork(refusal)
 
 
 def outcome_refusal(current: BatchLineage) -> str | None:
@@ -312,7 +321,7 @@ def require_open_experiment(current: BatchLineage, action: str) -> Experiment:
     return experiment
 
 
-def no_open_experiment(current: BatchLineage, action: str) -> BatchError:
+def no_open_experiment(current: BatchLineage, action: str) -> NothingToActOn:
     """Why there is nothing to act on, in one place.
 
     Every operation on an experiment reaches this, and each of them reaches it
@@ -321,7 +330,7 @@ def no_open_experiment(current: BatchLineage, action: str) -> BatchError:
     again" — a terminal decision is never reopened.
     """
 
-    return BatchError(_no_open_experiment(current, action))
+    return NothingToActOn(_no_open_experiment(current, action))
 
 
 def open_experiment_refusal(current: BatchLineage, action: str) -> str | None:
@@ -624,7 +633,7 @@ def require_line_not_checked_out(config: EvolutionConfig, ref: str, action: str)
     checked_out = checked_out_refs(config.repo_root)
     if checked_out is None:
         require_git(config.repo_root, reading=f"whether any work tree is sitting on {ref}")
-        raise BatchError(
+        raise CheckoutUnusable(
             f"whether {ref} is checked out anywhere cannot be answered in {config.repo_root}, and {action} "
             "moves it without touching a working tree; a work tree sitting on that branch would be left "
             "describing the commit before, so this refuses rather than move a ref it cannot say is free"
@@ -632,7 +641,7 @@ def require_line_not_checked_out(config: EvolutionConfig, ref: str, action: str)
     directory = checked_out.get(ref)
     if directory is None:
         return
-    raise BatchError(
+    raise CheckoutUnusable(
         f"{ref} is checked out at {directory}, and {action} moves it without touching a working tree; that "
         "tree and its index would go on describing the commit before, showing what the move changed as an edit "
         f"nobody made — run {action} from a checkout that is not on the source line"
@@ -658,7 +667,7 @@ def require_consistent_ref(current: BatchLineage) -> None:
 
     refusal = ref_refusal(current)
     if refusal is not None:
-        raise BatchError(refusal)
+        raise LineMoved(refusal)
 
 
 def ref_refusal(current: BatchLineage) -> str | None:
@@ -714,7 +723,7 @@ def held(
     try:
         holding.enter_context(held_at(config.repo_root, ref, revision))
     except RefHoldError as exc:
-        raise BatchError(
+        raise LineMoved(
             f"{subject}: {exc}; {requirement}, so it is recorded while the ref is held there "
             "rather than from a reading that may already be stale — read the ref as it now stands and decide "
             "again"

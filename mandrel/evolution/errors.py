@@ -278,13 +278,183 @@ class BatchError(EvolutionError):
     contradicts itself or the pool, an id is already taken, or the requested
     freeze would break an admission invariant.
 
-    The whole legal-refusal family under one code. What each refusal is about is
-    in its sentence and not yet in an attribute, which is the next thing this
-    taxonomy owes a machine caller.
+    Also the base of the refusals below, which say what stands in the way. A
+    caller that needs only to know the state said no catches this; one deciding
+    what to run next reads `code`. Still raised bare where no narrower answer has
+    been drawn yet, which is what the subclasses are steadily taking away.
     """
 
     kind = KIND_REFUSED
     code = "state-refused"
+
+
+# --- what stands in the way ---------------------------------------------------
+#
+# The refusal family, split at the level the operator's *next command* differs.
+# Every one of these is answered by changing the state, which is what keeps them
+# one `kind`; the split is between the states, because "the lifecycle says no" is
+# not something a surface can act on and "nothing has been admitted yet" is.
+#
+# Drawn from the answers rather than from the raise sites. A condition checked in
+# four operations is one class, and two conditions one operation checks that send
+# an operator two different places are two. Where a refusal is stated once and
+# read by both an operation and the console's gate, the class belongs to the
+# operation: the gate composes sentences and routes on nothing.
+
+
+class NothingToActOn(BatchError):
+    """What this verb acts on does not exist yet.
+
+    No batch is current, no experiment is open, no promotion was ever made, no
+    run is on record, no cohort owes a reading. One class rather than one per
+    absence, because the shape of the answer is the same every time and the
+    sentence already names the missing thing: what comes next is the verb that
+    creates it, or nothing.
+
+    Distinct from `StandingWork` in the direction it points, and that is the
+    whole of it — an operator sent the wrong way waits for something nobody
+    started, or starts a second one of something already going.
+    """
+
+    code = "nothing-to-act-on"
+
+
+class AlreadyAnswered(BatchError):
+    """A durable record already answers this, and what is being asked differs
+    from it.
+
+    Terminal decisions, consumed drafts, settled gates, allocated positions, an
+    operation prepared under one set of arguments and asked for again under
+    another — everything this controller writes once and never edits. A prepared
+    operation standing in the way of a *different* verb is `StandingWork`; this
+    is the same verb, asked twice, differently.
+
+    The redo path is what makes the class worth having. An identical request
+    finishes an interrupted write and comes back with what is on record, so a
+    caller reaching this knows it asked for something else and that repeating the
+    recorded request is the way through. Nothing here is answered by waiting.
+    """
+
+    code = "already-answered"
+
+
+class StandingWork(BatchError):
+    """Something unfinished is in the way, or is standing on what this would take
+    away.
+
+    An analysis stage still being written, an open round, a run the harness has
+    not answered for, a request no run was recorded against, a promotion prepared
+    and not landed, work admitted on the release a rollback would remove. The
+    next command is about that other thing rather than about this one — finish
+    it, end it, withdraw it — and the sentence names which.
+
+    The one refusal here that can become allowed with nobody typing anything, a
+    run still going being the case, which is why it is not folded into
+    `NothingToActOn`: a surface that polls at all polls this.
+    """
+
+    code = "standing-work"
+
+
+class UnknownSubject(BatchError):
+    """What the caller named is not what this state holds.
+
+    An experiment id this batch never allocated, an attempt that is not the one a
+    decision is being redone for, a draft that is not waiting at this gate, a
+    `--source-ref` other than the line the evidence or the configuration names.
+
+    Not `InputError`, though both end in retyping. What is wrong with these is
+    not their shape but that the state holds something else, so the sentence
+    names what it holds and the answer is read off a status rather than off the
+    argument — an operator told the value was malformed goes looking at their own
+    typing for a name that is spelled exactly right.
+    """
+
+    code = "subject-unknown"
+
+
+class CheckoutUnusable(BatchError):
+    """This checkout cannot be the one the operation is run from.
+
+    A commit or ref the answer depends on is not here — an experiment ref outside
+    the default refspec, a base nobody fetched, one side of a pair the question is
+    about — or Git will not make the commit this operation has to make in it, or
+    cannot say whether a work tree is sitting on the line about to move.
+
+    A fact about this machine and about no revision, which is what separates it
+    from every other refusal here: the same command in a complete clone answers.
+    Not `toolchain`, because the tool is fine — it is this copy of the repository
+    that cannot answer, and fetching is a different next command from installing a
+    newer Git.
+    """
+
+    code = "checkout-unusable"
+
+
+class LineMoved(BatchError):
+    """A ref is not where the record this is checked against says it stands.
+
+    A source line that did not take the commit an operation made for it, a line
+    that no longer carries what a rollback was to remove, an experiment ref
+    standing off the history its record pins, a ref that moved out from under the
+    reading a write was about to be recorded from.
+
+    Its own class because the answer is neither "change the lifecycle" nor
+    "wait": run it again, and if it refuses the same way, find out what is moving
+    the ref. A compare-and-swap that lost is ordinary and finishable, a line
+    somebody reset is not, and only the second half of each sentence tells them
+    apart — which is exactly what a caller routing on `code` should not have to
+    read.
+    """
+
+    code = "line-moved"
+
+
+class IntegrationUnusable(BatchError):
+    """The tree Git computes here is not one this operation may carry.
+
+    A candidate that does not merge cleanly onto the line it would be promoted
+    with, an inverse that does not apply to what the line now holds. Refused
+    rather than resolved: resolving it decides what the release contains, and
+    this controller records decisions instead of making them, so the next step is
+    a person with a working tree in front of them.
+    """
+
+    code = "integration-unusable"
+
+
+class RecordRefused(BatchError):
+    """The document a writer handed to a record's own rules is not one that
+    record may hold.
+
+    The cross-field rules of the files this controller publishes through their
+    parsers — runs appended in order, a position allocated once, a completed run
+    that measured something, a verdict its counterfactual supports. Asked in the
+    writing direction they answer the caller stating the record's next state,
+    which is a refusal, and is answered by stating one the rules take.
+
+    The same rules read the other way are not this. A file already on disk that
+    breaks one was written by nobody present, so its reader translates the whole
+    answer to `RecordError` before a caller sees it (`damaged_record`) — and the
+    translation is the reader's, because at the rule itself the two directions
+    are the same mapping.
+    """
+
+    code = "record-refused"
+
+
+class HarnessAnswerUnusable(BatchError):
+    """What the harness was stated to have said cannot be held by the record that
+    would carry it.
+
+    The durable half is why this is not `record-refused`, though a record's rules
+    are what refused: the request is already written, so nothing was lost and
+    nothing is repeated — the operator states the answer again once it is one the
+    record holds, or withdraws the request and stops the run at the harness. A
+    caller told its document was rejected would go looking for a write to redo.
+    """
+
+    code = "harness-answer-unusable"
 
 
 def damaged_record(complaint: object, *, what: str) -> str:
