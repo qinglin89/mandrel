@@ -2122,14 +2122,14 @@ def test_the_classified_modules_raise_no_refusal_under_the_family_code() -> None
     for name in CLASSIFIED_MODULES:
         source = Path(evolution.__file__).parent / f"{name}.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
-        raised = {
-            node.exc.func.id
+        constructed = {
+            node.func.id
             for node in ast.walk(tree)
-            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
-        assert "BatchError" not in raised, f"{name}.py still raises the undifferentiated refusal"
-        for raised_name in sorted(raised):
-            failure = getattr(errors, raised_name, None)
+        assert "BatchError" not in constructed, f"{name}.py still constructs the undifferentiated refusal"
+        for constructed_name in sorted(constructed):
+            failure = getattr(errors, constructed_name, None)
             if not (isinstance(failure, type) and issubclass(failure, errors.BatchError)):
                 continue
             assert "code" in vars(failure), f"{failure.__name__} inherits {errors.BatchError.code!r}"
