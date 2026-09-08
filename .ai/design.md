@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-07
-verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
+last-updated: 2026-09-08
+verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
 ---
 
 # Design Principles and Decisions
@@ -41,10 +41,12 @@ verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
   publishes the same commit as the manifest-owned base/runner. The first
   experiment consumes that base, while evidence—not configuration—supplies
   promotion and rollback lines.
-- Automatic batch membership is per-task agreement across every owned report:
-  each report's deployable-canonical identity must equal the proposal base's.
-  Human inclusion/exclusion is the only override and remains attributed in the
-  proposal, immutable manifest denominator, and generated analysis task.
+- Automatic batch membership asks the one report pack held by the pending task:
+  its deployable-canonical identity must equal the proposal base's, and freeze
+  records that same pack. Superseded packs stay accounted for outside the pool
+  but enter no manifest. Human inclusion/exclusion is the only override and
+  remains attributed in the proposal, immutable manifest denominator, and
+  generated analysis task.
 - The shipped evolution source line is the exclusive receiving branch
   `refs/heads/dev`; `refs/heads/main` is human-maintained and canonical work
   stays on feature branches. Rollback's current-tip three-way inverse depends

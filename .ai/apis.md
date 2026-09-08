@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-07
-verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
+last-updated: 2026-09-08
+verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
 ---
 
 # APIs and Interfaces
@@ -83,7 +83,7 @@ revert-tree needs 2.40, and an absent Git is the same `toolchain` family.
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
 | `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; `start` records its tip in the proposal, `freeze` publishes it as the batch base/runner commit after revalidation, and replays resolve it, while promotion/rollback take their line from evidence |
 | `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
-| `.ai-evolution/state.json` | Ignored schema-v2 cursor, feed-exhaustion proof, pending/rejected/processed state; together with its referenced staged bundles, one `runtime-state-corrupt` record that is never silently repaired |
+| `.ai-evolution/state.json` | Ignored schema-v3 cursor, feed-exhaustion proof, one-pack pending entries, and rejected/processed/superseded decisions; v1/v2 upgrade-on-read preserves every report key and chooses the survivor by `generated_at`, then `sequence`; together with its referenced staged bundles, one `runtime-state-corrupt` record that is never silently repaired |
 | `.ai-evolution/batch-proposal.json` | Ignored schema-v1 base, selected members, excluded denominator, and attributed human moves; included in `state_revision`, revalidated at freeze |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies; freeze re-verifies the pool's hashes/identities/bodies and reports missing or changed evidence as corrupt runtime state |
 | `evolution/batches/<id>/manifest.json` | Immutable committed base, semantically validated selected/excluded denominator, human attribution, and evaluator/protocol provenance |
