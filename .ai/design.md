@@ -1,6 +1,6 @@
 ---
 last-updated: 2026-09-08
-verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
+verified-against: 182cb36f727a1490610822b675b57512430f009f
 ---
 
 # Design Principles and Decisions
@@ -46,7 +46,10 @@ verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
   records that same pack. Superseded packs stay accounted for outside the pool
   but enter no manifest. Human inclusion/exclusion is the only override and
   remains attributed in the proposal, immutable manifest denominator, and
-  generated analysis task.
+  generated analysis task. Evaluator/rubric/model facets are recorded per
+  report, never membership gates; generated analysis states the required
+  evaluator values, calls uniform non-statement absent rather than mixed, and
+  qualifies claims that cross a stated split.
 - The shipped evolution source line is the exclusive receiving branch
   `refs/heads/dev`; `refs/heads/main` is human-maintained and canonical work
   stays on feature branches. Rollback's current-tip three-way inverse depends
