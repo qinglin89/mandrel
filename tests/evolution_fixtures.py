@@ -258,11 +258,18 @@ def make_record(
     runner_protocol_revision: str = "v2.2.0",
     rubric_revision: str = "r7",
     dev_model: str = "claude-opus-5",
+    evaluator_model: str = "claude-opus-5",
+    evaluator_schema_version: int | str = 1,
     effective_revision: str | None = "e1",
 ) -> dict:
     """One feed record. `effective_revision` is what the target that produced it
     actually held — the reading a release assessment places a report by, and null
-    for a report whose provenance never said."""
+    for a report whose provenance never said.
+
+    `evaluator_model` and `evaluator_schema_version` are knobs because a pool
+    holding two of either is the ordinary case — evolution consumes evaluations
+    it does not order — and a suite that could not build one could not show that
+    membership is protocol-keyed alone."""
 
     bodies = bodies or ARTIFACT_BODIES
     return {
@@ -280,8 +287,8 @@ def make_record(
         },
         "evaluator": {
             "backend": "claude",
-            "model": "claude-opus-5",
-            "schema_version": 1,
+            "model": evaluator_model,
+            "schema_version": evaluator_schema_version,
             "rubric_revision": rubric_revision,
         },
         "artifacts": {

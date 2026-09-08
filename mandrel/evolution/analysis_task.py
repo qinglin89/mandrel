@@ -519,10 +519,18 @@ justified is a valid outcome (invariant 7).
   `{spec.artifacts_root}/`; they are ignored by Git and may be absent on
   another machine. Keep report content out of this task file beyond bounded
   summaries and references (invariant 11).
-- Check cohort coherence before comparing anything: the manifest carries each
-  report's evaluator/rubric revision, runner protocol revision, and role
-  models. Separate materially different revisions or account for them
-  explicitly (invariant 5).
+- Account for the evaluator before comparing across members. Invariant 5's
+  protocol limb is the membership rule above; its evaluator limbs are recorded,
+  not gated — evolution does not re-evaluate anything, so a batch holding
+  several evaluators was still correctly frozen. Each member's `evaluator` block
+  states the `backend`, `model` and `schema_version` behind it; every other
+  coherence facet the manifest has room for is nullable, and a facet null on
+  every member is absent — nothing is known about it — never mixed, and it
+  weakens no claim by itself. Where a stated facet holds more than one value,
+  say where the split falls and carry it into every claim that crosses it: a
+  cluster drawn from one evaluator alone is a claim about that evaluator, and a
+  recurrence count spanning the split says so. A mixed evaluator set is a reason
+  to know less, never a reason to hold the evidence back.
 - Give every finding cluster exactly one primary disposition from the
   contract's triage table, and record task count, repository/task-type
   coverage, recurrence, counterexamples, confidence, affected revisions,
@@ -559,8 +567,9 @@ justified is a valid outcome (invariant 7).
 
 - `{spec.findings_relative_path}` records every finding cluster with exactly one
   primary disposition, its evidence, and its confidence.
-- Cohort coherence is stated: which revisions are represented, and how mixed
-  cohorts were separated or accounted for.
+- The evaluator set is stated: which `backend`, `model` and `schema_version`
+  values the membership holds, which facets no member states at all, and how a
+  split was carried into every claim that crosses it.
 - Recurrence claims name the unique completed tasks they rest on, counted from
   the manifest — never a single report (invariant 1).
 - Zero changes under `canonical/`; every proposed change exists only as a draft

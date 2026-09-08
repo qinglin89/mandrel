@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/batch-manifest.schema.json",
   "title": "Evolution batch manifest (version 2)",
-  "description": "The shape a freeze writes, and the only one this build reads. Version 2 adds the per-report cohort provenance invariants 4 and 5 need, and the batch base every experiment starts from. Version 1 was dropped rather than kept as a frozen reader schema: no batch has ever been frozen, so there is no immutable manifest at that version to keep readable. That window closes at the first successful freeze — after it, a frozen manifest cannot be migrated and its schema has to stay.",
+  "description": "The shape a freeze writes, and the only one this build reads. Version 2 adds the per-report evaluator and provenance blocks invariants 4 and 5 need, and the batch base every experiment starts from. Version 1 was dropped rather than kept as a frozen reader schema: no batch has ever been frozen, so there is no immutable manifest at that version to keep readable. That window closes at the first successful freeze — after it, a frozen manifest cannot be migrated and its schema has to stay.",
   "type": "object",
   "required": [
     "schema_version",
@@ -40,7 +40,7 @@
       ]
     },
     "runner_protocol_revision": {
-      "description": "This batch's base: where the configured source line ([source_line].ref) stood when the batch was formed, as a full commit id. One commit under two readings — the stable protocol revision governing this cohort's evolution tasks (contract invariant 8), and the commit every experiment of this batch starts from (invariant 15). Required and never null: the line is what selects the batch's members, so a checkout that cannot resolve it refuses to freeze rather than record the absence. Not a release tag and not the per-report `provenance.runner_protocol_revision`, which is the revision a report's own runs were produced under.",
+      "description": "This batch's base: where the configured source line ([source_line].ref) stood when the batch was formed, as a full commit id. One commit under two readings — the stable protocol revision governing this batch's evolution tasks (contract invariant 8), and the commit every experiment of this batch starts from (invariant 15). Required and never null: the line is what selects the batch's members, so a checkout that cannot resolve it refuses to freeze rather than record the absence. Not a release tag and not the per-report `provenance.runner_protocol_revision`, which is the revision a report's own runs were produced under.",
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
@@ -51,7 +51,7 @@
       ]
     },
     "selection": {
-      "description": "This batch's own denominator: what was considered when it was formed, how it split, and why each considered task that is not a member was left out. Membership is equality of deployable canonical identity against `runner_protocol_revision` (contract invariants 1 and 5), decided per unique completed task over the one report that is its evidence, against the pending pool as it stood at formation. Recorded here because the pool is ignored machine-local state that moves: without it a frozen manifest reads as if the pool held exactly its members, and a cohort's recurrence claim is about the set it was drawn from. The agreement between these counts and the reports below is a cross-field rule this schema cannot state; `manifests.require_coherent_selection` enforces it in both directions, and a manifest that contradicts itself is refused when it is read as well as when it is written.",
+      "description": "This batch's own denominator: what was considered when it was formed, how it split, and why each considered task that is not a member was left out. Membership is equality of deployable canonical identity against `runner_protocol_revision` (contract invariants 1 and 5), decided per unique completed task over the one report that is its evidence, against the pending pool as it stood at formation. Recorded here because the pool is ignored machine-local state that moves: without it a frozen manifest reads as if the pool held exactly its members, and a batch's recurrence claim is about the set it was drawn from. The agreement between these counts and the reports below is a cross-field rule this schema cannot state; `manifests.require_coherent_selection` enforces it in both directions, and a manifest that contradicts itself is refused when it is read as well as when it is written.",
       "type": "object",
       "required": [
         "considered",
@@ -89,7 +89,7 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "description": "One report's membership entry. Identity and content hash pin what was analyzed; evaluator and provenance carry the cohort-coherence facts (contract invariants 4 and 5) so a frozen batch answers 'is this one cohort?' from committed content alone, without the ignored raw bundles.",
+        "description": "One report's membership entry. Identity and content hash pin what was analyzed; evaluator and provenance carry the coherence facts (contract invariants 4 and 5) so a frozen batch answers what produced each report from committed content alone, without the ignored raw bundles. Only the protocol facet is a membership rule; the evaluator facets are recorded here for the analysis to state, never gated on.",
         "type": "object",
         "required": [
           "report_key",
@@ -224,7 +224,7 @@
           ]
         },
         "justification": {
-          "description": "Why a human took this task out, in their own words. Null for every machine reason, which is already its own explanation. Stated because an exclusion removes evidence the identity test had selected — the move most able to shape what a cohort says, and so the one least able to go unexplained.",
+          "description": "Why a human took this task out, in their own words. Null for every machine reason, which is already its own explanation. Stated because an exclusion removes evidence the identity test had selected — the move most able to shape what a batch says, and so the one least able to go unexplained.",
           "type": [
             "string",
             "null"

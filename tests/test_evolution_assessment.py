@@ -1010,6 +1010,81 @@ def test_a_side_only_some_of_whose_reports_state_a_facet_is_a_gap_too(
     assert frame.comparability.differing == ()
 
 
+def test_a_facet_neither_side_states_is_absent_and_not_a_difference() -> None:
+    """Uniform absence, read the way the batch side states it in prose.
+
+    A facet null on every report of both sides is a gap in what the feed
+    published — `unstated`, absent evidence — and never `differing`, which is a
+    claim that something other than the release separates the two. The batch-side
+    statement of the same rule lives in invariant 5 and the generated analysis
+    task, and it is prose there because a batch has one set and nothing to
+    compare it against; this holds the derivation the assessment runs to the same
+    answer, facet names and order included, while that prose is written beside it.
+    """
+
+    def side(batch_id: str, keys: tuple[str, ...], overrides: dict[str, str | None] | None = None):
+        return assessment.Cohort(
+            members=tuple(
+                assessment.Member(
+                    report_key=key,
+                    batch_id=batch_id,
+                    repo_id="repo-alpha",
+                    task_id=f"2026-08-0{index}-task",
+                    effective_revision="e1",
+                    facets={
+                        assessment.FACET_EVALUATOR_BACKEND: "claude-cli",
+                        assessment.FACET_EVALUATOR_MODEL: "claude-opus-5",
+                        assessment.FACET_EVALUATOR_SCHEMA: "1",
+                        # The four the published feed states on no report at all,
+                        # plus the shape of the work, which no manifest version
+                        # has a field for.
+                        assessment.FACET_EVALUATOR_RUBRIC: None,
+                        assessment.FACET_RUNNER_REVISION: None,
+                        assessment.FACET_DEV_ROLE: None,
+                        assessment.FACET_REVIEW_ROLE: None,
+                        assessment.FACET_TASK_SHAPE: None,
+                        assessment.FACET_REPOSITORY_COVERAGE: "repo-alpha",
+                        **(overrides or {}),
+                    },
+                )
+                for index, key in enumerate(keys, start=1)
+            )
+        )
+
+    comparability = assessment._comparability(side(FIRST, ("b1", "b2")), side(SECOND, ("a1", "a2")))
+
+    assert [facet.facet for facet in comparability.facets] == [
+        assessment.FACET_EVALUATOR_BACKEND,
+        assessment.FACET_EVALUATOR_MODEL,
+        assessment.FACET_EVALUATOR_RUBRIC,
+        assessment.FACET_EVALUATOR_SCHEMA,
+        assessment.FACET_RUNNER_REVISION,
+        assessment.FACET_DEV_ROLE,
+        assessment.FACET_REVIEW_ROLE,
+        assessment.FACET_TASK_SHAPE,
+        assessment.FACET_REPOSITORY_COVERAGE,
+    ]
+    assert comparability.differing == ()
+    assert comparability.unstated == (
+        assessment.FACET_EVALUATOR_RUBRIC,
+        assessment.FACET_RUNNER_REVISION,
+        assessment.FACET_DEV_ROLE,
+        assessment.FACET_REVIEW_ROLE,
+        assessment.FACET_TASK_SHAPE,
+    )
+    assert comparability.incoherent == comparability.unstated
+
+    # And a facet both sides do state, differently, is still the other answer:
+    # absence elsewhere neither hides a difference nor manufactures one.
+    split = assessment._comparability(
+        side(FIRST, ("b1", "b2")),
+        side(SECOND, ("a1", "a2"), {assessment.FACET_EVALUATOR_MODEL: "claude-opus-4-8"}),
+    )
+
+    assert split.differing == (assessment.FACET_EVALUATOR_MODEL,)
+    assert split.unstated == comparability.unstated
+
+
 def test_a_reversed_promotion_is_a_different_question(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,

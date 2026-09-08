@@ -28,7 +28,7 @@ machine that has the task; the controller then publishes
 `analysis-complete.json`, which is committed and so answers for every other
 clone. Task *absence* is never read as completion: `.ai-tasks/` is machine-local
 and ignored, so absence is the ordinary state everywhere the analysis did not
-run, and reading it as "finished" let draft findings release the next cohort
+run, and reading it as "finished" let draft findings release the next batch
 from any fresh checkout. A machine that holds an unfinished task keeps the
 analysis stage open even against the record — local lifecycle may only be more
 conservative than the committed answer, never less.
@@ -39,7 +39,7 @@ members split between the identity test and human judgement, and why each
 considered task that is not a member was left out; each report restates its own
 task's answer. A member's evidence is one pack, so a batch frozen here has one
 report per member — and where a manifest holds several for a task anyway, the
-reader requires the same answer on all of them. That is what makes a cohort's
+reader requires the same answer on all of them. That is what makes a batch's
 recurrence claim checkable from committed content: the pool it was selected out
 of is ignored machine-local state and has moved by the time anyone reads the
 batch.
@@ -55,9 +55,9 @@ read is one that can no longer be repaired.
 Manifests are versioned and never rewritten, so once a batch exists its version
 keeps the schema it was written against. Only `batch-manifest.schema.json`
 (version 2) is read today: it carries the per-report evaluator and provenance
-blocks cohort coherence needs, the base the batch was formed at, and the
-selection above. Version 1
-was dropped with its schema rather than kept as a reader arm, because no batch
-has ever been frozen here — that window closes at the first freeze.
+blocks the analysis reads invariant 5's evaluator limbs off, the base the batch
+was formed at, and the selection above. Version 1 was dropped with its schema
+rather than kept as a reader arm, because no batch has ever been frozen here —
+that window closes at the first freeze.
 
 Never edit a frozen manifest to add late reports; create a later batch.

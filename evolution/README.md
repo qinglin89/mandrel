@@ -30,7 +30,7 @@ complete an evaluation.
    — recorded each time with the mover's name and their reason, and counted like
    any other member. That is the one sanctioned exception and it is deliberately
    not a second threshold beneath the first: the judgement that a report belongs
-   in this cohort is a person's to make, and the configured minimum is a default
+   in this batch is a person's to make, and the configured minimum is a default
    for the automatic path rather than a rule they are subject to. What bounds it
    is the record. A frozen manifest states its automatic and human-included
    members as two numbers and never one, so a batch of ten that is nine
@@ -47,7 +47,7 @@ complete an evaluation.
 4. **Preserve provenance.** Keep source repo/task/evaluation identity,
    protocol/deployment revision, role models/profiles, evaluator/rubric
    revision, timestamps, artifact hashes, and explicit missing fields.
-5. **Compare coherent cohorts.** Protocol, evaluator/rubric, and materially
+5. **Compare coherent batches.** Protocol, evaluator/rubric, and materially
    different model revisions must be separated or explicitly accounted for.
    Protocol coherence is the batch's membership rule and is enforced at
    formation: a pooled report is a member when its evaluated target was running
@@ -60,12 +60,19 @@ complete an evaluation.
    automatic on another report's evidence. A superseded evaluation is asked
    nothing: it enters no manifest, so the batch makes no claim about it, and it
    is kept whole outside the pool (invariant 4). The other two facets are recorded
-   per report and read by the analysis. Every frozen manifest states its own
-   denominator in `selection`: how many tasks the formation considered, how the
-   membership split between the identity test and human judgement, and why each
-   considered task that is not a member was left out. A cohort's recurrence
-   claim is about the set it was drawn from, so a manifest listing only its
-   members would read as if the pool held exactly them. That denominator is
+   per report and read by the analysis, and recorded is the whole of it: evolution
+   consumes evaluations it does not produce and cannot order again, so a pool
+   holding two evaluators is the ordinary case and gating membership on them
+   would leave those reports with no batch to enter and no way out of the pool.
+   What the analysis owes them is a statement rather than a threshold, taken
+   over the whole membership — a facet no member states is **absent**, which is
+   something nobody knows, and never mixed, which is a difference somebody
+   found. Every frozen manifest states its own denominator in `selection`: how
+   many tasks the formation considered, how the membership split between the
+   identity test and human judgement, and why each considered task that is not a
+   member was left out. A batch's recurrence claim is about the set it was drawn
+   from, so a manifest listing only its members would read as if the pool held
+   exactly them. That denominator is
    read back as strictly as it is written: counts that no set of reports could
    produce, a task both selected and left out, and a human move nobody is named
    for are refused when the manifest is loaded, not only when it is formed.
@@ -519,7 +526,7 @@ Three fields decide more than their size suggests:
 `archived` and `completed` are pinned `true` by the schema. That is
 eligibility, not bookkeeping: evolution reasons about finished work, and a
 report about a task still in flight would put a moving target in an immutable
-cohort.
+batch.
 
 `provenance.effective_revision` is the one nullable field with a downstream
 consequence. It is the protocol revision the target that produced the report
@@ -2162,10 +2169,10 @@ stops the operation with what it found, instead of picking one reading and
 continuing.
 
 The freeze, and the completion of one that was interrupted, are guarded by the
-same reading. Which batch is current decides both whether a new cohort may form
+same reading. Which batch is current decides both whether a new batch may form
 and which unfinished freeze may be completed, so it is derived from the whole
 lineage before either writes: a conclusion its own experiments contradict leaves
-its batch current rather than releasing the next cohort, and two current batches
+its batch current rather than releasing the next one, and two current batches
 stop the run instead of one of them being picked to continue.
 
 ## Machine surface

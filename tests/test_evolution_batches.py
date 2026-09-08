@@ -811,6 +811,81 @@ def test_the_generated_task_states_the_membership_it_reads_recurrence_against(
     assert "the pending pool is machine-local, has moved since, and is not this batch's denominator" in flat
 
 
+def mixed_evaluators(config: evolution.EvolutionConfig, feed_root: Path) -> None:
+    """A pool the way the live one actually is: two evaluator models and two
+    evaluator schema versions across one protocol, on one backend.
+
+    The split is the model limb and the schema limb of invariant 5 together, and
+    it is not a state evolution can fix — it does not order evaluations and does
+    not re-run them, so the reports carry whatever produced them forever.
+    """
+
+    records = [
+        make_record(
+            key=f"r{index}",
+            sequence=index,
+            task_id=f"2026-07-{index:02d}-task",
+            evaluator_model="claude-opus-4-8" if index <= MINIMUM else "claude-opus-5",
+            evaluator_schema_version=1 if index <= MINIMUM else 2,
+        )
+        for index in range(1, TARGET + 1)
+    ]
+    evolution.sync(config, write_feed(feed_root, at_line(config, records)))
+
+
+def test_a_pool_evaluated_by_two_evaluators_still_freezes_whole(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """Invariant 5's evaluator limbs are recorded, not gated.
+
+    Membership is protocol-keyed alone, and it has to be: the only exit from the
+    pool is a successful freeze, so refusing one over a mixed evaluator set would
+    strand every report in it — over a difference nothing in this repository can
+    resolve. What the batch owes instead is the record, which the manifest
+    already carries per report for the analysis to read.
+    """
+
+    mixed_evaluators(config, feed_root)
+
+    manifest = read_manifest(freeze(config))
+
+    assert manifest["selection"]["auto_selected"] == TARGET
+    assert manifest["selection"]["not_selected"] == []
+    assert {
+        (report["evaluator"]["model"], report["evaluator"]["schema_version"]) for report in manifest["reports"]
+    } == {("claude-opus-4-8", 1), ("claude-opus-5", 2)}
+
+
+def test_the_generated_task_accounts_for_the_evaluator_instead_of_gating_on_it(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """What the analysing session is told to do with the set that just froze.
+
+    The fields it is sent to are the ones a report always carries: the import
+    schema requires `backend`, `model` and `schema_version` and makes everything
+    else nullable, and the published feed states none of the rest — so a session
+    pointed at `rubric_revision` or at the role blocks finds nulls throughout and
+    reads a coherent batch where nothing was ever measured. Uniform absence is
+    stated as absence for exactly that reason, and a split that is there is
+    carried into the claims that cross it rather than stopping the analysis.
+    """
+
+    mixed_evaluators(config, feed_root)
+
+    result = freeze(config)
+
+    assert result.analysis_task_path is not None
+    flat = " ".join(result.analysis_task_path.read_text(encoding="utf-8").split())
+    assert "its evaluator limbs are recorded, not gated" in flat
+    assert "`backend`, `model` and `schema_version`" in flat
+    assert "a facet null on every member is absent — nothing is known about it — never mixed" in flat
+    assert "a recurrence count spanning the split says so" in flat
+    assert "A mixed evaluator set is a reason to know less, never a reason to hold the evidence back." in flat
+    assert "The evaluator set is stated:" in flat
+    assert "rubric_revision" not in flat
+    assert "role models" not in flat
+
+
 
 
 def test_membership_counts_unique_tasks_and_freezes_one_report_each(
