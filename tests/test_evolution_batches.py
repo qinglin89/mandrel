@@ -882,6 +882,8 @@ def test_the_generated_task_accounts_for_the_evaluator_instead_of_gating_on_it(
     assert "a recurrence count spanning the split says so" in flat
     assert "A mixed evaluator set is a reason to know less, never a reason to hold the evidence back." in flat
     assert "The evaluator set is stated:" in flat
+    assert "no later batch forms" in flat
+    assert "no later cohort forms" not in flat
     assert "rubric_revision" not in flat
     assert "role models" not in flat
 

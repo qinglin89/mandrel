@@ -541,7 +541,7 @@ justified is a valid outcome (invariant 7).
   `{spec.closure_relative_path}` from that status. Never write that record by
   hand; it attests to a lifecycle, not to a file. Completing this task releases
   the dispositions to the admission gate; the batch itself stays current — and
-  no later cohort forms (invariant 14) — until its outcome is recorded, which is
+  no later batch forms (invariant 14) — until its outcome is recorded, which is
   a decision later than and separate from this task.
 - Draft each accepted `protocol-candidate` (and any other change task this
   analysis concludes is warranted) as a schema-conforming task file at
