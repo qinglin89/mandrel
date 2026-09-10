@@ -52,7 +52,7 @@ request the harness never answered for is work that may be going, and it is
 deliberately left out of the evidence notes exactly where the evidence supports
 a promotion — so "no note" never means "nothing outstanding" and only the field
 can say. The reading a release owes is a gate on the next first experiment, and
-it belongs to the cohort frozen after the promotion whether or not that cohort
+it belongs to the batch frozen after the promotion whether or not that batch
 is still the current one. Every one of those used to be met as a refusal with
 nothing on the surface explaining it.
 
@@ -60,7 +60,7 @@ nothing on the surface explaining it.
 would collapse into one are kept apart deliberately: a round nothing has
 replayed against a batch with no round for evidence to be about, an inverse
 commit the line has not taken against a promotion nobody reversed, an empty
-cohort against cohorts that disagree, and a promotion nobody prepared against a
+side against sides that disagree, and a promotion nobody prepared against a
 build that recorded no merge unit — the last of which is why the prepared
 promotion is read off the open experiment and a promotion that happened is read
 off its batch's outcome.
@@ -282,7 +282,7 @@ class BatchView:
     task_count: int
     # What the formation answered for, and how many members a human argued in
     # past the identity test. Two numbers beside the count and never folded into
-    # it: a batch of ten drawn from eleven is a different cohort from one drawn
+    # it: a batch of ten drawn from eleven is a different batch from one drawn
     # from thirty, and a batch most of whose members were curated is a different
     # one again (invariants 1 and 5).
     considered: int
@@ -294,7 +294,7 @@ class BatchView:
     # batch ending, which is what the outcome record does.
     analysis_complete: bool
     # Staged bundles for this batch's reports that exist on this machine. A
-    # frozen cohort owns its reports wherever it was frozen, so a clone that
+    # frozen batch owns its reports wherever it was frozen, so a clone that
     # never staged them holds a manifest with no evidence behind it — a fact to
     # show, not an error: the manifest's hashes still say what was analyzed.
     evidence_local: int
@@ -397,7 +397,7 @@ class BatchRecord:
     Every batch is listed, the current one included, because "which batch is
     current" is a fact about the series rather than a property of a batch read
     in isolation — a reader given only the current one cannot say whether it is
-    the first cohort after a promotion, and that is the question the release
+    the first batch after a promotion, and that is the question the release
     gate turns on.
 
     A promoted batch carries its merge unit here, read from its own outcome.
@@ -439,9 +439,9 @@ class BatchRecord:
 class ReleaseReading:
     """The reading of the release before the current batch, wherever it sits.
 
-    Two batches are in play and they are ordinarily one: the cohort whose cycle
-    is running, and the cohort that owes the reading. They part company as soon
-    as the owing cohort ends without answering — the obligation stays where the
+    Two batches are in play and they are ordinarily one: the batch whose cycle
+    is running, and the batch that owes the reading. They part company as soon
+    as the owing batch ends without answering — the obligation stays where the
     record is (invariant 17) — and a surface that showed only the current
     batch's own frame would offer an admission that the release gate refuses.
     """
@@ -455,7 +455,7 @@ class ReleaseReading:
 
     @property
     def owned_here(self) -> bool:
-        """Whether the cohort that owes the reading is the one running now."""
+        """Whether the batch that owes the reading is the one running now."""
 
         return self.owner_id == self.batch_id
 
@@ -629,7 +629,7 @@ class LifecycleStatus:
     replays: History | None = None
     # Every frozen batch in order, the current one included.
     batches: tuple[BatchRecord, ...] = ()
-    # The reading of the release before the current batch, from the cohort that
+    # The reading of the release before the current batch, from the batch that
     # owes it. None when there is no release before it at all — which is most
     # batches, and is ordinary rather than missing.
     release: ReleaseReading | None = None
@@ -798,7 +798,7 @@ class LifecycleStatus:
                 "total": self.batch_count,
                 "current": self.current_batch.to_json() if self.current_batch else None,
                 # Every batch, in freeze order — the series rather than the one
-                # cohort in play, because which promotion a batch follows is a
+                # batch in play, because which promotion a batch follows is a
                 # position in it and not a fact any batch states about itself.
                 "history": [item.to_json() for item in self.batches],
             },
@@ -914,12 +914,12 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
     stage_open = current is not None and awaiting_analysis(config, current.batch)
 
     # Only meaningful while no batch is current: a proposal is an offer of the
-    # *next* cohort, and one standing beside a running change cycle is a leftover
+    # *next* batch, and one standing beside a running change cycle is a leftover
     # the next build drops rather than a state to report.
     proposal = load_proposal(config) if current is None else None
     # Read before admission, because admission measures it: the thresholds count
     # the batch a freeze would form, so a reading that applied them to the pool
-    # would report a cohort as ready that the freeze then refuses.
+    # would report a batch as ready that the freeze then refuses.
     decision = evaluate_admission(
         config,
         state,
@@ -1117,7 +1117,7 @@ def _release(
     """The reading of the release before the current batch, and whose it is.
 
     Asked through `obligation` rather than of the current batch's own frame,
-    because those are two questions: a cohort that ends without answering leaves
+    because those are two questions: a batch that ends without answering leaves
     the obligation where it was, and the next first experiment waits on the
     owner's record (invariant 17). Asking the admitting batch alone would find
     nothing owed and offer an admission that refuses.
@@ -1155,7 +1155,7 @@ def _promotion(promoted: BatchLineage | None) -> Promotion | None:
     """What a batch put on the source line, and whether it is still there.
 
     One function for both readings a console takes of a promotion — the latest
-    one, which is what the next cohort's reports were produced at, and each
+    one, which is what the next batch's reports were produced at, and each
     batch's own in the history list. Two derivations of "what this batch
     promoted" would be two answers to what the line carries.
 
@@ -1361,12 +1361,12 @@ def _on(object_type: str, object_id: str | None) -> tuple[str | None, str | None
 
 
 def _start_action(status: LifecycleStatus) -> Action:
-    """Polling the feed and offering the next cohort.
+    """Polling the feed and offering the next batch.
 
     Refused for one reason, and a short pool is not it: `start` is a discovery
     pass and then a proposal, so running it below the target imports whatever
     has arrived and offers a batch nothing may yet freeze — a normal outcome
-    rather than a refusal. What it cannot do is offer a cohort beside one whose
+    rather than a refusal. What it cannot do is offer a batch beside one whose
     cycle is still running, which is the one sentence both halves of a formation
     share (`batches.current_batch_refusal`).
     """
@@ -2056,7 +2056,7 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
     """Taking the newest promotion back off the line it was put on.
 
     Not gated on the analysis stage or on anything about the current batch: what
-    it acts on is a promotion an earlier cohort recorded, and the batch running
+    it acts on is a promotion an earlier batch recorded, and the batch running
     now is where the reading of that promotion lives rather than what it reverses.
 
     Two interrupted states reach this verb as a repair rather than as a fresh
@@ -2161,7 +2161,7 @@ def _rollback_action(config: EvolutionConfig, status: LifecycleStatus, lineage: 
     return Action(ACTION_ROLLBACK, OBJECT_PROMOTION, promotion.revision, refusal)
 
 
-# The word each release verb puts in the operation's own sentence for a cohort
+# The word each release verb puts in the operation's own sentence for a batch
 # that has recorded no reading yet (`assessment._recorded`), and for a reading
 # whose gate has already answered (`assessment._require_unsettled`). Two
 # vocabularies rather than one because the two sentences are about different
@@ -2227,15 +2227,15 @@ def _reading_recoveries(release: ReleaseReading) -> dict[str, str]:
     subject = release.frame.subject
     decision = reading.decision
     found: dict[str, str] = {}
-    # A reading this cohort holds is one its own formation can report back, and
-    # so is an earlier cohort's while nobody has answered for it — the formation
+    # A reading this batch holds is one its own formation can report back, and
+    # so is an earlier batch's while nobody has answered for it — the formation
     # follows an outstanding obligation to where the record is. What it does not
     # follow is an obligation already answered; only the settlement does
     # (`assessment._owing_frame`).
     if release.owned_here or decision is None:
         found[ACTION_ASSESS] = (
             f"{release.owner_id} already reads the {subject.batch_id} release {reading.verdict!r}; that reading "
-            "formed again from the same cohorts and the same rationale reports the record and writes nothing"
+            "formed again from the same sides and the same rationale reports the record and writes nothing"
         )
     if decision is not None:
         found[ACTION_SETTLE] = (
@@ -2268,7 +2268,7 @@ def _no_release(status: LifecycleStatus) -> str:
     (`assessment._owing_frame`)."""
 
     if status.current_batch is None:
-        return assessment_ops.no_cohort_refusal()
+        return assessment_ops.no_batch_refusal()
     return assessment_ops.no_release_refusal(status.current_batch.batch_id)
 
 
@@ -2300,12 +2300,12 @@ def _reading_refusals(release: ReleaseReading) -> dict[str, str | None]:
             action: assessment_ops.reading_refusal(frame, None, words[0])
             for action, words in _RELEASE_WORDS.items()
         }
-        # The one verb a cohort with nothing recorded is for.
+        # The one verb a batch with nothing recorded is for.
         unread[ACTION_ASSESS] = None
         return unread
 
     read = (
-        f"{release.owner_id} has already read the {subject.batch_id} release {reading.verdict!r}; a cohort reads a "
+        f"{release.owner_id} has already read the {subject.batch_id} release {reading.verdict!r}; a batch reads a "
         "release once, and `assess-resolve` is what revises that reading on a completed run"
     )
     if decision is not None:
@@ -2542,7 +2542,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
 
     The frame is emitted whether or not anything was recorded, because the
     denominators and the exclusions are what a reader judges an absent or a
-    zero-cohort reading by — two empty cohorts are absent evidence, never a
+    zero-report reading by — two empty sides are absent evidence, never a
     reading against the release, and only the exclusions say which of the two
     this is.
     """
@@ -2554,7 +2554,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
     assessed = release.assessed
     return {
         "owner_batch_id": release.owner_id,
-        # False when the cohort that owes the reading already ended: the record
+        # False when the batch that owes the reading already ended: the record
         # being waited on is not this batch's own (invariant 17).
         "owned_here": release.owned_here,
         # Read off the owner's own frame, so it is True wherever a reading is
@@ -2571,7 +2571,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
             # reading formed while the release stood and lands the inverse
             # commit after it, so on the path a regression finding ordinarily
             # ends these two disagree. Reading the lineage's current standing
-            # here would report a cohort as having assessed a reversal it never
+            # here would report a batch as having assessed a reversal it never
             # saw.
             "standing": assessed.standing,
             "rollback_revision": assessed.rollback_revision,
@@ -2585,6 +2585,11 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
                 "rollback_revision": frame.subject.rollback_revision,
             },
         },
+        # `cohorts` is the wire name for the two sides, kept where the
+        # vocabulary moved on (`assessment.Side`): a schema version spent on a
+        # key's spelling would cost every consumer and buy none of them
+        # anything. The same asymmetry runs through `cohorts_support_direction`
+        # below and through the record this reads back.
         "cohorts": {
             "before": {
                 "report_keys": list(frame.before.report_keys),
@@ -2613,7 +2618,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
             "coherent": frame.comparability.coherent,
             "incoherent": list(frame.comparability.incoherent),
             # The two ways a facet lands in `incoherent`, which are different
-            # answers to a surface: `differing` is evidence about these cohorts
+            # answers to a surface: `differing` is evidence about these sides
             # — the release is not the only difference between them — while
             # `unstated` is a gap in what the feed publishes and says nothing
             # about the release either way. Emitted rather than left to be
@@ -2631,7 +2636,7 @@ def _release_json(release: ReleaseReading | None) -> dict[str, Any] | None:
                 }
                 for facet in frame.comparability.facets
             ],
-            # Whether the cohorts alone could carry a direction, before any
+            # Whether the sides alone could carry a direction, before any
             # measurement. False on every frame while no manifest states the
             # shape of the work, which is why a direction rests on the
             # counterfactual instead.

@@ -794,7 +794,7 @@ def _require_processed(
     is resolved rather than merely parsed. A claim is what removes a report from
     discovery (`known_report_keys`), so a syntactically valid batch id that no
     manifest backs — or one whose manifest never names this report — hides the
-    report from every future sync while nothing on disk says which cohort
+    report from every future sync while nothing on disk says which batch
     analyzed it. Resolving the claim against the manifests makes that
     unrepresentable: the membership record is the authority, and a claim that
     contradicts it is corruption, not history.

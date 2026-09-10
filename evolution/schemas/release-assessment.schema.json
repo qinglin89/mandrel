@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/release-assessment.schema.json",
   "title": "Evolution release assessment",
-  "description": "One cohort's reading of whether an earlier promotion actually improved the work that came after it (contract: Release assessment). It sits in the directory of the batch that produced the reading — `batch_id` — and names the release it is about in `assessed`, because the promoted batch's records are terminal and a later cohort's judgement is not theirs to carry.\n\nWhat is recorded here is only what cannot be re-derived. The release under assessment, the two cohorts, their denominators, the exclusions, and the comparability facets all follow from two immutable manifests, the promoted batch's outcome, and Git — so they are derived on every read and this record is checked against that derivation. The measurements come from machine-local evaluation artifacts, the counterfactual from a harness run, and the verdict, confidence and rationale from the session that judged them; none of the four can be recomputed, which is exactly why they are committed.\n\nThe cohort fields are restated all the same, rather than left to the derivation. An assessment is evidence for a release decision, and evidence that names no denominator is a directional claim whose sample nobody can see; restating it is also what lets a later reader be told that this record and the repository disagree, instead of quietly reading the current answer as the one that was judged.",
+  "description": "One batch's reading of whether an earlier promotion actually improved the work that came after it (contract: Release assessment). It sits in the directory of the batch that produced the reading — `batch_id` — and names the release it is about in `assessed`, because the promoted batch's records are terminal and a later batch's judgement is not theirs to carry.\n\nWhat is recorded here is only what cannot be re-derived. The release under assessment, the two sides, their denominators, the exclusions, and the comparability facets all follow from two immutable manifests, the promoted batch's outcome, and Git — so they are derived on every read and this record is checked against that derivation. The measurements come from machine-local evaluation artifacts, the counterfactual from a harness run, and the verdict, confidence and rationale from the session that judged them; none of the four can be recomputed, which is exactly why they are committed.\n\nThe side fields are restated all the same, rather than left to the derivation. An assessment is evidence for a release decision, and evidence that names no denominator is a directional claim whose sample nobody can see; restating it is also what lets a later reader be told that this record and the repository disagree, instead of quietly reading the current answer as the one that was judged.",
   "type": "object",
   "required": [
     "schema_version",
@@ -40,7 +40,7 @@
       "$ref": "#/$defs/comparability"
     },
     "metrics": {
-      "description": "What the two report cohorts came to, quantity by quantity. Empty is a reading that measured nothing — the ordinary state of an `inconclusive` assessment formed over cohorts that were never comparable, and refused for every other verdict: a direction with no measured quantity behind it is an opinion wearing an artifact's provenance. Invariant 13 is why this is a set rather than a score: quality, convergence, quota and elapsed time are judged together, and each is recorded with the direction that counts as improvement so an observation is not read as a goal.",
+      "description": "What the two sides came to, quantity by quantity. Empty is a reading that measured nothing — the ordinary state of an `inconclusive` assessment formed over sides that were never comparable, and refused for every other verdict: a direction with no measured quantity behind it is an opinion wearing an artifact's provenance. Invariant 13 is why this is a set rather than a score: quality, convergence, quota and elapsed time are judged together, and each is recorded with the direction that counts as improvement so an observation is not read as a goal.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/measurement"
@@ -60,7 +60,7 @@
       }
     },
     "verdict": {
-      "description": "What this cohort says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The cohorts carry one when nothing else explains their difference: every facet coherent, both cohorts at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the cohort difference to be the cause. A verdict resting on that run is the direction the run measured: it supports the way every goal that moved points, goals it left unmoved neither add to that nor stand against it, all of them unmoved is `neutral`, and goals pointing both ways support no direction at all — which quantity a release is judged on is chosen when the run is configured, not by weighing an improvement against a regression afterwards. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
+      "description": "What this batch says about the release. `improved`, `neutral` and `regressed` are directional claims, and a directional claim rests on one of two kinds of evidence. The sides carry one when nothing else explains their difference: every facet coherent, both sides at or above the configured minimum unique-task count, and at least one goal measurement carrying both a before and an after. A completed counterfactual carries one on its own, because the two revisions it measured differ by the release and nothing else — and `regressed` rests on it in every case, since a suspected regression is answered by pinning the two revisions and measuring them, not by declaring the side difference to be the cause. A verdict resting on that run is the direction the run measured: it supports the way every goal that moved points, goals it left unmoved neither add to that nor stand against it, all of them unmoved is `neutral`, and goals pointing both ways support no direction at all — which quantity a release is judged on is chosen when the run is configured, not by weighing an improvement against a regression afterwards. `inconclusive` is the answer whenever neither is there, and it is a real result rather than a failure: sample insufficiency, mixed provenance, work whose shape nothing states and a harness that could not run are all reasons to know less, never evidence against the release. The controller enforces the pairing, which the implemented JSON Schema subset cannot express.",
       "enum": [
         "improved",
         "neutral",
@@ -69,7 +69,7 @@
       ]
     },
     "confidence": {
-      "description": "How much weight the judging session puts on its own verdict. A human reading of the evidence as a whole — cohort size, spread, how much of the change the after cohort could even exercise — and deliberately not derived from the counts, which would restate the admissibility rule as a number and add nothing.",
+      "description": "How much weight the judging session puts on its own verdict. A human reading of the evidence as a whole — side size, spread, how much of the change the after side could even exercise — and deliberately not derived from the counts, which would restate the admissibility rule as a number and add nothing.",
       "enum": [
         "high",
         "medium",
@@ -89,7 +89,7 @@
       ]
     },
     "formed_at": {
-      "description": "When this reading was recorded. Not when the cohort was frozen and not when the promotion was made: an assessment is a later judgement against a later cohort, and the interval between the three is the thing that makes it one.",
+      "description": "When this reading was recorded. Not when the batch was frozen and not when the promotion was made: an assessment is a later judgement against a later batch, and the interval between the three is the thing that makes it one.",
       "type": "string",
       "format": "date-time"
     },
@@ -152,7 +152,7 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "standing": {
-          "description": "Whether the source line still carried this promotion when the reading was formed. The two states are different questions rather than the same question with a caveat: a standing promotion is assessed by cohorts produced at a line that has the change, while a reversed one is assessed by cohorts that stop having it partway through — so a record says which of the two it answered instead of leaving a reader to assume the current one.\n\nNot re-derived on read, and deliberately: the ordinary consequence of an assessment finding a regression is the rollback that follows it, and re-reading this field against the lineage would make every such rollback contradict the assessment that justified it. What the line carries now is the lineage's own reading (`status`'s last promotion), and this is what was true when the judgement was made.",
+          "description": "Whether the source line still carried this promotion when the reading was formed. The two states are different questions rather than the same question with a caveat: a standing promotion is assessed by sides produced at a line that has the change, while a reversed one is assessed by sides that stop having it partway through — so a record says which of the two it answered instead of leaving a reader to assume the current one.\n\nNot re-derived on read, and deliberately: the ordinary consequence of an assessment finding a regression is the rollback that follows it, and re-reading this field against the lineage would make every such rollback contradict the assessment that justified it. What the line carries now is the lineage's own reading (`status`'s last promotion), and this is what was true when the judgement was made.",
           "type": "boolean"
         },
         "rollback_revision": {
@@ -167,7 +167,7 @@
       "additionalProperties": false
     },
     "cohorts": {
-      "description": "The reports the comparison rests on, split by what the target that produced each of them actually held. Membership is drawn from two immutable manifests — the assessed batch's and this one's — and every report either lands in a cohort or is excluded with a reason: a denominator that quietly loses members is the base rate invariant 2 exists to keep knowable.",
+      "description": "The reports the comparison rests on, split by what the target that produced each of them actually held. Membership is drawn from two immutable manifests — the assessed batch's and this one's — and every report either lands on a side or is excluded with a reason: a denominator that quietly loses members is the base rate invariant 2 exists to keep knowable.\n\n`cohorts` is the wire name for the two sides; the vocabulary around it says *side* for one half of the comparison and *batch* for the unit a reading belongs to. The key is kept deliberately: a schema version spent on a key's spelling would cost every reader of the records already written and buy none of them anything.",
       "type": "object",
       "required": [
         "before",
@@ -182,7 +182,7 @@
           "$ref": "#/$defs/cohort"
         },
         "excluded": {
-          "description": "Every report neither cohort could take, each with why. Reports are excluded for what their provenance cannot say — no effective revision, a revision this checkout cannot place, a line that had the change and lost it — and never for disagreeing with the change: dropping a report because its numbers are inconvenient is the one exclusion that cannot be told from the rest without a reason beside it.",
+          "description": "Every report neither side could take, each with why. Reports are excluded for what their provenance cannot say — no effective revision, a revision this checkout cannot place, a line that had the change and lost it — and never for disagreeing with the change: dropping a report because its numbers are inconvenient is the one exclusion that cannot be told from the rest without a reason beside it.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/exclusion"
@@ -200,7 +200,7 @@
       ],
       "properties": {
         "report_keys": {
-          "description": "The reports placed on this side, each named by a manifest of the assessed or the assessing batch. A key no manifest names is a member of no frozen cohort, and a key placed twice makes one report evidence on both sides.",
+          "description": "The reports placed on this side, each named by a manifest of the assessed or the assessing batch. A key no manifest names is a member of no frozen batch, and a key placed twice makes one report evidence on both sides.",
           "type": "array",
           "items": {
             "type": "string",
@@ -229,12 +229,12 @@
           "minLength": 1
         },
         "batch_id": {
-          "description": "The manifest this report is a member of — the assessed batch's or the assessing one's. Named because the two cohorts are drawn from different frozen manifests and an operator reading an exclusion needs to know which denominator lost a member.",
+          "description": "The manifest this report is a member of — the assessed batch's or the assessing one's. Named because the two sides are drawn from different frozen manifests and an operator reading an exclusion needs to know which denominator lost a member.",
           "type": "string",
           "pattern": "^evolution-batch-[0-9]{4,}$"
         },
         "reason": {
-          "description": "Why the report is in neither cohort. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-malformed`: it states something that is not a commit id — a branch, a tag, `HEAD`, an abbreviation — which every reader would resolve against its own checkout's position rather than against what that target held, so no repository may place it. `effective-revision-unresolvable`: this checkout cannot read the deployable canonical tree of a revision the placement turns on — the one stated, or a side of the release — which is a fact about the clone. `effective-revision-other-protocol`: the revision it states deploys neither the promoted protocol nor the one it replaced, so that target ran neither the release nor the state before it. A side is what a target held, which is a same-or-different question about protocols and never a before-or-after one, so a third protocol is excluded rather than sorted into the nearer side.",
+          "description": "Why the report is on neither side. `effective-revision-absent`: the report does not say what the target held, so nothing places it (invariant 4 keeps that missing rather than assumed). `effective-revision-malformed`: it states something that is not a commit id — a branch, a tag, `HEAD`, an abbreviation — which every reader would resolve against its own checkout's position rather than against what that target held, so no repository may place it. `effective-revision-unresolvable`: this checkout cannot read the deployable canonical tree of a revision the placement turns on — the one stated, or a side of the release — which is a fact about the clone. `effective-revision-other-protocol`: the revision it states deploys neither the promoted protocol nor the one it replaced, so that target ran neither the release nor the state before it. A side is what a target held, which is a same-or-different question about protocols and never a before-or-after one, so a third protocol is excluded rather than sorted into the nearer side.",
           "enum": [
             "effective-revision-absent",
             "effective-revision-malformed",
@@ -251,7 +251,7 @@
       "additionalProperties": false
     },
     "comparability": {
-      "description": "Whether the two cohorts are one cohort in every respect but the release (invariant 5). Facet by facet, with the values each side carried, because \"not comparable\" without naming what differed is not something an operator can act on — and because the accounting invariant 5 asks for is exactly this list.",
+      "description": "Whether the two sides are one comparison in every respect but the release (invariant 5). Facet by facet, with the values each side carried, because \"not comparable\" without naming what differed is not something an operator can act on — and because the accounting invariant 5 asks for is exactly this list.",
       "type": "object",
       "required": [
         "coherent",
@@ -261,11 +261,11 @@
       ],
       "properties": {
         "coherent": {
-          "description": "True only when every facet is. What a directional verdict resting on the cohorts is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision, role model or the shape of the work explains a difference in the numbers at least as well as the release does. A direction may instead rest on a completed counterfactual, which is evidence about two revisions rather than about these cohorts.",
+          "description": "True only when every facet is. What a directional verdict resting on the sides is admissible against, and the reason mixed provenance produces `inconclusive` rather than a regression claim: a difference in evaluator, rubric, protocol revision, role model or the shape of the work explains a difference in the numbers at least as well as the release does. A direction may instead rest on a completed counterfactual, which is evidence about two revisions rather than about these sides.",
           "type": "boolean"
         },
         "unstated": {
-          "description": "The incoherent facets at least one side does not fill in, named. The first of the two ways a comparison fails, and the one that is not about these cohorts at all: what the feed publishes leaves the answer unknown, which is neither evidence for the release nor against it. `task-shape` is the standing example, unknown on every manifest version — which is exactly why a direction is ordinarily settled by the counterfactual. A facet only one side fills in lands here rather than under `differing`, as does one a side fills in for some of its reports and not for the others, an empty cohort's facets included: what is missing is a half of the comparison, not an agreement — one side stating a rubric revision while the other states none is not the two disagreeing about the rubric, and `[\"r7\"]` before against `[\"r7\", null]` after is one report whose rubric was never published rather than two sides that disagree.",
+          "description": "The incoherent facets at least one side does not fill in, named. The first of the two ways a comparison fails, and the one that is not about these sides at all: what the feed publishes leaves the answer unknown, which is neither evidence for the release nor against it. `task-shape` is the standing example, unknown on every manifest version — which is exactly why a direction is ordinarily settled by the counterfactual. A facet only one side fills in lands here rather than under `differing`, as does one a side fills in for some of its reports and not for the others, an empty side's facets included: what is missing is a half of the comparison, not an agreement — one side stating a rubric revision while the other states none is not the two disagreeing about the rubric, and `[\"r7\"]` before against `[\"r7\", null]` after is one report whose rubric was never published rather than two sides that disagree.",
           "type": "array",
           "items": {
             "type": "string",
@@ -273,7 +273,7 @@
           }
         },
         "differing": {
-          "description": "The incoherent facets both sides state and disagree on, named. The other way a comparison fails, and the only one that is evidence about these cohorts: the release is not the only difference between them. Recorded beside `unstated` rather than folded into one list because reporting a mismatch nobody can fix beside a gap nobody introduced reads as broken provenance in both directions. Both lists are derived from the facets below — the controller checks a record against its own facets rather than taking either on the record's word — and they are recorded all the same, so that a consumer is not left to re-derive which kind each failure is, which means knowing that a value carried as null is a missing one.",
+          "description": "The incoherent facets both sides state and disagree on, named. The other way a comparison fails, and the only one that is evidence about these sides: the release is not the only difference between them. Recorded beside `unstated` rather than folded into one list because reporting a mismatch nobody can fix beside a gap nobody introduced reads as broken provenance in both directions. Both lists are derived from the facets below — the controller checks a record against its own facets rather than taking either on the record's word — and they are recorded all the same, so that a consumer is not left to re-derive which kind each failure is, which means knowing that a value carried as null is a missing one.",
           "type": "array",
           "items": {
             "type": "string",
@@ -305,11 +305,11 @@
           "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
         },
         "coherent": {
-          "description": "Whether this facet leaves the release as the difference between the cohorts. For every facet but repository coverage that means one value across both sides and none of it missing — a cohort mixing two evaluator models is not one cohort, and a provenance field nothing filled in cannot be shown to match. Repository coverage asks the weaker question its evidence supports: at least one repository present on both sides, or the comparison is between two projects rather than two revisions. Task shape is the facet no manifest version fills in: an entry states identity, hashes, evaluator and deployment provenance and nothing about the kind of task judged, so it is carried as unknown on both sides rather than approximated by repository coverage — which is why a direction is ordinarily settled by the counterfactual.",
+          "description": "Whether this facet leaves the release as the difference between the sides. For every facet but repository coverage that means one value across both sides and none of it missing — a side mixing two evaluator models is not one side, and a provenance field nothing filled in cannot be shown to match. Repository coverage asks the weaker question its evidence supports: at least one repository present on both sides, or the comparison is between two projects rather than two revisions. Task shape is the facet no manifest version fills in: an entry states identity, hashes, evaluator and deployment provenance and nothing about the kind of task judged, so it is carried as unknown on both sides rather than approximated by repository coverage — which is why a direction is ordinarily settled by the counterfactual.",
           "type": "boolean"
         },
         "before": {
-          "description": "The distinct values the before cohort carried, sorted, with a missing one spelled null. Empty for an empty cohort.",
+          "description": "The distinct values the before side carried, sorted, with a missing one spelled null. Empty for an empty side.",
           "type": "array",
           "items": {
             "type": [
@@ -331,7 +331,7 @@
       "additionalProperties": false
     },
     "measurement": {
-      "description": "One quantity, on the cohort produced before the release and on the cohort produced after it. `better` says which direction counts as improvement and `neither` marks an observation recorded beside the goals — quota and elapsed time are the ordinary examples, and raw token counts compared across providers are not a comparison at all (invariant 13). The spelling is the replay record's, with the two sides named for what they are here: two vocabularies for one fact would put a cohort reading and a run's numbers beyond comparison.",
+      "description": "One quantity, on the side produced before the release and on the side produced after it. `better` says which direction counts as improvement and `neither` marks an observation recorded beside the goals — quota and elapsed time are the ordinary examples, and raw token counts compared across providers are not a comparison at all (invariant 13). The spelling is the replay record's, with the two sides named for what they are here: two vocabularies for one fact would put a reading of the sides and a run's numbers beyond comparison.",
       "type": "object",
       "required": [
         "metric",
@@ -350,7 +350,7 @@
           "minLength": 1
         },
         "before": {
-          "description": "The quantity on the pre-release cohort, or null when only the after cohort could be measured. A directional verdict needs one: an improvement claim with nothing to improve on is a number rather than a finding.",
+          "description": "The quantity on the pre-release side, or null when only the after side could be measured. A directional verdict needs one: an improvement claim with nothing to improve on is a number rather than a finding.",
           "type": [
             "number",
             "null"
@@ -373,7 +373,7 @@
       "additionalProperties": false
     },
     "counterfactual": {
-      "description": "The pinned two-revision run that answers a suspected regression, or null when none was needed or none could be made. Not the cohort comparison repeated: it exercises the exact pre-promotion and promoted revisions with one case set, one evaluator and one configuration, so the release is the only difference between the two halves — which is what makes it evidence about the release rather than about the cohorts.\n\nIt is recorded here and nowhere near an experiment's `replays.json`. That record binds every run to a round of that experiment and to the candidate its seal pinned, which a pre-promotion/promoted pair is neither of; and the lineage reads the promoted experiment's replay evidence on every derivation, so an unrelated entry there would stop `status` for the whole history rather than for this comparison. The position the harness was keyed on is still recorded, because that key is what a harness answers idempotently: it has to be one no experiment run or withdrawn request holds, or the counterfactual would be answered with an experiment's run.",
+      "description": "The pinned two-revision run that answers a suspected regression, or null when none was needed or none could be made. Not the side comparison repeated: it exercises the exact pre-promotion and promoted revisions with one case set, one evaluator and one configuration, so the release is the only difference between the two halves — which is what makes it evidence about the release rather than about the sides.\n\nIt is recorded here and nowhere near an experiment's `replays.json`. That record binds every run to a round of that experiment and to the candidate its seal pinned, which a pre-promotion/promoted pair is neither of; and the lineage reads the promoted experiment's replay evidence on every derivation, so an unrelated entry there would stop `status` for the whole history rather than for this comparison. The position the harness was keyed on is still recorded, because that key is what a harness answers idempotently: it has to be one no experiment run or withdrawn request holds, or the counterfactual would be answered with an experiment's run.",
       "type": [
         "object",
         "null"
@@ -584,7 +584,7 @@
       "additionalProperties": false
     },
     "request": {
-      "description": "The counterfactual this cohort committed to before the harness answered for it, or null when none is outstanding. Everything in it is the controller's own — the key the run will occupy, the pair pinned for it, and what it was expected to show — which is exactly why it can be written before the harness is asked anything, and why it is not a run: while one stands, nothing has measured this release and no verdict may rest on it.\n\nWhat it is for is the window in between. The harness is an external thing being started, and an answer that never arrives — a lost process, a write that failed — would otherwise leave a run going that no record names. Asking again re-submits this request unchanged, and a conforming harness answers with the run it already began rather than starting a second one against the same key.\n\nThe one run a request may stand over is a failed one, which is the retry: the write that records the run a request became clears it in the same file, so a request beside a run still going or a completed one would leave a reader guessing which of them the harness is measuring this release with. A retry holds the position after everything that round has allocated — the failed run, and every request withdrawn.",
+      "description": "The counterfactual this batch committed to before the harness answered for it, or null when none is outstanding. Everything in it is the controller's own — the key the run will occupy, the pair pinned for it, and what it was expected to show — which is exactly why it can be written before the harness is asked anything, and why it is not a run: while one stands, nothing has measured this release and no verdict may rest on it.\n\nWhat it is for is the window in between. The harness is an external thing being started, and an answer that never arrives — a lost process, a write that failed — would otherwise leave a run going that no record names. Asking again re-submits this request unchanged, and a conforming harness answers with the run it already began rather than starting a second one against the same key.\n\nThe one run a request may stand over is a failed one, which is the retry: the write that records the run a request became clears it in the same file, so a request beside a run still going or a completed one would leave a reader guessing which of them the harness is measuring this release with. A retry holds the position after everything that round has allocated — the failed run, and every request withdrawn.",
       "type": [
         "object",
         "null"

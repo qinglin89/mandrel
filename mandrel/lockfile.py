@@ -134,7 +134,7 @@ def payload_source_commit(
     deploys that the commit does not hold as a regular file, since
     `iter_deployment_items` reads bytes through a symlink and deploys whatever
     it resolved to, and including any question Git could not answer. That
-    excludes such a report from a cohort, which costs a denominator, where the
+    excludes such a report from a side, which costs a denominator, where the
     alternative manufactures a placement.
 
     The question is scoped to the canonical files the mapping carries into a
@@ -194,7 +194,7 @@ def canonical_identity(
     This repository's one answer to *are these two commits the same protocol*,
     and equality of two of these mappings is the whole of that comparison. It is
     asked here by every reader that needs it — a target's placement among the
-    lines being released (`placement.SourceLines`), a cohort's membership, a
+    lines being released (`placement.SourceLines`), a batch's membership, a
     report's side of a release assessment — because a second derivation would let
     one of them call two commits the same protocol while another calls them
     different, over the same two trees.

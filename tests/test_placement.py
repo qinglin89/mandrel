@@ -459,7 +459,7 @@ def config(tmp_path: Path) -> config_module.EvolutionConfig:
 
 
 def frozen(config: config_module.EvolutionConfig) -> None:
-    """One current cohort: frozen at the source line, and with no outcome
+    """One current batch: frozen at the source line, and with no outcome
     recorded. The base is the manifest's, so every experiment written against
     this batch starts from the line's tip (`lineage._require_one_base`)."""
 

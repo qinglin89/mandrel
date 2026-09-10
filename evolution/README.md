@@ -151,16 +151,16 @@ complete an evaluation.
     the human was asked. `retain` passes on the frozen base by construction:
     the batch was formed at the line while the release was on it. `rolled-back`
     is where the two genuinely part company, since the reversal lands after the
-    formation — that cohort's base still carries the promotion just taken back,
+    formation — that batch's base still carries the promotion just taken back,
     so there is nothing that base can be admitted on. What resolves it is that a
     landed rollback *ends* the batch standing on the release (Rollback), which
     is keyed on the base rather than on whose reading was settled. The refusal
     stays as the answer for the window between the reversal landing and the
     record that ends the batch, and it says which command finishes that record. The obligation
-    stays with the first cohort frozen after the promotion and does not lapse
-    when that cohort ends: a batch that concluded `no-change` promoted nothing,
+    stays with the first batch frozen after the promotion and does not lapse
+    when that batch ends: a batch that concluded `no-change` promoted nothing,
     so the batch after it still follows the same release and still waits on
-    that cohort's answer. Nothing else in the batch waits on it — the reading
+    that batch's answer. Nothing else in the batch waits on it — the reading
     is taken while the analysis is still being written, and drafts, rejections
     and the closure are unaffected. A batch with no promotion anywhere before
     it owes nothing and waits for nothing.
@@ -250,7 +250,7 @@ records that as well (`integration.tree`).
 
 The last one is why promotion is not the end of the evidence chain: a promoted
 revision changes nothing an evaluation can see until targets carry it, so the
-cohort that measures a promotion is the one whose reports were produced at that
+batch that measures a promotion is the one whose reports were produced at that
 effective revision.
 
 ## Data layout
@@ -268,7 +268,7 @@ evolution/
   batches/<batch-id>/rejected-drafts.json  drafts declined at the admission gate
   batches/<batch-id>/outcome.json   terminal batch outcome; ends the batch
   batches/<batch-id>/rollback.json  the inverse commit that took a promoted change back off the source line
-  batches/<batch-id>/release-assessment.json  this cohort's reading of the release before it, the pinned run that settles it, and its settlement
+  batches/<batch-id>/release-assessment.json  this batch's reading of the release before it, the pinned run that settles it, and its settlement
   cases/                            curated sanitized regression cases
   experiments/<experiment-id>/experiment.json  identity, frozen base, ref, rounds, prepared promotion, decision
   experiments/<experiment-id>/replays.json     every replay run against that experiment's rounds, the request outstanding, and the positions given up
@@ -316,11 +316,11 @@ different moments, and each has its own record:
   carries; the batch stays concluded, the experiment stays promoted, and the
   outcome record is not edited.
 - A release assessment is about a *different* batch's promotion, which is why it
-  sits in the directory of the cohort that produced the reading rather than the
+  sits in the directory of the batch that produced the reading rather than the
   one being read (Release assessment). It ends nothing of its own batch's
   lifecycle; what it settles is whether the release before it stands, and the one
   thing that waits on the answer is the next first experiment admitted on that
-  line — this cohort's own, or a later cohort's where this one ended without
+  line — this batch's own, or a later batch's where this one ended without
   answering (invariant 17).
 
 ## Normal workflow
@@ -348,7 +348,7 @@ completed archived-task L1+L2 evaluations
   -> replay/canary of that pinned candidate against the base
   -> human promote | revise (next round) | abandon | supersede (next experiment)
   -> batch outcome: promoted, or no-change
-  -> next frozen cohort assesses the release: improved | neutral | regressed | inconclusive
+  -> next frozen batch assesses the release: improved | neutral | regressed | inconclusive
   -> human settlement: retain, or roll back -> the next batch's first experiment,
      held to the line it chose
 ```
@@ -747,8 +747,8 @@ A batch created after a promotion owes a reading of it, and until a human settle
 that reading no experiment is admitted (invariant 17, Release assessment):
 `retain` and `rolled-back` leave two different commits on the source line, so
 building on the base before the answer is the answer made by accident. The
-reading it waits on is the owning cohort's — the first batch created after that
-promotion — which is not always the batch doing the admitting: a cohort that
+reading it waits on is the owning batch's — the first batch created after that
+promotion — which is not always the batch doing the admitting: a batch that
 ended `no-change` promoted nothing, so the next one follows the same release
 while owing no reading of its own.
 
@@ -759,7 +759,7 @@ no circularity in creating the batch before the answer, because the batch being
 created is the evidence about that release: a `retain` leaves the already-fixed
 base carrying the release and the gate passes, and a `rolled-back` is meant to
 end the batch it settles, so no first experiment is ever admitted against it.
-Until that half lands, a `rolled-back` settlement leaves its own cohort's base
+Until that half lands, a `rolled-back` settlement leaves its own batch's base
 carrying the promotion the human took back off, and the gate refuses rather than
 building every alternative on a protocol nobody decided on. Configuration settles
 which ref a base comes off, not what that ref carried when it was read: a clone
@@ -1154,7 +1154,7 @@ from its own `.ai-deploy-lock.json`.
 
 A batch is current until `batches/<batch-id>/outcome.json`
 (`schemas/batch-outcome.schema.json`) records a conclusion the rest of its
-lineage agrees with, and that record is what releases the next cohort. Three ways
+lineage agrees with, and that record is what releases the next batch. Three ways
 reach it, and only the first two are decisions about this batch's own attempts:
 
 - `promoted` — an experiment was promoted; the outcome names it, the promotion
@@ -1201,7 +1201,7 @@ supersession still owing its successor: an attempt nobody created has not ended,
 and that state is looked for in the batch that is current — so an outcome over it
 ends the cycle on an attempt that does not exist and simultaneously puts it
 beyond the redo that would finish it, with `status` no longer reporting it and
-the next cohort released over it.
+the next batch released over it.
 
 `no-change` is therefore written over a batch with nothing left open: its
 analysis stage has ended, no experiment is open, no attempt records a promotion,
@@ -1330,7 +1330,7 @@ exists about, and a moved line makes that evidence describe something else, whil
 a rollback's content is computed from the line and nothing measured is
 invalidated by the line moving.
 
-**A rollback is also how a batch ends.** The cohort frozen after a promotion was
+**A rollback is also how a batch ends.** The batch frozen after a promotion was
 formed at the source line while the release was on it, so that release is in the
 base every alternative in the batch would start from (invariant 15). Take the
 release back off the line and there is no move that batch can still make: its
@@ -1346,10 +1346,10 @@ release left it; both halves are asked, because a revert adds history rather tha
 removing it and every batch formed after the reversal carries the promotion too.
 Keyed that way, one rule covers every way a reversal arrives: the settlement that
 composes it, a `retain` followed later by a standalone rollback, and the case
-where the reading belongs to an earlier cohort that concluded without answering
+where the reading belongs to an earlier batch that concluded without answering
 while the *next* one holds the base — which a rule phrased as "a rollback ends the
 assessing batch" would never reach. A reversal no current batch is standing on
-ends nothing, which is the ordinary case for one run before any cohort followed
+ends nothing, which is the ordinary case for one run before any batch followed
 it.
 
 Landed is what the source line carries and not what this controller has recorded
@@ -1370,13 +1370,13 @@ returns to the pending pool, and there is no operation here that would put it
 there. That is a real cost and it is named rather than left as a silence:
 evidence produced at a canonical revision that has been reverted describes a
 protocol the project no longer has, the batch's denominator goes with it, and the
-next cohort starts counting from the reports that arrive afterwards. It is also
+next batch starts counting from the reports that arrive afterwards. It is also
 the ordinary consequence of the judgement — a release worth reversing is a
-release whose cohort was measuring the wrong line.
+release whose batch was measuring the wrong line.
 
 A rollback is not a judgement the promotion's own evidence contains. A replay
 measures a tree; whether the promotion argued from it should stand is a later
-judgement against a later cohort, and what this records of it is the operator's
+judgement against a later batch, and what this records of it is the operator's
 reason (Promotion evidence). Nor does it say anything about deployment: targets
 carry what they were last deployed with, and a reversed promotion reaches them
 the same way the promotion did — through `mandrel deploy`, read from each target's
@@ -1386,54 +1386,53 @@ own receipt.
 
 A promotion is not the end of the evidence chain. The last of the revisions in
 play is why: a promoted commit changes nothing an evaluation can see until
-targets carry it, so what a release actually did is a question for the cohort
-whose reports were produced at that effective revision. That cohort is the next
-frozen batch, and its reading is recorded in
+targets carry it, so what a release actually did is a question for the batch
+whose reports were produced at that effective revision. That batch is the next
+frozen one, and its reading is recorded in
 `batches/<assessing-batch-id>/release-assessment.json`
 (`schemas/release-assessment.schema.json`) — in the *assessing* batch's
 directory, because the promoted batch's records are terminal and a later
-cohort's judgement is not theirs to carry.
+batch's judgement is not theirs to carry.
 
 The obligation belongs to the first batch frozen after a promotion, and it stays
-there. A later cohort ordinarily has nothing to assess: the batches form a series
+there. A later batch ordinarily has nothing to assess: the batches form a series
 (invariant 14), so by the time it can freeze, the reading has been taken and
 settled. A batch whose predecessor concluded `no-change` owes nothing of its own
 either — that conclusion fabricates no revision (invariant 7), so there is no
 upgrade for an effect to be measured against and none is invented.
 
-What it does not do is lift the older obligation. A cohort can end its own batch
-without answering the gate — concluding `no-change` asks only that nothing about
-*that* batch is still open — and the release before it is then still unjudged
-while the next cohort follows it and owes no reading. So the obligation is
-resolved by asking which cohort owes the reading of the release before this
-batch, rather than by asking whether this batch owes one: the next first
-experiment waits on that cohort's settlement, and an obligation it left
-outstanding is recorded and settled where it sits, in that cohort's own
-directory. A gate that could no longer be answered would stop the lineage for
-good, since the admission waits on the settlement and the settlement is what
-would release it.
+What it does not do is lift the older obligation. A batch can end without
+answering the gate — concluding `no-change` asks only that nothing about *that*
+batch is still open — and the release before it is then still unjudged while
+the next batch follows it and owes no reading. So the obligation is resolved by
+asking which batch owes the reading of the release before this one, rather than
+by asking whether this batch owes it: the next first experiment waits on that
+batch's settlement, and an obligation it left outstanding is recorded and
+settled where it sits, in that batch's own directory. A gate that could no
+longer be answered would stop the lineage for good, since the admission waits
+on the settlement and the settlement is what would release it.
 
-**Derived, then recorded.** The release under assessment, the two cohorts, their
+**Derived, then recorded.** The release under assessment, the two sides, their
 denominators, the exclusions and the comparability facets all follow from two
 immutable manifests, the promoted batch's outcome, its rollback record if it has
 one, and Git — so they are derived on every read like the rest of the lifecycle,
 and the record is checked against that derivation. What is committed is what
 cannot be re-derived: measurements taken from machine-local evaluation
 artifacts, the counterfactual a harness ran, and the verdict, confidence,
-rationale and recommendation of the session that judged them. The cohorts are
+rationale and recommendation of the session that judged them. The sides are
 restated all the same, because evidence that names no denominator is a
 directional claim whose sample nobody can see.
 
-Recording one runs that derivation as a write. The cohorts, denominators,
+Recording one runs that derivation as a write. The sides, denominators,
 exclusions and facets come from the manifests rather than from whoever is
 recording; the verdict is held to the evidence the record carries before anything
-lands; and the audit line that follows names the cohort, the release and the
+lands; and the audit line that follows names the batch, the release and the
 verdict, which is a bounded code this controller authored. So a reading that
 could not be read back is never written, and a record written beside it by hand
 is held to the same rules the moment it is read. Running the same formation again
 reports the reading already on record — an interrupted one is finished by
 repeating it — and a request that says something else is refused, because a
-cohort reads a release once and that record is what the counterfactual and the
+batch reads a release once and that record is what the counterfactual and the
 settlement are added to.
 
 The release is read from the promoted batch's `outcome.json`. That record carries
@@ -1446,7 +1445,7 @@ outcome's claim checkable rather than merely internally consistent.
 
 **Which question is being answered.** A promotion a rollback reversed is a
 different question from a standing one, not the same question with a caveat: the
-cohort produced after the reversal was produced at a revision the change is not
+side produced after the reversal was produced at a revision the change is not
 in. So the record states which of the two it assessed, and it is not re-derived
 afterwards — the ordinary consequence of a regression finding is the rollback
 that follows it, and re-reading that field would make every such rollback
@@ -1479,20 +1478,20 @@ placed is excluded with a reason and stays in view: no effective revision
 recorded, one recorded as something that is not a commit id, one whose canonical
 tree this checkout cannot read, or one deploying neither the release nor the
 protocol it replaced. Exclusions are for what provenance cannot say
-and never for what the numbers came to — a cohort narrowed to the reports that
+and never for what the numbers came to — a side narrowed to the reports that
 agreed with the change is the base rate invariants 1 and 2 exist to keep
 knowable.
 
-Where both sides carry one protocol — a promotion whose integration tree deploys
-exactly what the line already deployed — the before side is the answer. That
-release moved no byte any target receives, and reading its cohort as post-release
-evidence would manufacture an `after` side out of a release with no change in it.
-Asking the before side first is also what settles a side this checkout cannot
-read, and it leaves the two unalike: where the missing side is the before one, a
-report matching the readable `after` is excluded as unresolvable rather than
-placed, because the answer asked first is the one nobody here has — while a
-report matching a readable `before` places whatever the unreadable side would
-have turned out to be.
+Where both sides carry one protocol — a promotion whose integration tree
+deploys exactly what the line already deployed — the before side is the answer.
+That release moved no byte any target receives, and reading those reports as
+post-release evidence would manufacture an `after` side out of a release with
+no change in it. Asking the before side first is also what settles a side this
+checkout cannot read, and it leaves the two unalike: where the missing side is
+the before one, a report matching the readable `after` is excluded as
+unresolvable rather than placed, because the answer asked first is the one
+nobody here has — while a report matching a readable `before` places whatever
+the unreadable side would have turned out to be.
 
 **Where that revision comes from.** It is the evaluated target's
 `.ai-deploy-lock.json` `source_git_commit` — the canonical commit its deployed
@@ -1522,7 +1521,7 @@ report stating one would be placed by where this checkout happens to stand and
 would change sides when it moved. Such a report is excluded, naming what it
 stated, and it is judged at placement rather than on the way in: the import
 client copies the published string verbatim and repairs nothing, a frozen
-manifest copies the record as staged and is never edited, so a cohort frozen
+manifest copies the record as staged and is never edited, so a batch frozen
 before this rule existed is read by it too.
 
 **When a lock may be published as one.** A commit written beside a payload is not
@@ -1618,9 +1617,9 @@ agent/model/effort/profile, and says so.
 Reports published before the capture existed keep their `available: false` and
 their reason, and no re-import changes that: the pool dedupes by (repo, task) and
 a frozen manifest copies the staged record, so a report already imported carries
-the provenance it was imported with, forever. The first placeable cohort is
+the provenance it was imported with, forever. The first placeable side is
 therefore built from reports imported after the publisher began stating the pair,
-and a cohort mixing the two reads as the exclusions it prints — absent evidence,
+and a side mixing the two reads as the exclusions it prints — absent evidence,
 not a negative reading and not a defect to be worked around by inferring the
 field locally. Where the exclusions take a denominator to zero, the pinned
 counterfactual below is the only directional instrument there is.
@@ -1629,14 +1628,14 @@ counterfactual below is the only directional instrument there is.
 three are directional, and a directional claim rests on one of two kinds of
 evidence.
 
-The **cohorts** carry one only when nothing else explains their difference: every
+The **sides** carry one only when nothing else explains their difference: every
 comparability facet coherent — one evaluator, rubric, protocol revision and role
 configuration across both sides, at least one repository present on both, and the
 same shape of work — both sides at or above the configured minimum unique-task
 count, and at least one goal quantity measured on both sides (invariants 1, 4, 5,
 13). The shape of the work is the facet nothing frozen states: a manifest entry
 carries identity, hashes, evaluator and deployment provenance and nothing about
-the kind of task it judged, and the two cohorts are two different task sets by
+the kind of task it judged, and the two sides are two different task sets by
 construction (one report per completed task). So it is recorded as the unknown it
 is — invariant 4 — rather than approximated by repository coverage, which is
 coverage and not a match. The facet becomes answerable if a later manifest
@@ -1644,14 +1643,14 @@ version carries durable task-shape provenance.
 
 A facet fails in one of two ways, and the record and the JSON name them apart.
 `differing` is *both* sides stating a value and disagreeing: the release is
-not the only difference between them, which is evidence about these cohorts.
+not the only difference between them, which is evidence about these sides.
 `unstated` is a facet at least one side does not fill in — a gap in what the
 feed publishes, which is neither evidence for the release nor against it, and
 which `task-shape` sits in on every manifest version. Both make `coherent`
-false and both stop a cohort-only direction, so the distinction costs the gate
+false and both stop a side-only direction, so the distinction costs the gate
 nothing and is worth everything to whoever reads it: reported together, a
-mismatch somebody could cohort their way out of reads like a gap nobody
-introduced, and a gap reads like broken provenance.
+mismatch a different membership would fix reads like a gap nobody introduced,
+and a gap reads like broken provenance.
 
 Both sides rather than either, and every report of a side rather than one of
 them; that is the whole of what the split is for. One side stating a rubric
@@ -1659,7 +1658,7 @@ revision while the other states none is not the two sides disagreeing about the
 rubric — nothing on the far side was there to disagree with. A side only some of
 whose reports state it is the same gap made smaller: `r7` before against `r7`
 and a missing value after is one report the feed published no rubric for, and
-what both sides do state agrees exactly. An empty cohort is the same answer
+what both sides do state agrees exactly. An empty side is the same answer
 taken to its limit: it fills in no facet, so every one of them is unstated and
 nothing could be compared at all, which is what the exclusions beside it say at
 length. Both lists are derived from the facets and checked against them on every
@@ -1669,9 +1668,9 @@ carried as null is a missing one.
 
 The **counterfactual** carries one on its own: a completed run measuring a goal
 quantity on both the pre-promotion and the promoted revision is a comparison in
-which the release *is* the only difference, so what the cohorts came to is
+which the release *is* the only difference, so what the sides came to is
 context rather than the claim's support. `regressed` rests on it in every case.
-In practice, then, the cohorts show the base rate and raise the suspicion, and
+In practice, then, the sides show the base rate and raise the suspicion, and
 the pinned run settles the direction — in either sign.
 
 A verdict resting on that run is also the direction the run measured. It supports
@@ -1681,7 +1680,7 @@ changing nothing, which is a finding rather than the absence of one. Goals
 pointing both ways support no direction: which quantity a release is judged on is
 chosen when the run is configured, and the rest are recorded as observations
 (invariant 13), so weighing an improvement against a regression afterwards would
-make that choice on the operator's behalf. What the cohorts came to is read by
+make that choice on the operator's behalf. What the sides came to is read by
 the judging session — that is what `confidence` and `rationale` are for — but a
 claim the pinned run contradicts is a claim about something else.
 
@@ -1690,7 +1689,7 @@ shape nothing states, and a harness that could not run are reasons to know less,
 never evidence against a release — and the reading that costs somebody a promoted
 change is the one that has to be measured rather than inferred.
 
-**The counterfactual.** A cohort difference can suspect a regression; what
+**The counterfactual.** A side difference can suspect a regression; what
 settles it is the exact pre-promotion and promoted revisions exercised with one
 case set, one evaluator and one configuration, so that the release is the only
 difference between the two halves. It is the replay boundary, driven in temporary
@@ -1748,7 +1747,7 @@ something under it, so it stays allocated forever, the record keeps the window
 and the pair for whoever goes looking, and a further attempt is numbered past
 the run and the withdrawals together.
 
-**Reading the run.** The reading a cohort forms is written while the cohorts are
+**Reading the run.** The reading a batch forms is written while the sides are
 all there is, and is then settled by the numbers the completed run reports: the
 verdict, the confidence and the sentence saying why, none of which existed when
 the reading was formed. That revises the one record rather than adding a second,
@@ -1821,7 +1820,7 @@ carrying the release. `rolled-back` takes that release off the line and with it
 the only base the batch had, so it *ends* the batch instead (Rollback) — the
 settlement's last write, after the decision it is recorded from. The batch ended
 is read from the base rather than from this decision's owner, which is what
-reaches the cohort holding the stale base when the reading belongs to an earlier
+reaches the batch holding the stale base when the reading belongs to an earlier
 one. A batch whose analysis produced no drafts at all is not a third answer here:
 it concludes `no-change` (invariant 7), which is the absence of anything to
 choose between rather than a decision about the release.
@@ -1834,7 +1833,7 @@ second spelling of them here would be a second answer to give an operator. A
 reversal already on the line is adopted instead of made again — the operator may
 have run the rollback themselves, and a run interrupted between the commit and
 the record is finished by repeating it. Every refusal is made before the commit:
-a cohort that recorded no reading, a gate that already answered, evidence still
+a batch that recorded no reading, a gate that already answered, evidence still
 in flight, a `retain` of a release that is already off the line, and a
 `rolled-back` of anything but the promotion a rollback would reverse. The whole
 settlement runs under one hold of the single-writer lock, the reversal included,
@@ -1842,7 +1841,7 @@ so the state those refusals cleared is the state the commit lands on; a
 composition that let go of the lock to reach the rollback would leave a window in
 which another writer settles, measures or revises the reading, after which the
 release is off the line for a decision nobody can record. The audit line names
-the cohort, the release and which way the gate went; running the same settlement
+the batch, the release and which way the gate went; running the same settlement
 again reports what is on record and appends no second line.
 
 The rollback's own refusal that later work stands on the promotion is not
@@ -1863,8 +1862,8 @@ that round is candidate-ready, the candidate revision, a successor a
 supersession recorded and did not create, the drafts still
 waiting at the gate, what the current round has been replayed by, the last
 promotion this repository recorded and whether the source line still carries it,
-which release the current cohort follows, which cohort owes the reading of it,
-which of that cohort's reports can contribute to one, whether that reading
+which release the current batch follows, which batch owes the reading of it,
+which of that batch's reports can contribute to one, whether that reading
 has been settled, and whether the current batch's base still stands on a release
 that came off the line
 are
@@ -1897,7 +1896,7 @@ keyed clear of every position its experiment could hold, and a settlement held t
 a rollback the source line took.
 Those denominators and facets are committed content, so they are checked on every
 clone, including one that can resolve no effective revision and place no report
-at all: a reader that skipped them there would accept a cohort size and a
+at all: a reader that skipped them there would accept a side size and a
 coherence claim nobody could have derived. A reading that could not have been
 formed is not one that may be read back.
 
@@ -1977,29 +1976,29 @@ the difference is which stage they belong to. Every other operation here writes
 into a batch's change lineage, which is why each refuses while the analysis stage
 is still running; this reading *is* part of that stage — the generated analysis
 task's second question — so what guards it is which batch is current (invariant
-14, from the whole history) and which cohort owes the reading of the release
+14, from the whole history) and which batch owes the reading of the release
 before it, and nothing about the stage's end. Ordinarily those are the same
-batch; where the owing cohort ended without answering, they are not, and the
+batch; where the owing batch ended without answering, they are not, and the
 record is written where the obligation is rather than where the current batch is.
 Once that obligation is answered it is closed to everything that would add to the
 reading, which is then told whose record it is — but not to the settlement's own
 redo, which reaches the answer in order to report it back; a settlement a caller
 could not repeat is one it could not recover, and a carried-forward settlement is
-no more repeatable from the cohort that took it than any other. None of them
+no more repeatable from the batch that took it than any other. None of them
 moves a ref or touches
 an experiment; a `rolled-back` settlement moves the source line, and it does that
 by running the rollback, under the guards a rollback has. What they share is the
 rest: the lock, the record before the audit line, and a redo that reports what is
 already on record.
 
-They are ordered among themselves by what each one is about. The cohorts are read
+They are ordered among themselves by what each one is about. The sides are read
 first, because a pinned run answers a suspicion they raised and the reading is
 where that run is recorded; the run's numbers settle a verdict only once it has
 completed; the gate answers over evidence that is over, never over a run still
 going or a request outstanding; and nothing is added to a reading its gate has
 already answered. What the answer releases is the next first experiment, which
 is guarded from the other side: the first experiment of a batch following that
-release refuses until the owing cohort's settlement is on record, and then
+release refuses until the owing batch's settlement is on record, and then
 refuses a base that is not on the line the settlement chose (invariant 17).
 
 An ending is also guarded by the state of the ref it ends over. An experiment's

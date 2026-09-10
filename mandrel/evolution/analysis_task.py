@@ -62,7 +62,7 @@ INDEX_PLACEHOLDER = "(none)"
 class ReleaseAssessment:
     """The release a generated task also owes a reading of, when there is one.
 
-    Identity only, and deliberately: the two cohorts, their exclusions and their
+    Identity only, and deliberately: the two sides, their exclusions and their
     comparability are derived from frozen manifests and Git on every read
     (`assessment.py`), and a clone that cannot resolve what some target held
     derives different exclusions from the machine that froze the batch. Rendering
@@ -119,7 +119,7 @@ class AnalysisTaskSpec:
     config_sha256: str
     forced: bool
     force_justification: str | None
-    # The release this batch is the first cohort after, when it follows one. None
+    # The release this batch is the first one after, when it follows one. None
     # for the first batch a repository ever freezes and for every batch whose
     # predecessor changed nothing — a `no-change` conclusion fabricates no
     # revision (invariant 7), so there is no upgrade effect to look for.
@@ -148,7 +148,7 @@ class AnalysisTaskSpec:
     @property
     def summary(self) -> str:
         tail = (
-            f" Assess the {self.release.batch_id} release from this cohort."
+            f" Assess the {self.release.batch_id} release from this batch."
             if self.release is not None
             else ""
         )
@@ -161,7 +161,7 @@ class AnalysisTaskSpec:
     def session_est_total(self) -> int:
         """One session per bounded group of reports, plus one for a release
         assessment when the batch owes one: it is a second reading of the same
-        cohort against a different question, not a paragraph in the first."""
+        batch against a different question, not a paragraph in the first."""
 
         needed = -(-max(self.task_count, 1) // TASKS_PER_SESSION)
         return min(needed + (1 if self.release is not None else 0), MAX_SESSION_EST)
@@ -586,7 +586,7 @@ def _release_scope(release: ReleaseAssessment | None, drafts: str) -> str:
 
     Empty for a batch that follows no promotion, so the ordinary generated task
     is exactly what it was. The identity here is the promoted batch's outcome
-    restated; everything derived — the cohorts, the exclusions, the comparability
+    restated; everything derived — the sides, the exclusions, the comparability
     — is left to be read at the time, because it depends on Git and on the
     machine reading it.
     """
@@ -597,7 +597,7 @@ def _release_scope(release: ReleaseAssessment | None, drafts: str) -> str:
     return f"""
 ### Release assessment — {release.batch_id}
 
-This is the first frozen cohort after a promotion, so it also owes one reading of
+This is the first batch frozen after a promotion, so it also owes one reading of
 whether that release improved the work (contract: Release assessment). It is a
 separate question from the dispositions above and neither answer decides the
 other.
@@ -616,9 +616,9 @@ other.
   its revision alone.
 - Ask `mandrel evolution status` whether the source line still carries it. A
   promotion a rollback reversed is a different question from a standing one — the
-  cohort after the reversal was produced at a revision the change is not in — and
+  side after the reversal was produced at a revision the change is not in — and
   the assessment states which of the two it answered.
-- Cohorts come from frozen manifests only: this batch's and
+- Sides come from frozen manifests only: this batch's and
   `{release.batch_id}`'s. Which side a report is on is a per-report reading of
   `provenance.effective_revision` — what that target actually held — and never
   the targets the promotion was *planned* for ({targets}), which is a plan and
@@ -628,27 +628,27 @@ other.
   runs were all verified against their deployment receipts, and publishes neither
   for one whose runs were not — every report imported before that publication
   began among them, since a frozen manifest copies the record as it was staged.
-  So a cohort can be partly or wholly unplaceable, and one that places nothing
+  So a side can be partly or wholly unplaceable, and one that places nothing
   offers no direction in either sign. Read the exclusions before the numbers.
   Where they take the denominators to zero, the pinned counterfactual below is
   the only directional instrument available, and an unmeasured reading is
   `inconclusive` — absent evidence, never evidence against the release.
 - Verdicts are `improved`, `neutral`, `regressed`, or `inconclusive`. The first
-  three are directional and rest on one of two kinds of evidence. The cohorts
+  three are directional and rest on one of two kinds of evidence. The sides
   carry a direction only when nothing else explains it: one evaluator, rubric,
   protocol revision and role configuration across both sides, the same shape of
   work, both sides at or above the configured minimum unique-task count, and a
   goal quantity measured on both. Mixed provenance and too small a sample are
   reasons to know less, never evidence against the release, so they produce
   `inconclusive` (invariants 1, 4, 5).
-- Expect the shape of the work to be the facet that stops a cohort-only claim. No
-  manifest states what kind of task a report judged, and the two cohorts are two
+- Expect the shape of the work to be the facet that stops a side-only claim. No
+  manifest states what kind of task a report judged, and the two sides are two
   different task sets, so the numbers they came to are explained by the work at
   least as well as by the release. A direction — in either sign — is settled by
   the pinned two-revision counterfactual: the pre-promotion and promoted
   revisions over one case set with one evaluator, which is the only comparison in
   which the release is the only difference. `regressed` rests on it in every
-  case. Without one, record what the cohorts show and read it `inconclusive`.
+  case. Without one, record what the sides show and read it `inconclusive`.
 - A verdict settled that way is the direction the run measured: the way every
   goal that moved points, with unmoved goals neither adding to it nor standing
   against it, and every goal unmoved reading `neutral`. Goals pointing both ways
@@ -679,9 +679,9 @@ other.
   the base this batch was formed at already carries, while `rolled-back` puts an
   inverse commit there and ends the batch standing on that release with it —
   its base carries a promotion nobody kept, so there is nothing left to admit on
-  and its claimed reports are spent with it. The obligation is this cohort's and
-  stays this cohort's: a batch
-  concluding without answering does not pass it on, it leaves the next cohort's
+  and its claimed reports are spent with it. The obligation is this batch's and
+  stays this batch's: a batch
+  concluding without answering does not pass it on, it leaves the next batch's
   first experiment waiting on this record. Nothing else here waits on it — the dispositions, the
   drafts and this task's own completion are unaffected.
 """
@@ -698,13 +698,13 @@ def _release_acceptance(release: ReleaseAssessment | None) -> str:
     if release is None:
         return ""
     return f"""- `{release.assessment_relative_path}`
-  records one reading of the `{release.batch_id}` release: the cohorts and their
+  records one reading of the `{release.batch_id}` release: the sides and their
   denominators, every exclusion with its reason, the comparability facets, the
   verdict, and the rationale — or an explicit `inconclusive` with what was
   missing.
 - No directional verdict rests on mixed provenance, work whose shape nothing
-  states, an under-sized cohort, or an unmeasured quantity — a direction the
-  cohorts cannot carry is either settled by a completed counterfactual or read
+  states, an under-sized side, or an unmeasured quantity — a direction the
+  sides cannot carry is either settled by a completed counterfactual or read
   `inconclusive`, and a verdict a counterfactual settles is the direction that
   run measured.
 - That reading also states which settlement it recommends, and the rationale says

@@ -1,7 +1,7 @@
 """Admission policy, the immutable batch freeze, and the analysis task it creates.
 
 Everything runs against a temporary repository and a directory-backed feed: no
-network, no orch-hub, and no evaluation call — freezing a cohort is a decision
+network, no orch-hub, and no evaluation call — freezing a batch is a decision
 about evidence that already exists.
 
 The temporary config lowers `target_task_count` to 3 and `minimum_task_count` to
@@ -135,7 +135,7 @@ def backdate(config: evolution.EvolutionConfig, timestamp: str) -> None:
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
     """Offer the batch, then fix it — the two commands a human runs.
 
-    The formation is two operations, so a test that means "form a cohort out of
+    The formation is two operations, so a test that means "form a batch out of
     this pool" has to do both. Where the split itself is what is under test, the
     two are called apart.
     """
@@ -244,7 +244,7 @@ def close_analysis(config: evolution.EvolutionConfig, batch_id: str) -> None:
 
 
 def conclude_batch(config: evolution.EvolutionConfig, batch_id: str) -> None:
-    """End the batch itself, which is what releases the next cohort.
+    """End the batch itself, which is what releases the next batch.
 
     The record is written directly rather than through `conclude-no-change`,
     which does now write one: what the freeze reads is the record, and going
@@ -445,7 +445,7 @@ def test_a_report_produced_at_the_same_protocol_is_a_member_whatever_its_commit(
     The source line moves for work under `mandrel/`, `tests/` and `docs/` that no
     target ever receives, so a report produced one ordinary commit off the base
     was produced under the same protocol — and a test on commit strings would
-    throw away evidence that belongs to the cohort.
+    throw away evidence that belongs to the batch.
     """
     produced = git_commit(repo, "work no target receives")
     assert produced != runner_revision(config)
@@ -557,7 +557,7 @@ def test_a_superseded_off_base_evaluation_does_not_keep_its_task_out(
 
     The earlier evaluation ran under another protocol and is superseded: it is
     not in the manifest, nothing is stamped `auto` on its behalf, and there is
-    no claim about it for the cohort's coherence to be read against.
+    no claim about it for the batch's coherence to be read against.
     """
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     fill_pool(config, feed_root, TARGET)
@@ -579,7 +579,7 @@ def test_an_off_base_current_evaluation_keeps_its_task_out(
     config: evolution.EvolutionConfig, repo: Path, feed_root: Path
 ) -> None:
     """The same task and the same two revisions the other way round. The answer
-    differs because the evidence differs: what a cohort holds for this task is
+    differs because the evidence differs: what a batch holds for this task is
     its latest evaluation, and this one was produced under another protocol."""
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     fill_pool(config, feed_root, TARGET)
@@ -621,7 +621,7 @@ def test_a_staged_bundle_this_machine_cannot_read_stops_the_offer(
 ) -> None:
     """The pool names evidence that is not there, which is damage rather than a
     smaller batch: recording it as a non-member would turn a broken workspace
-    into a cohort nobody was told was short."""
+    into a batch nobody was told was short."""
     fill_pool(config, feed_root, TARGET)
     entry = evolution.load_state(config).pending[0]
     (config.repo_root / entry.report.artifacts_path / "report.json").unlink()
@@ -649,7 +649,7 @@ def test_the_thresholds_measure_the_batch_on_offer_and_not_the_pool(
     """A pool of TARGET of which one qualifies does not reach the target.
 
     Measuring the pool instead would pass the threshold on evidence about another
-    protocol and then freeze the one report that belongs — a cohort whose size
+    protocol and then freeze the one report that belongs — a batch whose size
     was decided by reports it does not contain.
     """
     elsewhere = git_canonical_commit(repo, "a different dev contract")
@@ -684,7 +684,7 @@ def test_the_age_rule_is_about_the_members_and_not_the_pool(
     """A report this base does not select cannot age this batch out.
 
     Taken over the pool, one long-pooled off-base report would release every
-    later cohort the day it arrived, whatever the evidence at the base.
+    later batch the day it arrived, whatever the evidence at the base.
     """
     elsewhere = git_canonical_commit(repo, "a different dev contract")
     evolution.sync(
@@ -924,7 +924,7 @@ def test_membership_counts_unique_tasks_and_freezes_one_report_each(
     assert sequences == sorted(sequences), "membership order is deterministic"
 
 
-def test_the_manifest_carries_the_provenance_a_cohort_comparison_needs(
+def test_the_manifest_carries_the_provenance_a_side_comparison_needs(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """Invariant 5 cannot be applied from an ignored runtime directory: the
@@ -1134,13 +1134,13 @@ def test_a_batched_report_is_never_re_imported(
     assert evolution.load_state(config).pending == []
 
 
-def test_a_machine_with_no_runtime_state_does_not_re_import_a_frozen_cohort(
+def test_a_machine_with_no_runtime_state_does_not_re_import_a_frozen_batch(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """The state that records the claim is gitignored; the manifest that records
     the membership is committed. So a fresh clone — or this machine after
     `.ai-evolution/` is deleted — must read the manifests, or it re-imports a
-    cohort already analyzed and freezes the same unique completed tasks a second
+    batch already analyzed and freezes the same unique completed tasks a second
     time (invariants 1-3)."""
     feed = fill_pool(config, feed_root, TARGET)
     result = freeze(config)
@@ -1161,7 +1161,7 @@ def test_a_clone_still_imports_a_later_evaluation_of_an_already_batched_task(
 ) -> None:
     """The manifests suppress report keys, not tasks: a new evaluation is
     evidence for a later batch (invariant 3), and losing it would silently cap
-    what a second cohort can ever measure."""
+    what a second batch can ever measure."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
     close_analysis(config, result.batch_id or "")
@@ -1174,7 +1174,7 @@ def test_a_clone_still_imports_a_later_evaluation_of_an_already_batched_task(
     assert again.imported == ("late",)
 
 
-def test_list_reports_a_frozen_cohorts_reports_as_already_decided(
+def test_list_reports_a_frozen_batches_reports_as_already_decided(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     feed = fill_pool(config, feed_root, TARGET)
@@ -1452,7 +1452,7 @@ def test_a_bounded_partial_drain_freezes_nothing(
     assert not analysis_task.tasks_root(config).exists()
     # An offer stands over a prefix, and admission is what refuses it: the
     # proposal says which reports were selected, the policy says whether a
-    # cohort may be formed out of them at all.
+    # batch may be formed out of them at all.
     refused = evolution.freeze(config, now=NOW)
     assert not refused.frozen
     assert refused.decision.reason == batches.REASON_POOL_INCOMPLETE
@@ -1507,7 +1507,7 @@ def test_a_sync_that_fails_after_a_drain_leaves_no_stale_exhaustion(
     fetched a page and then failed may not leave the previous drain's answer
     standing. That sync saw a report the earlier one never did — it proved the
     pool is a prefix — and a separate freeze reading the stale flag would
-    publish exactly the cohort the failure had just invalidated."""
+    publish exactly the batch the failure had just invalidated."""
     fill_pool(config, feed_root, TARGET)
     assert evolution.load_state(config).feed_exhausted is True
 
@@ -1683,7 +1683,7 @@ def test_a_claimed_and_logged_task_still_counts_as_the_generated_one(
 def test_a_manifest_member_claimed_by_another_batch_stops_the_reconcile(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """Two cohorts believing they own one report is a contradiction this
+    """Two batches believing they own one report is a contradiction this
     controller cannot arbitrate."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
@@ -1736,7 +1736,7 @@ def test_draft_findings_do_not_close_a_batch_still_being_analyzed(
     """The analysis task writes its dispositions while it is still being
     developed and reviewed. Reading that draft as completion would release
     unreviewed dispositions to the admission gate (invariant 9), and the batch
-    would go on blocking the next cohort with nobody able to act on it."""
+    would go on blocking the next batch with nobody able to act on it."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
     if status != "pending":
@@ -1785,7 +1785,7 @@ def test_draft_findings_do_not_close_a_batch_on_another_machine_either(
     """`.ai-tasks/` is machine-local and ignored, so on every machine but one
     the analysis lifecycle cannot be read at all. Reading that absence as
     completion — as this controller once did — let committed draft findings
-    release the next cohort from any fresh clone, while the analysis they came
+    release the next batch from any fresh clone, while the analysis they came
     from was still pending review."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
@@ -1899,7 +1899,7 @@ def test_a_closure_record_that_contradicts_its_manifest_is_refused(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """The record is what every other machine trusts, so one that names another
-    batch or another task releases the next cohort on evidence of something
+    batch or another task releases the next batch on evidence of something
     else entirely."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
@@ -1936,7 +1936,7 @@ def test_a_closure_record_needs_a_manifest_that_names_its_task(
     """A closure attests that one named task completed. Beside a manifest that
     names no analysis task there is nothing to attest to, and the controller
     could not have written the record — so accepting it means trusting an
-    unverifiable file to release the next cohort, which is what skipping the
+    unverifiable file to release the next batch, which is what skipping the
     identity check on a null `analysis_task_id` did."""
     write_manifest(config.batches_root, "evolution-batch-0001", ["old1"], **named)
     record_findings(config, "evolution-batch-0001")
@@ -1964,7 +1964,7 @@ def test_an_open_batch_that_names_no_analysis_task_is_reported(
 def test_a_new_batch_waits_for_the_current_one_to_record_its_outcome(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """Invariant 14: the next cohort forms once the batch before it has
+    """Invariant 14: the next batch forms once the batch before it has
     concluded — not once its analysis finished, which is a stage inside it."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
@@ -2010,7 +2010,7 @@ def test_a_second_current_batch_stops_the_repair_before_it_is_selected(
     whenever two of them stand at different stages: the analysis-complete one
     drops out of the question, the interrupted one is the only candidate left,
     and the repair completes its freeze — state transition, analysis task, index
-    row — and reports an ordinary run while another cohort's change cycle is
+    row — and reports an ordinary run while another batch's change cycle is
     still open.
     """
     fill_pool(config, feed_root, TARGET)
@@ -2047,16 +2047,16 @@ def test_a_second_current_batch_stops_the_repair_before_it_is_selected(
     ],
     ids=["experiment-missing", "revision-mismatched"],
 )
-def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
+def test_a_conclusion_its_own_experiments_contradict_releases_no_batch(
     config: evolution.EvolutionConfig, feed_root: Path, recorded: str | None, message: str
 ) -> None:
     """A terminal record is not a concluded batch on its own.
 
-    `outcome.json` is what releases the next cohort, so a conclusion no
+    `outcome.json` is what releases the next batch, so a conclusion no
     experiment of the batch bears out ends the cycle on a trail leading nowhere:
     the promoted experiment does not exist, or it pinned another revision.
     `status` already refused to describe either state; the freeze read the
-    record's own shape, called the batch concluded, and formed the cohort after
+    record's own shape, called the batch concluded, and formed the one after
     it.
     """
     fill_pool(config, feed_root, TARGET)
@@ -2091,7 +2091,7 @@ def test_a_conclusion_its_own_experiments_contradict_releases_no_cohort(
     assert [batch.batch_id for batch in evolution.load_batches(config)] == [batch_id]
 
 
-def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
+def test_a_conclusion_over_a_successor_nobody_created_releases_no_batch(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """The same rule for the state an interrupted supersession leaves.
@@ -2100,7 +2100,7 @@ def test_a_conclusion_over_a_successor_nobody_created_releases_no_cohort(
     the batch is current. An outcome recorded over it ends the cycle on an attempt
     that does not exist, and once the batch is no longer current nothing looks for
     that successor again: the freeze reading the record's own shape would form the
-    next cohort over an unfinished operation nobody can now finish.
+    next batch over an unfinished operation nobody can now finish.
     """
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
@@ -2130,7 +2130,7 @@ def test_allocation_counts_from_the_highest_id_ever_used(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """Counting existing directories instead would reuse the id of a batch that
-    was moved away, attaching new evidence to an old cohort's name."""
+    was moved away, attaching new evidence to an old batch's name."""
     fill_pool(config, feed_root, TARGET)
     first = freeze(config)
     conclude_batch(config, first.batch_id or "")
@@ -2242,7 +2242,7 @@ def test_a_manifest_from_another_machine_still_guards_the_open_batch(
     assert batches.COMPLETED_TASK in result.completed
     assert analysis_task.task_exists(config, "2026-07-31-evolution-batch-0001-analysis")
     # The old batch's report is recorded as claimed, so a later sync cannot pool
-    # evidence a frozen cohort already owns.
+    # evidence a frozen batch already owns.
     assert evolution.load_state(config).processed["old1"]["batch_id"] == "evolution-batch-0001"
 
 
@@ -2356,7 +2356,7 @@ def human_selection(**overrides) -> dict:
     ],
     ids=["counts", "both-lists", "counted-twice", "unnamed-inclusion", "unnamed-exclusion", "two-answers"],
 )
-def test_a_manifest_stating_a_cohort_that_cannot_exist_is_refused(
+def test_a_manifest_stating_a_batch_that_cannot_exist_is_refused(
     config: evolution.EvolutionConfig, overrides: dict, message: str
 ) -> None:
     """A manifest is immutable and everything downstream reads its denominator as
@@ -2365,7 +2365,7 @@ def test_a_manifest_stating_a_cohort_that_cannot_exist_is_refused(
     JSON Schema constrains each field alone: it will accept counts that no set of
     reports could produce, a task both selected and left out, one judgement
     counted twice, a human move nobody is named for, and one task answered two
-    ways across its own reports. Every one of those is a cohort that never
+    ways across its own reports. Every one of those is a batch that never
     existed, and `Batch.considered`, `Batch.human_included`, `status` and a
     repaired analysis task would each report it as the batch's own account of
     what it was drawn from. The freeze publishes through this same reader, so a
@@ -2459,7 +2459,7 @@ def test_the_generated_task_keeps_the_base_apart_from_where_the_evidence_came_fr
     `provenance.effective_revision` is where that report was produced; the base
     is where the batch was formed, and nothing holds the two to the same commit.
     A task calling the base "the protocol revision its evidence was produced
-    under" would have the analysing session state cohort provenance no report
+    under" would have the analysing session state a provenance no report
     actually says.
     """
     # A member produced one commit past the base, changing nothing a target
@@ -2669,7 +2669,7 @@ def test_the_audit_names_the_trigger_that_formed_the_batch(
 def test_the_runner_revision_is_the_source_line_not_the_checkout(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """Invariant 8: the revision governing the cohort is where the line the
+    """Invariant 8: the revision governing the batch is where the line the
     project releases from stands, not where whoever ran the freeze was standing.
 
     The old reading was `git describe --tags HEAD`, which answered with a tag
@@ -2692,7 +2692,7 @@ def test_the_freeze_records_a_revision_rather_than_a_release_tag(
 ) -> None:
     """`v2.2.0` is reachable here and is deliberately not the answer: every other
     entry in the contract's revisions table is a commit, and a tag names a tree
-    that need not be the one the cohort ran under."""
+    that need not be the one the batch ran under."""
     fill_pool(config, feed_root, TARGET)
 
     recorded = read_manifest(freeze(config))["runner_protocol_revision"]
@@ -2865,7 +2865,7 @@ def test_the_freeze_drops_the_offer_it_fixed(
 def test_a_current_batch_leaves_no_offer_standing(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """A proposal is an offer of the *next* cohort. One standing beside a
+    """A proposal is an offer of the *next* batch. One standing beside a
     running change cycle would be frozen the moment that cycle ended, out of a
     pool nobody read again."""
     feed = fill_pool(config, feed_root, TARGET)
@@ -3245,7 +3245,7 @@ def test_a_human_exclusion_takes_a_selected_member_out(
 ) -> None:
     """The direction that most needs its reason recorded: it removes evidence
     the identity test had already selected, so it is the move able to shape what
-    a cohort says."""
+    a batch says."""
     fill_pool(config, feed_root, TARGET)
     evolution.build_proposal(config, now=NOW)
 

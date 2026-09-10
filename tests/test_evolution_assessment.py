@@ -1,7 +1,7 @@
 """Whether a promoted release actually improved the work that came after it.
 
 Everything here runs against a real Git repository with a real promotion on it,
-for the reason the promotion and rollback suites do: which cohort a report
+for the reason the promotion and rollback suites do: which batch a report
 belongs to is a question about ancestry — did the line that target held carry the
 change — and a fixture standing in for Git would prove only that the package
 agrees with itself.
@@ -10,11 +10,11 @@ Two properties get most of the attention, because they are what this artifact
 exists for:
 
 - **A directional claim needs evidence that can carry one.** Mixed provenance,
-  work whose shape no manifest states, a cohort below the minimum unique-task
+  work whose shape no manifest states, a side below the minimum unique-task
   count, an unmeasured quantity, and a regression nobody counterfactually
   measured are each refused — in the record as well as in the derivation, since a
   rule only the writer keeps is one any file written beside it escapes. What the
-  cohorts cannot carry, a completed counterfactual can: it is the one comparison
+  sides cannot carry, a completed counterfactual can: it is the one comparison
   in which the release is the only difference.
 - **Nothing is invented where there is nothing to assess.** A repository that
   never promoted, a `no-change` predecessor, and a batch whose predecessor's
@@ -82,7 +82,7 @@ RESOLVED_AT = datetime(2026, 8, 11, 13, 0, 0, tzinfo=timezone.utc)
 # would never reach the question these tests are asking.
 ABSENT_COMMIT = "b1" + "0" * 38
 
-WHY = "the cohort produced at the promoted revision converged in fewer rounds"
+WHY = "the side produced at the promoted revision converged in fewer rounds"
 EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged"
 REVERSAL = "the counterfactual confirmed the regression"
 DIED = "the harness host was reclaimed mid-run and never reported"
@@ -91,7 +91,7 @@ DIED = "the harness host was reclaimed mid-run and never reported"
 @pytest.fixture
 def config(tmp_path: Path) -> evolution.EvolutionConfig:
     """A repository with the real contract files, a release tag, and an admission
-    policy low enough to freeze a cohort in a test."""
+    policy low enough to freeze a batch in a test."""
 
     root = git_repo(make_repo(tmp_path), tag="v2.2.0")
     path = root / "evolution" / "config.toml"
@@ -117,9 +117,9 @@ def release(config: evolution.EvolutionConfig) -> str:
 def promoted(config: evolution.EvolutionConfig, release: str) -> experiments.PromotionResult:
     """One whole change cycle on the first batch, ending in a merge on the line.
 
-    Its own three reports are the pre-release cohort: they were produced at the
+    Its own three reports are the pre-release side: they were produced at the
     revision the line stood at before the promotion, which is what makes them the
-    baseline the next cohort is compared against.
+    baseline the next batch is compared against.
 
     The candidate does canonical work, and this whole suite rests on that: a
     report is placed by the protocol its revision deploys, so a promotion that
@@ -152,12 +152,12 @@ def freeze_second(
     effective: str | None = None,
     base: str | None = None,
 ) -> lineage.Batch:
-    """The cohort that measures the release: a frozen batch whose reports were
+    """The batch that measures the release: a frozen one whose reports were
     produced at the promoted revision unless a test says otherwise.
 
     Formed at the source line as it stands now, which is a real formation's own
     reading — after a promotion that is the promoted revision, and it is the base
-    every experiment of this cohort then starts from (invariant 15). `base` states
+    every experiment of this batch then starts from (invariant 15). `base` states
     it instead, for a checkout that can no longer resolve the line.
     """
 
@@ -180,7 +180,7 @@ def freeze_second(
 
 def fill_pool(config: evolution.EvolutionConfig, feed_root: Path) -> None:
     """Import three distinct completed tasks — the lowered admission minimum — so
-    a freeze has a cohort to form. The keys are the promoted batch's own
+    a freeze has a batch to form. The keys are the promoted batch's own
     membership, kept distinct: one report belongs to one batch."""
 
     evolution.sync(
@@ -331,7 +331,7 @@ def test_no_frame_for_a_no_change_predecessor(config: evolution.EvolutionConfig,
     assert assessment.describe_current(config) is None
 
 
-def test_frame_splits_the_cohorts_by_what_each_target_held(
+def test_frame_splits_the_sides_by_what_each_target_held(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
@@ -352,9 +352,9 @@ def test_frame_splits_the_cohorts_by_what_each_target_held(
     assert frame.after.task_count == 3
     assert frame.excluded == ()
     # Every respect a frozen manifest states agrees. The one it does not state is
-    # what kind of work each cohort did, and that is not a detail: these are two
+    # what kind of work each side did, and that is not a detail: these are two
     # different task sets, so the numbers they came to are explained by the work
-    # unless something pins it. The cohorts raise the question; the counterfactual
+    # unless something pins it. The sides raise the question; the counterfactual
     # answers it.
     assert frame.comparability.incoherent == (assessment.FACET_TASK_SHAPE,)
     assert frame.cohorts_support_direction is False
@@ -448,7 +448,7 @@ def test_a_release_that_deploys_what_the_line_already_did_is_read_as_no_release(
 
     A promotion whose integration tree deploys exactly what the line already
     deployed moved no byte any target receives. Answered `before`, because
-    reading such a cohort as post-release evidence would manufacture an `after`
+    reading such reports as post-release evidence would manufacture an `after`
     side out of a release with no change in it — and an empty `after` side
     carries no direction, which is the honest reading of that release.
     """
@@ -548,7 +548,7 @@ def test_a_match_on_the_readable_side_is_not_a_placement_where_the_before_side_i
     frame = assessment.describe(config, second)
 
     assert frame is not None
-    # The pre-release cohort states the missing revision itself, so it goes for
+    # The pre-release side states the missing revision itself, so it goes for
     # its own reason; the reports this is about are `a1`-`a3`.
     assert frame.before.report_keys == ()
     assert frame.after.report_keys == ()
@@ -643,7 +643,7 @@ def test_a_record_calling_a_third_protocol_unresolvable_stays_readable(
                 for key in ("a1", "a2", "a3")
             ),
             verdict=assessment.VERDICT_INCONCLUSIVE,
-            rationale="the forming checkout could place none of this cohort's reports",
+            rationale="the forming checkout could place none of this batch's reports",
         ),
     )
 
@@ -657,7 +657,7 @@ def test_a_record_excluding_a_report_this_checkout_places_is_refused(
     promoted: experiments.PromotionResult,
 ) -> None:
     """The trust has a floor. A record calling a report a third protocol where
-    this checkout places it squarely in a cohort is not a machine reporting its
+    this checkout places it squarely in a side is not a machine reporting its
     own limits: the two disagree about what a target deployed, and that is a
     record-level defect."""
 
@@ -682,7 +682,7 @@ def test_a_record_excluding_a_report_this_checkout_places_is_refused(
                 ),
             ),
             verdict=assessment.VERDICT_INCONCLUSIVE,
-            rationale="the cohorts cannot carry a direction",
+            rationale="the sides cannot carry a direction",
         ),
     )
 
@@ -690,7 +690,7 @@ def test_a_record_excluding_a_report_this_checkout_places_is_refused(
         assessment.read(config, second)
     message = str(error.value)
     assert f"excluded as {assessment.EXCLUDED_OTHER_PROTOCOL!r}" in message
-    assert "places it in the after cohort" in message
+    assert "places it on the after side" in message
 
 
 def test_reports_without_an_effective_revision_are_excluded(
@@ -774,7 +774,7 @@ def test_a_revision_that_is_not_a_commit_id_is_excluded_rather_than_placed(
     assert frame.unverified == ()
     assert {item.reason for item in frame.excluded} == {assessment.EXCLUDED_REVISION_MALFORMED}
     assert repr(stated) in frame.exclusion("a1").detail
-    # Absent evidence, not a reading against the release: the cohort is empty and
+    # Absent evidence, not a reading against the release: the side is empty and
     # nothing directional may be claimed from it.
     assert frame.cohorts_support_direction is False
 
@@ -793,7 +793,7 @@ def test_a_symbolic_revision_a_feed_published_never_reaches_a_frozen_manifest(
     exclude; membership now asks the same question earlier, so the report is left
     out of the batch with `revision-malformed` and no manifest ever states it.
     The assessment's own arm still stands for the two ways such a member can
-    exist — a cohort frozen by another build, and (once the human window lands) a
+    exist — a batch frozen by another build, and (once the human window lands) a
     report somebody argued in — and is pinned by the hand-written manifest beside
     this test.
     """
@@ -863,7 +863,7 @@ def test_mixed_provenance_is_named_facet_by_facet(
 ) -> None:
     """And the two ways a facet fails are named apart.
 
-    A rubric the sides state and disagree on is evidence about these cohorts;
+    A rubric the sides state and disagree on is evidence about these sides;
     the shape of the work is a facet no manifest version fills in, which is
     neither evidence for the release nor against it. Both make `coherent` false,
     which is why the distinction has to be carried rather than derived from it.
@@ -926,7 +926,7 @@ def test_a_repository_present_on_only_one_side_is_not_a_comparison(
         assessment.FACET_REPOSITORY_COVERAGE,
     )
     # Both sides name a repository and they are different ones, so this is the
-    # cohorts differing rather than a facet nobody stated.
+    # sides differing rather than a facet nobody stated.
     assert frame.comparability.differing == (assessment.FACET_REPOSITORY_COVERAGE,)
     assert frame.comparability.unstated == (assessment.FACET_TASK_SHAPE,)
     assert frame.cohorts_support_direction is False
@@ -938,9 +938,9 @@ def test_a_facet_only_one_side_fills_in_is_a_gap_and_not_a_difference(
 ) -> None:
     """Nothing on the far side was there to disagree with.
 
-    The after cohort states no rubric revision at all while the before cohort
+    The after side states no rubric revision at all while the before side
     states one. Both readings make the comparison incoherent, but only one of
-    them is a claim about these cohorts — and calling this one a difference
+    them is a claim about these sides — and calling this one a difference
     would report what the feed did not publish as evidence that the release is
     not the only thing separating them.
     """
@@ -974,12 +974,12 @@ def test_a_side_only_some_of_whose_reports_state_a_facet_is_a_gap_too(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The same gap, smaller: one report of the after cohort states no rubric
+    """The same gap, smaller: one report of the after side states no rubric
     revision and the other two state the one both sides share.
 
     The values that are there agree exactly, so what makes the facet incoherent
     is the missing one — and a side is not stated by one of its reports filling
-    it in. Read the other way this would name the cohorts as differing over a
+    it in. Read the other way this would name the sides as differing over a
     rubric neither side disagrees about, which is absent evidence reported as a
     difference between them: the claim this split exists to keep off the record,
     the JSON and the render alike, all three of which read the one derivation.
@@ -1023,7 +1023,7 @@ def test_a_facet_neither_side_states_is_absent_and_not_a_difference() -> None:
     """
 
     def side(batch_id: str, keys: tuple[str, ...], overrides: dict[str, str | None] | None = None):
-        return assessment.Cohort(
+        return assessment.Side(
             members=tuple(
                 assessment.Member(
                     report_key=key,
@@ -1099,7 +1099,7 @@ def test_a_reversed_promotion_is_a_different_question(
     needed a fourth exclusion reason to keep from reading that line as `after`,
     and the reason threw away true before-side evidence to do it."""
 
-    reversal = rollback.rollback(config, reason="the release looked wrong on the first cohort", now=REVERSED_AT)
+    reversal = rollback.rollback(config, reason="the release looked wrong on the first batch", now=REVERSED_AT)
     second = freeze_second(config, promoted, effective=reversal.revision)
     frame = assessment.describe(config, second)
 
@@ -1113,7 +1113,7 @@ def test_a_reversed_promotion_is_a_different_question(
     assert frame.cohorts_support_direction is False
 
 
-def test_only_the_first_cohort_after_a_release_owes_the_reading(
+def test_only_the_first_batch_after_a_release_owes_the_reading(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
@@ -1190,7 +1190,7 @@ def test_inconclusive_is_admissible_on_mixed_provenance(
     assert len(read.excluded) == 3
 
 
-def test_a_directional_verdict_over_incomparable_cohorts_is_refused(
+def test_a_directional_verdict_over_incomparable_sides_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
@@ -1219,7 +1219,7 @@ def test_a_directional_verdict_over_incomparable_cohorts_is_refused(
     assert assessment.VERDICT_INCONCLUSIVE in str(error.value)
 
 
-def test_a_directional_verdict_below_the_minimum_cohort_is_refused(
+def test_a_directional_verdict_below_the_minimum_side_size_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
@@ -1244,11 +1244,11 @@ def test_a_directional_verdict_below_the_minimum_cohort_is_refused(
     assert "unique completed task(s) against a minimum of 3" in str(error.value)
 
 
-def test_a_direction_the_cohorts_cannot_carry_rests_on_the_counterfactual(
+def test_a_direction_the_sides_cannot_carry_rests_on_the_counterfactual(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """Two cohorts agreeing in every respect a frozen manifest states, and the one
+    """Two sides agreeing in every respect a frozen manifest states, and the one
     it does not state is what kind of work each of them did.
 
     They are two different task sets by construction — one report per completed
@@ -1300,10 +1300,10 @@ def test_invented_comparability_facets_are_refused(
 ) -> None:
     """The facet list is derived, never taken on the record's word.
 
-    Two rubric revisions in the after cohort is exactly the mixed provenance a
+    Two rubric revisions in the after side is exactly the mixed provenance a
     directional claim may not rest on. A record that drops the derived facets and
     states one coherent one of its own would otherwise carry `improved` past every
-    remaining check — the summary agrees with the list it came with, the cohorts
+    remaining check — the summary agrees with the list it came with, the sides
     are frozen members, the counts are right, and Git places every report where
     the record says.
     """
@@ -1424,7 +1424,7 @@ def test_regressed_without_a_completed_counterfactual_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """A cohort difference suspects a regression. What settles it is the pinned
+    """A side difference suspects a regression. What settles it is the pinned
     pair, measured — so a failed run leaves the reading inconclusive."""
 
     second = freeze_second(config, promoted)
@@ -1488,7 +1488,7 @@ def test_a_counterfactual_that_measured_no_goal_carries_no_direction(
 ) -> None:
     """A run that reached the end of both revisions and recorded only observations
     settles nothing: the direction has to be in what the run measured, since the
-    cohorts are not what the claim is resting on."""
+    sides are not what the claim is resting on."""
 
     second = freeze_second(config, promoted)
     frame = assessment.describe(config, second)
@@ -1706,7 +1706,7 @@ def test_a_report_placed_against_git_is_refused(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The cohorts are what the targets actually held: a pre-release report moved
+    """The sides are what the targets actually held: a pre-release report moved
     onto the after side is refused wherever the checkout can say so."""
 
     second = freeze_second(config, promoted)
@@ -1725,7 +1725,7 @@ def test_an_exclusion_the_manifest_contradicts_is_refused(
 ) -> None:
     """An exclusion states what the provenance could not say. Claiming a report
     stated no effective revision when its frozen entry states one is checkable
-    from committed content alone — and is how a cohort would be narrowed to the
+    from committed content alone — and is how a side would be narrowed to the
     reports that agreed with the change."""
 
     second = freeze_second(config, promoted)
@@ -1751,7 +1751,7 @@ def test_an_exclusion_the_manifest_contradicts_is_refused(
 
     with pytest.raises(evolution.RecordError) as error:
         assessment.read(config, second)
-    assert "places it in the after cohort" in str(error.value)
+    assert "places it on the after side" in str(error.value)
 
 
 def test_a_reading_formed_where_the_objects_were_missing_stays_readable(
@@ -1774,7 +1774,7 @@ def test_a_reading_formed_where_the_objects_were_missing_stays_readable(
             after=(),
             after_task_count=0,
             metrics=(),
-            # The facets that machine derived: over an empty after cohort, since
+            # The facets that machine derived: over an empty after side, since
             # the reports it could not place are reports it could not compare
             # either. Read here through the same derivation the reader uses,
             # because the point of the test is the placement rule and the record
@@ -1790,7 +1790,7 @@ def test_a_reading_formed_where_the_objects_were_missing_stays_readable(
                 for key in ("a1", "a2", "a3")
             ),
             verdict=assessment.VERDICT_INCONCLUSIVE,
-            rationale="the forming checkout could place none of this cohort's reports",
+            rationale="the forming checkout could place none of this batch's reports",
         ),
     )
 
@@ -1809,7 +1809,7 @@ def test_a_record_calling_a_malformed_revision_unresolvable_is_refused(
 
     Whether the manifest states a revision, and whether what it states is a
     commit id, are read off the frozen bytes before Git is asked anything — so
-    `unresolvable` over a cohort stating `HEAD` is not a machine reporting its own
+    `unresolvable` over a side stating `HEAD` is not a machine reporting its own
     limits, it is a record-level defect wearing the one reason no reader checks.
     Left tolerated, it would relabel every malformed report as a clone's problem
     and take the strict direction the shape rule exists for back out.
@@ -1834,7 +1834,7 @@ def test_a_record_calling_a_malformed_revision_unresolvable_is_refused(
                 for key in ("a1", "a2", "a3")
             ),
             verdict=assessment.VERDICT_INCONCLUSIVE,
-            rationale="the after cohort is empty",
+            rationale="the after side is empty",
         ),
     )
 
@@ -1873,7 +1873,7 @@ def test_a_record_calling_an_unresolvable_revision_absent_is_refused(
                 for key in ("a1", "a2", "a3")
             ),
             verdict=assessment.VERDICT_INCONCLUSIVE,
-            rationale="the after cohort is empty",
+            rationale="the after side is empty",
         ),
     )
 
@@ -1903,7 +1903,7 @@ def test_a_frozen_member_placed_nowhere_is_refused(
     promoted: experiments.PromotionResult,
 ) -> None:
     """The denominator stays visible: a member the record never mentions is a
-    cohort quietly narrowed (invariant 2)."""
+    side quietly narrowed (invariant 2)."""
 
     second = freeze_second(config, promoted)
     frame = assessment.describe(config, second)
@@ -1934,7 +1934,7 @@ def test_a_denominator_counted_in_reports_is_refused(
     )
     frame = assessment.describe(config, second)
     assert frame is not None
-    # Three reports of one completed task: the cohort is one task's evidence
+    # Three reports of one completed task: the side is one task's evidence
     # however it is counted (invariant 1).
     assert frame.after.task_count == 1
     publish(second, build(frame, after_task_count=3))
@@ -1953,7 +1953,7 @@ def test_a_denominator_no_checkout_could_place_is_still_counted(
 
     Three reports of one completed task at an effective revision nothing here
     resolves. A reader that counted only the reports it could place would have no
-    opinion about this cohort at all and would take the record's own `3` — one
+    opinion about this side at all and would take the record's own `3` — one
     task's evidence stated as three, and over the minimum a directional verdict is
     admissible against. `(repo_id, task_id)` is committed content, so the answer
     is the same on every clone.
@@ -2033,7 +2033,7 @@ def test_a_retained_release_settles_without_an_inverse_commit(
             metrics=(),
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
-            rationale="no frozen manifest states what kind of work either cohort did",
+            rationale="no frozen manifest states what kind of work either side did",
             decision=assessment.Decision(
                 settlement=assessment.SETTLEMENT_RETAIN,
                 decided_at=SETTLED_AT,
@@ -2147,7 +2147,7 @@ def test_a_settlement_beside_a_prepared_rollback_is_refused(
     assert interrupted is not None
     assert interrupted.subject.rollback_revision == prepared["revision"]
     assert interrupted.subject.standing is True
-    # The reading itself is unaffected: what the cohorts held did not change, and
+    # The reading itself is unaffected: what the sides held did not change, and
     # the record says nothing about a reversal yet.
     assert assessment.read(config, second) is not None
 
@@ -2237,7 +2237,7 @@ def test_a_record_with_no_release_before_it_is_refused(
 # --- recording a reading ----------------------------------------------------
 
 
-INCONCLUSIVE_WHY = "no frozen manifest states what kind of work either cohort did"
+INCONCLUSIVE_WHY = "no frozen manifest states what kind of work either side did"
 
 
 def ledger_records(config: evolution.EvolutionConfig, record_type: str) -> list[dict]:
@@ -2248,7 +2248,7 @@ def test_forming_derives_everything_but_the_judgement(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """A caller supplies the numbers and the reading; the cohorts, denominators,
+    """A caller supplies the numbers and the reading; the sides, denominators,
     exclusions and facets come from the frozen manifests and Git."""
 
     second = freeze_second(config, promoted)
@@ -2284,7 +2284,7 @@ def test_forming_audits_the_release_it_read(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The audit line names the cohort that read it, the release it was about,
+    """The audit line names the batch that read it, the release it was about,
     and the verdict — which is a bounded code this package authored."""
 
     freeze_second(config, promoted)
@@ -2313,7 +2313,7 @@ def test_forming_states_a_prepared_reversal_as_no_reversal_at_all(
     the promotion standing, and a reading formed then says so.
 
     The derived subject carries that commit — it has to, since a report produced
-    at a line that took it belongs to neither cohort — but `assessed` is about
+    at a line that took it belongs to neither side — but `assessed` is about
     what the line held, and stating a reversal beside `standing: true` is the
     contradiction the reader refuses.
     """
@@ -2356,12 +2356,12 @@ def test_a_verdict_the_evidence_cannot_carry_writes_nothing(
             config,
             verdict=assessment.VERDICT_IMPROVED,
             confidence=assessment.CONFIDENCE_HIGH,
-            rationale="the cohort after the release converged faster",
+            rationale="the side after the release converged faster",
             recommendation=assessment.SETTLEMENT_RETAIN,
             metrics=(measurement(),),
         )
 
-    assert "resting on the cohorts alone" in str(error.value)
+    assert "resting on the sides alone" in str(error.value)
     assert assessment.FACET_TASK_SHAPE in str(error.value)
     assert second.assessment_path.exists() is False
     assert ledger_records(config, assessment.RECORD_RELEASE_ASSESSED) == []
@@ -2408,7 +2408,7 @@ def test_the_same_formation_run_again_reports_what_it_wrote(
         confidence=assessment.CONFIDENCE_LOW,
         # The same sentence, wrapped differently — a reason travels in a versioned
         # record and is compared there.
-        rationale="no frozen manifest\n  states what kind of work either cohort did",
+        rationale="no frozen manifest\n  states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         metrics=(measurement(),),
     )
@@ -2532,7 +2532,7 @@ def test_the_same_formation_advising_something_else_is_a_second_reading(
     changes it is not an interrupted formation being finished.
 
     Refused before the pairing rule is reached, deliberately: what is wrong here
-    is that this cohort already read the release, not what the second request
+    is that this batch already read the release, not what the second request
     advises.
     """
 
@@ -2575,7 +2575,7 @@ def test_a_second_reading_of_one_release_is_refused(
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_MEDIUM,
-            rationale="the after cohort was produced at a revision that carries the change",
+            rationale="the after side was produced at a revision that carries the change",
             recommendation=assessment.SETTLEMENT_RETAIN,
         )
     assert "reads a release once" in str(error.value)
@@ -2599,16 +2599,16 @@ def test_nothing_is_formed_where_there_is_no_release(
     assert (config.batches_root / FIRST / "release-assessment.json").exists() is False
 
 
-def test_a_later_cohort_may_not_reread_a_release_that_was_answered(
+def test_a_later_batch_may_not_reread_a_release_that_was_answered(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The obligation belongs to the first cohort after the promotion and is
+    """The obligation belongs to the first batch after the promotion and is
     discharged there. A later one derives the same release — that is how it reads
     the record — and is told whose reading it is.
 
     The refusal is about an obligation that was *answered*, not about who is
-    standing at the keyboard: one the owning cohort left outstanding is followed
+    standing at the keyboard: one the owning batch left outstanding is followed
     to where it sits, because a gate nobody could answer would stop the lineage
     for good.
     """
@@ -2632,11 +2632,11 @@ def test_a_later_cohort_may_not_reread_a_release_that_was_answered(
     assert read_reading(config, second).settled is True
 
 
-def test_no_current_cohort_reads_nothing(
+def test_no_current_batch_reads_nothing(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """Every batch concluded: there is a release on the line and no cohort whose
+    """Every batch concluded: there is a release on the line and no batch whose
     reading it would be."""
 
     with pytest.raises(evolution.NothingToActOn) as error:
@@ -2708,7 +2708,7 @@ def read_reading(config: evolution.EvolutionConfig, batch: lineage.Batch) -> ass
 
 
 def form_reading(config: evolution.EvolutionConfig) -> assessment.Formed:
-    """The cohort reading a counterfactual is started from.
+    """The batch reading a counterfactual is started from.
 
     `inconclusive` because that is what a real one is: no manifest states the
     shape of the work, so the two task sets suspect and the pinned run settles.
@@ -2923,7 +2923,7 @@ def test_concluding_records_the_numbers_in_this_records_vocabulary(
 ) -> None:
     """A run states a baseline and a candidate; here the two sides are the line
     before the release and the release, so they are recorded as before and after
-    — the same names the cohort comparison uses, which is what lets the two be
+    — the same names the side comparison uses, which is what lets the two be
     read together at all."""
 
     second = freeze_second(config, promoted)
@@ -3325,11 +3325,11 @@ def test_a_retry_is_numbered_past_the_run_and_the_withdrawals_together(
     assert "a position is allocated once" in str(error.value)
 
 
-def test_nothing_is_measured_before_the_cohorts_are_read(
+def test_nothing_is_measured_before_the_sides_are_read(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """What a pinned run answers is a suspicion the cohorts raised, so the
+    """What a pinned run answers is a suspicion the sides raised, so the
     reading is where the run is recorded and there has to be one."""
 
     second = freeze_second(config, promoted)
@@ -3372,7 +3372,7 @@ def test_the_verdict_the_run_settles_is_recorded(
     assert recorded.recommendation == assessment.SETTLEMENT_ROLLED_BACK
     assert recorded.confidence == assessment.CONFIDENCE_HIGH and recorded.rationale == WORSE
     assert recorded.formed_at == "2026-08-11T13:00:00Z"
-    # The cohort reading and the run both stand: the numbers the session judged
+    # The reading of the sides and the run both stand: the numbers the session judged
     # are what `confidence` and `rationale` are read against.
     assert recorded.metrics == (measurement(),)
     assert recorded.counterfactual is not None and recorded.counterfactual.completed
@@ -3756,7 +3756,7 @@ def suspected(config: evolution.EvolutionConfig, batch: lineage.Batch) -> assess
 
 
 def open_second(config: evolution.EvolutionConfig, batch: lineage.Batch, *drafts: str) -> list[str]:
-    """Everything the assessing cohort needs before its first experiment: its
+    """Everything the assessing batch needs before its first experiment: its
     analysis stage ended, and drafts waiting at the admission gate.
 
     Draft ids of its own, because a draft's id is its task's: the promoted batch
@@ -4063,11 +4063,11 @@ def test_nothing_is_settled_over_evidence_still_in_flight(
     assert read_reading(config, second).settled is False
 
 
-def test_a_release_no_cohort_has_read_is_not_settled(
+def test_a_release_no_batch_has_read_is_not_settled(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The gate answers a reading. A cohort that has taken none has nothing for a
+    """The gate answers a reading. A batch that has taken none has nothing for a
     decision to be made from."""
 
     freeze_second(config, promoted)
@@ -4104,7 +4104,7 @@ def test_only_the_last_promotion_is_reversed_by_this_gate(
     """A rollback takes the newest promotion off the line and no other, so a
     reading of an earlier release cannot be settled by running one.
 
-    The state is a corrupted history — a later cohort promoted while this one is
+    The state is a corrupted history — a later batch promoted while this one is
     still current, which no freeze allows — and the refusal is here because of
     what would otherwise happen: a commit reversing somebody else's release,
     followed by a settlement the reader refuses for naming it.
@@ -4145,7 +4145,7 @@ def test_no_experiment_is_admitted_before_the_release_is_judged(
     promoted: experiments.PromotionResult,
 ) -> None:
     """Invariant 17 from the other side. The base was fixed when the assessing
-    cohort was formed; what the settlement gates is the first admission, which is
+    batch was formed; what the settlement gates is the first admission, which is
     the last moment before every alternative in the batch stands on that commit.
     The two settlements leave two different commits on the line, so admitting
     before the answer builds on whichever one the formation happened to read.
@@ -4338,13 +4338,13 @@ def ended_without_settling(
     *,
     reading: bool,
 ) -> lineage.Batch:
-    """The assessing cohort ends its own batch without answering the gate.
+    """The assessing batch ends without answering the gate.
 
     Legal at every step and reachable through the real operations: concluding
     `no-change` asks that nothing about this batch is still open, and an
     unanswered reading of the release *before* it is not about this batch at all.
     What it leaves is the state the next freeze has to find — the obligation
-    still sits where it was, on a cohort that is no longer current.
+    still sits where it was, on a batch that is no longer current.
     """
 
     (config.batches_root / SECOND / "findings.md").write_text("# Findings\n", encoding="utf-8")
@@ -4371,16 +4371,16 @@ def ended_without_settling(
     )
 
 
-def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
+def test_a_batch_that_ended_unsettled_still_gates_the_next_base(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The obligation belongs to the first cohort after the release and does not
-    lapse when that cohort ends.
+    """The obligation belongs to the first batch after the release and does not
+    lapse when that batch ends.
 
     `no-change` promotes nothing, so the batch after it still follows the same
     release while owing no reading of its own. Asking only whether the
-    *admitting* cohort owes one would find nothing to wait for and build every
+    *admitting* batch owes one would find nothing to wait for and build every
     alternative on whichever commit the line happened to be holding when the
     batch was formed — which is invariant 17 defeated by a sequence every step of
     which is legal.
@@ -4414,15 +4414,15 @@ def test_a_cohort_that_ended_unsettled_still_gates_the_next_base(
     assert admitted.created is True and admitted.base_revision == promoted.promotion_revision
 
 
-def test_a_cohort_that_ended_unread_still_gates_the_next_base(
+def test_a_batch_that_ended_unread_still_gates_the_next_base(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
-    """The same rule one state earlier: the owing cohort recorded nothing at all.
+    """The same rule one state earlier: the owing batch recorded nothing at all.
 
     Two refusals rather than one, because they are two different things for an
     operator to do — read the release, then settle the reading — and both are
-    still done by the cohort that owes them.
+    still done by the batch that owes them.
     """
 
     second = freeze_second(config, promoted)
@@ -4456,7 +4456,7 @@ def test_a_settlement_taken_where_the_obligation_sits_is_redone_there_too(
     interrupted between the record and its return are the same state, and the
     way out of it here is to ask again. Refusing the second ask because the
     first one succeeded would make the one settlement an operator cannot repeat
-    the one they most need to, since it is taken from a cohort that is not even
+    the one they most need to, since it is taken from a batch that is not even
     the record's own.
     """
 
@@ -4494,10 +4494,10 @@ def test_an_answered_obligation_is_still_closed_to_everything_but_its_own_redo(
     """Reaching a settled owner's record is the settlement's exception alone.
 
     What a redo does with a decision already on record is report it; what these
-    would do is add to the reading that decision was made from. So the cohort
+    would do is add to the reading that decision was made from. So the batch
     that is merely standing where the obligation was answered is told whose
     reading it is, which is a different thing for an operator to hear than
-    "settled" — their own cohort has recorded nothing at all.
+    "settled" — their own batch has recorded nothing at all.
     """
 
     second = freeze_second(config, promoted)
@@ -4640,14 +4640,14 @@ def test_a_retained_release_is_not_frozen_out_of_the_base(
     assert lineage.describe(config).current.experiments == ()
 
 
-def test_the_cohort_after_a_reversal_admits_on_the_line_it_left(
+def test_the_batch_after_a_reversal_admits_on_the_line_it_left(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
 ) -> None:
     """The other side of the same rule, and what the gate lets through.
 
     A reversal ends the batch standing on the release, so what follows it is the
-    *next* cohort, formed at the line carrying the inverse commit. That base
+    *next* batch, formed at the line carrying the inverse commit. That base
     carries the reversal, so it is not standing on a release that came off the
     line — and it carries the promotion too, since a revert adds history rather
     than removing it, which is why the reversal has to be asked about at all.
@@ -4706,9 +4706,9 @@ def test_a_reversal_ends_the_batch_holding_the_base_and_not_the_one_that_owes_it
 ) -> None:
     """The deferred case, and why the ending is keyed on the base.
 
-    A cohort can end its own batch without answering the gate — `no-change` asks
+    A batch can end without answering the gate — `no-change` asks
     only that nothing about *that* batch is still open — and the obligation stays
-    with it while the *next* cohort follows the same release and holds the base
+    with it while the *next* batch follows the same release and holds the base
     carrying it. So the settlement is recorded in the owner's directory and the
     batch it ends is a different one, which a rule phrased as "a rollback ends
     the assessing batch" would never reach.
@@ -4747,7 +4747,7 @@ def test_a_settlement_that_ended_its_batch_still_reports_itself(
     interrupted after the record landed look the same from outside. A
     `rolled-back` settlement is the one that can leave no batch current at all, so
     the frame is read from the batch its own answer ended rather than from a
-    current one — otherwise the confirmation path meets "no cohort is frozen",
+    current one — otherwise the confirmation path meets "no batch is frozen",
     which is a refusal about the wrong thing.
     """
 
@@ -4845,12 +4845,12 @@ def test_a_base_this_checkout_cannot_place_on_the_settled_line_is_refused(
 # --- what the generated analysis task says ---------------------------------
 
 
-def test_the_first_cohort_after_a_release_is_asked_to_assess_it(
+def test_the_first_batch_after_a_release_is_asked_to_assess_it(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
     tmp_path: Path,
 ) -> None:
-    """The freeze that creates the next cohort's analysis task states the release
+    """The freeze that creates the next batch's analysis task states the release
     it follows — identity only, and the path the reading goes to."""
 
     fill_pool(config, tmp_path / "feed")
@@ -4863,7 +4863,7 @@ def test_the_first_cohort_after_a_release_is_asked_to_assess_it(
     assert promoted.merge_input_revision in text
     assert f"evolution/batches/{SECOND}/release-assessment.json" in text
     assert "`improved`, `neutral`, `regressed`, or `inconclusive`" in text
-    # One session for the reports, one for the second reading of the same cohort.
+    # One session for the reports, one for the second reading of the same batch.
     assert "session-est: 0/2" in text
 
 
@@ -4894,7 +4894,7 @@ def test_the_analysis_is_asked_for_both_answers_it_owes(
     assert "A `rolled-back` recommendation carries a\n  `regressed` verdict behind it." in text
 
 
-def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(
+def test_the_task_says_a_side_the_feed_cannot_place_carries_no_direction(
     config: evolution.EvolutionConfig,
     promoted: experiments.PromotionResult,
     tmp_path: Path,
@@ -4903,7 +4903,7 @@ def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(
     can place has to be met there rather than in the contract alone: a report with
     no effective revision is excluded whole, a report imported before orch-hub
     published the identity is one and stays one, and the counterfactual is then
-    the only directional instrument. Without it a session finds empty cohorts and
+    the only directional instrument. Without it a session finds empty sides and
     no reason for them.
     """
 
@@ -4919,7 +4919,7 @@ def test_the_task_says_a_cohort_the_feed_cannot_place_carries_no_direction(
     assert "the only directional instrument available" in text
 
 
-def test_a_first_cohort_is_asked_for_no_release_reading(
+def test_a_first_batch_is_asked_for_no_release_reading(
     config: evolution.EvolutionConfig,
     tmp_path: Path,
 ) -> None:

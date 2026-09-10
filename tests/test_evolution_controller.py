@@ -985,7 +985,7 @@ def corrupt_legacy(mutate) -> str:
         corrupt(lambda data: data["rejected"].update(r9=a_rejection(note="extra"))),
         # A claimed report names the batch that claimed it and when. An entry
         # that kept the key and lost either one removes the report from
-        # discovery while no longer saying which cohort analyzed it.
+        # discovery while no longer saying which batch analyzed it.
         corrupt(lambda data: data["processed"].update(r8={})),
         corrupt(lambda data: data["processed"].update(r8={"batch_id": "b1", "recorded_at": "2026-07-30T10:00:03Z"})),
         corrupt(lambda data: data["processed"].update(r8=a_claim(batch_id="evolution-batch-1"))),
@@ -995,7 +995,7 @@ def corrupt_legacy(mutate) -> str:
         corrupt(lambda data: data["processed"].update(r8="evolution-batch-0001")),
         # Well-formed, and still backed by nothing: no manifest under
         # `evolution/batches/` names r8, so the claim suppresses the report from
-        # every future sync while no cohort accounts for it.
+        # every future sync while no batch accounts for it.
         corrupt(lambda data: data["processed"].update(r8=a_claim())),
         # The version-2 shape is upgraded on read, which is not the same as
         # being read loosely: what it says has to be true before it is reshaped.
@@ -1169,7 +1169,7 @@ def test_a_processed_claim_loads_only_when_a_manifest_names_the_report(
 ) -> None:
     """A claim is what removes a report from discovery, and the manifests are
     the membership record. A claim the manifests do not back would skip the
-    report on every future sync while nothing on disk says which cohort
+    report on every future sync while nothing on disk says which batch
     analyzed it — so the claim is resolved, not merely parsed."""
     config.runtime_root.mkdir(parents=True, exist_ok=True)
     claimed = valid_state()

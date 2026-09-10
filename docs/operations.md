@@ -505,7 +505,7 @@ before relying on those hooks.
 protocol suite from evidence. `mandrel evolution` is the mechanical half of it:
 it discovers already-complete evaluation reports, stages them, offers a batch
 out of the pool, and — once a human fixes that offer — freezes an immutable
-cohort and prepares its pending analysis task. It runs against this repository,
+batch and prepares its pending analysis task. It runs against this repository,
 not a target.
 
 Nothing here starts or schedules an evaluation, and nothing here decides
@@ -519,7 +519,7 @@ gates.
 ./bin/mandrel evolution start --feed-dir ...   # repair/close, sync, then propose a batch
 ./bin/mandrel evolution batch-include ...      # argue one task into that proposal
 ./bin/mandrel evolution batch-exclude ...      # take one out of it
-./bin/mandrel evolution freeze                 # fix that proposal as an immutable cohort
+./bin/mandrel evolution freeze                 # fix that proposal as an immutable batch
 ```
 
 Forming a batch is two commands on purpose. `start` writes a proposal to ignored
@@ -561,9 +561,9 @@ left to record. A move is lost only three ways — the task leaves the pool, the
 base moves to one its evidence matches, or the offer becomes unreadable and the
 poll rebuilds it — each costing what losing the offer entirely costs.
 
-Those seven manage report intake and cohort formation. What a frozen cohort then
+Those seven manage report intake and batch formation. What a frozen batch then
 becomes — experiments, rounds, replays, a promotion, its reversal, and the next
-cohort's reading of the release — is
+batch's reading of the release — is
 [the lifecycle console](#the-lifecycle-console) below.
 
 Every subcommand takes `--repo <path>` to work on another checkout, and every
@@ -635,7 +635,7 @@ evolution: batch-proposed 4/20
 ```
 
 One label is chosen by what blocks the next action: an open batch first (it is
-what stops another cohort forming), then an admitted change task in flight,
+what stops another batch forming), then an admitted change task in flight,
 then drafts waiting at the admission gate, then the pool. Every fact is printed
 regardless of which label won, so nothing is hidden by the choice.
 
@@ -686,11 +686,11 @@ release is kept — all of it is a human judgement stated here and recorded
 | `promote --reason ... [--target <name>]... [--source-ref <ref>]` | carry the replayed candidate onto the line its replay integrated onto, and end the batch with it |
 | `rollback --reason ... [--source-ref <ref>]` | add and record the inverse commit for the latest promotion, on the line that promotion reached, and end the batch standing on that release |
 
-**The release the next cohort owes a reading of**
+**The release the next batch owes a reading of**
 
 | Verb | What it does |
 |---|---|
-| `assess --verdict ... --confidence ... --rationale ... --recommend ... [--metric NAME UNIT BEFORE AFTER BETTER]...` | record this cohort's reading of the release before it, and which settlement it advises |
+| `assess --verdict ... --confidence ... --rationale ... --recommend ... [--metric NAME UNIT BEFORE AFTER BETTER]...` | record this batch's reading of the release before it, and which settlement it advises |
 | `assess-measure --expectation ...` | request the pinned counterfactual, and record its run once one is stated |
 | `assess-conclude --outcome ... --detail ...` | record what the harness reported for it |
 | `assess-abandon --reason ...` | record why that run ended when its harness cannot say |
@@ -714,7 +714,7 @@ Either way the reversal ends the batch standing on the release it took back. Tha
 batch was formed at the line while the release was on it, so its base carries a
 promotion nobody kept and there is nothing left to admit on it — the outcome
 record says `rolled-back`, and the reports it claimed stay claimed. Which batch
-ends is read off the base rather than off who answered the gate, so a cohort that
+ends is read off the base rather than off who answered the gate, so a batch that
 concluded without reading the release does not shield the one after it.
 
 Where the source line comes from differs by verb, and `--source-ref` never
@@ -723,7 +723,7 @@ changes it. A batch freeze and a replay *resolve* the line, from
 clone measures against the line it releases from rather than the branch someone
 was on. The freeze resolves it for the manifest's `runner_protocol_revision`,
 which is this batch's base: where that line stands when the batch is formed is
-both the protocol revision the cohort's tasks are governed by and the commit
+both the protocol revision the batch's tasks are governed by and the commit
 every experiment of that batch starts from, so a checkout that does not hold the
 line refuses to freeze rather than record the absence. Admission resolves
 nothing — it reads the base out of the manifest. A promotion and a rollback do
@@ -755,7 +755,7 @@ habit `dev` invites is the thing to correct, not the guard.
 #### One cycle, end to end
 
 ```bash
-./bin/mandrel evolution start                      # propose the next cohort
+./bin/mandrel evolution start                      # propose the next batch
 # review what it offers, then fix it:
 ./bin/mandrel evolution freeze                     # writes the manifest and the analysis task
 # complete the generated analysis task and commit its findings and drafts
@@ -779,12 +779,12 @@ habit `dev` invites is the thing to correct, not the guard.
 ./bin/mandrel deploy ../orch-hub                   # promotion is not deployment
 ```
 
-The cohort frozen after that promotion owes a reading of it, and no later first
+The batch frozen after that promotion owes a reading of it, and no later first
 experiment is admitted until the reading is settled (invariant 17):
 
 ```bash
 ./bin/mandrel evolution start && ./bin/mandrel evolution freeze
-# what the cohorts came to, and inconclusive: no manifest states the shape of
+# what the sides came to, and inconclusive: no manifest states the shape of
 # the work, so they carry no direction of their own to record here
 ./bin/mandrel evolution assess --verdict inconclusive --confidence low \
     --rationale "..." --recommend retain \
@@ -798,18 +798,18 @@ experiment is admitted until the reading is settled (invariant 17):
 ```
 
 The direction arrives on `assess-resolve` and not before it. A directional
-verdict rests on evidence that can carry one, and the cohorts cannot: the shape
+verdict rests on evidence that can carry one, and the sides cannot: the shape
 of the work is a facet no manifest version states, so the comparison is
 incoherent on every frame this build can form and `assess` refuses `improved`
-outright. What the first reading records is the cohorts' numbers and
+outright. What the first reading records is the sides' numbers and
 `inconclusive`; the pinned counterfactual is what settles a direction, and
 `assess-resolve` is where the reading is revised on it.
 
 Either path can end differently and both endings are verbs: `conclude-no-change`
 for a batch whose evidence justified nothing, `abandon` or `supersede` for an
 attempt that did not work out, and `settle --settlement rolled-back` for a
-release the next cohort read as a regression — which reverses the release and
-ends that cohort's own batch with it.
+release the next batch read as a regression — which reverses the release and
+ends that batch's own cycle with it.
 
 #### The harness is you
 
@@ -1044,7 +1044,7 @@ silently import nothing. The offline path is a local report bundle:
 <feed-dir>/artifacts/<report_key>/<artifact-name>  the four L1+L2 bodies
 ```
 
-`--feed-dir` stays the way to run a deterministic cohort offline and to replay
+`--feed-dir` stays the way to run a deterministic batch offline and to replay
 a fixed one afterwards.
 
 The wire contract implemented by the client is detailed in
@@ -1134,10 +1134,10 @@ cannot observe that transition.
   evidence. A staged bundle the file names is the same record and the same exit
   7 — gone, edited since import, or disagreeing with the pool entry pointing at
   it, all of which stop the offer or the freeze rather than quietly forming a
-  smaller cohort. Restore the file, or delete `.ai-evolution/` and re-run
+  smaller batch. Restore the file, or delete `.ai-evolution/` and re-run
   `start` to rebuild the pool from the feed. The committed batches are what
   protect you there: discovery skips every report a frozen manifest already
-  names, so a wipe re-imports only what no cohort has analyzed, and an open
+  names, so a wipe re-imports only what no batch has analyzed, and an open
   batch's claims and analysis task are recreated from its manifest. Raw bundles
   that were staged before the wipe are gone; `status` reports the batch's
   evidence as absent from this machine rather than as damage.

@@ -537,13 +537,13 @@ def current_batch(config: EvolutionConfig, *, batches: list[Batch] | None = None
     """The one batch whose change cycle is still running, read as a whole
     history rather than off a file's presence.
 
-    Currency decides two writes — whether a new cohort may be frozen, and which
+    Currency decides two writes — whether a new batch may be frozen, and which
     interrupted freeze may be completed — so both ask here, through the same
     derivation `status` reads. An `outcome.json` the rest of its batch
     contradicts has ended nothing: it names an experiment the batch does not
     have, or concludes `no-change` over an attempt that records a promotion.
     Judging it by its own shape alone is what let a malformed conclusion release
-    the next cohort while `status`, deriving the same repository, refused to
+    the next batch while `status`, deriving the same repository, refused to
     describe it at all.
     """
 
@@ -556,8 +556,8 @@ def _require_one_current(current: list[BatchLineage]) -> None:
 
     Refused rather than arbitrated. Whichever of the two a reader picks, the
     experiments and evidence it goes on to collect belong to the other — and a
-    write path that picks one completes the interrupted freeze of a cohort while
-    another cohort's change cycle is still running.
+    write path that picks one completes the interrupted freeze of a batch while
+    another batch's change cycle is still running.
     """
 
     if len(current) > 1:
@@ -565,7 +565,7 @@ def _require_one_current(current: list[BatchLineage]) -> None:
             "more than one current batch: "
             + ", ".join(lineage.batch_id for lineage in current)
             + " — invariant 14 allows one at a time; record the earlier batch's outcome "
-            "(promoted, no-change, or the rolled-back a reversal ends it with) before the next cohort continues"
+            "(promoted, no-change, or the rolled-back a reversal ends it with) before the next batch continues"
         )
 
 
@@ -594,7 +594,7 @@ def load_experiments(
     one directory, and the tree ships with a `README.md` layout note beside them.
 
     An experiment naming a batch that does not exist is refused rather than
-    dropped: it is either a cohort somebody deleted or an id that was mistyped,
+    dropped: it is either a batch somebody deleted or an id that was mistyped,
     and both are histories this controller must not quietly stop showing.
     """
 
@@ -619,7 +619,7 @@ def load_experiments(
         if experiment.batch_id not in known:
             raise RecordError(
                 f"{experiment.directory / EXPERIMENT_FILENAME}: names batch {experiment.batch_id!r}, which has no "
-                f"frozen manifest under {config.storage.batches}/; an experiment belongs to the cohort that "
+                f"frozen manifest under {config.storage.batches}/; an experiment belongs to the batch that "
                 "justified it"
             )
         grouped.setdefault(experiment.batch_id, []).append(experiment)
@@ -781,7 +781,7 @@ def _require_one_base(batch: Batch, experiments: Iterable[Experiment]) -> None:
     Held to the manifest rather than only to each other. Agreement among the
     experiments was all there was to ask while the first of them chose the
     commit; now the batch states it, so a set of experiments that agree on some
-    *other* revision is a set built on a protocol this cohort's evidence was
+    *other* revision is a set built on a protocol this batch's evidence was
     never selected against — and the membership test is what that base decided.
 
     Refused rather than reconciled in either direction, because attempts against
@@ -853,7 +853,7 @@ def _require_named_successors(experiments: tuple[Experiment, ...]) -> None:
 
     That relaxation is for a batch still running, and `_require_ended_attempts`
     is where it ends: an outcome recorded over a successor nobody created has
-    concluded a cohort whose newest attempt does not exist, and there is no
+    concluded a batch whose newest attempt does not exist, and there is no
     recoverable reading of that to preserve.
     """
 
@@ -908,10 +908,10 @@ def _require_ended_attempts(
     not the successor it names: that state is deliberately readable so the
     operation can be redone (`_require_named_successors`), but the relaxation is
     for a batch whose cycle is still running. An outcome over one concludes a
-    cohort whose newest attempt does not exist — and it concludes it invisibly,
+    batch whose newest attempt does not exist — and it concludes it invisibly,
     because a batch that is no longer current is no longer where anything looks
     for a pending successor, so the redo that would finish it can no longer run
-    and the next cohort is released over the wreckage.
+    and the next batch is released over the wreckage.
     """
 
     if open_experiment is not None:

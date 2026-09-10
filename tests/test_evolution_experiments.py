@@ -286,7 +286,7 @@ def test_the_base_is_the_line_the_batch_was_formed_at_and_not_this_checkout(
 ) -> None:
     """The commit every alternative in the batch is an attempt against is the
     line the project releases from as the batch's formation read it, which is a
-    property of the cohort rather than of whoever ran the command."""
+    property of the batch rather than of whoever ran the command."""
 
     ahead = git_commit(config.repo_root, "unrelated work on the operator's branch")
 
@@ -303,7 +303,7 @@ def test_an_admission_resolves_no_ref_and_takes_the_batchs_own_base(
     in the immutable manifest — so admission reads it rather than resolving the
     line again. A checkout that lost the line since the batch was formed still
     admits at the same commit, which is what makes the base a fact about the
-    cohort rather than about whoever ran the command. The freeze is where a
+    batch rather than about whoever ran the command. The freeze is where a
     missing line refuses (`batches._source_line_revision`)."""
 
     line = git_rev(config.repo_root, RELEASE_REF)
@@ -3042,7 +3042,7 @@ def test_a_promotion_is_recorded_by_both_the_experiment_and_the_batch(
     assert ledger_types(config)[-2:] == ["experiment-promoted", "batch-concluded"]
 
 
-def test_a_promoted_batch_is_over_and_releases_the_next_cohort(
+def test_a_promoted_batch_is_over_and_releases_the_next_batch(
     config: evolution.EvolutionConfig, batch: Path, release: str
 ) -> None:
     """Invariant 14: only a promotion or a no-change conclusion ends a batch, and
@@ -3895,7 +3895,7 @@ def test_a_promotion_from_a_cycle_that_closed_is_not_this_request_redone(
     write_manifest(config.batches_root, SECOND_BATCH, ["r3"], analysis_task_id="2026-08-04-second-analysis")
     write_closure(config.batches_root, SECOND_BATCH, analysis_task_id="2026-08-04-second-analysis")
     (config.batches_root / SECOND_BATCH / "findings.md").write_text("# Findings\n", encoding="utf-8")
-    experiments.conclude_no_change(config, reason="the second cohort justified nothing", now=LATEST)
+    experiments.conclude_no_change(config, reason="the second batch justified nothing", now=LATEST)
 
     with pytest.raises(evolution.NothingToActOn, match="nothing to promote"):
         experiments.promote(config, reason=WHY, targets=TARGETS, now=LATEST)

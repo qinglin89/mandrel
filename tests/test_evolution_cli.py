@@ -118,7 +118,7 @@ TOKEN = "s3cret-token"
 BASE = "a" * 40
 CANDIDATE = "b" * 40
 
-# The two cohorts a release reading is about: the batch whose experiment was
+# The two batches a release reading is about: the batch whose experiment was
 # promoted, and the first one frozen after it. Batch ids are allocated, so these
 # are what the allocator would produce rather than names of a test's choosing.
 FIRST = "evolution-batch-0001"
@@ -186,7 +186,7 @@ def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, count: int):
 def freeze(config: evolution.EvolutionConfig, **kwargs) -> batches.FreezeResult:
     """Offer the batch, then fix it — the two commands a human runs.
 
-    The formation is two operations, so a test that means "form a cohort out of
+    The formation is two operations, so a test that means "form a batch out of
     this pool" has to do both. Where the split itself is what is under test, the
     two are called apart.
     """
@@ -387,7 +387,7 @@ def test_a_below_target_offer_is_a_freeze_the_gate_allows(
     action = _action(phase.describe(config, now=NOW), phase.ACTION_FREEZE)
 
     assert action.allowed and action.refusal is None
-    frozen = evolution.freeze(config, now=NOW, forced=True, justification="the cohort is complete")
+    frozen = evolution.freeze(config, now=NOW, forced=True, justification="the batch is complete")
     assert frozen.frozen and frozen.decision.trigger == batches.TRIGGER_FORCED
 
 
@@ -460,8 +460,8 @@ def test_the_window_verbs_are_offered_exactly_while_an_offer_stands(
 
     What does close it is the manifest. A frozen batch's membership is immutable
     (invariant 3), and the sentence says so rather than repeating the
-    "another cohort is running" refusal `start` gives — a reader has to be able
-    to tell a window that has closed from a cohort that is busy.
+    "another batch is running" refusal `start` gives — a reader has to be able
+    to tell a window that has closed from a batch that is busy.
     """
     fill_pool(config, feed_root, MINIMUM)
 
@@ -654,7 +654,7 @@ def test_a_completed_analysis_leaves_its_batch_current_at_the_admission_gate(
 ) -> None:
     """The analysis stage ends; the batch does not (invariant 14). What is
     waiting is the human admission gate, and the batch goes on holding the next
-    cohort back while it waits."""
+    batch back while it waits."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
     close_batch(config, result.batch_id or "", result.analysis_task_id or "")
@@ -992,7 +992,7 @@ def test_the_lineage_outlives_a_checkout_and_a_lost_task_pool(
 def test_a_batch_whose_evidence_was_staged_elsewhere_is_shown_not_failed(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
-    """A frozen cohort owns its reports wherever it was frozen; `.ai-evolution/`
+    """A frozen batch owns its reports wherever it was frozen; `.ai-evolution/`
     is machine-local, so a clone holds the manifest and none of the bundles."""
     fill_pool(config, feed_root, TARGET)
     result = freeze(config)
@@ -1092,7 +1092,7 @@ def test_the_status_json_carries_the_phase_and_the_revisions_in_play(
     # different absence from a round nothing has replayed.
     assert payload["replay"] is None
     assert payload["last_promotion"] is None
-    # Nothing has been promoted, so there is no release for any cohort to read.
+    # Nothing has been promoted, so there is no release for any batch to read.
     assert payload["release"] is None
     assert json.loads(json.dumps(payload)) == payload
 
@@ -1484,13 +1484,13 @@ def test_the_hub_client_imports_a_report_end_to_end(config: evolution.EvolutionC
     assert result.cursor_after == "1"
 
 
-def test_a_published_identity_reaches_the_frozen_cohort_unchanged(
+def test_a_published_identity_reaches_the_frozen_batch_unchanged(
     config: evolution.EvolutionConfig,
 ) -> None:
     """The identity is only worth publishing if it survives to where a release
     assessment reads it: the pool stages the record whole and the freeze copies
     its provenance into the immutable manifest, so what places a report in a
-    cohort is the pair its own feed stated."""
+    batch is the pair its own feed stated."""
     # Published at this repository's base, so the reports are selected into the
     # batch at all: membership is what that same field decides.
     produced = line_tip(config)
@@ -1545,7 +1545,7 @@ def test_a_verified_protocol_identity_is_copied_onto_the_record(
     config: evolution.EvolutionConfig,
 ) -> None:
     """The pair orch-hub publishes is the one fact of this repository's provenance
-    block the feed states, and it is what places a report in a release cohort."""
+    block the feed states, and it is what places a report in a release side."""
     entry = make_hub_entry(key="r1", seq=1, protocol=hub_protocol())
     feed = hub_feed({page_url(limit="5"): hub_page([entry])})
 
@@ -1719,10 +1719,10 @@ def test_every_command_a_refusal_names_is_one_this_build_exposes() -> None:
     assert named <= _exposed_verbs(), f"named in a refusal, absent from the CLI: {sorted(named - _exposed_verbs())}"
 
 
-def test_a_refusal_that_sends_an_operator_to_form_a_cohort_names_both_commands(
+def test_a_refusal_that_sends_an_operator_to_form_a_batch_names_both_commands(
     config: evolution.EvolutionConfig,
 ) -> None:
-    """Forming a cohort takes two commands, and a recovery naming only the poll
+    """Forming a batch takes two commands, and a recovery naming only the poll
     leaves the operator exactly where they started.
 
     `start` offers a batch and writes no manifest, so an operator told to freeze
@@ -1739,7 +1739,7 @@ def test_a_refusal_that_sends_an_operator_to_form_a_cohort_names_both_commands(
 
     for refusal in (
         guards.no_current_batch(),
-        assessment.no_cohort_refusal(),
+        assessment.no_batch_refusal(),
         str(promoting.value),
         str(concluding.value),
     ):
@@ -1810,7 +1810,7 @@ def test_start_runs_the_whole_flow_to_one_pending_analysis_task(
 ) -> None:
     """The acceptance end to end: an empty repository, a fixture feed, and the
     two commands a formation takes — the poll that offers a batch, and the
-    freeze that fixes it as a cohort with its pending analysis task."""
+    freeze that fixes it as a batch with its pending analysis task."""
     config = evolution.load_config(repo)
     write_feed(feed_root, records(evolution.load_config(repo), TARGET))
 
@@ -1840,7 +1840,7 @@ def test_a_second_start_offers_no_second_batch(
     repo: Path, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The pool goes on accumulating while a cycle runs; what it may not do is
-    offer a second cohort beside it (invariant 14)."""
+    offer a second batch beside it (invariant 14)."""
     write_feed(feed_root, records(evolution.load_config(repo), TARGET))
     run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
     run(["evolution", "freeze", "--repo", str(repo)], capsys)
@@ -1858,7 +1858,7 @@ def test_start_below_the_target_offers_a_batch_nothing_may_freeze_yet(
 ) -> None:
     """Too little evidence is the contract's normal outcome, so the run
     succeeds and reports the reason. The offer still stands: what admission
-    refuses is forming a cohort out of it, not selecting it."""
+    refuses is forming a batch out of it, not selecting it."""
     write_feed(feed_root, records(evolution.load_config(repo), 1))
 
     code, out, _ = run(["evolution", "start", "--repo", str(repo), "--feed-dir", str(feed_root)], capsys)
@@ -2458,7 +2458,7 @@ def test_a_frozen_manifest_that_contradicts_itself_is_not_a_freeze_being_refused
     """The other half of the same translation, on the record the repository
     carries rather than this machine.
 
-    A manifest's counts and its reports have to describe one cohort, and the
+    A manifest's counts and its reports have to describe one batch, and the
     rule saying so is asked in both directions: the freeze publishes through it,
     where refusing is right because the manifest is still being built and does
     not have to be published, and the reader asks it of a file frozen months ago
@@ -2872,7 +2872,7 @@ def test_the_whole_change_lineage_is_reachable_from_the_command_line(
     assert "round 2 open" in out
     assert phase.describe(config, now=NOW).phase == phase.PHASE_IMPLEMENTING
 
-    code, out, _ = run(["evolution", "reject", "wider-rubric", "--reason", "not this cohort's evidence", *where], capsys)
+    code, out, _ = run(["evolution", "reject", "wider-rubric", "--reason", "not this batch's evidence", *where], capsys)
     assert code == 0
     assert "1 draft(s) declined" in out
 
@@ -3285,8 +3285,8 @@ def test_the_documented_cycle_is_a_sequence_this_build_still_runs() -> None:
 
     Its reading half is held to more than that, because a command can parse and
     still be refused: a directional verdict rests on evidence that can carry one,
-    and the cohorts never can while `task-shape` goes unstated on every manifest
-    version (`test_placed_cohorts_name_the_facet_no_manifest_states`). A cycle
+    and the sides never can while `task-shape` goes unstated on every manifest
+    version (`test_placed_sides_name_the_facet_no_manifest_states`). A cycle
     documenting `assess --verdict improved` therefore hands an operator a command
     the controller refuses, which is what this asserts against: the direction
     arrives on `assess-resolve`, after the counterfactual it rests on.
@@ -3310,7 +3310,7 @@ def test_the_documented_cycle_is_a_sequence_this_build_still_runs() -> None:
     assert all(parsed.verdict not in assessment.DIRECTIONAL_VERDICTS for parsed in by_verb["assess"])
     assert any(parsed.verdict in assessment.DIRECTIONAL_VERDICTS for parsed in by_verb["assess-resolve"])
     # Why the first reading cannot be directional, from the predicate rather than
-    # from this test's opinion: incomparable cohorts carry no direction whatever
+    # from this test's opinion: incomparable sides carry no direction whatever
     # else they came to.
     assert (
         assessment.directional_admissible(coherent=False, before_task_count=99, after_task_count=99, minimum=1)
@@ -3322,7 +3322,7 @@ def test_the_documented_cycle_is_a_sequence_this_build_still_runs() -> None:
 #
 # What the change lineage produces and what is done about it afterwards: a
 # candidate carried onto the source line, a run that measured it ended or given
-# up, the next cohort's reading of that release, and the gate the next first
+# up, the next batch's reading of that release, and the gate the next first
 # experiment waits on. The same two properties are under test as for the lineage
 # verbs — every operation reachable, and a run that found the work already done
 # saying so — with one more that belongs to this half alone: a `rolled-back`
@@ -3460,7 +3460,7 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     assert lineage.describe(config).current is None
 
     code, out, _ = run(
-        ["evolution", "rollback", "--reason", "the next cohort measured worse", "--source-ref", RELEASE_REF, *where],
+        ["evolution", "rollback", "--reason", "the next batch measured worse", "--source-ref", RELEASE_REF, *where],
         capsys,
     )
 
@@ -3471,7 +3471,7 @@ def test_a_promotion_and_its_rollback_are_reachable_from_the_command_line(
     line = git_rev(lineage_repo, RELEASE_REF)
     assert line != promoted.revision
 
-    code, out, _ = run(["evolution", "rollback", "--reason", "the next cohort measured worse", *where], capsys)
+    code, out, _ = run(["evolution", "rollback", "--reason", "the next batch measured worse", *where], capsys)
 
     assert code == 0
     assert "this run wrote nothing: the rollback above is the one on record" in out
@@ -3643,11 +3643,11 @@ class DeadHarness:
 
 
 def assessing(config: evolution.EvolutionConfig, feed_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
-    """A promotion on the line and the cohort that owes the reading of it.
+    """A promotion on the line and the batch that owes the reading of it.
 
     The promotion is made by the command under test in the tests above; here it
     is the state rather than the subject, so the shared cycle makes it — and the
-    second cohort's reports state the promoted revision, which is what places
+    second batch's reports state the promoted revision, which is what places
     them after the release.
     """
 
@@ -3676,7 +3676,7 @@ def _report(key: str, sequence: int, task_id: str, effective_revision: str) -> d
     """One frozen membership entry, stating the revision its target held.
 
     Which side of the release a report falls on is read from that revision and
-    nothing else, so a cohort is placed by what this states rather than by when
+    nothing else, so a report is placed by what this states rather than by when
     the batch was frozen.
     """
 
@@ -3688,7 +3688,7 @@ def _report(key: str, sequence: int, task_id: str, effective_revision: str) -> d
 def test_the_release_reading_and_its_gate_are_one_verb_each(
     lineage_repo: Path, release: str, feed_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """What the cohort after a promotion owes: a reading of that release, and an
+    """What the batch after a promotion owes: a reading of that release, and an
     answer to the gate the next first experiment waits on. The quantities are the
     operator's — read off machine-local artifacts nothing here can re-derive —
     and everything else about the reading is the lineage's own."""
@@ -3706,7 +3706,7 @@ def test_the_release_reading_and_its_gate_are_one_verb_each(
             "--confidence",
             assessment.CONFIDENCE_LOW,
             "--rationale",
-            "no frozen manifest states what kind of work either cohort did",
+            "no frozen manifest states what kind of work either side did",
             "--recommend",
             assessment.SETTLEMENT_RETAIN,
             "--metric",
@@ -3760,7 +3760,7 @@ def test_a_rolled_back_settlement_runs_the_reversal_itself(
             "--confidence",
             assessment.CONFIDENCE_LOW,
             "--rationale",
-            "the cohorts place nothing on either side",
+            "the sides place nothing on either side",
             "--recommend",
             assessment.SETTLEMENT_RETAIN,
             *where,
@@ -3838,7 +3838,7 @@ def test_a_settlement_finishes_a_reversal_the_line_had_already_taken(
             "--confidence",
             assessment.CONFIDENCE_LOW,
             "--rationale",
-            "the cohorts place nothing on either side",
+            "the sides place nothing on either side",
             "--recommend",
             assessment.SETTLEMENT_RETAIN,
             *where,
@@ -3894,7 +3894,7 @@ def test_the_counterfactual_is_ended_given_up_and_read_from_the_command_line(
         "--confidence",
         assessment.CONFIDENCE_LOW,
         "--rationale",
-        "the cohorts place nothing on either side",
+        "the sides place nothing on either side",
         "--recommend",
         assessment.SETTLEMENT_RETAIN,
     ]
@@ -3966,7 +3966,7 @@ def test_a_release_verb_refuses_the_reading_another_writer_moved_under(
             "--confidence",
             assessment.CONFIDENCE_LOW,
             "--rationale",
-            "the cohorts place nothing on either side",
+            "the sides place nothing on either side",
             "--recommend",
             assessment.SETTLEMENT_RETAIN,
             *where,
@@ -4003,7 +4003,7 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
 
     The count is the argument's own shape and is argparse's; the two quantities
     are checked here, because a side is a number or nothing at all and an empty
-    one is a cohort that measured nothing — a different fact from zero, and the
+    one is a side that measured nothing — a different fact from zero, and the
     reason the values are not simply required. The name and the unit are carried
     whole: the record takes any non-empty string for either, delimiters included,
     so five values are what keeps this console able to say everything the library
@@ -4020,7 +4020,7 @@ def test_a_measurement_the_record_cannot_hold_is_refused_before_anything_runs(
         "--confidence",
         assessment.CONFIDENCE_LOW,
         "--rationale",
-        "the cohorts place nothing on either side",
+        "the sides place nothing on either side",
         "--recommend",
         assessment.SETTLEMENT_RETAIN,
     ]
@@ -4329,7 +4329,7 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
 
     The numbers cross one boundary on the way in — a run states a baseline and a
     candidate, and this record states a before and an after — so what is asserted
-    here is that the two sides arrive where the cohort reading can be read
+    here is that the two sides arrive where the reading of the sides can be read
     against them.
     """
 
@@ -4342,7 +4342,7 @@ def test_a_counterfactual_is_measured_and_concluded_from_the_command_line(
         "--confidence",
         assessment.CONFIDENCE_LOW,
         "--rationale",
-        "the cohorts place nothing on either side",
+        "the sides place nothing on either side",
         "--recommend",
         assessment.SETTLEMENT_RETAIN,
     ]

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/batch-outcome.schema.json",
   "title": "Evolution batch outcome",
-  "description": "The terminal record of one batch. Its presence is what ends the batch and releases the next cohort (contract invariant 14), which is why it is committed: `.ai-evolution/` is machine-local, so a batch whose conclusion lived only in runtime state would read as current on every other clone forever.\n\nThree ways a batch reaches it, and only one of them is a decision about this batch's own attempts: it promoted, it concluded that the evidence justified no change, or the release it was formed to judge was taken back off the source line under it.",
+  "description": "The terminal record of one batch. Its presence is what ends the batch and releases the next one (contract invariant 14), which is why it is committed: `.ai-evolution/` is machine-local, so a batch whose conclusion lived only in runtime state would read as current on every other clone forever.\n\nThree ways a batch reaches it, and only one of them is a decision about this batch's own attempts: it promoted, it concluded that the evidence justified no change, or the release it was formed to judge was taken back off the source line under it.",
   "type": "object",
   "required": [
     "schema_version",

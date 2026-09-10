@@ -3,14 +3,14 @@
 Invariant 10 puts a replay between a candidate and the source line, and the
 contract's last revision in play says why that is not the end of the evidence
 chain: a promoted commit changes nothing an evaluation can see until targets
-carry it, so the cohort that measures a release is the one whose reports were
+carry it, so the batch that measures a release is the one whose reports were
 produced at that effective revision. This module is that reading — one later
 batch's answer about one earlier promotion.
 
 **What is derived and what is recorded.** The release under assessment, the two
-report cohorts, their denominators, the exclusions, and the comparability facets
-all follow from two immutable manifests, the promoted batch's outcome, its
-rollback record if it has one, and Git. So they are derived here on every read,
+sides, their denominators, the exclusions, and the comparability facets all
+follow from two immutable manifests, the promoted batch's outcome, its rollback
+record if it has one, and Git. So they are derived here on every read,
 the way every other lifecycle reading in this package is, and the committed
 record is checked against that derivation. What cannot be re-derived is what the
 record exists for: measurements taken from machine-local evaluation artifacts, a
@@ -20,10 +20,10 @@ as a write — a caller supplies only the half nobody can re-derive, and the rec
 is published through the reader that loads it back, so what a later read enforces
 is what this write passed and a reading that could not be read is never written.
 
-**The failure this exists to prevent** is a directional claim the cohorts cannot
+**The failure this exists to prevent** is a directional claim the sides cannot
 support. Reports arrive from targets that were redeployed at different times, by
 evaluators that move, on work of different shapes — so a difference in the
-numbers between two cohorts is explained by the release only when nothing else
+numbers between two sides is explained by the release only when nothing else
 differs. Mixed or missing provenance therefore produces `inconclusive`, which is
 a real result: knowing less is not evidence against a release, and a regression
 claim is the one reading that costs somebody the change they promoted. A
@@ -42,7 +42,7 @@ pair with the lock's payload digest, and the import client copies both or
 neither, so a report here states the identity its runs were verified under or
 states nothing at all. Reports imported before that publication carry no
 revision and never gain one — a frozen manifest copies the record as staged —
-so a cohort built from them excludes whole and the counterfactual below is what
+so a side built from them excludes whole and the counterfactual below is what
 carries a direction (contract: Release assessment).
 
 Reported also means unchecked, with one exception: `_place` asks Git which
@@ -69,11 +69,11 @@ import client copies the published string verbatim and repairs nothing
 and it reaches reports frozen into a manifest before the rule existed as readily
 as ones imported after it.
 
-The shape of the work is the difference nothing frozen states. Two cohorts are
+The shape of the work is the difference nothing frozen states. Two sides are
 two different task sets by construction, and no manifest version records what
 kind of task each report judged, so that facet is carried as the unknown it is
 rather than approximated by "the same repository appears on both sides". What
-follows is not a weaker artifact but an honest division of labour: the cohorts
+follows is not a weaker artifact but an honest division of labour: the sides
 show the base rate and raise the suspicion, and a direction — in either sign — is
 settled by the counterfactual.
 
@@ -114,8 +114,8 @@ regression and result shapes are the replay record's own value objects: a
 comparison across two spellings of "who judged this" could not make the
 separation invariant 5 asks for. The one deliberate difference is the
 measurement — a run states a quantity as `baseline` and `candidate`, and here
-the two sides are cohorts produced before and after a release, so they are named
-`before` and `after`. A counterfactual's numbers cross that boundary once, on
+the two sides are report sets produced before and after a release, so they are
+named `before` and `after`. A counterfactual's numbers cross that boundary once, on
 the way in: its baseline is the pre-promotion revision and its candidate the
 promoted one.
 
@@ -198,7 +198,7 @@ VERDICT_REGRESSED = "regressed"
 VERDICT_INCONCLUSIVE = "inconclusive"
 # The three readings that say which way the release moved the work. `neutral` is
 # one of them: "the release changed nothing" is a claim about a measured
-# difference, and it needs the same comparable cohorts `improved` does.
+# difference, and it needs the same comparable sides `improved` does.
 # `inconclusive` is the answer when they are not there.
 DIRECTIONAL_VERDICTS = frozenset({VERDICT_IMPROVED, VERDICT_NEUTRAL, VERDICT_REGRESSED})
 # Every reading a record may state: the three directional ones, then the one
@@ -227,7 +227,7 @@ SETTLEMENT_ROLLED_BACK = "rolled-back"
 # choose (invariant 7's `no-change` conclusion) rather than a third word here.
 SETTLEMENTS = (SETTLEMENT_RETAIN, SETTLEMENT_ROLLED_BACK)
 
-# Why a frozen report is in neither cohort. All four are about what its
+# Why a frozen report is on neither side. All four are about what its
 # provenance can be shown to say, never about what its numbers came to.
 EXCLUDED_REVISION_ABSENT = "effective-revision-absent"
 EXCLUDED_REVISION_MALFORMED = "effective-revision-malformed"
@@ -235,7 +235,7 @@ EXCLUDED_REVISION_UNRESOLVABLE = "effective-revision-unresolvable"
 # The price of placing by canonical identity rather than by ancestry: identity
 # answers same-or-different and never before-or-after, so a target that held a
 # third protocol — neither the release nor the line it was merged into — belongs
-# to no cohort here and says so. Ancestry had a total order and no such answer,
+# to no side here and says so. Ancestry had a total order and no such answer,
 # which is exactly how it bought a side for revisions that deserve none.
 EXCLUDED_OTHER_PROTOCOL = "effective-revision-other-protocol"
 # The two a frozen manifest settles by itself: whether it states an effective
@@ -250,10 +250,10 @@ MANIFEST_SETTLED_EXCLUSIONS = frozenset({EXCLUDED_REVISION_ABSENT, EXCLUDED_REVI
 SIDE_BEFORE = "before"
 SIDE_AFTER = "after"
 
-# The respects in which the two cohorts have to be one cohort (invariant 5).
+# The respects in which the two sides have to be one comparison (invariant 5).
 # Every one but the last is an equality facet: one value across both sides and
-# none of it missing, because a cohort carrying two evaluator models is not one
-# cohort and a provenance field nothing filled in cannot be shown to match.
+# none of it missing, because a side carrying two evaluator models is not one
+# side and a provenance field nothing filled in cannot be shown to match.
 FACET_EVALUATOR_BACKEND = "evaluator-backend"
 FACET_EVALUATOR_MODEL = "evaluator-model"
 FACET_EVALUATOR_RUBRIC = "evaluator-rubric-revision"
@@ -261,16 +261,16 @@ FACET_EVALUATOR_SCHEMA = "evaluator-schema-version"
 FACET_RUNNER_REVISION = "runner-protocol-revision"
 FACET_DEV_ROLE = "dev-role"
 FACET_REVIEW_ROLE = "review-role"
-# Whether the two cohorts did the same kind of work — and it is unknown on every
+# Whether the two sides did the same kind of work — and it is unknown on every
 # manifest version. A frozen entry states identity, hashes, evaluator and
 # deployment provenance and nothing about the shape of the task it judged, so
 # invariant 4 keeps this missing rather than assumed. It is recorded all the same
-# because of what its absence would otherwise be read as: the two cohorts are
+# because of what its absence would otherwise be read as: the two sides are
 # necessarily two different task sets (one report per completed task), so a
 # difference in their numbers is explained by the work at least as well as by the
 # release, and "at least one repository on both sides" is coverage rather than
 # evidence that the work matched. A direction therefore cannot rest on the
-# cohorts alone here; what settles one is the counterfactual, where the case set
+# sides alone here; what settles one is the counterfactual, where the case set
 # is pinned and the release is the only difference. The facet becomes answerable
 # the day a manifest version carries durable task-shape provenance — a change to
 # what the feed reports, not to this reading.
@@ -279,7 +279,7 @@ FACET_TASK_SHAPE = "task-shape"
 # equality: at least one repository present on both sides. Requiring the same set
 # would refuse every real comparison, and requiring nothing would compare two
 # projects and call the difference a release effect. It is also the facet an
-# empty cohort fails, which is why `Comparability.coherent` can stay exactly
+# empty side fails, which is why `Comparability.coherent` can stay exactly
 # "every facet is coherent".
 FACET_REPOSITORY_COVERAGE = "repository-coverage"
 
@@ -310,9 +310,9 @@ class Subject:
     tree: str
     # The targets the promotion was *planned* for. A plan, never a deployment:
     # what a target holds is per target and read from its own deploy receipt, and
-    # reading this list as the deployed cohort is exactly the false comparability
+    # reading this list as the deployed side is exactly the false comparability
     # this module refuses. Kept because it is what an operator compares the
-    # cohort's actual effective revisions against.
+    # sides' actual effective revisions against.
     planned_targets: tuple[str, ...]
     # Whether the source line still carries the promotion. False only for one a
     # completed rollback reversed; a rollback still in flight leaves it standing,
@@ -328,7 +328,7 @@ class Subject:
         """Whether this is an assessment of a release the line no longer holds.
 
         A different question from an assessment of a standing one, not the same
-        question with a caveat: the cohort after a rollback was produced at a
+        question with a caveat: the side after a rollback was produced at a
         revision the change is not in, so what it can say is what the reversal
         did rather than what the release did.
         """
@@ -340,7 +340,7 @@ class Subject:
 class Member:
     """One frozen report, with the facts a comparison is drawn from.
 
-    `batch_id` is the manifest it belongs to. The two cohorts come from two
+    `batch_id` is the manifest it belongs to. The two sides come from two
     immutable manifests — the assessed batch's and the assessing one's — so a
     report cannot be traced back to a denominator without it.
     """
@@ -354,7 +354,7 @@ class Member:
 
 
 @dataclass(frozen=True)
-class Cohort:
+class Side:
     """One side of the comparison, and the denominator it comes to."""
 
     members: tuple[Member, ...]
@@ -366,14 +366,14 @@ class Cohort:
     @property
     def task_count(self) -> int:
         """Unique completed tasks — the unit invariant 1 counts in, so an
-        evaluator rerun does not inflate a cohort into significance."""
+        evaluator rerun does not inflate a side into significance."""
 
         return len({(member.repo_id, member.task_id) for member in self.members})
 
 
 @dataclass(frozen=True)
 class Excluded:
-    """A frozen report neither cohort could take, and why."""
+    """A frozen report neither side could take, and why."""
 
     report_key: str
     batch_id: str
@@ -383,7 +383,7 @@ class Excluded:
 
 @dataclass(frozen=True)
 class Facet:
-    """One respect in which the cohorts either are or are not one cohort."""
+    """One respect in which the sides either are or are not one comparison."""
 
     facet: str
     coherent: bool
@@ -406,7 +406,7 @@ class Facet:
         sides disagreeing about the rubric — nothing on the far side was there to
         disagree with — and calling it a difference would report a gap in what
         the feed published as evidence that the release is not the only thing
-        separating the cohorts. A side only some of whose reports fill the facet
+        separating the sides. A side only some of whose reports fill the facet
         in says the same thing about a smaller gap: before `("r7",)` against
         after `("r7", None)` is one after-side report whose rubric the feed never
         published, and what the two sides do state agrees exactly. An empty side
@@ -420,7 +420,7 @@ class Facet:
 
 @dataclass(frozen=True)
 class Comparability:
-    """Whether the release is the only difference between the two cohorts."""
+    """Whether the release is the only difference between the two sides."""
 
     facets: tuple[Facet, ...]
 
@@ -440,13 +440,13 @@ class Comparability:
         """The incoherent facets at least one side does not state.
 
         The first of the two ways a facet fails, and the one that is not about
-        these cohorts at all: a facet no manifest fills in is a gap in what the
+        these sides at all: a facet no manifest fills in is a gap in what the
         feed publishes, so the answer is unknown rather than no. `task-shape` is
         the standing example — unknown on every manifest version, which is
         exactly why a direction rests on the counterfactual instead.
 
         A facet only one side fills in lands here too, as does one a side fills
-        in for some of its reports and not for the others, an empty cohort's
+        in for some of its reports and not for the others, an empty side's
         facets included: what is missing is a half of the comparison, not an
         agreement. See `Facet.stated`, which is where that rule is.
         """
@@ -458,7 +458,7 @@ class Comparability:
         """The incoherent facets both sides state, and disagree on.
 
         The other way a facet fails, and the only one that is evidence about
-        these cohorts: the release is not the only difference between them. Kept
+        these sides: the release is not the only difference between them. Kept
         apart from `unstated` because reporting the two together reads as broken
         provenance in both directions — a mismatch nobody can fix beside a gap
         nobody introduced.
@@ -469,7 +469,7 @@ class Comparability:
 
 @dataclass(frozen=True)
 class Measurement:
-    """One quantity, on the cohort produced before the release and on the one
+    """One quantity, on the side produced before the release and on the one
     produced after it."""
 
     metric: str
@@ -589,7 +589,7 @@ class Counterfactual:
 
 @dataclass(frozen=True)
 class CounterfactualRequest:
-    """A run this cohort committed to before it asked the harness for one.
+    """A run this batch committed to before it asked the harness for one.
 
     Everything here is the controller's own: the key the run will occupy, the
     pair pinned for it, and what it was expected to show. Nothing the harness
@@ -657,8 +657,8 @@ class Frame:
 
     batch: Batch
     subject: Subject
-    before: Cohort
-    after: Cohort
+    before: Side
+    after: Side
     excluded: tuple[Excluded, ...]
     comparability: Comparability
     # Every report the two frozen manifests name, placed or not. Which side a
@@ -669,7 +669,7 @@ class Frame:
     # both manifest facts, and a clone missing an object would otherwise skip them
     # and accept a count or a facet list nobody could have derived.
     catalog: tuple[Member, ...]
-    # The unique-task count each cohort needs before a directional claim is
+    # The unique-task count each side needs before a directional claim is
     # admissible. The analysis policy's own minimum cluster size: a claim about
     # the release is a cluster-level claim about unique completed tasks, and a
     # second threshold for it would be a second policy for one question.
@@ -696,10 +696,14 @@ class Frame:
 
     @property
     def cohorts_support_direction(self) -> bool:
-        """Whether the two cohorts could carry `improved`, `neutral` or
+        """Whether the two sides could carry `improved`, `neutral` or
         `regressed` between them — before any measurement is taken.
 
-        The cohorts alone, deliberately: a direction may also rest on a completed
+        Named for the persisted `cohorts` block rather than for the side
+        vocabulary around it: renaming a key the record and the status payload
+        both publish would spend a schema version on a reader's convenience.
+
+        The sides alone, deliberately: a direction may also rest on a completed
         counterfactual, which is evidence a frame knows nothing about. False for
         every frame while no manifest states the shape of the work.
         """
@@ -798,6 +802,10 @@ class Assessment:
                 "standing": self.subject.standing,
                 "rollback_revision": self.subject.rollback_revision,
             },
+            # `cohorts` is the wire name for the two sides and their exclusions.
+            # Kept where the vocabulary moved on (`Side`), because a schema
+            # version spent on a key's spelling costs every reader of the
+            # records already written and buys none of them anything.
             "cohorts": {
                 "before": {"report_keys": list(self.before), "task_count": self.before_task_count},
                 "after": {"report_keys": list(self.after), "task_count": self.after_task_count},
@@ -849,12 +857,12 @@ class Assessment:
 class Obligation:
     """The reading of one release, wherever it sits: whose it is and what it says.
 
-    The obligation belongs to the first cohort frozen after the promotion and
-    stays there — a later batch never acquires it — so this pairs that cohort's
+    The obligation belongs to the first batch frozen after the promotion and
+    stays there — a later batch never acquires it — so this pairs that batch's
     derived frame with whatever it has recorded so far. Ordinarily the two are
     the same batch and this says nothing new; it exists for the case where they
     are not, because the answer an admission waits on is the *owner's* and not
-    the admitting cohort's own (invariant 17).
+    the admitting batch's own (invariant 17).
     """
 
     frame: Frame
@@ -862,7 +870,7 @@ class Obligation:
 
     @property
     def owner_id(self) -> str:
-        """The cohort that owes the reading."""
+        """The batch that owes the reading."""
 
         return self.frame.batch_id
 
@@ -903,15 +911,15 @@ def directional_admissible(
     after_task_count: int,
     minimum: int,
 ) -> bool:
-    """Whether cohorts of this shape may carry a directional verdict on their own.
+    """Whether sides of this shape may carry a directional verdict on their own.
 
     One rule, asked by both sides of the artifact: formation asks it of the
-    frame it derived, and every read asks it of the cohorts the record states.
+    frame it derived, and every read asks it of the sides the record states.
     Two answers to "may this claim be made" would let a record be written that
     nothing afterwards accepts, or accepted where it could not have been written.
 
     A direction may also rest on a completed counterfactual, which is not a
-    property of the cohorts and so is not asked here — the reader composes the
+    property of the sides and so is not asked here — the reader composes the
     two paths.
     """
 
@@ -966,7 +974,7 @@ def settleable(run: Counterfactual | None, requested: CounterfactualRequest | No
 
 
 def subject(lineage: Lineage, batch: Batch) -> Subject | None:
-    """The release `batch`'s cohort would be assessing, or None when there is
+    """The release `batch` would be assessing, or None when there is
     none before it.
 
     Read from records alone — no Git — because this is also what the analysis
@@ -975,7 +983,7 @@ def subject(lineage: Lineage, batch: Batch) -> Subject | None:
 
     "The newest promotion before this batch" rather than the newest promotion
     outright: a batch assesses the release its own reports were produced after,
-    and a promotion made later is one its cohort could not have seen.
+    and a promotion made later is one its reports could not have seen.
     """
 
     promoted = _last_promoted_before(lineage, batch)
@@ -1004,14 +1012,14 @@ def subject(lineage: Lineage, batch: Batch) -> Subject | None:
 def owed_by(lineage: Lineage, batch: Batch) -> Subject | None:
     """The release `batch` itself owes a reading of, or None when it owes none.
 
-    The obligation belongs to the *first* cohort frozen after a promotion, which
+    The obligation belongs to the *first* batch frozen after a promotion, which
     is the one whose reports are the earliest evidence about it, and it stays
     there. A later batch still derives the same subject — that is how it reads
     the record — and owes no reading of its own, because invariant 14 keeps the
-    batches in a series and there is only one first cohort. Its formation waits
-    on nothing either way; what a later batch's first admission may still wait
-    on is the *owning* cohort's answer, which invariant 17 keeps with that
-    cohort rather than passing on.
+    batches in a series and there is only one first batch after it. Its formation
+    waits on nothing either way; what a later batch's first admission may still
+    wait on is the *owning* batch's answer, which invariant 17 keeps with that
+    batch rather than passing on.
 
     Read from records alone, so the freeze that generates an analysis task can
     ask it without depending on which Git objects the machine holds.
@@ -1052,7 +1060,7 @@ def describe(
     # Several reports ordinarily name one effective revision, and deriving the
     # protocol one carries costs a Git process. `_Sides` holds the cache
     # (`lockfile.CanonicalIdentities`) as well as the pair being compared
-    # against, so a cohort walk asks about each distinct revision once.
+    # against, so a walk over the reports asks about each distinct revision once.
     sides = _sides(config, assessed)
     for member in members:
         side, exclusion = _place(member, sides)
@@ -1063,15 +1071,15 @@ def describe(
         else:
             after.append(member)
 
-    before_cohort = Cohort(members=tuple(before))
-    after_cohort = Cohort(members=tuple(after))
+    before_side = Side(members=tuple(before))
+    after_side = Side(members=tuple(after))
     return Frame(
         batch=batch,
         subject=assessed,
-        before=before_cohort,
-        after=after_cohort,
+        before=before_side,
+        after=after_side,
         excluded=tuple(excluded),
-        comparability=_comparability(before_cohort, after_cohort),
+        comparability=_comparability(before_side, after_side),
         catalog=members,
         minimum_task_count=config.analysis.minimum_cluster_task_count,
         owed=_owed(known, batch, assessed),
@@ -1103,7 +1111,7 @@ def read(
     Validated and then held to the repository, the way every other committed
     record here is. A record about a release this batch does not follow, over
     reports no frozen manifest names, or carrying a directional verdict its own
-    cohorts cannot support is refused rather than read — the last of those is the
+    sides cannot support is refused rather than read — the last of those is the
     whole point of the artifact, and a rule only the writer keeps is one any file
     written beside it escapes.
 
@@ -1119,7 +1127,7 @@ def read(
         batch.assessment_path,
         schema_filename=ASSESSMENT_SCHEMA_FILENAME,
         description="release assessment record",
-        foreign="one batch's cohort cannot record another's reading of a release",
+        foreign="one batch cannot record another's reading of a release",
     )
     if record is None:
         return None
@@ -1138,19 +1146,19 @@ def obligation(
     *,
     lineage: Lineage | None = None,
 ) -> Obligation | None:
-    """The reading of the release before `batch`, read from the cohort that owes
+    """The reading of the release before `batch`, read from the batch that owes
     it. None when there is no release before `batch` at all.
 
     The distinction this exists for: "which release precedes this batch" and
-    "which cohort answers for it" are two questions, and they part company as
-    soon as the owing cohort ends without answering. A batch that concluded
+    "which batch answers for it" are two questions, and they part company as
+    soon as the owing batch ends without answering. A batch that concluded
     `no-change` promoted nothing, so the batch after it still follows the older
     release — while the obligation to read that release stays with the first
-    cohort frozen after it, which is where the record is and where it stays.
+    batch frozen after it, which is where the record is and where it stays.
     Asking `owed_by` of the admitting batch alone would find no obligation there
     and let the admission proceed on a base nobody decided about (invariant 17).
 
-    Read-only, and the answer is the whole state: which cohort owes it, the frame
+    Read-only, and the answer is the whole state: which batch owes it, the frame
     its record is checked against, and the record itself where there is one.
     """
 
@@ -1169,7 +1177,7 @@ def obligation(
         # make these two readings of it agree.
         raise RecordError(
             f"{batch.batch_id} follows the {assessed.batch_id} release ({assessed.revision[:12]}), and no batch "
-            "is recorded as frozen after that promotion; the cohort that owes the reading is the first one after "
+            "is recorded as frozen after that promotion; the batch that owes the reading is the first one after "
             "it, so this lineage cannot say who answers for a release its own batches follow"
         )
     frame = describe(config, owner.batch, lineage=known)
@@ -1177,9 +1185,9 @@ def obligation(
         # Same shape: the owner follows that promotion by construction, so a
         # frame it cannot derive is a lineage disagreeing with itself.
         raise RecordError(
-            f"{owner.batch_id} is the cohort that owes a reading of the {assessed.batch_id} release, and no "
+            f"{owner.batch_id} is the batch that owes a reading of the {assessed.batch_id} release, and no "
             "release can be derived for it; the batches form a series (invariant 14), so the promotion this "
-            "batch follows is the one that cohort follows too"
+            "batch follows is the one that batch follows too"
         )
     return Obligation(frame=frame, reading=read(config, owner.batch, frame=frame))
 
@@ -1195,7 +1203,7 @@ def parse(
     cannot express.
 
     Two kinds of check, and they are kept apart deliberately. The record's
-    internal consistency — the verdict against the comparability, the cohorts and
+    internal consistency — the verdict against the comparability, the sides and
     the counterfactual it states — is machine-independent, so it is enforced
     everywhere and a record that passes it stays readable on every clone. Its
     agreement with the repository is enforced as far as the checkout can answer:
@@ -1211,7 +1219,7 @@ def parse(
     if frame is None:
         raise RecordRefused(
             f"{path}: this batch follows no promotion, so there is no release for an assessment to be about; "
-            "a repository that promoted nothing before this cohort has nothing to assess, and a record here "
+            "a repository that promoted nothing before this batch has nothing to assess, and a record here "
             "names a release its own lineage does not have"
         )
 
@@ -1254,8 +1262,8 @@ def parse(
 
     # Asked of every record, whatever it concluded: a quantity stated twice or a
     # direction with nothing to point away from is a malformed measurement, and an
-    # `inconclusive` reading is read by the next cohort like any other.
-    _require_distinct_metrics(path, "the cohort comparison", metrics)
+    # `inconclusive` reading is read by the next batch like any other.
+    _require_distinct_metrics(path, "the side comparison", metrics)
     _require_allocated_once(path, counterfactual, requested, withdrawn)
     _require_settled_over_evidence(path, decision, counterfactual, requested)
     _require_one_side(path, before, after, excluded)
@@ -1314,10 +1322,10 @@ def form(
     expect: str | None = None,
     now: datetime | None = None,
 ) -> Formed:
-    """Record the current cohort's reading of the release before it.
+    """Record the current batch's reading of the release before it.
 
     What a caller supplies is only what nobody can re-derive: the quantities the
-    two cohorts came to, read from evaluation artifacts this machine holds, and
+    two sides came to, read from evaluation artifacts this machine holds, and
     the verdict, confidence and rationale of the session that judged them.
     Everything else — which release, which reports on which side, the
     denominators, the exclusions, the comparability facets — is derived here from
@@ -1332,14 +1340,14 @@ def form(
     generated analysis task's own second question, taken before the dispositions
     close. What this does need from the lineage is the same as everything else:
     which batch is current (invariant 14, from the whole history), and whether it
-    is the cohort that owes the reading.
+    is the batch that owes the reading.
 
     The verdict is checked against the evidence the record carries, by the parser
     every read uses. In practice a reading formed here is `inconclusive` or
-    nothing: no manifest version states the shape of the work, so the cohorts
+    nothing: no manifest version states the shape of the work, so the sides
     carry no direction on their own, and the counterfactual that settles one has
     not run when this is written. That is the artifact working rather than a
-    limitation of it — the cohorts raise the suspicion and the pinned run answers
+    limitation of it — the sides raise the suspicion and the pinned run answers
     it. Which is also why a formation ordinarily advises `retain`: `rolled-back`
     is held to a `regressed` reading, and that reading is what `resolve` is the
     first place able to record.
@@ -1348,7 +1356,7 @@ def form(
     record rather than writing a second one, and does not re-append the audit line
     that interruption may have cost — the rule a redone conclusion follows, for
     the same reason: the event happened once. A request that says something
-    different is refused, because a cohort reads a release once and the record is
+    different is refused, because a batch reads a release once and the record is
     what the counterfactual and the human settlement are afterwards added to.
     """
 
@@ -1356,7 +1364,7 @@ def form(
     text = require_reason(
         rationale,
         "a release assessment records why its verdict is that verdict; the evidence the judging session had in "
-        "front of it is machine-local and the cohorts are two different task sets, so this sentence is what a "
+        "front of it is machine-local and the sides are two different task sets, so this sentence is what a "
         "later reader has instead of both",
     )
     stated = tuple(metrics)
@@ -1413,15 +1421,15 @@ def _owing_frame(
     """The frame of the batch that owes a reading, or why there is none to write.
 
     Three ways there is nothing here to record, and they are different answers to
-    an operator: no cohort is current, the current cohort follows no release, and
-    the reading belongs to an earlier cohort whose answer is already on record.
+    an operator: no batch is current, the current batch follows no release, and
+    the reading belongs to an earlier batch whose answer is already on record.
 
-    The third of those is a refusal only where that earlier cohort *answered*.
-    An obligation it left outstanding — a cohort that ended without reading the
+    The third of those is a refusal only where that earlier batch *answered*.
+    An obligation it left outstanding — a batch that ended without reading the
     release, or read it and was never settled — is still the obligation the next
-    first experiment waits on, and the record still belongs in that cohort's own
+    first experiment waits on, and the record still belongs in that batch's own
     directory. So these operations follow it there rather than refusing from the
-    cohort that happens to be current: a gate nothing can answer would stop the
+    batch that happens to be current: a gate nothing can answer would stop the
     lineage for good, since what releases the next admission is the settlement
     and what would record the settlement is this.
 
@@ -1434,13 +1442,13 @@ def _owing_frame(
     and being interrupted after the record landed look the same from outside.
     The operations that *add* to a reading do not take the exception: for them an
     answered obligation is where the work stops, and stopping here says whose
-    record it is, which the settled check further in could not — the cohort
+    record it is, which the settled check further in could not — the batch
     standing at the keyboard has recorded nothing at all.
     """
 
     current = known.current
     if current is None:
-        raise NothingToActOn(no_cohort_refusal())
+        raise NothingToActOn(no_batch_refusal())
 
     frame = describe(config, current.batch, lineage=known)
     if frame is None:
@@ -1448,8 +1456,8 @@ def _owing_frame(
     if frame.owed:
         return frame
 
-    # Never None: this cohort derived a release just above, so there is one
-    # before it — and where the lineage cannot say which cohort owes that
+    # Never None: this batch derived a release just above, so there is one
+    # before it — and where the lineage cannot say which batch owes that
     # reading, `obligation` refuses rather than answering.
     owed = obligation(config, current.batch, lineage=known)
     if owed is not None and (follow_answered or not owed.settled):
@@ -1463,15 +1471,15 @@ def _settling_frame(config: EvolutionConfig, known: Lineage) -> Frame:
     `_owing_frame` starts from the batch that is current, which is the right
     place for every operation that adds to a reading. A settlement is the one
     that can leave no batch current at all: `rolled-back` takes the release out
-    from under the cohort standing on it, and ending that cohort is this
+    from under the batch standing on it, and ending that batch is this
     operation's last write. Repeating the settlement afterwards would then meet
-    "no cohort is frozen" — a refusal about the wrong thing, on the one path a
+    "no batch is frozen" — a refusal about the wrong thing, on the one path a
     caller has for confirming an answer whose response it lost.
 
     So where nothing is current, the batch a reversal ended is what this reads
     from, and the obligation is followed from there exactly as it would have been
-    followed from a current one: the reading may belong to an earlier cohort, and
-    it is still that cohort's record.
+    followed from a current one: the reading may belong to an earlier batch, and
+    it is still that batch's record.
 
     Only for reporting. What follows is `_redone_settlement`, which either states
     the decision on record or refuses a different one; a gate that has not been
@@ -1483,7 +1491,7 @@ def _settling_frame(config: EvolutionConfig, known: Lineage) -> Frame:
         return _owing_frame(config, known, follow_answered=True)
     ended = _ended_by_reversal(known)
     if ended is None:
-        raise NothingToActOn(no_cohort_refusal())
+        raise NothingToActOn(no_batch_refusal())
     owed = obligation(config, ended.batch, lineage=known)
     if owed is None:
         # Unreachable: a batch ends `rolled-back` only where a release it stood
@@ -1529,7 +1537,7 @@ def _redone(
     rationale: str,
     recommendation: str,
 ) -> Formed:
-    """The same formation run again, or the refusal that this cohort has read
+    """The same formation run again, or the refusal that this batch has read
     this release already.
 
     Recognised by what the record says rather than by a marker: an interrupted
@@ -1554,7 +1562,7 @@ def _redone(
         )
     raise AlreadyAnswered(
         f"{frame.batch_id} already reads the {frame.subject.batch_id} release {already.verdict!r}, and this "
-        f"request is {verdict!r}; a cohort reads a release once, and that record is what the counterfactual "
+        f"request is {verdict!r}; a batch reads a release once, and that record is what the counterfactual "
         "and the human settlement are added to — two readings of one release would leave a later reader "
         "choosing between them"
     )
@@ -1777,7 +1785,7 @@ def conclude(
     The numbers cross one boundary on the way in. A run states each quantity as a
     baseline and a candidate; here the two sides are the line before the release
     and the release itself, so they are recorded as `before` and `after` — one
-    vocabulary, because a cohort reading and a run's numbers that could not be
+    vocabulary, because a reading of the sides and a run's numbers that could not be
     compared would be two artifacts pretending to be one.
 
     What it does not do is decide anything. A completed run settles a direction
@@ -1980,7 +1988,7 @@ def resolve(
 ) -> Formed:
     """Record the reading the completed counterfactual settles.
 
-    A reading is formed while the cohorts are all there is, and in practice that
+    A reading is formed while the sides are all there is, and in practice that
     is `inconclusive`: no manifest states the shape of the work, so the two task
     sets suspect rather than settle. This is where the pinned run answers — the
     verdict, the confidence and the sentence that says why, read off numbers that
@@ -2086,8 +2094,8 @@ class Settled:
     # record it, and a settlement reported back rather than written again.
     reversal: RollbackResult | None = None
     # The batch this answer ended, and None where it ended none. A `rolled-back`
-    # settlement takes the release out from under the cohort that read it, which
-    # is a batch with no move left (contract: Rollback) — but the cohort standing
+    # settlement takes the release out from under the batch that read it, which
+    # is a batch with no move left (contract: Rollback) — but the batch standing
     # on that base is not always the one that owed the reading, so what is ended
     # is read from the base rather than from this decision's owner.
     ended_batch: BatchEnded | None = None
@@ -2121,7 +2129,7 @@ def settle(
     made again: the operator may have run the rollback themselves, and a run
     interrupted between the commit and this record finishes by being repeated.
 
-    **Refused before anything is made, and nothing writes in between.** A cohort
+    **Refused before anything is made, and nothing writes in between.** A batch
     that recorded no reading has nothing to settle, a gate that answered is not
     re-answered, evidence still in flight is not settled over, `retain` is
     refused for a release already off the line, and `rolled-back` is refused
@@ -2231,15 +2239,15 @@ def _ended(config: EvolutionConfig, known: Lineage, recorded: Settled, moment: d
     line, and say on the result which batch that was.
 
     After the decision rather than before it, and after the reversal rather than
-    inside it: the answer goes onto the reading of the cohort that took it, and a
-    cohort ended on the way past would leave this gate with no current batch to
+    inside it: the answer goes onto the reading of the batch that took it, and a
+    batch ended on the way past would leave this gate with no current batch to
     record it on (`_owing_frame`). The one write that has to be last is therefore
     last, and it is idempotent — the outcome record is what makes a batch no
     longer current, so a settlement repeated after it landed finds nothing to end
     (`rollback.end_batch`).
 
     Which batch is read from the base rather than from this decision's owner. A
-    cohort that concluded without answering keeps the obligation while the *next*
+    batch that concluded without answering keeps the obligation while the *next*
     one holds the base carrying the release, so a rule keyed on who answered
     would end a batch that is already over and leave the one standing on nothing
     (contract: Release assessment).
@@ -2333,7 +2341,7 @@ def _redone_settlement(
         f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decided.settlement!r} "
         f"at {decided.decided_at}: {decided.reason!r}; this gate answers once, because what it releases is the "
         "next first experiment and the line its base is held to — a release judged again after that is the next "
-        "cohort's reading of the line as it now is"
+        "batch's reading of the line as it now is"
     )
 
 
@@ -2357,31 +2365,31 @@ def _require_settleable(frame: Frame, reading: Assessment) -> None:
 # claims — stays with the operation, under the lock.
 
 
-def no_cohort_refusal() -> str:
-    """Why nothing here reads a release when no cohort is frozen."""
+def no_batch_refusal() -> str:
+    """Why nothing here reads a release when no batch is frozen."""
 
     return (
-        "no batch is current, so there is no cohort to read a release from; an assessment is one frozen "
-        "cohort's answer about the promotion before it, and freezing a cohort takes two commands — "
+        "no batch is current, so there is nothing to read a release from; an assessment is one frozen "
+        "batch's answer about the promotion before it, and freezing a batch takes two commands — "
         "`mandrel evolution start` offers one and `mandrel evolution freeze` fixes it (invariant 14)"
     )
 
 
 def no_release_refusal(batch_id: str) -> str:
-    """Why a cohort that follows no promotion has nothing to assess (invariant 7)."""
+    """Why a batch that follows no promotion has nothing to assess (invariant 7)."""
 
     return (
         f"{batch_id} follows no promotion, so there is no release for it to assess; a repository "
-        "that promoted nothing before this cohort and a predecessor that concluded `no-change` both leave "
+        "that promoted nothing before this batch and a predecessor that concluded `no-change` both leave "
         "nothing an upgrade effect could be measured against, and none is invented (invariant 7)"
     )
 
 
 def owner_refusal(batch_id: str, subject: Subject, owed: Obligation | None) -> str | None:
-    """Why the cohort standing at the keyboard is not the one that records this.
+    """Why the batch standing at the keyboard is not the one that records this.
 
-    An obligation an earlier cohort left *outstanding* is not this: the record
-    still belongs in that cohort's directory and these operations follow it there
+    An obligation an earlier batch left *outstanding* is not this: the record
+    still belongs in that batch's directory and these operations follow it there
     (`_owing_frame`), because a gate nothing can answer would stop the lineage
     for good. What is refused is a reading already answered — with the one
     exception the settlement takes, since reporting a decision back is what makes
@@ -2396,7 +2404,7 @@ def owner_refusal(batch_id: str, subject: Subject, owed: Obligation | None) -> s
 def _not_the_owner(batch_id: str, subject: Subject, owed: Obligation | None) -> str:
     owner = batch_id if owed is None else owed.owner_id
     return (
-        f"{batch_id} is not the cohort that owes a reading of the {subject.batch_id} release; "
+        f"{batch_id} is not the batch that owes a reading of the {subject.batch_id} release; "
         f"the first batch frozen after that promotion is {owner}, whose reports are the earliest evidence "
         "about it, and it has read that release and had it settled (invariant 14)"
     )
@@ -2406,9 +2414,9 @@ def reading_refusal(frame: Frame, reading: Assessment | None, action: str) -> st
     """Why there is no reading for the counterfactual or the gate to act on.
 
     Everything those do is done to that record: it is where the run is written,
-    and what the run's numbers afterwards settle. A cohort that has not read the
+    and what the run's numbers afterwards settle. A batch that has not read the
     release yet has nothing to add either to — and the order is the point rather
-    than bookkeeping, since what a pinned run answers is a suspicion the cohorts
+    than bookkeeping, since what a pinned run answers is a suspicion the sides
     raised, and what the gate answers is the reading that came of it.
     """
 
@@ -2418,7 +2426,7 @@ def reading_refusal(frame: Frame, reading: Assessment | None, action: str) -> st
 def _nothing_read(frame: Frame, action: str) -> str:
     return (
         f"{frame.batch_id} has recorded no reading of the {frame.subject.batch_id} release, so there is "
-        f"nothing to {action}; the cohorts are read first — what they come to is the suspicion a pinned run "
+        f"nothing to {action}; the sides are read first — what they come to is the suspicion a pinned run "
         "is started to settle, and the reading it leaves is what the gate answers"
     )
 
@@ -2433,7 +2441,7 @@ def unsettled_refusal(frame: Frame, reading: Assessment, described: str) -> str 
         f"{frame.batch_id}'s reading of the {frame.subject.batch_id} release was settled {decision.settlement!r} "
         f"at {decision.decided_at}, so {described} would change the record that decision was made from; a "
         "settlement stands on the evidence it stood on, and a release read again after its gate has answered is "
-        "the next cohort's reading of the line as it now is"
+        "the next batch's reading of the line as it now is"
     )
 
 
@@ -2598,7 +2606,7 @@ def resolve_failure(frame: Frame, reading: Assessment) -> BatchError | None:
         found = f"{_describe(run.position)} ended {RESULT_FAILED!r}: {ended}"
     sentence = (
         f"{frame.batch_id} has no completed counterfactual of the {frame.subject.batch_id} release, so "
-        f"there is nothing for a reading to be settled by — {found}; what the cohorts allow on their own "
+        f"there is nothing for a reading to be settled by — {found}; what the sides allow on their own "
         f"is {VERDICT_INCONCLUSIVE!r}"
     )
     in_flight = requested is not None or (run is not None and run.running)
@@ -2667,8 +2675,8 @@ def _require_reversible(known: Lineage, frame: Frame) -> None:
 
     The rollback operation picks its own target — the newest promotion this
     repository recorded — and in a lineage whose batches form a series that is
-    this release: nothing can have promoted since, because the cohort holding
-    this reading is the current batch and it has concluded nothing (invariant
+    this release: nothing can have promoted since, because the batch holding
+    this reading is the current one and it has concluded nothing (invariant
     14). It is asked all the same, because of what is about to happen if it does
     not hold: a commit lands on the source line reversing some other promotion,
     and the settlement naming it is then refused for naming a commit this
@@ -2689,14 +2697,14 @@ def _require_reversible(known: Lineage, frame: Frame) -> None:
 
 
 def _recorded(config: EvolutionConfig, frame: Frame, action: str) -> Assessment:
-    """The reading this cohort has already recorded, or why there is none.
+    """The reading this batch has already recorded, or why there is none.
 
     Everything the counterfactual does is done to that record: it is where the
     run is written, and what the run's numbers afterwards settle. So is the human
     settlement, which is a judgement made from a reading rather than about a
-    release in the abstract. A cohort that has not read the release yet has
+    release in the abstract. A batch that has not read the release yet has
     nothing to add either to — and the order is the point rather than
-    bookkeeping, since what a pinned run answers is a suspicion the cohorts
+    bookkeeping, since what a pinned run answers is a suspicion the sides
     raised, and what the gate answers is the reading that came of it.
     """
 
@@ -2886,7 +2894,7 @@ def _result(report: ReplayReport, *, at: str) -> RunResult:
 
     The one place the two vocabularies meet. A run measures a baseline and a
     candidate; here they are the line before the release and the release, so they
-    are recorded as `before` and `after` — the same names the cohort comparison
+    are recorded as `before` and `after` — the same names the side comparison
     uses, which is what lets the two be read together at all.
     """
 
@@ -2961,18 +2969,18 @@ def _moment(now: datetime | None) -> datetime:
 
 
 def _owed(lineage: Lineage, batch: Batch, assessed: Subject) -> bool:
-    """Whether `batch` is the first cohort frozen after that promotion."""
+    """Whether `batch` is the first batch frozen after that promotion."""
 
     owner = _owner(lineage, assessed)
     return owner is not None and owner.batch_id == batch.batch_id
 
 
 def _owner(lineage: Lineage, assessed: Subject) -> BatchLineage | None:
-    """The cohort that owes a reading of that release: the first one frozen
+    """The batch that owes a reading of that release: the first one frozen
     after the promotion.
 
     None only where nothing was frozen after it, which is a repository whose
-    newest batch is the one that promoted — there is no cohort yet whose reports
+    newest batch is the one that promoted — there is no batch yet whose reports
     could say what the release did.
     """
 
@@ -3001,7 +3009,7 @@ def _last_promoted_before(lineage: Lineage, batch: Batch) -> BatchLineage | None
 def _members(batch: Batch) -> list[Member]:
     """One batch's frozen reports, with the facets a comparison reads.
 
-    A version-1 manifest carries identity and content hashes and no cohort
+    A version-1 manifest carries identity and content hashes and no deployment
     provenance at all, which is not a defect in this reading: those reports
     simply cannot say what the target held, so they are placed nowhere and
     excluded with that reason (invariant 4 keeps a missing field missing).
@@ -3044,7 +3052,7 @@ class _Sides:
     """The two protocols this release moved between, as this checkout reads them.
 
     Derived once per frame and not per report: the pair is fixed by the outcome
-    record, and a cohort walk that re-derived it would ask Git the same two
+    record, and a walk that re-derived it would ask Git the same two
     questions for every row.
 
     Either half is None where this checkout cannot read that revision's canonical
@@ -3128,9 +3136,9 @@ def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
     **Before is asked first**, which decides the one case both sides answer: a
     promotion whose integration tree deploys exactly what the line already
     deployed. There the release changed nothing any target receives, and reading
-    its cohort as post-release evidence would manufacture an `after` side out of a
+    those reports as post-release evidence would manufacture an `after` side out of a
     release with no change in it — the direction this module refuses everywhere
-    else. Answered `before` instead, the `after` cohort comes out empty, which
+    else. Answered `before` instead, the `after` side comes out empty, which
     carries no direction, which is the honest reading of a release that moved no
     deployable byte.
 
@@ -3222,18 +3230,18 @@ def _place(member: Member, sides: _Sides) -> tuple[str | None, Excluded | None]:
     )
 
 
-def _comparability(before: Cohort, after: Cohort) -> Comparability:
+def _comparability(before: Side, after: Side) -> Comparability:
     """The facet-by-facet reading of whether the release is the only difference.
 
     Every facet but repository coverage is equality: one value across both
-    cohorts and none of it missing. Repository coverage asks for an overlap
+    sides and none of it missing. Repository coverage asks for an overlap
     instead, which is the weakest fact that makes the comparison about a protocol
     revision rather than about two projects — and, being an overlap, it is also
-    what an empty cohort fails.
+    what an empty side fails.
 
     Task shape is an equality facet nothing fills in, so it is the facet no
-    cohort comparison currently passes. That is the reading rather than a gap in
-    it: the cohorts are two different task sets, and until a manifest states what
+    side comparison currently passes. That is the reading rather than a gap in
+    it: the sides are two different task sets, and until a manifest states what
     kind of work each report judged, a direction is settled by the counterfactual
     and not by the numbers the two sets came to.
     """
@@ -3262,7 +3270,7 @@ def _comparability(before: Cohort, after: Cohort) -> Comparability:
 
 
 def _stated_comparability(frame: Frame, before: Sequence[str], after: Sequence[str]) -> Comparability:
-    """The facets the cohorts a record states come to, read off the frozen
+    """The facets the sides a record states come to, read off the frozen
     manifests alone.
 
     The same derivation `describe` runs, over the record's own sides rather than
@@ -3273,16 +3281,16 @@ def _stated_comparability(frame: Frame, before: Sequence[str], after: Sequence[s
 
     catalog = {member.report_key: member for member in frame.catalog}
     return _comparability(
-        Cohort(members=tuple(catalog[key] for key in before)),
-        Cohort(members=tuple(catalog[key] for key in after)),
+        Side(members=tuple(catalog[key] for key in before)),
+        Side(members=tuple(catalog[key] for key in after)),
     )
 
 
-def _values(cohort: Cohort, facet: str) -> tuple[str | None, ...]:
-    """The distinct values one cohort carries for one facet, sorted, with a
+def _values(side: Side, facet: str) -> tuple[str | None, ...]:
+    """The distinct values one side carries for one facet, sorted, with a
     missing one kept as null rather than dropped."""
 
-    seen = {member.facets.get(facet) for member in cohort.members}
+    seen = {member.facets.get(facet) for member in side.members}
     return tuple(sorted((value for value in seen if value is not None))) + ((None,) if None in seen else ())
 
 
@@ -3575,7 +3583,7 @@ def _read_request(
     run: Counterfactual | None,
     withdrawn: Sequence[WithdrawnRequest],
 ) -> CounterfactualRequest | None:
-    """The run this cohort asked for and has no answer to yet.
+    """The run this batch asked for and has no answer to yet.
 
     Held to the same release and the same kind of position a recorded run is:
     the request is what the run will be recorded as, so a request nobody could
@@ -3790,7 +3798,7 @@ def _require_stated_comparability(
     after: Sequence[str],
     frame: Frame,
 ) -> None:
-    """The recorded facets must be the ones this record's own cohorts produce.
+    """The recorded facets must be the ones this record's own sides produce.
 
     Derived from the frozen manifests and the sides the record itself states, so
     the check holds on every clone: what makes a facet coherent is evaluator and
@@ -3798,7 +3806,7 @@ def _require_stated_comparability(
 
     Checking the summary against the record's own facet list would leave that
     list unchecked, and the list is where the whole rule lives: a record over
-    cohorts that mix rubric revisions could drop the seven honest facets, state
+    sides that mix rubric revisions could drop the seven honest facets, state
     one invented coherent one, and carry `improved` past every remaining check.
     The facets are also the accounting invariant 5 asks for, which is not
     something a record chooses.
@@ -3809,7 +3817,7 @@ def _require_stated_comparability(
     recorded = {facet.facet: facet for facet in comparability.facets}
     if set(recorded) != set(expected):
         raise RecordRefused(
-            f"{path}: the assessment records the comparability facets {sorted(recorded)}, and the cohorts it "
+            f"{path}: the assessment records the comparability facets {sorted(recorded)}, and the sides it "
             f"states are compared in {sorted(expected)}; the facets are derived from the frozen manifests, so "
             "a record states the reading rather than choosing it"
         )
@@ -3853,7 +3861,7 @@ def _require_one_side(
     """Each report is evidence in one place.
 
     A key on both sides is one report arguing for and against the release; a key
-    in a cohort and in the exclusions is a report counted in a denominator it was
+    on a side and in the exclusions is a report counted in a denominator it was
     also removed from.
     """
 
@@ -3879,7 +3887,7 @@ def _require_counts(
     they name (invariant 1).
 
     Checked against the manifests rather than trusted, because this is the number
-    a directional verdict is admissible against: a cohort of four reports from
+    a directional verdict is admissible against: a side of four reports from
     one task is one task's evidence however it is counted.
 
     Counted from the frozen membership and not from what this checkout placed. A
@@ -3887,7 +3895,7 @@ def _require_counts(
     answer everywhere — including on the clone that cannot resolve one effective
     revision, which would otherwise skip the side entirely and accept whatever
     denominator the record claimed, up to and including one that lifts a thin
-    cohort over the minimum.
+    side over the minimum.
     """
 
     tasks = {member.report_key: (member.repo_id, member.task_id) for member in frame.catalog}
@@ -3896,7 +3904,7 @@ def _require_counts(
         known = {tasks[key] for key in keys}
         if len(known) != stated:
             raise RecordRefused(
-                f"{path}: the {side} cohort states {stated} unique completed task(s) and its reports come to "
+                f"{path}: the {side} side states {stated} unique completed task(s) and its reports come to "
                 f"{len(known)}; the denominator is unique tasks, not reports (invariant 1)"
             )
 
@@ -3912,7 +3920,7 @@ def _require_membership(
     is named.
 
     Both directions matter. A key no manifest names is evidence from outside the
-    cohorts this comparison is drawn from — a report that was never frozen, or one
+    sides this comparison is drawn from — a report that was never frozen, or one
     belonging to some other batch entirely. A member the record never mentions is
     a denominator quietly narrowed, which is the base rate invariant 2 exists to
     keep knowable.
@@ -3925,14 +3933,14 @@ def _require_membership(
     if unknown:
         raise RecordRefused(
             f"{path}: {unknown} named by this assessment belong to no frozen manifest of "
-            f"{frame.subject.batch_id} or {frame.batch_id}; a comparison is drawn from frozen cohorts alone "
+            f"{frame.subject.batch_id} or {frame.batch_id}; a comparison is drawn from frozen batches alone "
             "(invariant 3)"
         )
     missing = sorted(set(members) - named)
     if missing:
         raise RecordRefused(
             f"{path}: {missing} are frozen members of {frame.subject.batch_id} or {frame.batch_id} and this "
-            "assessment places them nowhere; every report lands in a cohort or is excluded with a reason, so "
+            "assessment places them nowhere; every report lands on a side or is excluded with a reason, so "
             "the denominator stays visible (invariant 2)"
         )
     for item in excluded:
@@ -3983,13 +3991,13 @@ def _require_placement(
             derived = frame.placement(key)
             if derived is not None and derived != side:
                 raise RecordRefused(
-                    f"{path}: report {key!r} is placed in the {side} cohort, but the effective revision its "
-                    f"manifest states places it {derived}; a cohort is what the targets actually held"
+                    f"{path}: report {key!r} is placed on the {side} side, but the effective revision its "
+                    f"manifest states places it {derived}; a side is what the targets actually held"
                 )
             exclusion = frame.exclusion(key)
             if exclusion is not None and exclusion.reason != EXCLUDED_REVISION_UNRESOLVABLE:
                 raise RecordRefused(
-                    f"{path}: report {key!r} is placed in the {side} cohort, but this checkout excludes it "
+                    f"{path}: report {key!r} is placed on the {side} side, but this checkout excludes it "
                     f"({exclusion.reason}): {exclusion.detail}"
                 )
 
@@ -4007,7 +4015,7 @@ def _require_placement(
             continue
         placed = frame.placement(item.report_key)
         if placed is not None:
-            found = f"places it in the {placed} cohort"
+            found = f"places it on the {placed} side"
         elif derived is not None:
             found = f"excludes it as {derived.reason!r}"
         else:
@@ -4041,16 +4049,16 @@ def _require_supported_verdict(
     is the stronger: the exact pre-promotion and promoted revisions exercised
     over one case set by one evaluator, which is the only comparison in which the
     release is the only difference. A completed run carrying a goal quantity on
-    both revisions settles a direction whatever the cohorts came to, because the
+    both revisions settles a direction whatever the sides came to, because the
     claim is no longer resting on them.
 
-    The **cohorts** carry one only when nothing else explains the difference:
+    The **sides** carry one only when nothing else explains the difference:
     every comparability facet coherent, both sides at or above the minimum
     unique-task count (invariant 1's anecdote rule), and a goal quantity measured
-    on both. Incomparable cohorts differ in the evaluator, the protocol revision
+    on both. Incomparable sides differ in the evaluator, the protocol revision
     or the work itself, any of which explains a difference at least as well. That
     includes the shape of the work, which no manifest states — so in practice the
-    cohorts suspect and the counterfactual settles, which is the standing this
+    sides suspect and the counterfactual settles, which is the standing this
     evidence has rather than a rule added on top of it.
 
     `regressed` is checked before either: it always rests on the counterfactual,
@@ -4058,7 +4066,7 @@ def _require_supported_verdict(
     and the one that therefore has to be measured rather than inferred.
 
     A verdict resting on the counterfactual is also held to what that run
-    measured. The cohorts are two different task sets and their numbers are read
+    measured. The sides are two different task sets and their numbers are read
     by the judging session, with `confidence` and `rationale` for what the reading
     weighs; the counterfactual is the release measured directly, so a direction it
     contradicts is not a judgement about it but a claim about something else.
@@ -4115,7 +4123,7 @@ def _require_supported_verdict(
     # operator or a rationale can act on.
     unmet: list[str] = []
     if not comparability.coherent:
-        unmet.append(f"the cohorts are not comparable ({', '.join(comparability.incoherent)} differ)")
+        unmet.append(f"the sides are not comparable ({', '.join(comparability.incoherent)} differ)")
     if before_task_count < minimum or after_task_count < minimum:
         unmet.append(
             f"before {before_task_count} / after {after_task_count} unique completed task(s) against a "
@@ -4127,7 +4135,7 @@ def _require_supported_verdict(
             f"observation recorded as {BETTER_NEITHER!r} or a side never measured (invariant 13)"
         )
     raise RecordRefused(
-        f"{path}: {verdict!r} is a directional claim resting on the cohorts alone, and they do not "
+        f"{path}: {verdict!r} is a directional claim resting on the sides alone, and they do not "
         "support one — "
         + "; ".join(unmet)
         + f"; what this evidence allows is {VERDICT_INCONCLUSIVE!r}, or a direction settled by a "
@@ -4311,7 +4319,7 @@ def _text(value: Any) -> str | None:
     """One facet value as a string, or None when the manifest does not carry it.
 
     A schema version is an integer or a string depending on the evaluator that
-    reported it, and two spellings of one version would read as two cohorts.
+    reported it, and two spellings of one version would read as two values.
     """
 
     if value is None or isinstance(value, bool):
@@ -4326,7 +4334,7 @@ def _role(role: Any) -> str | None:
 
     None when the block is absent or any part of it is missing: a role whose
     agent, model, effort or profile nobody recorded cannot be shown to match
-    another cohort's, and invariant 4 keeps that unknown rather than treating it
+    another side's, and invariant 4 keeps that unknown rather than treating it
     as equal.
     """
 

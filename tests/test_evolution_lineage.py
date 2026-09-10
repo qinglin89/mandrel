@@ -1014,7 +1014,7 @@ def test_an_experiment_id_outside_its_own_batch_is_refused(config: evolution.Evo
 def test_an_experiment_of_a_batch_that_does_not_exist_is_refused(
     config: evolution.EvolutionConfig, batch: Path
 ) -> None:
-    """Either a cohort somebody deleted or an id that was mistyped — both are
+    """Either a batch somebody deleted or an id that was mistyped — both are
     histories this controller must not quietly stop showing."""
 
     write_experiment(config.experiments_root, f"{SECOND_BATCH}-exp-01")
@@ -1516,7 +1516,7 @@ def test_a_batch_cannot_conclude_over_a_successor_nobody_created(
     over one is where that stops: `status` would look for a pending successor
     only in the current batch and find none, no operation could act on a batch
     that has concluded, and the record ending the cycle would release the next
-    cohort over an attempt that was never started."""
+    batch over an attempt that was never started."""
 
     write_experiment(
         config.experiments_root,

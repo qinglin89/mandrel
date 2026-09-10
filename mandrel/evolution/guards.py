@@ -118,7 +118,7 @@ def no_current_batch() -> str:
     """Why there is nothing for any of these operations to act on."""
 
     return (
-        "no batch is current, and every change lineage belongs to one; a cohort takes two commands — "
+        "no batch is current, and every change lineage belongs to one; a batch takes two commands — "
         "`mandrel evolution start` offers one out of the pool and `mandrel evolution freeze` fixes it — and its "
         "analysis then produces the drafts (invariant 14)"
     )
@@ -212,7 +212,7 @@ def settled(config: EvolutionConfig, *, now: datetime) -> Lineage:
     lifecycle on the machine that has it, and from the committed record
     everywhere else. Admitting a draft before that stage ends would implement
     dispositions that are still being written — and concluding a batch before it
-    would end a cohort whose analysis is still being written.
+    would end a batch whose analysis is still being written.
     """
 
     record_closures(config, now=now)

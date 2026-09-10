@@ -1,6 +1,6 @@
 """Admission policy, the batch proposal, and the immutable freeze.
 
-This is the step where evidence becomes a cohort, and it is **two operations**:
+This is the step where evidence becomes a batch, and it is **two operations**:
 a proposal offering a batch out of the pool (`proposals.py`), and the freeze
 that fixes it. The split is what makes the human window real — everything a
 person may argue with about membership happens while the offer is still ignored
@@ -21,14 +21,14 @@ Four things make it safe:
 - **One current batch at a time** (invariant 14). A batch is current from its
   freeze until its outcome is recorded — through analysis, admission, and every
   experiment its evidence justified. While one is current, `start` finishes
-  whatever that batch's freeze left undone rather than forming a second cohort;
+  whatever that batch's freeze left undone rather than forming a second batch;
   the pool goes on accumulating in the meantime, which is where the next one
   comes from. Which batch that is comes from the whole lineage
   (`lineage.current_batch`) and is settled before anything here writes: an
   outcome record its own experiments contradict has concluded nothing, and two
   current batches leave no one cycle a repair or a freeze could belong to.
 
-**What may be frozen.** Only a pool that is the whole eligible set — a cohort
+**What may be frozen.** Only a pool that is the whole eligible set — a batch
 frozen from a prefix has a denominator set by a local pagination limit rather
 than by the evidence (invariants 1 and 2). Discovery records whether it drained
 the feed (`state.feed_exhausted`), because the freeze it would mislead need not
@@ -438,7 +438,7 @@ def batch_awaiting_analysis(config: EvolutionConfig, *, batches: list[Batch] | N
     Only a current batch is asked about. A concluded batch awaits nothing — its
     outcome ended the whole cycle — so a freeze interrupted before its analysis
     task landed is left as the history it is rather than repaired into a task
-    for a cohort nobody is going to analyze.
+    for a batch nobody is going to analyze.
 
     `batches` lets a caller that has already loaded and validated the manifests
     reuse them, so a reader deriving several facts at once does not re-read the
@@ -496,7 +496,7 @@ def evaluate_admission(
     1. A current batch dominates everything (invariant 14). It is current from
        its freeze until its outcome is recorded, so the pool keeps accumulating
        through analysis, admission, and the whole change cycle, and the next
-       cohort forms only once that batch has concluded.
+       batch forms only once that batch has concluded.
     2. The pool must be the whole eligible set. `state.feed_exhausted` is false
        when discovery stopped before the feed was drained — or has never run;
        the count is then a prefix, and every threshold below would be measured
@@ -530,7 +530,7 @@ def evaluate_admission(
 
     The age rule moves with the count for the same reason. A report that is not
     a member of this batch cannot age *this* batch out — under the pool's oldest
-    timestamp, one long-pooled off-base report would release every later cohort
+    timestamp, one long-pooled off-base report would release every later batch
     on the day it arrived.
 
     The pool is read from the state rather than passed in by the caller, because
@@ -630,7 +630,7 @@ def include(
     The only door for evidence the automatic test refuses, and invariant 1's
     sanctioned exception: a human-included member counts toward the batch
     thresholds like any other, because the judgement that a report belongs in
-    this cohort is the human's to make and the configured minimum is a default
+    this batch is the human's to make and the configured minimum is a default
     for the automatic path. What bounds it is the record rather than a rule —
     the manifest states the two counts apart, and every inclusion carries the
     words and the name of whoever made it.
@@ -668,7 +668,7 @@ def exclude(
 
     The direction that most needs its reason recorded: an exclusion removes
     evidence the identity test had already selected, so it is the move able to
-    shape what a cohort says. `human-excluded` is its own non-selection reason
+    shape what a batch says. `human-excluded` is its own non-selection reason
     for that — a reader of the frozen manifest can tell a judgement from a fact
     about the record or the clone — and the words go beside it.
 
@@ -913,7 +913,7 @@ def start(
     reachable feed would leave the repository stuck on an outage that has
     nothing to do with it.
 
-    Nothing here forms a cohort. `start` used to end in the freeze, which put
+    Nothing here forms a batch. `start` used to end in the freeze, which put
     the pool, the manifest, the report claim and the analysis task in one
     uninterruptible call with no human between them. It now ends in a proposal,
     and `freeze` is the human's own command — so the whole window in which
@@ -951,7 +951,7 @@ def build_proposal(config: EvolutionConfig, *, now: datetime | None = None) -> P
 
     **No CLI verb exposes it, and no refusal names it.** An operator's rebuild is
     `mandrel evolution start`, whatever went stale: a command that offered a
-    cohort without discovery would select out of a pool nothing had just proved
+    batch without discovery would select out of a pool nothing had just proved
     whole, which is the completeness a freeze may not assume (invariants 1
     and 2). A recovery pointing at a verb this build has no parser for is worse
     than none, so the sentences that name the rebuild name only `start`.
@@ -1079,12 +1079,12 @@ def _select(
     test and a much narrower one: the source line moves for work under
     `mandrel/`, `tests/` and `docs/` that no target ever receives, so a report
     produced one ordinary commit later than the base would be excluded from a
-    cohort it belongs to.
+    batch it belongs to.
 
     Every task the pool holds is answered, and the ones that are not members are
     recorded with why (`not_selected`). That record is the batch's denominator:
     a manifest saying nine of eleven is a different document from one saying
-    nine, and the two the reader cannot see are exactly where a cohort's
+    nine, and the two the reader cannot see are exactly where a batch's
     coherence claim would go wrong.
 
     **A human move survives the rebuild that would otherwise discard it.** The
@@ -1260,7 +1260,7 @@ def _staged_effective_revision(config: EvolutionConfig, entry: PoolEntry, ref: R
     Read from the staged record rather than from the pool, because the pool
     keeps identity and hashes and no report content: duplicating provenance into
     it would give the same fact two homes that can disagree, and the bundle is
-    where every other reader (`_manifest_report`, the assessment cohorts) takes
+    where every other reader (`_manifest_report`, the assessment sides) takes
     it from.
 
     **Read here, verified at the freeze.** This is a selection over ignored
@@ -1317,7 +1317,7 @@ def freeze_locked(
     # Invariant 14 first, through the derivation `status` reads: one current
     # batch, and its terminal record agreeing with the experiments it concludes
     # over. Nothing below writes into a repository that cannot answer that —
-    # neither the closure records, nor the repair, nor a new cohort — because
+    # neither the closure records, nor the repair, nor a new batch — because
     # each of the three belongs to a change cycle, and an unreadable lineage
     # does not say which one.
     #
@@ -1483,7 +1483,7 @@ def _source_line_revision(config: EvolutionConfig) -> str:
     and it described whichever branch the operator was standing on. Measured on
     this repository when it was changed, `HEAD` described as `v2.3.0` while the
     two `canonical/` trees differed (`3ed93a7a` against `70a0265e`) — so the
-    field named a release the cohort was demonstrably not run under, and stayed
+    field named a release the batch was demonstrably not run under, and stayed
     wrong until somebody tagged. Taking the line's tip rather than the tag
     reachable from it is safe here for the reason it was not there: this is the
     line the project releases from, named once in `evolution/config.toml`, and
@@ -1492,7 +1492,7 @@ def _source_line_revision(config: EvolutionConfig) -> str:
     Refused rather than recorded as absent when this checkout does not hold the
     line. That is the reverse of what it did while the field was provenance
     only — a freeze was then a decision about the report pool alone, and refusing
-    one over an unfetched ref would have stopped a cohort forming for a reason
+    one over an unfetched ref would have stopped a batch forming for a reason
     that had nothing to do with the evidence. The line is now what *selects* the
     evidence, so a checkout that cannot resolve it cannot say what the batch is:
     there is no membership to test against and no base for the alternatives to be
@@ -1521,7 +1521,7 @@ def _unfetched_line_refusal(config: EvolutionConfig) -> str:
 def current_batch_refusal(batch_id: str | None) -> str:
     """Why neither half of a formation runs beside a cycle that is still going.
 
-    One sentence for both commands (invariant 14). `start` cannot offer a cohort
+    One sentence for both commands (invariant 14). `start` cannot offer a batch
     beside one whose cycle is still running, and a freeze has nothing to fix for
     the same reason — so a reader meets the same fact whichever they asked about,
     and neither is sent at the other as a repair.
@@ -1529,7 +1529,7 @@ def current_batch_refusal(batch_id: str | None) -> str:
 
     return (
         f"{batch_id} is current and no outcome has been recorded for it; the pool keeps accumulating and the "
-        "next cohort forms once that batch concludes (invariant 14)"
+        "next batch forms once that batch concludes (invariant 14)"
     )
 
 
@@ -1589,7 +1589,7 @@ def _admission_refusal(decision: AdmissionDecision) -> str:
     return (
         f"admission does not release a batch ({decision.reason}: {decision.task_count} selected of "
         f"{decision.pool_count} pooled, target {decision.target}, minimum {decision.minimum}); a freeze forms a "
-        "cohort only once policy releases one, and `--force` waives the configured target rather than any of this"
+        "batch only once policy releases one, and `--force` waives the configured target rather than any of this"
     )
 
 
@@ -1711,7 +1711,7 @@ def frozen_membership_refusal(batch_id: str) -> str:
     """Why the human window is closed once a manifest exists.
 
     A different fact from `current_batch_refusal`, which is about forming the
-    *next* cohort: this one is about the batch that already exists. Its
+    *next* batch: this one is about the batch that already exists. Its
     membership was fixed by the freeze and a frozen manifest is immutable
     (invariant 3), so there is nothing here a move could act on — not a policy
     that will relent when the cycle ends.
@@ -1821,7 +1821,7 @@ def _build_manifest(
 
     The offer's whole answer is copied in, not just the half that was selected.
     A frozen batch has to state its own denominator — what was considered, what
-    was left out and why — because a cohort's coherence claim is about the set
+    was left out and why — because a batch's coherence claim is about the set
     it was drawn from, and a manifest listing only members reads as if the pool
     held exactly them (invariant 5).
     """
@@ -1886,8 +1886,9 @@ def _manifest_report(
     schema: Mapping[str, Any],
     member: Member,
 ) -> dict[str, Any]:
-    """One report's membership entry, with its cohort provenance read back from
-    the staged bundle and the whole bundle re-verified against the pool.
+    """One report's membership entry, with its evaluator and provenance blocks
+    read back from the staged bundle and the whole bundle re-verified against
+    the pool.
 
     `selection` is the task's: membership is decided per completed task
     (invariant 1), and this is the report that decision was taken over. Carried
@@ -2161,7 +2162,7 @@ def _require_consistent_claims(
     That is this machine's own record of having staged it, which is what the gap
     below is looking for; the claim `_claim_reports` then writes replaces it.
 
-    A claim naming a different batch means two cohorts believe they own one
+    A claim naming a different batch means two batches believe they own one
     report, and this controller cannot arbitrate which manifest is right.
 
     A member the state does not mention at all is a gap, and the discriminator
@@ -2216,7 +2217,7 @@ def _task_spec(
     """Describe the generated task from the manifest and the batch series, so a
     reconstructed task says exactly what the original said.
 
-    The one thing outside the manifest is the release this cohort follows, and it
+    The one thing outside the manifest is the release this batch follows, and it
     is stable for exactly as long as this batch is current: a promotion is
     recorded by a terminal outcome that is never edited, and no later batch can
     promote while this one has not concluded (invariant 14). So the repair path
@@ -2264,13 +2265,13 @@ def _release_spec(
     *,
     directory: str,
 ) -> analysis_task.ReleaseAssessment | None:
-    """The release this batch is the first cohort after, or None when it follows
+    """The release this batch is the first one after, or None when it follows
     none.
 
     Derived from the whole lineage, which by this point includes this batch's own
-    manifest: the obligation belongs to the first cohort frozen after a promotion,
+    manifest: the obligation belongs to the first batch frozen after a promotion,
     and that is a position in the batch series rather than a property of one
-    manifest. Identity only — the cohorts and their comparability are read when
+    manifest. Identity only — the sides and their comparability are read when
     the assessment is formed, not baked into a task file that a repair on another
     machine would then have to reproduce.
     """

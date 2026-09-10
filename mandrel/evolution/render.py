@@ -225,7 +225,7 @@ def format_proposal(result: ProposalResult, repo_root: Path) -> str:
 
     Says plainly that nothing durable was written, because the line above it
     reports a batch by name and the two used to be the same event: an operator
-    who read `start` as the freeze would otherwise take an offer for a cohort.
+    who read `start` as the freeze would otherwise take an offer for a batch.
     """
 
     lines: list[str] = []
@@ -489,7 +489,7 @@ def format_rollback(result: RollbackResult, repo_root: Path) -> str:
     What does end is the batch that was standing on the release, and it is stated
     separately for the same reason: it is a second batch, ending for the first
     time, and an operator who reads only the first line would go looking for a
-    cohort that is over (contract: Rollback).
+    batch that is over (contract: Rollback).
     """
 
     state = "is off" if result.recorded else "was already off"
@@ -516,7 +516,7 @@ def format_rollback(result: RollbackResult, repo_root: Path) -> str:
 def _ended_batch_lines(ended: BatchEnded | None, repo_root: Path) -> list[str]:
     """The batch a reversal ended, or nothing where it ended none.
 
-    Silence is the ordinary answer: a rollback of a release no current cohort was
+    Silence is the ordinary answer: a rollback of a release no current batch was
     standing on ends nothing, and so does one repeated after the ending landed.
     """
 
@@ -755,11 +755,11 @@ def format_request_withdrawn(result: RequestWithdrawn) -> str:
 
 
 def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
-    """This cohort's reading of the release before it, recorded or revised.
+    """This batch's reading of the release before it, recorded or revised.
 
     One formatter for both because they record one thing — the verdict this
     batch holds about that release — and the difference is what it was read
-    from: the two cohorts, or the counterfactual that answered them.
+    from: the two sides, or the counterfactual that answered them.
     """
 
     reading = result.assessment
@@ -769,7 +769,7 @@ def format_reading(result: Formed, repo_root: Path, *, resolved: bool) -> str:
         f"{verb}: {result.batch_id} {state} {_short(reading.subject.revision)} as "
         f"{reading.verdict} ({reading.confidence} confidence)",
         _field("release", f"{reading.subject.batch_id} ({reading.subject.experiment_id})"),
-        _field("cohorts", f"{reading.before_task_count} task(s) before, {reading.after_task_count} after"),
+        _field("sides", f"{reading.before_task_count} task(s) before, {reading.after_task_count} after"),
         _field("rationale", reading.rationale),
         _field("recommends", f"{reading.recommendation} — advice for the gate, which a human answers"),
         _field("record", _relative(result.record_path, repo_root)),
@@ -826,7 +826,7 @@ def format_counterfactual_concluded(result: Concluded) -> str:
 
     A run states a baseline and a candidate; here the two sides are the line
     before the release and the release itself, so the numbers are reported as
-    `before` and `after` — the same names the cohort reading uses, which is what
+    `before` and `after` — the same names the side comparison uses, which is what
     lets the two be read together.
     """
 
@@ -1005,7 +1005,7 @@ def format_status(status: LifecycleStatus) -> str:
     note = f"current {current.batch_id}" if current else "none current"
     lines.append(_field("batches", f"{status.batch_count} frozen, {note}"))
     if current is not None:
-        # The cohort's denominator, from its own manifest: what its formation
+        # The batch's denominator, from its own manifest: what its formation
         # answered for, and how many members a person argued in past the
         # identity test (invariants 1 and 5).
         curated = (
@@ -1102,7 +1102,7 @@ def _short(object_id: str) -> str:
 def _concluded_lines(batches: tuple[BatchRecord, ...]) -> list[str]:
     """The batches that ended, and how.
 
-    Every one of them, uncapped: what a cohort follows is a position in this
+    Every one of them, uncapped: what a batch follows is a position in this
     series, and a list that quietly stopped at the newest few would read as the
     whole history to anyone counting back from it. The current batch is not here
     — it is reported above, where what it is waiting for is.
@@ -1310,8 +1310,8 @@ def _release_lines(release: ReleaseReading | None) -> list[str]:
 
     Absent for most batches, and that is ordinary: only a promotion produces
     something to assess. What is never ordinary is the shape of the absence, so
-    every part of this says which absence it is — a cohort that has recorded
-    nothing, cohorts with nothing in them, a check this checkout could not make,
+    every part of this says which absence it is — a batch that has recorded
+    nothing, sides with nothing in them, a check this checkout could not make,
     and a reading nobody has settled are four different next steps.
     """
 
@@ -1327,7 +1327,7 @@ def _release_lines(release: ReleaseReading | None) -> list[str]:
     ]
     owner = "this batch" if release.owned_here else f"{release.owner_id}, which has already concluded"
     lines.append(_field("", f"the reading of it is owed by {owner}"))
-    lines.extend(_cohort_lines(release))
+    lines.extend(_side_lines(release))
     lines.extend(_counterfactual_lines(release))
     lines.extend(_reading_lines(release))
     return lines
@@ -1348,11 +1348,11 @@ def _standing(subject: Subject) -> str:
     return "still on the source line"
 
 
-def _cohort_lines(release: ReleaseReading) -> list[str]:
+def _side_lines(release: ReleaseReading) -> list[str]:
     """The denominators, the exclusions, and what the two together can carry.
 
     Precedence matters here and it is why the facets are not simply listed: an
-    empty cohort fails every facet, so a surface reaching for the facet list over
+    empty side fails every facet, so a surface reaching for the facet list over
     one would name a provenance mismatch when what happened is that no report
     could be placed at all. The exclusions are the answer in that case, and the
     numbers are absent evidence — never a reading against the release.
@@ -1363,7 +1363,7 @@ def _cohort_lines(release: ReleaseReading) -> list[str]:
     lines = [
         _field(
             "",
-            f"cohorts: {before} unique task(s) before the release, {after} after; "
+            f"sides: {before} unique task(s) before the release, {after} after; "
             f"a direction needs {frame.minimum_task_count} each",
         )
     ]
@@ -1377,7 +1377,7 @@ def _cohort_lines(release: ReleaseReading) -> list[str]:
         lines.append(
             _field(
                 "",
-                "an empty cohort carries no evidence either way — absent evidence, not a defect and not a "
+                "an empty side carries no evidence either way — absent evidence, not a defect and not a "
                 "reading against the release",
             )
         )
@@ -1395,10 +1395,10 @@ def _cohort_lines(release: ReleaseReading) -> list[str]:
 
 
 def _facet_lines(frame: Frame) -> list[str]:
-    """Why the cohorts do or do not carry a direction on their own.
+    """Why the sides do or do not carry a direction on their own.
 
     The two ways a facet fails are separated because only one of them is about
-    the cohorts: a facet the manifests do not all state is a gap in what the feed
+    the sides: a facet the manifests do not all state is a gap in what the feed
     publishes, and rendering it beside a real mismatch would read as broken
     provenance in both directions. `task-shape` is the standing example — unknown
     on every manifest version, which is exactly why a direction rests on the
@@ -1406,7 +1406,7 @@ def _facet_lines(frame: Frame) -> list[str]:
 
     "Not every manifest" rather than "no manifest", because a side one report of
     which leaves the facet missing is a gap too (`Facet.stated`) and the sharper
-    sentence would be false over it. An empty cohort never reaches here: the
+    sentence would be false over it. An empty side never reaches here: the
     caller answers that case with the exclusions instead.
 
     The split itself is `Comparability`'s, not this render's. Three surfaces say
@@ -1415,19 +1415,19 @@ def _facet_lines(frame: Frame) -> list[str]:
     """
 
     if frame.comparability.coherent:
-        return [_field("", "the cohorts are comparable in every stated facet")]
+        return [_field("", "the sides are comparable in every stated facet")]
     unstated = frame.comparability.unstated
     differing = frame.comparability.differing
     lines: list[str] = []
     if differing:
         lines.append(
-            _field("", f"the cohorts differ in {', '.join(differing)} — the release is not the only difference")
+            _field("", f"the sides differ in {', '.join(differing)} — the release is not the only difference")
         )
     if unstated:
         lines.append(
             _field(
                 "",
-                f"not every manifest states {', '.join(unstated)}, so the cohorts alone carry no direction — "
+                f"not every manifest states {', '.join(unstated)}, so the sides alone carry no direction — "
                 "one rests on the pinned counterfactual",
             )
         )
@@ -1508,7 +1508,7 @@ def _reading_lines(release: ReleaseReading) -> list[str]:
 
     The settlement is stated as the commit it selects rather than as a word,
     because the thing an operator is about to do with it is admit an experiment:
-    the base the next cohort was formed at has to be on the line the answer
+    the base the next batch was formed at has to be on the line the answer
     chose, and discovering that from a refusal is the miss this line exists to
     prevent.
 

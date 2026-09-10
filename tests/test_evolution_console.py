@@ -10,8 +10,8 @@ refuses for a reason nothing on the surface said.
 
 The other half is what the absences mean. A null here is a state and not a gap,
 and the pairs that would collapse into one are what these tests hold apart: a
-round nothing replayed against a batch with no round at all, an empty cohort
-against a cohort that disagrees, a promotion still on the line against one an
+round nothing replayed against a batch with no round at all, an empty side
+against a side that disagrees, a promotion still on the line against one an
 inverse commit took back off it, and — the one an operator would act wrongly on —
 "no note" against "nothing outstanding".
 
@@ -80,7 +80,7 @@ EXPECTATION = "fewer remediation rounds, with quality and elapsed time unchanged
 @pytest.fixture
 def config(tmp_path: Path) -> evolution.EvolutionConfig:
     """A repository with the real contract files and an admission policy low
-    enough to freeze a cohort in a test."""
+    enough to freeze a batch in a test."""
 
     root = git_repo(make_repo(tmp_path), tag="v2.2.0")
     path = root / "evolution" / "config.toml"
@@ -108,11 +108,11 @@ def release(config: evolution.EvolutionConfig) -> str:
 @pytest.fixture
 def promoted(config: evolution.EvolutionConfig, release: str) -> experiments.PromotionResult:
     """One whole change cycle ending in a merge on the source line, with its own
-    reports standing as the cohort produced before it.
+    reports standing as the side produced before it.
 
     Canonical work in the candidate, because this suite renders where reports
     land: a report is placed by the protocol its revision deploys, so a promotion
-    that moved nothing under `canonical/` would put both cohorts on one side and
+    that moved nothing under `canonical/` would put both sides on one side and
     the surface would be rendering a distinction that was not there.
     """
 
@@ -133,7 +133,7 @@ def promoted(config: evolution.EvolutionConfig, release: str) -> experiments.Pro
     )
 
 
-def freeze_cohort(
+def freeze_batch(
     config: evolution.EvolutionConfig,
     batch_id: str,
     *,
@@ -141,14 +141,14 @@ def freeze_cohort(
     prefix: str = "a",
     base: str | None = None,
 ) -> None:
-    """A frozen cohort whose reports were produced at `effective`.
+    """A frozen batch whose reports were produced at `effective`.
 
     `None` is the ordinary shape of everything imported before orch-hub began
     publishing the protocol identity: no report states what its target held, so
     no report can be placed on either side of a release.
 
     Formed at the source line as it stands, which is what a real formation reads
-    and the base every experiment of this cohort then starts from.
+    and the base every experiment of this batch then starts from.
     """
 
     write_manifest(
@@ -217,7 +217,7 @@ def prepare_promotion(config: evolution.EvolutionConfig, release: str) -> str:
     """
 
     candidate = git_rev(config.repo_root, "HEAD")
-    freeze_cohort(config, FIRST, effective=None, base=candidate)
+    freeze_batch(config, FIRST, effective=None, base=candidate)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     write_experiment(
         config.experiments_root,
@@ -266,7 +266,7 @@ def test_an_experiment_with_nothing_prepared_says_so_by_saying_nothing(
     that simply lost the field is refused rather than read as this, which is what
     keeps the absence unambiguous."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
 
@@ -294,7 +294,7 @@ def sealed_round(config: evolution.EvolutionConfig) -> str:
     """A batch, an experiment, and a round whose candidate is pinned — the state
     a run is started from. Returns the experiment's ref."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
     for item in admission.admitted:
@@ -428,11 +428,11 @@ def test_a_withdrawn_position_is_reported_rather_than_lost(
 def test_the_batch_history_is_the_series_and_each_promotion_it_made(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """Which release a cohort follows is a position in the series, not something
+    """Which release a batch follows is a position in the series, not something
     a batch states about itself — so the whole series is emitted, and a promoted
     batch carries the merge unit its own outcome states."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     history = payload(config)["batches"]["history"]
     assert [item["batch_id"] for item in history] == [FIRST, SECOND]
@@ -454,7 +454,7 @@ def test_a_rolled_back_promotion_is_still_the_promotion_it_was(
     commit was promoted and a later commit took the change back out, and a
     surface reporting only the second would lose the batch's own outcome."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     rollback.reverse(config, reason="the counterfactual confirmed the regression", now=NOW)
 
     entry = payload(config)["batches"]["history"][0]
@@ -467,14 +467,14 @@ def test_a_rolled_back_promotion_is_still_the_promotion_it_was(
 # --- the release reading -----------------------------------------------------
 
 
-def test_the_reading_of_a_release_is_owed_by_the_cohort_frozen_after_it(
+def test_the_reading_of_a_release_is_owed_by_the_batch_frozen_after_it(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
     """The gate the next first experiment waits on (invariant 17), and the
     surface names the line the base is expected on rather than letting an
     operator discover it from a refusal."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     block = payload(config)["release"]
     assert block["owner_batch_id"] == SECOND
@@ -493,17 +493,17 @@ def test_the_reading_of_a_release_is_owed_by_the_cohort_frozen_after_it(
     assert "no reading recorded" in text
 
 
-def test_the_obligation_stays_with_the_cohort_that_owes_it(
+def test_the_obligation_stays_with_the_batch_that_owes_it(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """A cohort that ends without answering does not hand the obligation on. The
+    """A batch that ends without answering does not hand the obligation on. The
     batch after it still follows the same release, and the record being waited on
     is not its own — so the surface says whose it is."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     analyzed(config, SECOND)
     experiments.conclude_no_change(config, reason="no cluster reached recurrence", now=NOW)
-    freeze_cohort(config, THIRD, effective=promoted.promotion_revision, prefix="c")
+    freeze_batch(config, THIRD, effective=promoted.promotion_revision, prefix="c")
 
     block = payload(config)["release"]
     assert block["owner_batch_id"] == SECOND
@@ -511,17 +511,17 @@ def test_the_obligation_stays_with_the_cohort_that_owes_it(
     assert f"owed by {SECOND}, which has already concluded" in rendered(config)
 
 
-def test_empty_cohorts_read_as_absent_evidence_and_not_as_a_verdict(
+def test_empty_sides_read_as_absent_evidence_and_not_as_a_verdict(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
     """The ordinary shape of everything imported before orch-hub began publishing
     the protocol identity: no report states what its target held, so none of them
-    can be placed and the cohort they would have formed is empty. An empty cohort
+    can be placed and the side they would have formed is empty. An empty side
     also fails every comparability facet, so a surface reaching for the facet list
     here would name a provenance mismatch when what happened is that nothing could
     be placed at all."""
 
-    freeze_cohort(config, SECOND, effective=None)
+    freeze_batch(config, SECOND, effective=None)
 
     block = payload(config)["release"]
     assert block["cohorts"]["before"]["task_count"] == 3
@@ -535,16 +535,16 @@ def test_empty_cohorts_read_as_absent_evidence_and_not_as_a_verdict(
 
     text = rendered(config)
     assert "3 of 6 report(s) excluded: effective-revision-absent (3)" in text
-    assert "an empty cohort carries no evidence either way" in text
+    assert "an empty side carries no evidence either way" in text
     assert "not a defect and not a reading against the release" in text
-    # The facet list is the wrong absence to name over a cohort nothing reached.
+    # The facet list is the wrong absence to name over a side nothing reached.
     assert "task-shape" not in text
 
 
-def test_placed_cohorts_name_the_facet_no_manifest_states(
+def test_placed_sides_name_the_facet_no_manifest_states(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """Where reports can be placed, the cohorts still carry no direction — no
+    """Where reports can be placed, the sides still carry no direction — no
     manifest says what kind of work either side judged. Rendered bare that reads
     as broken provenance, so the facet is named and the counterfactual is where a
     direction is said to rest.
@@ -553,7 +553,7 @@ def test_placed_cohorts_name_the_facet_no_manifest_states(
     only some of a side's reports state, and the sharper sentence would be false
     over that one."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     text = rendered(config)
     assert "not every manifest states task-shape" in text
@@ -571,15 +571,15 @@ def test_a_settled_reading_names_the_commit_the_next_base_must_carry(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
     """What the answer selects is a commit as well as a direction: the first
-    experiment of the next cohort has to stand on the line the gate chose, and
+    experiment of the next batch has to stand on the line the gate chose, and
     discovering that from a refusal is the miss this line prevents."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -614,23 +614,23 @@ def test_a_rolled_back_settlement_keeps_the_question_the_reading_answered(
     into one: the reading was formed while the release stood on the source line —
     which is the question it answered — and the line no longer carries it,
     because settling `rolled-back` lands the inverse commit after the record is
-    written. Reporting the line's state as the reading's would say this cohort
+    written. Reporting the line's state as the reading's would say this batch
     assessed a reversal it never saw, and it is the ordinary end of a regression
     finding rather than a corner.
 
     While the gate is unanswered the two are both on the release block, which is
-    where an operator meets them. Answering `rolled-back` ends the cohort along
+    where an operator meets them. Answering `rolled-back` ends the batch along
     with the release (contract: Rollback), so that block goes with it — for the
     reason every concluded batch's does — and what the surface carries afterwards
     is the promotion with its reversal, and the batch's own ending.
     """
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -674,12 +674,12 @@ def test_the_gate_may_answer_against_the_reading_it_answers_from(
     clause is absent — it is the disagreement that is worth a reader's attention.
     """
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -731,12 +731,12 @@ def test_the_counterfactual_is_four_states_and_a_request_is_the_first(
     from again, and the two things to do about it are neither of the things a run
     offers."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -789,7 +789,7 @@ def test_a_batch_with_no_release_before_it_has_nothing_to_read(
     """Absent for most batches, and ordinary: only a promotion produces something
     to assess, and `no-change` produces nothing (invariant 7)."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
 
     assert status(config).release is None
     assert payload(config)["release"] is None
@@ -805,7 +805,7 @@ def test_the_json_and_the_human_form_come_from_one_read_model(
     """One derivation behind both surfaces, and a payload that survives the wire
     it is going over."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     analyzed(config, SECOND, drafts=("loader-fallback",))
 
     described = status(config)
@@ -832,7 +832,7 @@ def test_every_verb_is_named_and_the_refused_ones_carry_a_reason(
     the reason it is not one of them: a menu that listed only the legal verbs
     would leave "why not" to be discovered by running them."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
 
@@ -903,7 +903,7 @@ def test_a_supersession_owing_its_successor_accepts_only_its_own_redo(
     the attempt that ended — the id that tells it from an untouched successor
     superseded in its turn."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     write_experiment(
         config.experiments_root,
@@ -934,7 +934,7 @@ def test_a_promotion_owing_its_outcome_accepts_only_the_promote_that_finishes_it
     decision is recorded before the outcome, so a run that stops between them
     leaves exactly this record with no `outcome.json` beside it."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST)
     candidate = git_rev(config.repo_root, "HEAD")
     write_experiment(
@@ -974,7 +974,7 @@ def test_the_redo_of_a_promotion_is_withheld_over_a_replay_record_nobody_can_rea
     operation refuses sends an operator at the single verb this state accepts
     and has it fail."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST)
     candidate = git_rev(config.repo_root, "HEAD")
     # Written first, which is what keeps the fixture from bringing the readable
@@ -1011,7 +1011,7 @@ def test_the_release_verbs_are_legal_while_the_analysis_stage_runs(
     ended — as every verb that writes into the change lineage is — would refuse it
     exactly when it is meant to be used."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     named = verbs(config)
     assert named["assess"]["allowed"] is True
@@ -1030,7 +1030,7 @@ def test_a_first_admission_names_the_settlement_it_waits_on(
     refusal says whose record that is rather than leaving it to be met at the
     admission."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     analyzed(config, SECOND, drafts=("loader-fallback",))
 
     named = verbs(config)
@@ -1046,7 +1046,7 @@ def test_a_first_admission_names_the_settlement_it_waits_on(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -1070,7 +1070,7 @@ def test_an_in_flight_rollback_is_offered_only_where_this_checkout_can_finish_it
     commit this checkout cannot recompute, so a surface deriving "run it again"
     from the record alone offers a verb that will not run."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     rollback.reverse(config, reason="the counterfactual confirmed the regression", now=NOW)
     record = json.loads(promoted_rollback_path(config).read_text(encoding="utf-8"))
 
@@ -1117,7 +1117,7 @@ def test_a_recorded_admission_offers_the_redo_that_writes_the_copies_it_owes(
     run again, which the gate has to offer rather than refuse as a second
     experiment."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
     admitted = admission.admitted[0]
@@ -1141,7 +1141,7 @@ def test_a_sealed_round_and_an_empty_revision_offer_the_runs_that_recorded_them(
     revision reports the round it opened. Both are what an operator reaches for
     after losing the response to a run that had already landed."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
     for item in admission.admitted:
@@ -1170,7 +1170,7 @@ def test_a_concluded_batch_offers_the_conclusion_that_ended_it(
     what ends one, and it lands before the audit line — so the run that finishes an
     interrupted conclusion is asking about a batch this reading calls history."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST)
     reason = "the reports recur on evaluation noise rather than on protocol"
     experiments.conclude_no_change(config, reason=reason, now=FROZEN_AT)
@@ -1191,7 +1191,7 @@ def test_a_finished_rollback_offers_the_request_that_recorded_it(
     the same request run again reports it. The gate used to call that terminal —
     which is true of the reversal and not of the verb."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     reason = "the counterfactual confirmed the regression"
     reversal = rollback.reverse(config, reason=reason, now=NOW)
 
@@ -1211,12 +1211,12 @@ def test_a_settled_release_offers_the_answer_that_settled_it(
     `rolled-back` answer lands its inverse commit before its decision record, so an
     operator who lost the response between them has this verb and nothing else."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     assessment.form(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -1241,7 +1241,7 @@ def test_a_settled_release_offers_the_answer_that_settled_it(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -1277,7 +1277,7 @@ def test_the_change_verbs_refuse_in_the_words_their_operations_refuse_with(
     """One walk through a batch, asking the gate at each state and then running
     the operation it refused. Every sentence is the operation's own."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     write_draft(config.batches_root, FIRST, "loader-fallback")
 
     # The analysis stage, which the preamble every guarded operation runs stops
@@ -1337,9 +1337,9 @@ def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
     """The same property on the seven verbs whose guard is not the shared
     preamble: what the reading is at, said once by the module that owns it."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
-    # A cohort that owes a reading and has recorded none: six of the seven have
+    # A batch that owes a reading and has recorded none: six of the seven have
     # nothing to act on.
     assert refusal(config, "settle") == raised(
         lambda: assessment.settle(config, settlement=assessment.SETTLEMENT_RETAIN, reason="nothing found", now=NOW)
@@ -1360,7 +1360,7 @@ def test_the_release_verbs_refuse_in_the_words_their_operations_refuse_with(
         config,
         verdict=assessment.VERDICT_INCONCLUSIVE,
         confidence=assessment.CONFIDENCE_LOW,
-        rationale="no frozen manifest states what kind of work either cohort did",
+        rationale="no frozen manifest states what kind of work either side did",
         recommendation=assessment.SETTLEMENT_RETAIN,
         now=NOW,
     )
@@ -1398,7 +1398,7 @@ def test_a_withdrawal_over_nothing_outstanding_is_offered_rather_than_refused(
     after it either landed or did not — so a gate refusing them would withhold the
     verb that finishes an interrupted one."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
 
@@ -1495,7 +1495,7 @@ def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
     time, since a token that expired overnight would refuse operations over a
     repository nobody wrote to."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback", "hook-side-loader"))
 
     first = status(config).state_revision
@@ -1542,7 +1542,7 @@ def test_the_state_revision_is_stable_across_a_checkout_of_another_branch(
     the Web adapter, orch-hub) would ever have felt.
     """
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback",))
     before = status(config).state_revision
 
@@ -1566,7 +1566,7 @@ def test_a_reading_is_never_published_with_a_token_from_after_it(
     freshly derived one, finds it current, and acts on a reading of a lifecycle
     that has since moved — so the reading is taken again instead."""
 
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback", "hook-side-loader"))
 
     read = phase._read
@@ -1600,7 +1600,7 @@ def test_the_state_revision_follows_the_refs_the_lifecycle_stands_on(
     replay evidence stale — so the refs in play are part of what this reading is
     of."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     before = status(config).state_revision
 
     git_update_ref(config.repo_root, RELEASE_REF, git_commit(config.repo_root, "later work on the source line"))
@@ -1614,7 +1614,7 @@ def test_status_writes_nothing(
     including the release frame, which resolves revisions and places reports
     without recording either."""
 
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     before = snapshot(config.repo_root)
 
     render.format_status(status(config))
@@ -1677,7 +1677,7 @@ def test_what_a_target_holds_is_read_from_its_receipt_and_never_from_the_plan(
     revision each of those repositories actually carries."""
 
     target = managed("orch-hub", revision=promoted.promotion_revision)
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     block = deployed(config)
     assert block["promotion"] == promoted.promotion_revision and block["rollback"] is None
@@ -1709,7 +1709,7 @@ def test_a_target_deployed_before_the_promotion_is_the_redeploy_it_is_owed(
     and that repository is still running what came before it."""
 
     managed("orch-hub", revision=release)
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     assert [item["state"] for item in deployed(config)["targets"]] == ["behind"]
     assert f"orch-hub at {release[:12]} — does not carry this promotion" in rendered(config)
@@ -1735,7 +1735,7 @@ def test_the_reasons_a_target_cannot_be_placed_are_not_one_state(
     managed("far-off", revision="f" * 40)
     managed("twice-over", revision=promotion.promotion_revision)
     managed("twice-over", revision=release, path=tmp_path / "elsewhere" / "twice-over")
-    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    freeze_batch(config, SECOND, effective=promotion.promotion_revision)
 
     targets = deployed(config)["targets"]
     states = {item["target"]: item for item in targets}
@@ -1765,7 +1765,7 @@ def test_a_target_carrying_a_reversed_promotion_is_not_a_target_up_to_date(
     took the reversal reads as the different state it is."""
 
     promotion = promote_candidate(config, batch_id=FIRST, at=PROMOTED_AT, targets=("orch-hub", "shipped-back"))
-    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    freeze_batch(config, SECOND, effective=promotion.promotion_revision)
     reversal = rollback.reverse(config, reason="the counterfactual confirmed the regression", now=NOW)
     managed("orch-hub", revision=promotion.promotion_revision)
     managed("shipped-back", revision=reversal.revision)
@@ -1796,7 +1796,7 @@ def test_a_file_this_machine_cannot_read_is_that_target_and_not_the_console(
 
     target = managed("orch-hub", receipt=False)
     (target / ".ai-deploy-lock.json").write_text("{ not json", encoding="utf-8")
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
 
     assert deployed(config)["targets"][0]["state"] == "unreadable"
     assert "orch-hub — unreadable: " in rendered(config)
@@ -1821,7 +1821,7 @@ def test_an_inventory_this_process_cannot_read_at_all_is_still_every_targets_sta
     promises, and invisible until the file is one of those two things."""
 
     managed("orch-hub", revision=promoted.promotion_revision)
-    freeze_cohort(config, SECOND, effective=promoted.promotion_revision)
+    freeze_batch(config, SECOND, effective=promoted.promotion_revision)
     registry = config.repo_root / ".registry" / "repos.local.json"
 
     # Bytes that are not UTF-8 text: a `UnicodeDecodeError`, which is a
@@ -1867,7 +1867,7 @@ def test_a_receipt_is_placed_only_where_it_states_a_commit_this_build_wrote(
         at=PROMOTED_AT,
         targets=("symbolic", "abbreviated", "later-schema"),
     )
-    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    freeze_batch(config, SECOND, effective=promotion.promotion_revision)
     receipts = {
         "symbolic": {"schema_version": 1, "source_git_commit": "HEAD"},
         "abbreviated": {"schema_version": 1, "source_git_commit": promotion.promotion_revision[:12]},
@@ -1914,7 +1914,7 @@ def test_a_receipt_that_states_no_source_commit_is_not_one_stating_none(
     """
 
     promotion = promote_candidate(config, batch_id=FIRST, at=PROMOTED_AT, targets=("truncated", "untied"))
-    freeze_cohort(config, SECOND, effective=promotion.promotion_revision)
+    freeze_batch(config, SECOND, effective=promotion.promotion_revision)
     root = managed("truncated", receipt=False)
     (root / ".ai-deploy-lock.json").write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
     managed("untied", revision=None)
@@ -1944,7 +1944,7 @@ def test_a_repository_that_promoted_nothing_reads_no_targets(
     different thing from a promotion whose targets all read as absent."""
 
     managed("orch-hub", revision=git_rev(config.repo_root, "HEAD"))
-    freeze_cohort(config, FIRST, effective=None)
+    freeze_batch(config, FIRST, effective=None)
 
     assert payload(config)["deployment"] is None
     assert "deployed" not in rendered(config)

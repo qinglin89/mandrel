@@ -185,7 +185,7 @@ def form_batch(config, *, now: datetime, **kwargs):
     """The two commands a formation takes: offer the batch, then fix it.
 
     The formation split in two so the human window falls before the manifest
-    exists, so anything that means "form a cohort out of this pool" runs both.
+    exists, so anything that means "form a batch out of this pool" runs both.
     A test about one half calls that half directly.
     """
 
@@ -518,7 +518,7 @@ def write_rollback(
     reverted_from: str = "e" * 40,
     revision: str = "a" * 40,
     tree: str = "8" * 40,
-    reason: str = "the next cohort showed no improvement and two new regressions",
+    reason: str = "the next batch showed no improvement and two new regressions",
     prepared_at: str = "2026-08-10T09:00:00Z",
     reverted_at: str | None = "2026-08-10T09:00:01Z",
 ) -> Path:
@@ -592,17 +592,17 @@ def complete_task(config, task_id: str) -> Path:
 
 
 def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEMENT_RETAIN) -> bool:
-    """Answer the release gate a cohort frozen after a promotion owes.
+    """Answer the release gate a batch frozen after a promotion owes.
 
     Every first experiment after the first promotion waits on this (invariant
     17), so a fixture that wants a second change cycle has to go through it
-    exactly as an operator does: the cohort reads the release, and a human says
+    exactly as an operator does: the batch reads the release, and a human says
     whether the line keeps it. `inconclusive` and `retain` because that is the ordinary
-    answer — no manifest states the shape of the work, so the cohorts suspect
+    answer — no manifest states the shape of the work, so the sides suspect
     rather than settle, and the release stays the commit the next batch is formed
     on.
 
-    A no-op where nothing is owed, which is every first batch and every cohort
+    A no-op where nothing is owed, which is every first batch and every one
     whose predecessor changed nothing. Returns whether it answered anything.
     """
 
@@ -614,7 +614,7 @@ def settle_release(config, *, at: datetime, settlement: str = assessment.SETTLEM
             config,
             verdict=assessment.VERDICT_INCONCLUSIVE,
             confidence=assessment.CONFIDENCE_LOW,
-            rationale="no frozen manifest states what kind of work either cohort did",
+            rationale="no frozen manifest states what kind of work either side did",
             recommendation=assessment.SETTLEMENT_RETAIN,
             now=at,
         )
@@ -640,7 +640,7 @@ def promote_candidate(
     canonical: bool = False,
     at: datetime,
 ) -> Any:
-    """A whole change cycle, from a frozen cohort to a commit on the source line.
+    """A whole change cycle, from a frozen batch to a commit on the source line.
 
     Every step is the real operation — the freeze, the admission, the completion
     observation, the seal, a run measured by the shared harness double, and the
@@ -655,7 +655,7 @@ def promote_candidate(
     leaves behind.
 
     `reports` replaces the frozen membership when a caller needs particular
-    provenance in it — the release-assessment suite needs the cohort this batch
+    provenance in it — the release-assessment suite needs the reports this batch
     was analyzed from to state the revision its targets actually held.
 
     `canonical` is what the candidate commit touches, and a caller has to choose
@@ -1284,7 +1284,7 @@ def git_unreadable_canonical_commit(root: Path, message: str) -> str:
 def git_release_commit(root: Path, message: str) -> str:
     """One more commit, landed on the source line as well as on the checkout.
 
-    What canonical work between two cohorts actually is: the line the project
+    What canonical work between two batches actually is: the line the project
     releases from moves, which is where the next batch is formed. A commit
     left on the operator's branch alone moves nothing a freeze reads.
     """

@@ -723,7 +723,7 @@ def promotable_refusal(experiment: Experiment, evidence: Evidence | None) -> str
 def admission_release_refusal(current: BatchLineage, owed: assessment.Obligation | None) -> str | None:
     """Why a batch's base is not built on before the release behind it is judged.
 
-    Invariant 17. The reading it waits on is the *owning* cohort's, which is the
+    Invariant 17. The reading it waits on is the *owning* batch's, which is the
     first batch frozen after that promotion and not necessarily this one; the
     caller resolves that obligation (`assessment.obligation`) and hands it here.
 
@@ -738,13 +738,13 @@ def admission_release_refusal(current: BatchLineage, owed: assessment.Obligation
     if current.experiments or owed is None:
         return None
     subject = owed.frame.subject
-    owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the cohort frozen after it, "
+    owner = "" if owed.owner_id == current.batch_id else f"{owed.owner_id}, the batch frozen after it, "
     reading = owed.reading
     if reading is None:
         return (
             f"{owner or current.batch_id + ' '}has recorded no reading of the {subject.batch_id} release "
             f"({subject.revision[:12]}), so nothing may be admitted on {current.batch_id}'s base yet; that "
-            "cohort's reports are the first evidence of what the release did, and the base this batch was "
+            "batch's reports are the first evidence of what the release did, and the base this batch was "
             "formed at has to be either the line carrying the release or the line with it taken back out "
             "(invariant 17)"
         )
@@ -1808,7 +1808,7 @@ def promote(
     text = require_reason(
         reason,
         "a promotion records why the evidence justified putting this candidate on the source line; the reason is "
-        "what a later reader has instead of the conversation that produced it, and it is what the cohort measuring "
+        "what a later reader has instead of the conversation that produced it, and it is what the batch measuring "
         "the result is read against",
     )
     planned = _planned_targets(config, targets)
@@ -2393,7 +2393,7 @@ def _redo_promotion(
     would otherwise report that there is nothing to promote. What it reports
     instead is the batch that retry ended, which is the *newest* one and no
     other: every batch before it was ended by an operation of its own, and a
-    reason repeated across two cohorts would otherwise fetch back a promotion
+    reason repeated across two batches would otherwise fetch back a promotion
     from a cycle that closed long ago and report it as this request's work.
 
     Bound to the whole request rather than to the reason alone, for the reason
@@ -2406,7 +2406,7 @@ def _redo_promotion(
     if latest is None or outcome is None or outcome["outcome"] != OUTCOME_PROMOTED:
         raise NothingToActOn(
             "no batch is current, so there is nothing to promote; a batch is current from the freeze of its "
-            "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
+            "manifest until its outcome is recorded (invariant 14), and the next batch takes two commands: "
             "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
         )
     merge = outcome["promotion"]
@@ -2414,7 +2414,7 @@ def _redo_promotion(
         raise NothingToActOn(
             f"no batch is current, so there is nothing to promote; the newest, {latest.batch_id}, was promoted "
             f"for {outcome['reason']!r} planning {merge['planned_targets']}, which is not this request "
-            f"({reason!r} planning {list(planned)}) redone — the next cohort is offered by "
+            f"({reason!r} planning {list(planned)}) redone — the next batch is offered by "
             "`mandrel evolution start` and fixed by `mandrel evolution freeze`"
         )
     _require_promotion_line(outcome["experiment_id"], merge["merge_input_ref"], source_ref)
@@ -2482,7 +2482,7 @@ def conclude_no_change(
     no promotion revision, no merge, no deployment — and the record carries the
     reason and nothing else.
 
-    This is the record that releases the next cohort, so what it may be written
+    This is the record that releases the next batch, so what it may be written
     over is exactly the state where nothing is left to do: the analysis stage
     ended, no experiment is open, no proposal is still waiting for a decision,
     and no attempt records a promotion. Those four are the phase `status` calls
@@ -2601,7 +2601,7 @@ def _redo_conclusion(lineage: Lineage, reason: str) -> ConclusionResult:
     if latest is None:
         raise NothingToActOn(
             "no batch is current, so there is nothing to conclude; a batch is current from the freeze of its "
-            "manifest until its outcome is recorded (invariant 14), and the next cohort takes two commands: "
+            "manifest until its outcome is recorded (invariant 14), and the next batch takes two commands: "
             "`mandrel evolution start` offers one, `mandrel evolution freeze` fixes it"
         )
     return ConclusionResult(
@@ -3215,11 +3215,11 @@ def _require_release_settled(
     already-frozen base carrying the release, so this gate passes, while a
     `rolled-back` ends this batch outright and leaves nothing to admit to.
 
-    The reading it waits on is the *owning* cohort's, which is the first batch
+    The reading it waits on is the *owning* batch's, which is the first batch
     frozen after that promotion and not necessarily this one. The two part
-    company as soon as that cohort ends without answering: a batch that concluded
+    company as soon as that batch ends without answering: a batch that concluded
     `no-change` promoted nothing, so this batch still follows the older release
-    while owing no reading of its own. Asking only whether *this* cohort owes one
+    while owing no reading of its own. Asking only whether *this* batch owes one
     would find nothing to wait for and admit on a line nobody decided about — the
     obligation stays where it was, and so does what waits on it.
 
@@ -3266,7 +3266,7 @@ def base_on_the_line_failure(
     - the ordinary settlement, where `assessment.settle` composes the reversal;
     - a `retain` followed by a standalone `mandrel evolution rollback`, which no
       settlement of this batch's own would name;
-    - the deferred case, where the reading belongs to an earlier cohort that
+    - the deferred case, where the reading belongs to an earlier batch that
       concluded without answering while *this* batch holds the stale base — a
       rule keyed on whose obligation it is reaches the first of those two and
       never the second.
@@ -3329,7 +3329,7 @@ def base_on_the_line_failure(
             f"{promoted.batch_id} release {revision[:12]} that {reversal[:12]} has since taken back off the "
             "source line; nothing is admitted on a base carrying a promotion nobody kept (invariant 17), and a "
             "batch standing on one is over — run `mandrel evolution rollback` again for the reason on record to "
-            "write the outcome that ends it, and freeze the next cohort at the line as it now stands"
+            "write the outcome that ends it, and freeze the next batch at the line as it now stands"
         )
 
     release = assessment.subject(known, current.batch)
@@ -3349,7 +3349,7 @@ def base_on_the_line_failure(
             f"{current.batch_id}'s base {current.base_revision[:12]} does not carry the {release.batch_id} "
             f"release {release.revision[:12]}; every alternative in this batch starts from that base "
             "(invariant 15), and one off the line the release is on makes each of them an attempt against a "
-            "protocol nobody decided on (invariant 17) — a cohort is formed at the source line as it stands"
+            "protocol nobody decided on (invariant 17) — a batch is formed at the source line as it stands"
         )
     return None
 

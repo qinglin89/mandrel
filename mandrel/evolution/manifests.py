@@ -14,7 +14,7 @@ experiments, and their rounds all happen between the two;
 waiting at the admission gate forever; `rollback.json` comes after the end,
 saying that the promotion the outcome recorded is no longer on the source line;
 `release-assessment.json` is about a different batch's promotion entirely — this
-cohort's reading of whether the release before it worked (`assessment.py`), which
+batch's reading of whether the release before it worked (`assessment.py`), which
 is why it sits in the assessing batch's directory rather than the assessed one's.
 All five are committed for the same reason: `.ai-tasks/` and `.ai-evolution/`
 are machine-local, so a conclusion that lived only there would be unreadable on
@@ -26,12 +26,12 @@ and `batches.py` allocates ids and freezes new manifests.
 
 **Versioning.** A frozen manifest is immutable (invariant 3), so the schema it
 was written against is immutable too. Version 1 is the shape this repository
-shipped before per-report cohort provenance existed; version 2 adds it. The
-writer emits the current version and the reader accepts both, each against its
-own frozen schema file. Tightening version 1 in place would instead have
-redefined manifests already written under it — a manifest that was valid when
-frozen would stop loading, with no migration possible on content that may not
-be edited.
+shipped before the per-report evaluator and provenance blocks existed; version 2
+adds them. The writer emits the current version and the reader accepts both,
+each against its own frozen schema file. Tightening version 1 in place would
+instead have redefined manifests already written under it — a manifest that was
+valid when frozen would stop loading, with no migration possible on content that
+may not be edited.
 
 A version is bumped when the *reader* needs something old records cannot
 supply. A field only newer records can carry is added to the current version as
@@ -138,7 +138,7 @@ EXCLUSION_REASONS = frozenset(
 # about the *clone*, and another clone holding the object would select the very
 # same report. Recording both as one reason would tell a reader of a frozen
 # manifest that an unfetched object and a corrupt field are the same problem,
-# and only one of them is fixed by a fetch. `assessment.py` splits its cohort
+# and only one of them is fixed by a fetch. `assessment.py` splits its side
 # exclusions on the same line for the same reason.
 
 # The reasons a human owns. They carry the same attribution a human-included
@@ -149,7 +149,7 @@ HUMAN_REASONS = frozenset({REASON_HUMAN_EXCLUDED})
 # answer the same three questions and the two directions are equally in need of
 # an answer. A member was argued in past the identity test; an exclusion took out
 # evidence the test had selected, which is the move most able to shape what a
-# cohort says and so the one least able to go unexplained. The bounded field
+# batch says and so the one least able to go unexplained. The bounded field
 # stays where it is on each record (`mode` on a member, `reason` on an
 # exclusion): that is what a machine reads, and this is what a person wrote.
 HUMAN_MOVE_FIELDS = ("justification", "actor", "moved_at")
@@ -201,9 +201,9 @@ class Batch:
 
     @property
     def assessment_path(self) -> Path:
-        """This batch's reading of the release before it — its own cohort's
-        judgement, which is why it sits here and not with the promotion it is
-        about (`assessment.py`)."""
+        """This batch's reading of the release before it — its own judgement,
+        which is why it sits here and not with the promotion it is about
+        (`assessment.py`)."""
 
         return self.directory / ASSESSMENT_FILENAME
 
@@ -300,7 +300,7 @@ def next_batch_id(batches: list[Batch]) -> str:
     """One past the highest id ever allocated.
 
     Counted from the highest, not from how many exist: reusing the id of a batch
-    whose directory was moved away would attach new evidence to an old cohort's
+    whose directory was moved away would attach new evidence to an old batch's
     name.
     """
 
@@ -339,7 +339,7 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
     Validated, and cross-checked against the manifest it sits beside: a record
     naming another batch or another task — or sitting beside a manifest that
     names no task for it to attest to — is corruption, and corruption that loads
-    here releases the next cohort early.
+    here releases the next batch early.
     """
 
     path = batch.closure_path
@@ -360,7 +360,7 @@ def read_closure(config: EvolutionConfig, batch: Batch) -> Mapping[str, Any] | N
         # manifest naming none has no task whose lifecycle it could attest to —
         # and nothing on disk could ever be shown to have analyzed this batch.
         # Skipping the identity check here instead would let exactly that record
-        # release the next cohort.
+        # release the next batch.
         raise RecordError(
             f"{path}: {batch.manifest_path} names no analysis task, so this record attests to a completion "
             f"nothing can be checked against; restore the manifest's analysis_task_id, or remove the record "
@@ -592,7 +592,7 @@ def require_coherent_selection(manifest: Mapping[str, Any], *, where: str) -> No
     """The denominator's cross-field rules, which its schema cannot state.
 
     JSON Schema constrains each field on its own, so a shape-valid manifest can
-    still describe a cohort that never existed: counts that disagree with the
+    still describe a batch that never existed: counts that disagree with the
     reports they summarize, one task marked a member on one of its reports and
     something else on another, a task both selected and not selected, or a human
     judgement nobody is named for. Every one of those is a *frozen* record —

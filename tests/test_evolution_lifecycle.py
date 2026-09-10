@@ -3,7 +3,7 @@
 The other evolution suites each hold one seam still: admission policy against a
 fixed pool, the readers against hand-written records, the operations against a
 batch that was set up by hand. This one runs the arc the contract describes —
-freeze, analysis, admission, rounds, decisions, outcome, the next cohort — with
+freeze, analysis, admission, rounds, decisions, outcome, the next batch — with
 every step performed by the operation that owns it and every fact read back
 through the derivation `status` uses.
 
@@ -66,7 +66,7 @@ def at(day: int) -> datetime:
 def repo(tmp_path: Path) -> Path:
     """A repository with the real contract files and a pool target small enough
     to reach: the policy numbers are `test_evolution_controller`'s subject, and
-    this suite is about what happens after a cohort is frozen."""
+    this suite is about what happens after a batch is frozen."""
 
     root = git_repo(make_repo(tmp_path), tag=REVISION)
     path = root / "evolution" / "config.toml"
@@ -92,10 +92,10 @@ def feed_root(tmp_path: Path) -> Path:
 
 
 def fill_pool(config: evolution.EvolutionConfig, feed_root: Path, *, prefix: str, sequence: int) -> None:
-    """Import one cohort's worth of distinct completed tasks.
+    """Import one batch's worth of distinct completed tasks.
 
     Every record says it was produced at the source line's current tip, which is
-    what a batch formed now selects by (`at_line`): a cohort's members are the
+    what a batch formed now selects by (`at_line`): a batch's members are the
     reports produced under the protocol its base carries.
     """
 
@@ -258,7 +258,7 @@ def test_the_history_outlives_the_machine_that_produced_it(
     assert derived.gate.consumed == {"loader-fallback": EXP_01}
 
 
-def test_a_concluded_batch_releases_the_next_cohort(
+def test_a_concluded_batch_releases_the_next_batch(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """The sequencing rule the widened currency created: reports keep
@@ -338,13 +338,13 @@ def test_nothing_in_the_arc_reads_the_ledger_back_as_state(
     assert experiments.revise(config, reason="replay lost two runs", now=at(4)).round_number == 2
 
 
-def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
+def test_the_next_batch_is_a_batch_of_its_own_with_its_own_experiments(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:
     """Two cycles in one repository: the second batch is formed at its own base,
     and the first batch's history stays exactly where it was.
 
-    Canonical work lands on the line between the two cohorts, which is what makes
+    Canonical work lands on the line between the two batches, which is what makes
     the two bases different commits — and it lands before the second formation,
     because a formation reads the line once and never re-resolves it.
     """
@@ -359,7 +359,7 @@ def test_the_next_cohort_is_a_batch_of_its_own_with_its_own_experiments(
     experiments.conclude_no_change(config, reason="the one approach failed replay", now=at(4))
 
     fill_pool(config, feed_root, prefix="n", sequence=100)
-    moved = git_release_commit(config.repo_root, "canonical work between the two cohorts")
+    moved = git_release_commit(config.repo_root, "canonical work between the two batches")
     second = form_batch(config, now=at(5) + timedelta(days=1))
     analyze(config, NEXT_BATCH, second.analysis_task_id or "", drafts=("second-loader-fix",))
     later = experiments.create(config, ["second-loader-fix"], now=at(7))

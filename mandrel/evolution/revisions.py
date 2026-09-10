@@ -46,7 +46,7 @@ a lifecycle reading built out of `HEAD` against the release tag, which answered
 "is this checkout on the release line" — naming no experiment, changing with a
 `git checkout`, and reporting a candidate for any unrelated branch (contract:
 What is derived) — and the freeze's own runner revision, which described `HEAD`
-and named a release the cohort was not run under. The revisions in play are
+and named a release the batch was not run under. The revisions in play are
 properties of the batch and experiment records and of the configured source
 line, so `lineage.py` derives them and `phase.py` reports them; this module only
 resolves the names. Nothing here resolves the checkout, which is what lets

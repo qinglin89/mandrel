@@ -40,12 +40,12 @@ change is taken back out by a commit that says so, computed against the line as
 it now stands — every commit that landed after the promotion is carried through
 rather than dropped.
 
-**A rollback is also how a batch ends.** The cohort frozen after the promotion
+**A rollback is also how a batch ends.** The batch frozen after the promotion
 was formed to judge it and its base carries it (invariant 15); once the release
 comes off the line that base is a commit nobody decided on, and the batch has no
 move left. So a landed reversal writes that batch's terminal outcome
 (`end_batch`), keyed on the base rather than on whose reading was settled —
-which is what reaches the cohort holding the stale base when the obligation sits
+which is what reaches the batch holding the stale base when the obligation sits
 with an earlier one. Landed is the line's own answer and not this controller's
 record of it: the release comes off the moment the ref takes the inverse, one
 write before `reverted_at` says so and two before the ending, and each of those
@@ -213,7 +213,7 @@ def rollback(
 
     The evidence for a rollback is not in the run that justified the promotion.
     A replay measures a tree; whether the promotion argued from it should stand
-    is a later judgement against a later cohort, and what this records of it is
+    is a later judgement against a later batch, and what this records of it is
     the operator's reason (contract: Promotion evidence).
 
     `source_ref` asserts the line this moves and never selects it
@@ -238,7 +238,7 @@ def rollback(
         # composes that entry point and has a record of its own to write first:
         # its decision goes onto the reading of the batch this would end, and a
         # reversal that ended the batch on its way past would leave the gate with
-        # no cohort to record the answer on (`assessment.settle`). So both entry
+        # no batch to record the answer on (`assessment.settle`). So both entry
         # points end the batch, each after everything it owes the reading.
         return replace(result, ended_batch=end_batch(config, now=moment))
 
@@ -341,15 +341,15 @@ def standing_on_reversal(
 
     The one rule a landed rollback and the admission gate both ask, keyed on the
     base rather than on whose reading was settled. A batch is formed at the
-    source line as it then stands (invariant 15), so a cohort frozen after a
+    source line as it then stands (invariant 15), so a batch frozen after a
     promotion has that promotion in its base by construction — and when the
     promotion comes back off the line, that base is a commit carrying a release
     nobody kept. Every alternative in the batch would start from it (invariant
     17), which is the accident the gate exists to stop.
 
     Keyed on the base because the obligation and the stale base are not always
-    the same batch. A cohort may conclude without answering, leaving the reading
-    with it and the next cohort holding the base — so a rule phrased as "a
+    the same batch. A batch may conclude without answering, leaving the reading
+    with it and the next batch holding the base — so a rule phrased as "a
     rollback ends the assessing batch" reaches the first and never the second
     (contract: Release assessment).
 
@@ -547,7 +547,7 @@ def end_batch(
 ) -> BatchEnded | None:
     """End the current batch that a landed reversal left standing on nothing.
 
-    A rollback is a way a batch ends. The cohort frozen after a promotion was
+    A rollback is a way a batch ends. The batch frozen after a promotion was
     formed to judge that release and its base carries it (invariant 15); once the
     release is taken back off the line, that base is a commit nobody decided on,
     every alternative in the batch would start from it, and there is no move left
@@ -559,12 +559,12 @@ def end_batch(
 
     Called by both entry points rather than by `reverse`, because the settlement
     composes `reverse` and owes its own record first: the decision goes onto the
-    reading of the batch this ends, and a cohort ended on the way past would
+    reading of the batch this ends, and a batch ended on the way past would
     leave the gate with nothing to record the answer on (`assessment.settle`).
 
     None where there is nothing to end: no batch is current, or the current one
     is not standing on a reversed release — a repository whose rollback reversed
-    a promotion an older cohort already ended over, or one where the batch that
+    a promotion an older batch already ended over, or one where the batch that
     was standing on it has since concluded.
 
     A batch that admitted work on that base is refused rather than ended
@@ -765,10 +765,10 @@ def _require_nothing_built_on(config: EvolutionConfig, lineage: Lineage, promote
     Read off admitted work — experiment bases and pinned candidates — and never
     off the later batch's own base, which reads like the same question and is
     not. A batch is formed at the source line as it then stands (invariant 15),
-    so the cohort that assesses a release was formed at the promoted commit and
+    so the batch that assesses a release was formed at the promoted commit and
     its base carries the promotion by construction, before it has admitted
     anything at all. Asked of that base, this guard would refuse the reversal
-    composed by that cohort's own settlement every time — which is the only path
+    composed by that batch's own settlement every time — which is the only path
     a `rolled-back` decision has (contract: Release assessment), so the rule
     would make the settlement's two answers one.
 

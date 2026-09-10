@@ -417,10 +417,10 @@ def _add_lineage_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
     """The verbs about a release: the runs measured against a candidate, the
-    reversal of a promotion, and the cohort's reading of the one before it.
+    reversal of a promotion, and the batch's reading of the one before it.
 
     They act on things the change lineage has already produced — a round's run, a
-    promotion on the line, a frozen cohort's reading — which is why they are
+    promotion on the line, a frozen batch's reading — which is why they are
     grouped apart from the verbs that move that lineage. Judging any of it stays
     the operator's: these record a verdict, a settlement or a reversal, and none
     of them derives one.
@@ -453,7 +453,7 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_expectation_argument(rollback)
 
     assess = subparsers.add_parser(
-        phase.ACTION_ASSESS, help="record this cohort's reading of the release before it"
+        phase.ACTION_ASSESS, help="record this batch's reading of the release before it"
     )
     _add_reading_arguments(assess, assessment)
     assess.add_argument(
@@ -463,9 +463,9 @@ def _add_release_commands(subparsers: argparse._SubParsersAction) -> None:
         nargs=5,
         metavar=("NAME", "UNIT", "BEFORE", "AFTER", "BETTER"),
         help=(
-            "a quantity both cohorts came to, repeatable "
+            "a quantity both sides came to, repeatable "
             f"(e.g. --metric review-rounds rounds 1.8 1.2 {assessment.BETTER_LOWER}); an empty side is one that "
-            f"cohort does not state, which a quantity called better in some direction may not have — record it "
+            f"side does not state, which a quantity called better in some direction may not have — record it "
             f"{assessment.BETTER_NEITHER!r} instead. Five values rather than one packed field: the record holds any "
             "non-empty string as a name or a unit, delimiters included, and a shape that reserved one would put "
             "`latency:p95` beyond this console while the library accepts it"
@@ -711,7 +711,7 @@ def _add_reading_arguments(parser: argparse.ArgumentParser, assessment) -> None:
         "--verdict",
         required=True,
         choices=list(assessment.VERDICTS),
-        help="what this cohort reads of the release; a directional one has to be supported by the evidence recorded",
+        help="what this batch reads of the release; a directional one has to be supported by the evidence recorded",
     )
     parser.add_argument(
         "--confidence",
@@ -881,7 +881,7 @@ def _lineage_verbs(phase) -> frozenset[str]:
 
 def _release_verbs(phase) -> frozenset[str]:
     """The verbs about a release: a run measured against a candidate, a
-    promotion taken back off the line, and a cohort's reading of the release
+    promotion taken back off the line, and a batch's reading of the release
     before it.
 
     Named from the same constants for the same reason. The four verbs that ask a
@@ -1240,8 +1240,8 @@ def _measurements(assessment, stated: list[list[str]]) -> list[Any]:
     """The quantities an operator read off this machine's evaluation artifacts.
 
     Five values because that is what the record holds: the metric, its unit, what
-    each cohort came to, and which direction is better. A side left empty is one
-    that cohort does not state — a quantity nothing measured before the release is
+    each side came to, and which direction is better. A side left empty is one
+    that side does not state — a quantity nothing measured before the release is
     an ordinary reading, and it is a different fact from zero.
 
     They arrive as five separate arguments and are carried through untouched,
@@ -1282,7 +1282,7 @@ def _quantity(stated: str, where: str) -> float | None:
         return float(stated)
     except ValueError:
         raise evolution_errors.InputError(
-            f"{where!r} states {stated!r} where a measurement holds a number; an empty value is how a cohort that "
+            f"{where!r} states {stated!r} where a measurement holds a number; an empty value is how a side that "
             "measured nothing here is stated"
         ) from None
 

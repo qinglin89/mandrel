@@ -104,7 +104,7 @@ redeployed onto since. A stated field is checked only for being a non-empty
 string and is then copied unchanged; whether a revision is a commit id at all,
 and whether it resolves to one here, are `assessment`'s questions, asked where a
 report is placed and reported there as its own exclusions. Anything weaker turns
-an unverified lock into a cohort placement, which is worse than the null it
+an unverified lock into a side placement, which is worse than the null it
 replaced: an excluded report costs a denominator, a misplaced one invents a
 direction.
 

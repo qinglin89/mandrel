@@ -6,7 +6,7 @@ an unfamiliar feed.
 
 `sync` imports. It is human-invoked (contract invariant 9), makes no evaluation
 call of any kind, and never decides anything about batches: staging evidence
-and forming a cohort are separate steps with separate gates.
+and forming a batch are separate steps with separate gates.
 
 **Interruption.** One page is one commit. Records are validated and staged
 first, then the whole page — pool changes, rejections, and the new cursor —
@@ -260,7 +260,7 @@ def _known_keys(config: EvolutionConfig, state: EvolutionState) -> set[str]:
     ignored while the batch manifests are committed, so a fresh clone — or this
     machine after its runtime directory is deleted — holds every membership
     record and no pool at all. Consulting state alone there re-imports reports a
-    frozen cohort already analyzed and lets them form a second one, counting the
+    frozen batch already analyzed and lets them form a second one, counting the
     same unique completed tasks twice (invariants 1-3).
 
     Report keys, not tasks: a *later* evaluation of a task an old batch covered

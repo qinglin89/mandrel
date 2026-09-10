@@ -60,7 +60,7 @@ REVERSED = datetime(2026, 8, 9, 9, 0, 0, tzinfo=timezone.utc)
 REVERSED_AT = "2026-08-09T09:00:00Z"
 LATER = datetime(2026, 8, 10, 9, 0, 0, tzinfo=timezone.utc)
 LATER_AT = "2026-08-10T09:00:00Z"
-WHY = "the next cohort showed no improvement and two new regressions"
+WHY = "the next batch showed no improvement and two new regressions"
 # A line nothing here creates: what a rollback must not be redirected onto by
 # configuration, and what an operator asserting the wrong line names.
 ELSEWHERE = "refs/heads/elsewhere"
@@ -254,7 +254,7 @@ def test_the_status_reports_the_promotion_and_its_reversal(
 ) -> None:
     """Both are true and both are reported: the commit was promoted, and a later
     commit took the change back out. A status that dropped the promotion would
-    lose the revision the next cohort's reports were produced at."""
+    lose the revision the next batch's reports were produced at."""
 
     result = rollback.rollback(config, reason=WHY, now=REVERSED)
 
@@ -835,7 +835,7 @@ def test_a_later_attempt_built_on_the_promotion_stops_it(
     exists.
 
     The attempt can only stand there because somebody decided it should: nothing
-    is admitted on a batch's base until the cohort's reading of the release is
+    is admitted on a batch's base until the reading of the release before it is
     settled (invariant 17), so `retain` is what put this work on the promoted
     line in the first place.
     """
@@ -885,14 +885,14 @@ def test_a_later_attempt_this_checkout_cannot_place_stops_it(
 def test_a_later_batch_that_admitted_nothing_does_not_stop_it(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """A frozen cohort has pinned no candidate and holds no work, so it is not
+    """A frozen batch has pinned no candidate and holds no work, so it is not
     lineage built on the promotion — the guard is about attempts, not about
     time.
 
-    Formed at the promoted commit, which is what an assessing cohort's base
+    Formed at the promoted commit, which is what an assessing batch's base
     actually is: it was frozen at the source line while the release was on it
     (invariant 15), so its base carries the promotion before it has admitted
-    anything. That is the state a rollback composed by this cohort's own
+    anything. That is the state a rollback composed by this batch's own
     settlement runs in, and a guard asked about the base rather than about
     admitted work would refuse it here.
     """
@@ -908,7 +908,7 @@ def test_a_later_batch_that_admitted_nothing_does_not_stop_it(
 
     assert result.reverted is True
     assert git_rev(config.repo_root, RELEASE_REF) == result.revision
-    # And that cohort is what the reversal ends: its base carries the release
+    # And that batch is what the reversal ends: its base carries the release
     # that just came off the line, so it has nothing left to admit on.
     assert result.ended_batch is not None
     assert result.ended_batch.batch_id == SECOND_BATCH
@@ -917,10 +917,10 @@ def test_a_later_batch_that_admitted_nothing_does_not_stop_it(
 # --- the batch a reversal ends ------------------------------------------------
 
 
-def test_a_reversal_no_cohort_is_standing_on_ends_nothing(
+def test_a_reversal_no_batch_is_standing_on_ends_nothing(
     config: evolution.EvolutionConfig, promoted: experiments.PromotionResult
 ) -> None:
-    """The ordinary case: the promotion was reversed before any cohort followed
+    """The ordinary case: the promotion was reversed before any batch followed
     it, so there is no batch whose base carries the release and nothing to end.
     The promoted batch is not it — that one concluded by promoting, and a
     rollback edits no history."""
@@ -977,7 +977,7 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     and one with nothing left standing says it writes nothing.
     """
 
-    analyzed_cohort(config, promoted.promotion_revision)
+    analyzed_batch(config, promoted.promotion_revision)
     assert settle_release(config, at=LATER) is True
 
     reversal = rollback.reverse(config, reason=WHY, now=LATER)
@@ -1014,8 +1014,8 @@ def test_the_ending_is_what_a_redone_rollback_finishes(
     assert (config.batches_root / SECOND_BATCH / "outcome.json").read_bytes() == written
 
 
-def analyzed_cohort(config: evolution.EvolutionConfig, base: str, draft_id: str = "second-idea") -> None:
-    """The cohort that assesses a release, standing where an operator leaves it.
+def analyzed_batch(config: evolution.EvolutionConfig, base: str, draft_id: str = "second-idea") -> None:
+    """The batch that assesses a release, standing where an operator leaves it.
 
     Frozen at the source line while the release was on it (invariant 15), its
     analysis over, and one disposition waiting at the admission gate — which is
@@ -1055,7 +1055,7 @@ def test_a_reversal_the_line_took_and_no_record_names_still_holds_the_base(
     repairs it, and the redo finishes both writes at once.
     """
 
-    analyzed_cohort(config, promoted.promotion_revision)
+    analyzed_batch(config, promoted.promotion_revision)
     assert settle_release(config, at=REVERSED) is True
 
     stop_after(monkeypatch, "_finish")
@@ -1114,7 +1114,7 @@ def test_a_batch_that_admitted_work_on_that_base_is_refused_rather_than_ended(
     own refusal instead of a redo that does not run.
     """
 
-    analyzed_cohort(config, promoted.promotion_revision)
+    analyzed_batch(config, promoted.promotion_revision)
     assert settle_release(config, at=REVERSED) is True
 
     stop_after(monkeypatch, "_finish")
@@ -1157,7 +1157,7 @@ def test_the_same_refusal_stands_once_the_record_says_the_line_took_it(
     the one that finishes it: two states, one ending, one refusal.
     """
 
-    analyzed_cohort(config, promoted.promotion_revision)
+    analyzed_batch(config, promoted.promotion_revision)
     assert settle_release(config, at=REVERSED) is True
     rollback.reverse(config, reason=WHY, now=REVERSED)
 
@@ -1195,7 +1195,7 @@ def test_only_the_latest_promotion_is_rolled_back(
         batch_id=SECOND_BATCH,
         drafts=("second-idea",),
         # Membership of its own: one report belongs to one batch (invariant 3),
-        # and the second cohort's reading of the first release is taken over both
+        # and the second batch's reading of the first release is taken over both
         # manifests — two batches naming one report is a report on both sides.
         reports=[make_manifest_report(key="s1", sequence=1, task_id="2026-08-05-second-task")],
         at=LATER,

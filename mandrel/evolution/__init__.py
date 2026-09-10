@@ -4,7 +4,7 @@
 mechanical part of it — discovering already-complete orch-hub reports,
 validating and staging them as unique completed tasks, offering a batch out of
 that pool, recording the moves a human makes on that offer, freezing what they
-fix as an immutable cohort, preparing that cohort's pending analysis task, and
+fix as an immutable batch, preparing that batch's pending analysis task, and
 deriving where the lifecycle currently stands.
 
 What it deliberately does not do: run or schedule an evaluation, and decide
@@ -28,7 +28,7 @@ vocabulary (`replay.Integration`, `replay.CaseSet`, `replay.Measurement`, …),
 single-writer lock),
 `assessment.describe` / `assessment.read` / `assessment.obligation` /
 `assessment.form` (the comparison a batch's frozen provenance supports, the
-reading it recorded of the release before it, which cohort owes that reading and
+reading it recorded of the release before it, which batch owes that reading and
 what it says, and the operation that records one) together with
 `assessment.measure` / `assessment.conclude` / `assessment.abandon` /
 `assessment.withdraw` / `assessment.resolve` (the pinned two-revision run that

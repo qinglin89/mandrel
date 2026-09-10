@@ -314,7 +314,7 @@ class NothingToActOn(BatchError):
     """What this verb acts on does not exist yet.
 
     No batch is current, no experiment is open, no promotion was ever made, no
-    run is on record, no cohort owes a reading. One class rather than one per
+    run is on record, no batch owes a reading. One class rather than one per
     absence, because the shape of the answer is the same every time and the
     sentence already names the missing thing: what comes next is the verb that
     creates it, or nothing.

@@ -56,7 +56,7 @@
       "pattern": "^[0-9a-f]{40}$"
     },
     "reason": {
-      "description": "Why the promotion was reversed. The evidence for a rollback is not in the run that justified the promotion — a run measures a tree, and whether the promotion argued from it should stand is a later judgement made against a later cohort (contract: Promotion evidence).",
+      "description": "Why the promotion was reversed. The evidence for a rollback is not in the run that justified the promotion — a run measures a tree, and whether the promotion argued from it should stand is a later judgement made against a later batch (contract: Promotion evidence).",
       "type": "string",
       "minLength": 1
     },

@@ -262,7 +262,7 @@
       "additionalProperties": false
     },
     "evaluator": {
-      "description": "Who judged the run, in the vocabulary an imported report uses for the same fact (`evaluation-import.schema.json`). Same spelling on purpose: invariant 5 separates cohorts by evaluator, rubric, and materially different model revisions, and a comparison across two vocabularies cannot make that separation.",
+      "description": "Who judged the run, in the vocabulary an imported report uses for the same fact (`evaluation-import.schema.json`). Same spelling on purpose: invariant 5 separates sides by evaluator, rubric, and materially different model revisions, and a comparison across two vocabularies cannot make that separation.",
       "type": "object",
       "required": [
         "backend",
