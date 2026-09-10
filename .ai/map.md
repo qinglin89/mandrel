@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-07
-verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # Project Map
@@ -23,7 +23,7 @@ verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 | Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v11 status, state revision and allowed/refused/recovery actions, typed recovery-specific refusal codes, schema-v1 JSON non-completion envelope |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, source-line inverse commits, rollback interruption recovery, and base-keyed `rolled-back` batch ending; phase JSON v11 |
-| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity cohorts/exclusions with unstated/differing facet failures, CLI-visible assessment recommendation, pinned counterfactual, human retain/rollback settlement, retained-base admission or rollback ending |
+| Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity sides/exclusions with unstated/differing facet failures, CLI-visible assessment recommendation, pinned counterfactual, human retain/rollback settlement, retained-base admission or rollback ending |
 | Evolution deployment visibility | deployment/lockfile/registry/revision services | planned target names beside validated machine-local deploy-lock placement states; observation is outside lifecycle state |
 | Report publication | external orch-hub, hub client | published catalog/raw-artifact feed, import-record translation, manual live probe |
 

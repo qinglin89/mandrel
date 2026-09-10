@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-08
-verified-against: 182cb36f727a1490610822b675b57512430f009f
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # Design Principles and Decisions
@@ -68,7 +68,7 @@ verified-against: 182cb36f727a1490610822b675b57512430f009f
   refuses when later candidate lineage stands on the promotion. The landed
   inverse also ends the zero-attempt current batch whose base carries that
   promotion but not its inverse; its claimed reports remain spent.
-- A release assessment belongs to the first cohort after a promotion. Its
+- A release assessment belongs to the first batch after a promotion. Its
   manifest-derived denominator/exclusions stay visible; facet failures separate
   `unstated` evidence gaps from `differing` side values, and either remains
   inconclusive rather than negative evidence. Because manifests carry no
@@ -85,7 +85,7 @@ verified-against: 182cb36f727a1490610822b675b57512430f009f
   treat an unresolvable revision from another reader as portable uncertainty.
 - The assessment gate answers once with retain or rollback. Retain releases the
   frozen base for first admission; rollback ends the batch standing on the
-  reversed release. Its obligation survives an owning cohort's no-change
+  reversed release. Its obligation survives an owning batch's no-change
   conclusion; identical settlement retries remain idempotent, while evidence
   mutation closes after the answer.
 
@@ -173,7 +173,7 @@ verified-against: 182cb36f727a1490610822b675b57512430f009f
   tokens; human moves carry forward while their automatic answer still differs.
 - Cross-operation release settlement holds one single-writer lock across
   preflight, optional inverse rollback, lineage re-derivation, and decision
-  publication; an answered earlier-cohort obligation is followed only for the
+  publication; an answered earlier batch's obligation is followed only for the
   settlement redo path.
 - Config/schema version fields on persisted machine contracts.
 - Fail closed on malformed state, unsafe paths, unsupported config, or missing
@@ -187,7 +187,7 @@ verified-against: 182cb36f727a1490610822b675b57512430f009f
 - Committing secrets, raw evaluation bundles, local manifests, registry paths,
   or orchestrator `.env`.
 - Treating one evaluation finding as global policy evidence.
-- Combining heterogeneous protocol/rubric cohorts without stating it.
+- Combining sides with heterogeneous protocol/rubric provenance without stating it.
 - Letting an analysis task edit canonical files or a candidate govern its own
   creating run.
 - Comparing Claude and Codex raw token counts as equivalent cost.

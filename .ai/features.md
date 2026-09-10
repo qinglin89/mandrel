@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-07
-verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # Features
@@ -23,7 +23,7 @@ verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 | Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON status, stale-state token, allowed/refused/recovery actions; stable kind/code taxonomy with recovery-specific refusal codes and exits 3–12; every verb's classified non-completion uses a flat schema-v1 JSON stderr envelope, including durable `unanswered`, while success envelopes remain pending; README operator contract |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promoted/no-change/rolled-back outcomes; a landed rollback ends the zero-attempt batch whose base carries the reversed release, with public shared refusals aligning operations and console recovery |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
-| Cross-batch release assessment | implemented | canonical-identity before/after cohorts and clone-dependent exclusions; persisted/JSON `unstated` versus `differing` facet failures; CLI-visible durable assessment/counterfactual with retain/rollback recommendation; human settlement and next-base gate |
+| Cross-batch release assessment | implemented | canonical-identity before/after sides and clone-dependent exclusions; persisted/JSON `unstated` versus `differing` facet failures; CLI-visible durable assessment/counterfactual with retain/rollback recommendation; human settlement and next-base gate |
 | Evolution deployment visibility | implemented | planned target names kept separate from validated machine-local deploy-lock placement states; observation gates no lifecycle verb |
 
 ## Evolution Behavior Chain
@@ -42,7 +42,7 @@ archived tasks acquire complete L1+L2 evaluation artifacts
   → human admission creates an experiment on the settlement-selected base
   → append-only task rounds seal an exact candidate revision
   → exact integration replay → human exact-tree promotion or no-change
-  → the next eligible cohort repeats the release-effectiveness gate
+  → the next eligible batch repeats the release-effectiveness gate
 ```
 
 The evolution controller is independent of evaluation trigger policy and only

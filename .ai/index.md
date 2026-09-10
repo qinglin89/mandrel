@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: dceee9345be5e9201fc7a8a71cc2ef7692b42a3b
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # AI Knowledge Router
@@ -51,4 +51,4 @@ Load only what the current task needs.
 | Evolution experiment | One durable alternative attempted inside a batch, with its own ref, rounds, tasks, and terminal decision |
 | Experiment round | Append-only revision pass; candidate-ready only after task completion is observed and the ref tip is sealed |
 | Evolution revisions | Manifest-owned batch base/runner, per-report effective revision, moving candidate tip, sealed round candidate, source-line promotion, and per-target effective revision are distinct roles; the base and runner are one commit |
-| Release assessment | First post-promotion cohort's durable reading of the prior release: derived provenance frame, pinned counterfactual, and retain/rollback settlement |
+| Release assessment | First post-promotion batch's durable reading of the prior release: derived provenance frame, pinned counterfactual, and retain/rollback settlement |

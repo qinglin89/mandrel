@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-07
-verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # Modules
@@ -25,7 +25,7 @@ verified-against: 2f0e3dbf96293deafa0f195798ddc2a287be7855
 | Evolution controller | `mandrel/evolution/batches.py`, `proposals.py`, `manifests.py`, `state.py`, `errors.py`, `phase.py`, `render.py`; `mandrel/cli.py` | Canonical-identity proposal selection and human window, immutable semantic manifest publication, schema-v11 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, stable kind/code taxonomy with refusal codes split by recovery, schema-v1 JSON non-completion envelopes, and standalone CLI routing |
 | Evolution lineage | `mandrel/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `mandrel/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback, interruption recovery, and base-keyed ending of the zero-attempt batch standing on the reversed release |
-| Evolution release assessment | `mandrel/evolution/assessment.py`, `lockfile.py`, `experiments.py` | Canonical-identity before/after cohorts, visible exclusions, and unstated/differing facet split; assessment formation/read validation with settlement recommendation; pinned counterfactual recovery; human retain/rollback settlement; first-base sequencing |
+| Evolution release assessment | `mandrel/evolution/assessment.py`, `lockfile.py`, `experiments.py` | Canonical-identity before/after sides, visible exclusions, and unstated/differing facet split; assessment formation/read validation with settlement recommendation; pinned counterfactual recovery; human retain/rollback settlement; first-base sequencing |
 | Evolution stated harness | `mandrel/evolution/harness.py` | Operator-stated replay/counterfactual starts and polls; completed-attempt reproduction guard |
 | Evolution deployment reading | `mandrel/evolution/deployment.py`, `placement.py` | Add promotion/rollback ancestry to deploy-layer target revisions; preserve unregistered/unreadable/unplaceable states without gating the lifecycle |
 

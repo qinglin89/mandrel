@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-08
-verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # APIs and Interfaces
@@ -23,7 +23,7 @@ verified-against: 95a52b8c17e0595a7678fe9df7dbb3f728f3a243
 | `evolution freeze [--force --justification <text>]` | Revalidate and immutably publish the standing proposal, claim its reports, and generate its analysis task; force may waive the target but never the minimum |
 | `evolution create|add-tasks|reject|seal-round|revise|abandon|supersede|conclude-no-change` | Drive the guarded, recoverable experiment and batch lineage |
 | `evolution replay-start|replay-conclude|replay-abandon|replay-withdraw|promote|rollback` | Record/resume exact-integration evidence, promote its exact tree, or reverse the latest promotion |
-| `evolution assess|assess-measure|assess-conclude|assess-abandon|assess-withdraw|assess-resolve|settle` | Record the next cohort's release reading/counterfactual and settle retain or composed rollback |
+| `evolution assess|assess-measure|assess-conclude|assess-abandon|assess-withdraw|assess-resolve|settle` | Record the next batch's release reading/counterfactual and settle retain or composed rollback |
 
 All evolution operations are human-invoked and make no evaluation model call.
 `list` and `status` are read-only; `start` may return no proposal when the pool
@@ -60,7 +60,7 @@ revert-tree needs 2.40, and an absent Git is the same `toolchain` family.
 | Operation | Behavior |
 |---|---|
 | `experiments.create` / `add_tasks` / `reject` / `seal_round` / `revise` / `abandon` / `supersede` / `conclude_no_change` | Recoverable grouped admission, rounds, terminal experiment decisions, and batch no-change conclusion |
-| `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion cohort's canonical-identity before/after frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
+| `assessment.describe` / `obligation` / `read` / `form` | Derive the first post-promotion batch's canonical-identity before/after frame and owner, validate its durable reading, and record caller-owned measurements/judgement through the reader |
 | `assessment.measure` / `conclude` / `abandon` / `withdraw` / `resolve` | Allocate an experiment-disjoint replay position, persist/recover the pinned before/after counterfactual, and hold a directional verdict to its goal metrics |
 | `assessment.settle` | Idempotently retain the release or compose its audited rollback under one writer lock; the decision gates and constrains the next first experiment base |
 | `replay.start` / `conclude` / `abandon` / `withdraw` | Persist/resume an idempotent exact-integration replay request, then record or retire its durable run state |

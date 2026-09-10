@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
+last-updated: 2026-09-10
+verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 ---
 
 # Architecture
@@ -20,7 +20,7 @@ archived completed-task L1+L2 evaluation
         │ orch-hub global report feed
         ▼
 evolution runtime/import pool → frozen batch → analysis/change/replay
-        │ exact-tree promotion → next-cohort assessment/settlement
+        │ exact-tree promotion → next-batch assessment/settlement
         │ retain or audited inverse rollback → next experiment base
         └──────────────────────► canonical source line
 ```
@@ -112,11 +112,11 @@ batch with an outcome. A rollback adds an inverse commit to the latest effective
 promotion without editing that promotion's terminal experiment or batch outcome;
 it also writes a `rolled-back` outcome for the zero-attempt current batch whose
 base carries the reversed release, spending that batch's claimed reports. The
-first cohort after a promotion owns a release-assessment record derived from
+first batch after a promotion owns a release-assessment record derived from
 frozen manifests, per-target effective revisions, and lineage; a pinned
 counterfactual can settle its direction, and the reading records a retain/rollback
 recommendation before a human decision either releases admission or rolls back
-and ends the standing batch. The obligation remains with that cohort
+and ends the standing batch. The obligation remains with that batch
 if it concludes before answering and stays repeatable for recovery. Replay and
 counterfactual harness crossings are operator-stated, durable two-step
 request/run exchanges; promotion remains separate from deployment.
@@ -124,7 +124,7 @@ request/run exchanges; promotion remains separate from deployment.
 One whole-lineage derivation governs both status and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
 the current batch, open attempt, gate, round, and revisions from any checkout.
-Release-assessment cohorts use the same canonical identity as deploy status:
+Release-assessment sides use the same canonical identity as deploy status:
 `before` is checked first, an unreadable `before` prevents an `after` placement,
 and a revision matching neither side is excluded rather than ancestry-sorted.
 `.ai-tasks/` supplies local completion observations, never historical identity;
