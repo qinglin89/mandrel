@@ -56,6 +56,7 @@ from .experiments import (
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate, PreparedPromotion
 from .manifests import MODE_HUMAN_INCLUDED
+from .portfolio import BatchRow, Portfolio
 from .proposals import BatchProposal
 from .phase import (
     ACTION_BATCH_EXCLUDE,
@@ -1040,6 +1041,84 @@ def format_status(status: LifecycleStatus) -> str:
     lines.extend(_deployment_lines(status.last_promotion, status.deployment))
     lines.extend(_action_lines(status))
     return "\n".join(lines)
+
+
+def format_portfolio(document: Portfolio) -> str:
+    """The portfolio as a person reads it.
+
+    The document itself is the surface this reading exists for, and `--json` is
+    where a console takes it. What this prints is deliberately not a second
+    `status`: it is the series, one line per batch, with the three facts the row
+    adds and the next-action reading drops — when each batch's membership stopped
+    moving, the commit its attempts started from, and how far its own reading of
+    the release before it has got.
+
+    The two tokens lead, because they are what a surface came here for: one
+    reading of everything, with something to re-read on.
+    """
+
+    index = document.index
+    if index is None:
+        # A detail document, which only a later verb argument can ask for. It
+        # gets its rendering with the argument that produces it.
+        return f"evolution portfolio: {document.document}"
+
+    decision = index.decision
+    lines = [f"evolution portfolio: {len(index.batches)} batch(es) frozen, {index.phase}"]
+    lines.append(
+        _field("snapshot", f"state {document.snapshot.state_revision}, observations "
+               f"{document.snapshot.observations_revision}, taken {document.snapshot.taken_at}")
+    )
+    pool = (
+        f"{decision.pool_count} unique completed task(s); target {decision.target}, "
+        f"minimum {decision.minimum}, max wait {index.max_wait_days} day(s)"
+    )
+    lines.append(_field("pool", pool))
+    lines.append(_field("", _drained(index.pool_complete)))
+    lines.extend(_offer_lines(index.proposal, decision))
+    for position, row in enumerate(index.batches):
+        lines.append(_field("batches" if position == 0 else "", _row(row)))
+    # The promotion before the reading of what the targets hold, because every
+    # one of those states is a claim about *that* commit: a block of placements
+    # with the question missing is the one way this can be misread.
+    lines.extend(_promotion_lines(index.promotion))
+    lines.extend(_deployment_lines(index.promotion, index.deployment))
+    return "\n".join(lines)
+
+
+def _offer_lines(proposal: BatchProposal | None, decision: AdmissionDecision) -> list[str]:
+    """The batch on offer, as one line. Nothing at all when none stands, which
+    is every state but `batch-proposed` — a heading over an absent offer would
+    read as an offer that selected nothing."""
+
+    if proposal is None:
+        return []
+    waited = "" if decision.waited_days is None else f", waited {decision.waited_days} day(s)"
+    return [
+        _field(
+            "proposal",
+            f"{proposal.task_count} of {proposal.considered} considered task(s) at base "
+            f"{proposal.base_revision[:12]} ({proposal.source_line_ref}){waited}",
+        )
+    ]
+
+
+def _row(row: BatchRow) -> str:
+    """One batch of the series, as a line.
+
+    The ending and the release reading are both stated, and the second is not
+    implied by the first: a batch that concluded may still owe a reading of the
+    release before it, which is the one obligation that outlives the batch
+    holding it (invariant 17).
+    """
+
+    ending = "current" if row.current else str(row.outcome)
+    promoted = "" if row.promotion is None else f" {row.promotion.revision[:12]}"
+    return (
+        f"{row.batch_id} frozen {row.frozen_at} at {row.base_revision[:12]} — "
+        f"{row.task_count} of {row.considered} task(s), {row.experiment_count} attempt(s), "
+        f"{ending}{promoted}, release {row.release}"
+    )
 
 
 def _action_lines(status: LifecycleStatus) -> list[str]:

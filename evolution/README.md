@@ -2241,7 +2241,8 @@ an offer and the other by fetching, and an adapter tells them apart by `code`
 alone.
 
 **`--json` states the answer instead of describing it.** Every verb accepts it.
-A completed `status` is the whole reading, at that reading's own schema version.
+A completed run of either reading — `status` or `portfolio` — is that whole
+reading, at its own schema version.
 A non-completion from any verb is an envelope carrying `schema_version`, the
 `verb` that answered, `kind`, `code`, and a human-readable `message`. For a
 failure family that message is verbatim what the default channel prints; for
@@ -2413,13 +2414,13 @@ with history would give the bound away. Both documents carry the same snapshot, 
 console assembling an index and several details know whether it assembled one
 reading or several.
 
-The reading half of this boundary is settled here; the verb that emits it is not
-shipped yet, and until it is, `status --json` is the only reading this console
-produces. What ships with that verb is the volatile token computed over exactly
-the input set named above, with a regression per input showing it move while
-`state_revision` holds: a token computed over a narrower set than its own
-definition is a guarantee nothing keeps. The two gaps that exist today — the
-task tree and the clock — are pinned that way already.
+`mandrel evolution portfolio` emits the index. The detail read is specified
+here and is not shipped yet, so what is inside a batch is still read from
+`status` for the batch in play and from the records themselves for every batch
+before it. The volatile token is computed over exactly the input set named
+above, with a regression per input showing it move while `state_revision` holds
+(`tests/test_evolution_portfolio_reading.py`): a token computed over a narrower
+set than its own definition is a guarantee nothing keeps.
 
 ## Evolution task requirements
 

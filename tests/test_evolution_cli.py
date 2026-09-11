@@ -2587,9 +2587,12 @@ def test_every_verb_of_the_console_states_its_failures_on_request() -> None:
     assert verbs, "the console has verbs"
     for name, parser in sorted(verbs.items()):
         assert "--json" in parser._option_string_actions, f"{name} cannot state a failure a machine reads"
-    # `status` keeps its own, which promises the whole reading rather than the
-    # failure channel — the one verb where the flag already meant something.
-    assert verbs["status"]._option_string_actions["--json"].help == "print the same shape as JSON"
+    # The two readings keep their own, which promise the whole reading rather
+    # than the failure channel — the verbs where the flag already means
+    # something, and where the sweep adding a second one would be argparse
+    # refusing the duplicate rather than either promise quietly winning.
+    for reading in cli._WHOLE_READING_VERBS:
+        assert verbs[reading]._option_string_actions["--json"].help == "print the same shape as JSON"
 
 
 def test_a_failure_states_its_family_without_its_sentence(
@@ -3144,15 +3147,15 @@ def test_the_token_is_offered_by_every_verb_that_decides_anything() -> None:
     goes stale — `start` offers a batch and `freeze` fixes it, with a person's
     include and exclude decisions in between and no lock spanning them.
 
-    The three left out are left out for one reason each and none of them is an
-    omission: `list` and `status` write nothing, and `sync` decides nothing
-    about the lifecycle — it imports what the feed has, which is the same
-    import whatever the records did meanwhile. Naming them is what makes a
-    fourth one impossible to add by accident.
+    The four left out are left out for one reason each and none of them is an
+    omission: `list` and the two readings — `status` and `portfolio` — write
+    nothing, and `sync` decides nothing about the lifecycle; it imports what the
+    feed has, which is the same import whatever the records did meanwhile.
+    Naming them is what makes a fifth one impossible to add by accident.
     """
 
     takes = _takes_expectation()
-    every = takes | {"list", "status", "sync"}
+    every = takes | {"list", "status", "portfolio", "sync"}
 
     assert takes == cli._wired_verbs(phase) | {"start", "freeze"}
     assert every == set(_evolution_verbs())

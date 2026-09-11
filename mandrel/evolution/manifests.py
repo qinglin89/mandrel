@@ -213,6 +213,18 @@ class Batch:
         return version if isinstance(version, int) and not isinstance(version, bool) else None
 
     @property
+    def created_at(self) -> str:
+        """When the immutable manifest was published — the moment this batch's
+        membership stopped moving.
+
+        Required at every schema version this build reads, so it is stated rather
+        than optional: a batch whose manifest carries no freeze moment does not
+        load at all (`read_manifest`).
+        """
+
+        return str(self.manifest["created_at"])
+
+    @property
     def analysis_task_id(self) -> str | None:
         value = self.manifest.get("analysis_task_id")
         return value if isinstance(value, str) and value else None

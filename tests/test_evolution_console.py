@@ -1599,7 +1599,7 @@ def test_a_reading_is_never_published_with_a_token_from_after_it(
     freeze_batch(config, FIRST, effective=None)
     analyzed(config, FIRST, drafts=("loader-fallback", "hook-side-loader"))
 
-    read = phase._read
+    read = phase.read
     taken: list[phase.LifecycleStatus] = []
 
     def racing(cfg: evolution.EvolutionConfig, moment: datetime) -> tuple:
@@ -1612,7 +1612,7 @@ def test_a_reading_is_never_published_with_a_token_from_after_it(
         taken.append(reading)
         return reading, lineage, freeze_hold
 
-    monkeypatch.setattr(phase, "_read", racing)
+    monkeypatch.setattr(phase, "read", racing)
     reading = status(config)
 
     assert len(taken) == 2, "the reading the write landed under is taken again rather than published"

@@ -1,9 +1,11 @@
 """The portfolio read model: the schema, and the documents it has to describe.
 
-The portfolio is the reading a console renders the whole history from. Its
-implementation comes later; what this suite holds is the half that has to be
-settled first — the contract a surface writes against, and the worked documents
-that prove the contract can describe every state the lifecycle actually reaches.
+The portfolio is the reading a console renders the whole history from. What this
+suite holds is the half that has to be settled before a builder exists — the
+contract a surface writes against, and the worked documents that prove the
+contract can describe every state the lifecycle actually reaches. The reading
+that produces one is in `tests/test_evolution_portfolio_reading.py`, which runs
+against a real repository; nothing here reads the records at all.
 
 Three properties, and they are the reasons this file exists before the builder
 does:

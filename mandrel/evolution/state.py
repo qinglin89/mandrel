@@ -606,6 +606,25 @@ def artifacts_dir_name(report_key: str) -> str:
     return f"{slug}-{sha256_bytes(report_key.encode('utf-8'))[:16]}"
 
 
+def staged_bundle(config: EvolutionConfig, report_key: str) -> bool:
+    """Whether one report's bundle is staged on this machine.
+
+    One question with one answer, asked by everything that reports how much of a
+    batch's evidence is here: a frozen batch owns its reports wherever it was
+    frozen, so a clone that never staged them holds a manifest with nothing
+    behind it — a fact to show rather than damage, since the manifest's hashes
+    still say what was analyzed.
+
+    Volatile, and that is why it is one function: no writer of this lifecycle
+    moves a staged directory, so the reading moves on its own and the portfolio's
+    `observations_revision` is a digest of exactly these answers
+    (`portfolio.py`). An answer spelled twice would be a token over one spelling
+    and a surface rendering the other.
+    """
+
+    return (config.artifacts_root / artifacts_dir_name(report_key)).is_dir()
+
+
 def stage_artifacts(config: EvolutionConfig, report: NormalizedReport, blobs: Mapping[str, bytes]) -> str:
     """Write one report's validated record and bodies under the runtime root.
 

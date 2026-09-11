@@ -177,7 +177,7 @@ from .manifests import OUTCOME_PROMOTED, load_batches
 from .replay import Evidence, History, PendingRun, Replay, WithdrawnRequest, describe_evidence, read_replays
 from .revisions import Revision
 from .proposals import BatchProposal, load_proposal
-from .state import artifacts_dir_name, load_state
+from .state import load_state, staged_bundle
 
 # 11: the release block's `comparability` gained `unstated` / `differing` and its
 # `reading` gained `recommendation`. No field changed shape, but this payload
@@ -856,7 +856,7 @@ def describe(config: EvolutionConfig, *, now: datetime | None = None) -> Lifecyc
     moment = now or datetime.now(timezone.utc)
     inputs = guards.read_inputs(config)
     for _ in range(_SNAPSHOT_ATTEMPTS):
-        reading, lineage, holds = _read(config, moment)
+        reading, lineage, holds = read(config, moment)
         after = guards.read_inputs(config)
         if after == inputs:
             # The gate last, over the assembled reading: what may be done next is
@@ -891,7 +891,7 @@ class _PoolHolds:
     moves: str | None
 
 
-def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage, _PoolHolds]:
+def read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, Lineage, _PoolHolds]:
     """The lifecycle as the artifacts now have it, without the gate or the token.
 
     Both of those are derived from this and from nothing else, which is why they
@@ -901,6 +901,11 @@ def _read(config: EvolutionConfig, moment: datetime) -> tuple[LifecycleStatus, L
     The lineage travels with the reading because the gate asks the operations
     themselves what a redo would find here, and their predicates take the records
     rather than this projection of them.
+
+    Public because there is a second reading over the same derivation: the
+    portfolio answers what is and what was from these records rather than from
+    `status`'s projection of them (`portfolio.py`), and it has its own bracket to
+    apply — one whole-lineage derivation per reading, not one per surface.
     """
 
     state = load_state(config)
@@ -1026,9 +1031,7 @@ def _view(config: EvolutionConfig, current: BatchLineage, *, analysis_complete: 
         analysis_task_id=batch.analysis_task_id,
         findings_recorded=batch.findings_recorded,
         analysis_complete=analysis_complete,
-        evidence_local=sum(
-            1 for key in batch.report_keys if (config.artifacts_root / artifacts_dir_name(key)).is_dir()
-        ),
+        evidence_local=sum(1 for key in batch.report_keys if staged_bundle(config, key)),
         experiment_count=len(current.experiments),
     )
 

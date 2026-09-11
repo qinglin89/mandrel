@@ -214,6 +214,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     _add_workspace_argument(evolution_status)
     evolution_status.add_argument("--json", action="store_true", help="print the same shape as JSON")
 
+    evolution_portfolio = evolution_subparsers.add_parser(
+        "portfolio",
+        help="show the whole series and how each batch ended; writes nothing",
+    )
+    _add_workspace_argument(evolution_portfolio)
+    evolution_portfolio.add_argument("--json", action="store_true", help="print the same shape as JSON")
+
     evolution_start = evolution_subparsers.add_parser(
         "start",
         help="close finished analyses, repair, sync, then propose the next batch; writes no manifest",
@@ -247,6 +254,14 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
+# The verbs whose `--json` states a whole reading at its own schema version
+# rather than the failure channel. Both declare the flag themselves, which is
+# what keeps the sweep below from adding a second one — argparse refuses the
+# duplicate rather than quietly winning, so a reading added without this entry
+# fails at parser construction rather than at the first call.
+_WHOLE_READING_VERBS = frozenset({"status", "portfolio"})
+
+
 def _add_failure_channel(subparsers: argparse._SubParsersAction) -> None:
     """`--json` on every verb of the console, added over the finished set.
 
@@ -257,15 +272,17 @@ def _add_failure_channel(subparsers: argparse._SubParsersAction) -> None:
     for — the single case the taxonomy exists to remove. There is nothing to
     remember when the next verb is written.
 
-    `status` is skipped because its `--json` is already a different promise: the
-    whole reading, at its own schema version. What is added here is the
-    classified non-completion channel alone (`_failure_payload`); on a run that
-    completes, the flag changes nothing, and the success envelope for each verb
-    is a later contract.
+    The two readings are skipped because their `--json` is already a different
+    promise: the whole reading, at that reading's own schema version. What is
+    added here is the classified non-completion channel alone
+    (`_failure_payload`); on a run that completes, the flag changes nothing, and
+    the success envelope for each verb is a later contract. A failure from either
+    reading still states itself in the envelope — the flag is read off the
+    namespace and not off this sweep (`_failures_as_json`).
     """
 
     for name, parser in subparsers.choices.items():
-        if name == "status":
+        if name in _WHOLE_READING_VERBS:
             continue
         parser.add_argument(
             "--json",
@@ -765,13 +782,24 @@ def _evolution(args: argparse.Namespace) -> int:
     is neither and is described below.
     """
 
-    from .evolution import batches, config as evolution_config, importer, phase, render
+    from .evolution import batches, config as evolution_config, importer, phase, portfolio, render
 
     config = evolution_config.load_config(Path(args.repo).expanduser() if args.repo else None)
 
     if args.evolution_command == "status":
         status = phase.describe(config)
         print(json.dumps(status.to_json(), indent=2, sort_keys=True) if args.json else render.format_status(status))
+        return 0
+
+    if args.evolution_command == "portfolio":
+        # The other reading, and the same adapter shape: one domain call, and the
+        # flag chooses which of the two channels the same answer is stated on.
+        document = portfolio.index(config)
+        print(
+            json.dumps(document.to_json(), indent=2, sort_keys=True)
+            if args.json
+            else render.format_portfolio(document)
+        )
         return 0
 
     if args.evolution_command == phase.ACTION_FREEZE:
