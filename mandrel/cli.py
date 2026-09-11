@@ -220,6 +220,22 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     _add_workspace_argument(evolution_portfolio)
     evolution_portfolio.add_argument("--json", action="store_true", help="print the same shape as JSON")
+    # What bounds the payload. Without a subject this is the series, one row per
+    # batch; with one it is that subject expanded, and everything whose size is a
+    # function of one batch's own work is only ever reachable this way. Mutually
+    # exclusive because a document expands exactly one subject: two of them would
+    # be two readings, and the snapshot could not say which.
+    portfolio_subject = evolution_portfolio.add_mutually_exclusive_group()
+    portfolio_subject.add_argument(
+        "--batch",
+        metavar="<batch-id>",
+        help="expand one frozen batch: its members, gate, attempts, and release reading",
+    )
+    portfolio_subject.add_argument(
+        "--proposal",
+        action="store_true",
+        help="expand the standing batch proposal, member by member",
+    )
 
     evolution_start = evolution_subparsers.add_parser(
         "start",
@@ -794,7 +810,15 @@ def _evolution(args: argparse.Namespace) -> int:
     if args.evolution_command == "portfolio":
         # The other reading, and the same adapter shape: one domain call, and the
         # flag chooses which of the two channels the same answer is stated on.
-        document = portfolio.index(config)
+        # The subject arguments choose which document, and the absence of one is
+        # the series rather than a default anybody has to know.
+        document = (
+            portfolio.detail(config, portfolio.DETAIL_BATCH, args.batch)
+            if args.batch
+            else portfolio.detail(config, portfolio.DETAIL_PROPOSAL)
+            if args.proposal
+            else portfolio.index(config)
+        )
         print(
             json.dumps(document.to_json(), indent=2, sort_keys=True)
             if args.json

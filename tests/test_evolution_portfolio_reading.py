@@ -48,8 +48,10 @@ from evolution_fixtures import (
     admitted_task,
     at_line,
     complete_task,
+    draft_sha256,
     experiment_round,
     git_canonical_commit,
+    git_delete_ref,
     git_repo,
     git_rev,
     git_sibling_commit,
@@ -59,17 +61,19 @@ from evolution_fixtures import (
     make_repo,
     settle_release,
     promote_candidate,
+    rejection,
     write_closure,
     write_draft,
     write_experiment,
     write_feed,
     write_manifest,
+    write_rejected_drafts,
 )
 
 from mandrel import cli, evolution, lockfile
 from mandrel.evolution import assessment, experiments, phase, portfolio, rollback, state
-from mandrel.evolution.lineage import RefState
-from mandrel.evolution.schema import load_schema, validate
+from mandrel.evolution.lineage import REF_ABSENT, RefState
+from mandrel.evolution.schema import format_rfc3339, load_schema, validate
 
 FIRST = "evolution-batch-0001"
 SECOND = "evolution-batch-0002"
@@ -1068,3 +1072,492 @@ def test_the_verb_prints_the_series_for_a_person(
     # of those states is a claim about that commit.
     assert f"promoted {series[:12]}" in out
     assert "what each planned target holds now" in out
+
+
+# --- one subject, expanded ---------------------------------------------------
+
+
+def expand(
+    config: evolution.EvolutionConfig,
+    kind: str,
+    subject_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> portfolio.Portfolio:
+    return portfolio.detail(config, kind, subject_id, now=now or NOW)
+
+
+def expanded(
+    config: evolution.EvolutionConfig,
+    kind: str,
+    subject_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """One detail document, validated against the schema it is published at.
+
+    Validated here rather than in one test of its own, because every question
+    below is about a document a console would be handed: a field this reading
+    gets right in a shape the schema refuses is not an answer anybody receives.
+    """
+
+    document = expand(config, kind, subject_id, now=now).to_json()
+    validate(document, load_schema(SCHEMA_PATH))
+    return document
+
+
+def subject(
+    config: evolution.EvolutionConfig,
+    kind: str,
+    subject_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    return expanded(config, kind, subject_id, now=now)["detail"][kind]
+
+
+def test_a_detail_states_one_subject_and_carries_it(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """`kind` and the slot are one statement. Every other slot is a stated null,
+    which is the union the schema subset cannot express and this controller
+    checks in both directions."""
+
+    document = expanded(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert document["document"] == portfolio.DOCUMENT_DETAIL
+    assert document["index"] is None
+    detail = document["detail"]
+    assert (detail["kind"], detail["id"]) == (portfolio.DETAIL_BATCH, SECOND)
+    assert set(detail) == {"kind", "id", *portfolio.DETAIL_KINDS}
+    assert detail["proposal"] is None and detail["pool"] is None
+    assert detail["batch"] is not None
+
+
+def test_a_batch_detail_is_the_membership_its_manifest_fixed(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The frozen denominator, member by member, with what a human argued in
+    attributed on the member they argued for.
+
+    Read off the manifest and never recomputed from the pool, which is
+    machine-local and has moved: a batch's recurrence claim is about the set it
+    was drawn from.
+    """
+
+    batch = subject(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert batch["batch_id"] == SECOND
+    assert batch["base_revision"] == series
+    assert (batch["forced"], batch["force_justification"]) == (False, None)
+    assert batch["selection"] == {"considered": 5, "auto_selected": 2, "human_included": 1}
+    assert [report["report_key"] for report in batch["reports"]] == ["a1", "a2", "a3"]
+    argued, automatic = batch["reports"][0], batch["reports"][1]
+    assert argued["mode"] == "human-included"
+    assert (argued["actor"], argued["justification"]) == (HUMAN_MOVE["actor"], HUMAN_MOVE["justification"])
+    assert automatic["mode"] == "auto"
+    assert (automatic["actor"], automatic["justification"], automatic["moved_at"]) == (None, None, None)
+    # What produced the evaluation and what protocol it ran under, per report:
+    # recorded facts the analysis states, never membership gates.
+    assert argued["protocol"]["effective_revision"] == series
+    assert set(argued["evaluator"]) == {"backend", "model", "rubric_revision"}
+    assert [entry["reason"] for entry in batch["not_selected"]] == ["identity-differs"] * 2
+    assert batch["not_selected"][0]["report_keys"] == ["ax1"]
+
+
+def test_a_batch_detail_states_its_stage_and_what_this_machine_holds(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The analysis stage and the staged evidence are two different kinds of
+    fact: one ends a phase, and the other is this machine's own answer about
+    bundles a clone may never have seen."""
+
+    batch = subject(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert batch["current"] is True and batch["outcome"] is None
+    assert batch["analysis"] == {
+        "task_id": f"2026-08-10-{SECOND}",
+        "findings_recorded": True,
+        "complete": True,
+    }
+    # A manifest with no bundles behind it is the ordinary state of every clone
+    # but the one that imported them, and the hashes still say what was analyzed.
+    assert batch["evidence"] == {"report_count": 3, "local": 0}
+
+
+def test_a_batch_detail_carries_the_drafts_themselves(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """A console that had to open `proposed-tasks/` to show an operator what they
+    are being asked to admit is a second reader of the batch directory, and a
+    decision made from an id is not a decision."""
+
+    write_draft(config.batches_root, SECOND, "loader-rewrite")
+    write_rejected_drafts(
+        config.batches_root,
+        SECOND,
+        [rejection("loader-rewrite", reason="the deploy-time rendering it proposes is a payload change")],
+    )
+
+    gate = subject(config, portfolio.DETAIL_BATCH, SECOND)["gate"]
+
+    drafts = {draft["draft_id"]: draft for draft in gate["drafts"]}
+    assert set(drafts) == {DRAFT, "loader-rewrite"}
+    waiting = drafts[DRAFT]
+    assert (waiting["state"], waiting["experiment_id"], waiting["decided_at"]) == ("waiting", None, None)
+    # Nothing has pinned anything yet, and the bytes are here to read.
+    assert waiting["recorded_sha256"] is None
+    assert waiting["content_sha256"] == draft_sha256(DRAFT)
+    assert waiting["content"].startswith("---\n")
+    declined = drafts["loader-rewrite"]
+    assert declined["state"] == "declined"
+    assert declined["reason"].startswith("the deploy-time rendering")
+    assert declined["decided_at"] == "2026-08-02T09:00:00Z"
+    assert declined["recorded_sha256"] == declined["content_sha256"] == draft_sha256("loader-rewrite")
+    assert gate["unusable"] == []
+
+
+def test_a_draft_edited_after_the_decision_that_took_it_reads_as_two_hashes(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The two hashes are stated apart rather than assumed equal: that difference
+    is the only thing showing the file on disk is no longer what was decided."""
+
+    write_draft(config.batches_root, SECOND, "loader-rewrite")
+    write_rejected_drafts(config.batches_root, SECOND, [rejection("loader-rewrite")])
+    path = config.batches_root / SECOND / "proposed-tasks" / "loader-rewrite.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nedited after the decision\n", encoding="utf-8")
+
+    gate = subject(config, portfolio.DETAIL_BATCH, SECOND)["gate"]
+
+    declined = next(draft for draft in gate["drafts"] if draft["draft_id"] == "loader-rewrite")
+    assert declined["recorded_sha256"] == draft_sha256("loader-rewrite")
+    assert declined["content_sha256"] != declined["recorded_sha256"]
+
+
+def test_a_decided_draft_whose_file_is_gone_keeps_what_was_decided(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """Reported rather than refused: the record keeps the id and the hash of what
+    was decided, and the bytes are recoverable from history."""
+
+    (config.batches_root / FIRST / "proposed-tasks" / "loader-fallback.md").unlink()
+
+    gate = subject(config, portfolio.DETAIL_BATCH, FIRST)["gate"]
+
+    gone = next(draft for draft in gate["drafts"] if draft["draft_id"] == "loader-fallback")
+    assert gone["state"] == "consumed"
+    assert (gone["content"], gone["content_sha256"]) == (None, None)
+    assert gone["recorded_sha256"] == draft_sha256("loader-fallback")
+
+
+def test_a_consumed_draft_names_the_attempt_that_admitted_it(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """A draft appears once, in the state it is actually in — rather than in
+    whichever of four id lists a reader thought to look at."""
+
+    gate = subject(config, portfolio.DETAIL_BATCH, FIRST)["gate"]
+
+    consumed = {draft["draft_id"]: draft for draft in gate["drafts"]}
+    assert set(consumed) == {"loader-fallback", "hook-side-loader"}
+    taken = consumed["loader-fallback"]
+    assert taken["state"] == "consumed"
+    assert taken["experiment_id"] == f"{FIRST}-exp-01"
+    assert taken["decided_at"] is not None
+    # An admission's reason belongs to the round it opened, not to the draft.
+    assert taken["reason"] is None
+
+
+def test_every_attempt_reads_in_one_shape(config: evolution.EvolutionConfig, series: str) -> None:
+    """A reader reconstructing what happened needs the same fields from a
+    terminal attempt it needs from the one running, and `decision` is what tells
+    them apart."""
+
+    batch = subject(config, portfolio.DETAIL_BATCH, FIRST)
+
+    (attempt,) = batch["experiments"]
+    assert attempt["experiment_id"] == f"{FIRST}-exp-01"
+    assert attempt["open"] is False
+    assert attempt["decision"]["outcome"] == "promoted"
+    assert attempt["decision"]["promotion_revision"] == series
+    assert attempt["prepared_promotion"]["revision"] == series
+    (round_,) = attempt["rounds"]
+    assert round_["number"] == 1
+    assert [task["draft_id"] for task in round_["tasks"]] == ["hook-side-loader", "loader-fallback"]
+    assert round_["seal"]["candidate_revision"] == attempt["prepared_promotion"]["candidate_revision"]
+    # The whole diagnosis this checkout took of the attempt's ref — the same
+    # reading the volatile token digests, published field by field.
+    assert attempt["ref_state"]["ref"] == attempt["ref"]
+    assert attempt["ref_state"]["state"] == "at-pinned-revision"
+
+
+def test_a_terminal_attempts_replay_history_is_readable(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """What measured an attempt is what says why it ended that way, and the
+    next-action reading holds the open attempt's evidence only — so before this
+    document a terminal attempt's runs were read by nothing at all."""
+
+    assert phase.describe(config, now=NOW).replays is None
+
+    (attempt,) = subject(config, portfolio.DETAIL_BATCH, FIRST)["experiments"]
+
+    replays = attempt["replays"]
+    assert (replays["request"], replays["withdrawn"]) == (None, [])
+    (run,) = replays["runs"]
+    assert (run["round"], run["attempt"]) == (1, 1)
+    assert run["tree"] == attempt["prepared_promotion"]["tree"]
+    # The cohort, the evaluator and the harness: a run reported as an outcome and
+    # a date cannot be asked what measured it.
+    assert run["cases"]["case_set_id"] == "loader-regressions"
+    assert [item["case_id"] for item in run["cases"]["excluded"]] == ["case-9"]
+    assert run["evaluator"]["backend"] == "claude"
+    assert run["harness"]["id"] == "local-replay"
+    assert run["result"]["outcome"] == "completed"
+    assert [item["metric"] for item in run["result"]["metrics"]] == ["remediation-rounds"]
+
+
+def test_an_open_attempts_admitted_tasks_state_both_completion_answers(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The durable observation and this machine's own, side by side. Null where
+    nothing was asked — a task the record shows complete is not consulted at
+    all, which is a different absence from a clone that has no task tree."""
+
+    # The release gate first: the frozen base is held to its answer before
+    # anything may be admitted on it (invariant 17).
+    settle_release(config, at=NOW)
+    admission = experiments.create(config, [DRAFT], now=NOW)
+
+    (task,) = subject(config, portfolio.DETAIL_BATCH, SECOND)["experiments"][0]["rounds"][0]["tasks"]
+    assert (task["completion_observed_at"], task["file_complete"]) == (None, False)
+
+    complete_task(config, admission.admitted[0].task_id)
+
+    (task,) = subject(config, portfolio.DETAIL_BATCH, SECOND)["experiments"][0]["rounds"][0]["tasks"]
+    assert (task["completion_observed_at"], task["file_complete"]) == (None, True)
+
+
+def test_the_release_reading_a_batch_owes_sits_in_its_own_detail(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The frame is stated whether or not anything was recorded: two empty sides
+    are absent evidence rather than a reading against the release, and only the
+    exclusions say which of the two it is."""
+
+    release = subject(config, portfolio.DETAIL_BATCH, SECOND)["release"]
+
+    assert release["assessed"]["revision"] == series
+    assert release["assessed"]["standing"] is True
+    assert release["assessed"]["source_line"] == {"standing": True, "rollback_revision": None}
+    assert release["sides"]["before"]["report_keys"] == ["b1", "b2", "b3"]
+    assert release["sides"]["after"]["report_keys"] == ["a1", "a2", "a3"]
+    assert release["sides"]["minimum_task_count"] == config.batch.minimum_task_count
+    assert release["sides"]["unverified"] == []
+    # `unstated` and `differing` are two different answers: no manifest states
+    # the shape of the work, so the sides say nothing about the release either
+    # way and a direction has to rest on the counterfactual instead.
+    assert release["comparability"]["coherent"] is False
+    assert release["comparability"]["unstated"] == ["task-shape"]
+    assert release["comparability"]["differing"] == []
+    assert release["comparability"]["sides_support_direction"] is False
+    assert release["counterfactual"]["state"] == "none"
+    # Nothing recorded yet, which with the frame stated is an obligation
+    # outstanding rather than an answer of no.
+    assert (release["reading"], release["decision"]) == (None, None)
+    assert subject(config, portfolio.DETAIL_BATCH, FIRST)["release"] is None
+
+
+def test_a_settled_release_carries_the_reading_and_the_answer(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The reading recommends and the human settles, and the two are allowed to
+    disagree — which is why both are published."""
+
+    settle_release(config, at=NOW)
+
+    release = subject(config, portfolio.DETAIL_BATCH, SECOND)["release"]
+
+    assert release["reading"]["verdict"] == assessment.VERDICT_INCONCLUSIVE
+    assert release["reading"]["recommendation"] == assessment.SETTLEMENT_RETAIN
+    assert release["reading"]["directional"] is False
+    assert release["decision"]["settlement"] == assessment.SETTLEMENT_RETAIN
+    assert release["decision"]["rollback_revision"] is None
+
+
+def test_a_batch_that_ended_states_how(config: evolution.EvolutionConfig, series: str) -> None:
+    """The ending and the merge unit it went as. Taken from the batch's outcome
+    rather than from the attempt, because a version-1 experiment record kept no
+    merge unit at all."""
+
+    batch = subject(config, portfolio.DETAIL_BATCH, FIRST)
+
+    assert batch["current"] is False
+    assert batch["outcome"]["outcome"] == "promoted"
+    assert batch["outcome"]["experiment_id"] == f"{FIRST}-exp-01"
+    promotion = batch["outcome"]["promotion"]
+    assert promotion["revision"] == series
+    assert promotion["planned_targets"] == ["orch-hub"]
+    assert promotion["rollback"] is None
+
+
+def test_the_standing_offer_expands_member_by_member(
+    config: evolution.EvolutionConfig, release: str, feed_root: Path
+) -> None:
+    """The offer is the one thing in this reading that can say a human has been
+    offered a membership and has not answered, and either move takes the two
+    identity halves exactly as they stand here."""
+
+    fill_pool(config, feed_root, 3)
+    evolution.build_proposal(config, now=NOW)
+    evolution.exclude(
+        config,
+        "repo-alpha",
+        "2026-07-03-task",
+        justification="the evaluation ran against a rubric nothing else in the pool used",
+        actor="maintainer",
+        now=NOW,
+    )
+
+    offer = subject(config, portfolio.DETAIL_PROPOSAL)
+
+    assert offer["source_line_ref"] == config.source_line.ref
+    assert offer["base_revision"] == release
+    assert [member["task_id"] for member in offer["selected"]] == ["2026-07-01-task", "2026-07-02-task"]
+    assert {member["mode"] for member in offer["selected"]} == {"auto"}
+    (left_out,) = offer["not_selected"]
+    assert left_out["task_id"] == "2026-07-03-task"
+    assert left_out["reason"] == "human-excluded"
+    assert (left_out["actor"], left_out["moved_at"]) == ("maintainer", format_rfc3339(NOW))
+    assert left_out["justification"].startswith("the evaluation ran against a rubric")
+
+
+def test_the_offer_and_the_series_it_stands_before_are_one_reading(
+    config: evolution.EvolutionConfig, release: str, feed_root: Path
+) -> None:
+    """Both documents carry the same snapshot, so a console assembling an index
+    and several details knows whether it assembled one reading or several. The
+    question set cannot depend on what was asked for, or the pair could never say
+    that."""
+
+    fill_pool(config, feed_root, 3)
+    evolution.build_proposal(config, now=NOW)
+
+    series_document = payload(config)
+    offer_document = expanded(config, portfolio.DETAIL_PROPOSAL)
+
+    assert offer_document["snapshot"] == series_document["snapshot"]
+
+
+def test_a_batch_detail_and_the_series_are_one_reading(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The same property across the subject whose detail is the expensive one: a
+    batch expanded is read at the same moment as the row that named it."""
+
+    assert expanded(config, portfolio.DETAIL_BATCH, SECOND)["snapshot"] == payload(config)["snapshot"]
+
+
+def test_a_batch_no_freeze_ever_made_is_refused(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """A detail carrying no subject would be a document with nothing in it and no
+    way to say so, so what the state does not hold is refused and the sentence
+    names what it does hold."""
+
+    with pytest.raises(evolution.UnknownSubject) as raised:
+        expand(config, portfolio.DETAIL_BATCH, "evolution-batch-0009")
+
+    assert FIRST in str(raised.value) and SECOND in str(raised.value)
+
+
+def test_an_offer_that_does_not_stand_is_refused(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The offer is not a thing that exists in every state: a batch being current
+    means there is nothing to offer, and an empty document would read as an offer
+    that selected nothing."""
+
+    with pytest.raises(evolution.NothingToActOn) as raised:
+        expand(config, portfolio.DETAIL_PROPOSAL)
+
+    assert "no batch proposal stands" in str(raised.value)
+
+
+def test_a_subject_whose_builder_has_not_landed_is_refused(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The pool's shape is published and its builder is not here yet. Refused by
+    name rather than answered with an empty document, so a console reading the
+    vocabulary learns which subjects this build actually takes."""
+
+    with pytest.raises(evolution.UnknownSubject) as raised:
+        expand(config, portfolio.DETAIL_POOL)
+
+    assert portfolio.DETAIL_POOL in str(raised.value)
+
+
+def test_the_verb_expands_one_subject(
+    config: evolution.EvolutionConfig, series: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What bounds the payload, at the command line: no subject is the series,
+    and one subject is that subject expanded."""
+
+    code = cli.main(
+        ["evolution", "portfolio", "--repo", str(config.repo_root), "--batch", FIRST, "--json"]
+    )
+    out = capsys.readouterr().out
+
+    assert code == 0
+    stated = json.loads(out)
+    validate(stated, load_schema(SCHEMA_PATH))
+    assert stated["document"] == portfolio.DOCUMENT_DETAIL
+    assert stated["detail"]["kind"] == portfolio.DETAIL_BATCH
+    assert stated["detail"]["batch"]["batch_id"] == FIRST
+
+
+def test_the_verb_summarises_an_expanded_subject_for_a_person(
+    config: evolution.EvolutionConfig, series: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A summary and never the document: the subject of a detail read is every
+    draft's Markdown and every run's metrics, and printing it would be a page of
+    JSON without the brackets."""
+
+    code = cli.main(["evolution", "portfolio", "--repo", str(config.repo_root), "--batch", FIRST])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert f"evolution portfolio: batch {FIRST}" in out
+    assert f"{FIRST}-exp-01 — 1 round(s), 1 replay run(s), promoted" in out
+    assert "no release before this batch" in out
+
+
+def test_the_verb_takes_one_subject_at_a_time(config: evolution.EvolutionConfig) -> None:
+    """Two subjects would be two readings, and one snapshot could not say which
+    of them it was taken over."""
+
+    with pytest.raises(SystemExit):
+        cli.main(["evolution", "portfolio", "--repo", str(config.repo_root), "--batch", FIRST, "--proposal"])
+
+
+def test_an_attempt_whose_ref_this_checkout_never_fetched_still_reads(
+    config: evolution.EvolutionConfig, series: str
+) -> None:
+    """The ordinary state of any clone that never fetched the experiment
+    namespace: the record pins a revision and the ref is not here.
+
+    A fact about the checkout and never a finding about the record — and never a
+    reason to refuse the history either, which is what a document published for
+    a console to render has to hold.
+    """
+
+    git_delete_ref(config.repo_root, f"refs/evolution/experiments/{FIRST}-exp-01")
+
+    (attempt,) = subject(config, portfolio.DETAIL_BATCH, FIRST)["experiments"]
+
+    assert attempt["ref_state"]["state"] == REF_ABSENT
+    assert attempt["ref_state"]["tip"] is None
+    # The record's own pin is durable and still stated beside the absence.
+    assert attempt["ref_state"]["pinned"] == attempt["rounds"][0]["seal"]["candidate_revision"]
+    assert attempt["decision"]["outcome"] == "promoted"

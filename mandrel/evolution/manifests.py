@@ -269,6 +269,31 @@ class Batch:
 
         return _selection_count(self.manifest, "human_included")
 
+    @property
+    def auto_selected(self) -> int:
+        """Members the identity test selected on its own.
+
+        Stated apart from `human_included` and never summed with it, for the
+        reason the manifest states them apart: a batch of ten that is nine
+        judgements and one qualifying report is a different document from a batch
+        of ten.
+        """
+
+        return _selection_count(self.manifest, "auto_selected")
+
+    @property
+    def not_selected(self) -> tuple[Mapping[str, Any], ...]:
+        """Every considered task this batch left out, with the reason it was.
+
+        The other half of the denominator above: the counts say how the formation
+        split and these say which tasks and on what grounds, which is what a
+        reader judging a batch's recurrence claim needs.
+        """
+
+        selection = self.manifest.get("selection")
+        entries = selection.get("not_selected") if isinstance(selection, Mapping) else None
+        return tuple(entries or ())
+
 
 def _selection_count(manifest: Mapping[str, Any], key: str) -> int:
     selection = manifest.get("selection")

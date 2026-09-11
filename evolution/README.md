@@ -2311,9 +2311,10 @@ it belongs to neither token and its absence is not a gap.
 takes of something no writer of this lifecycle moves. That is the set the
 durable token leaves out and a reading still turns on, and the list is the
 definition rather than an illustration of it — whether each task admitted into
-an open round stands complete in `.ai-tasks/`; whether the current batch's
-analysis task stands complete there, which is what tells `batch-frozen` from
-every stage after it and what the gate verbs are offered from; which of a
+an open round stands complete in `.ai-tasks/`; whether each batch's analysis
+task stands complete there, which for the batch in play is what tells
+`batch-frozen` from every stage after it and what the gate verbs are offered
+from, and which a detail read publishes for whichever batch it expands; which of a
 batch's claimed report bundles are staged on this machine; what each planned
 target's deploy receipt holds; the age the clock gives the standing offer, since
 `max_wait_days` past its oldest member has the policy release a batch the same
@@ -2428,10 +2429,12 @@ with history would give the bound away. Both documents carry the same snapshot, 
 console assembling an index and several details know whether it assembled one
 reading or several.
 
-`mandrel evolution portfolio` emits the index. The detail read is specified
-here and is not shipped yet, so what is inside a batch is still read from
-`status` for the batch in play and from the records themselves for every batch
-before it. The volatile token is computed over exactly the input set named
+`mandrel evolution portfolio` emits the index, and `--batch <id>` or
+`--proposal` emits the detail read of that subject: one subject per document, so
+a reading always says which state it is of. The pool is the third subject this
+schema publishes and its builder has not landed, so the verb offers no argument
+for it and the reading refuses that kind by name rather than answering with an
+empty document. The volatile token is computed over exactly the input set named
 above, with a regression per input showing it move while `state_revision` holds,
 and the bracket is held to the two ways it can be broken — a record written and
 an observation moved between the two readings, each read again, and a repository

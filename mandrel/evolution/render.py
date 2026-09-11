@@ -56,7 +56,7 @@ from .experiments import (
 from .importer import STATUS_KNOWN, STATUS_NEW, STATUS_REJECTED, STATUS_RERUN, ListResult, SyncResult
 from .lineage import REF_ABSENT, Gate, PreparedPromotion
 from .manifests import MODE_HUMAN_INCLUDED
-from .portfolio import BatchRow, Portfolio
+from .portfolio import DETAIL_BATCH, BatchRow, Portfolio
 from .proposals import BatchProposal
 from .phase import (
     ACTION_BATCH_EXCLUDE,
@@ -1057,10 +1057,11 @@ def format_portfolio(document: Portfolio) -> str:
     reading of everything, with something to re-read on.
     """
 
+    if document.detail is not None:
+        return _detail_lines(document)
+
     index = document.index
     if index is None:
-        # A detail document, which only a later verb argument can ask for. It
-        # gets its rendering with the argument that produces it.
         return f"evolution portfolio: {document.document}"
 
     decision = index.decision
@@ -1084,6 +1085,106 @@ def format_portfolio(document: Portfolio) -> str:
     lines.extend(_promotion_lines(index.promotion))
     lines.extend(_deployment_lines(index.promotion, index.deployment))
     return "\n".join(lines)
+
+
+def _detail_lines(document: Portfolio) -> list[str]:
+    """One expanded subject, for a person.
+
+    A summary and never the document: the subject of a detail read is the whole
+    of a batch's work — every draft's Markdown, every round, every run's metrics
+    — and printing it would be a page of JSON without the brackets. What a person
+    reading a terminal needs from it is which subject this is, how big each part
+    of it is, and the tokens to re-read on; `--json` is where the reading itself
+    is taken.
+    """
+
+    detail = document.detail
+    assert detail is not None
+    lines = [f"evolution portfolio: {detail.kind} {detail.subject_id or ''}".rstrip()]
+    lines.append(
+        _field(
+            "snapshot",
+            f"state {document.snapshot.state_revision}, observations "
+            f"{document.snapshot.observations_revision}, taken {document.snapshot.taken_at}",
+        )
+    )
+    subject = detail.subject
+    if detail.kind == DETAIL_BATCH:
+        release = subject["release"]
+        outcome = subject["outcome"]
+        lines.append(
+            _field(
+                "batch",
+                f"frozen {subject['frozen_at']} at {subject['base_revision'][:12]} — "
+                f"{len(subject['reports'])} of {subject['selection']['considered']} considered task(s), "
+                f"{'current' if subject['current'] else outcome['outcome']}",
+            )
+        )
+        lines.append(
+            _field(
+                "evidence",
+                f"{subject['evidence']['local']} of {subject['evidence']['report_count']} bundle(s) staged here; "
+                f"analysis {'complete' if subject['analysis']['complete'] else 'open'}",
+            )
+        )
+        lines.append(
+            _field(
+                "gate",
+                f"{len(subject['gate']['drafts'])} draft(s), {len(subject['gate']['unusable'])} unusable file(s)",
+            )
+        )
+        for position, experiment in enumerate(subject["experiments"]):
+            lines.append(_field("attempts" if position == 0 else "", _attempt(experiment)))
+        lines.append(
+            _field(
+                "release",
+                "no release before this batch"
+                if release is None
+                else f"{release['assessed']['revision'][:12]} — "
+                f"{_release_stage(release)}",
+            )
+        )
+        return lines
+
+    proposal = subject
+    lines.append(
+        _field(
+            "offer",
+            f"built {proposal['built_at']} at {proposal['base_revision'][:12]} "
+            f"({proposal['source_line_ref']})",
+        )
+    )
+    lines.append(
+        _field(
+            "members",
+            f"{len(proposal['selected'])} selected, {len(proposal['not_selected'])} left out",
+        )
+    )
+    return lines
+
+
+def _attempt(experiment: dict) -> str:
+    """One attempt of a batch, as a line: how far it got and how it ended."""
+
+    decision = experiment["decision"]
+    ending = "open" if experiment["open"] else (decision or {}).get("outcome", "undecided")
+    runs = len(experiment["replays"]["runs"])
+    return (
+        f"{experiment['experiment_id']} — {len(experiment['rounds'])} round(s), {runs} replay run(s), {ending}"
+    )
+
+
+def _release_stage(release: dict) -> str:
+    """How far this batch's reading of the release before it has got."""
+
+    if release["decision"] is not None:
+        return f"settled {release['decision']['settlement']}"
+    if release["reading"] is not None:
+        return f"read {release['reading']['verdict']}, recommends {release['reading']['recommendation']}"
+    return (
+        f"unread; {release['sides']['before']['task_count']} before / "
+        f"{release['sides']['after']['task_count']} after, minimum {release['sides']['minimum_task_count']}"
+    )
 
 
 def _offer_lines(proposal: BatchProposal | None, decision: AdmissionDecision) -> list[str]:

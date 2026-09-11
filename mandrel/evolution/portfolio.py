@@ -24,7 +24,7 @@ what a record means.
 `state_revision` is the durable half, computed in `guards` and bracketed exactly
 as `phase.describe` brackets it. `observations_revision` is the volatile half:
 every reading this controller takes of something no writer of this lifecycle
-moves — each admitted task's completion, the current batch's analysis stage, the
+moves — each admitted task's completion, each batch's analysis stage, the
 staged bundles, each planned target's receipt, the age the clock gives the
 standing offer, and what this checkout can resolve. It digests the answers and
 never the inputs they were read from: `now` differs at every call and an object
@@ -46,15 +46,26 @@ documents carry one snapshot so that a console assembling an index and several
 details can tell one reading from several, and a token over a per-document
 question set could never say that. So these are the controller's readings of the
 repository, not this document's own.
+
+**Two documents, which is how the payload is bounded.** `index` is one row per
+batch and nothing else that grows with use; `detail` expands exactly one subject
+a row named — a batch's membership, the drafts at its gate, every attempt in it,
+what measured each of them and the release reading it owns, or the offer standing
+before a freeze. Everything whose size is a function of one batch's own work is
+only reachable that way, so the series grows by one row per freeze and no detail
+read grows with history at all. Neither truncates anything: a document that
+dropped part of a history would contradict the one thing it is published for.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from ..hashing import sha256_bytes
 from . import (
     assessment as assessment_ops,
     experiments as experiment_ops,
@@ -62,14 +73,17 @@ from . import (
     phase,
     rollback as rollback_ops,
 )
-from .analysis_task import task_finished, tasks_root
-from .batches import AdmissionDecision
+from .analysis_task import PROPOSED_TASKS_DIRNAME, task_finished, tasks_root
+from .batches import AdmissionDecision, awaiting_analysis
 from .config import EvolutionConfig
+from .assessment import Measurement as ReleaseMeasurement, Side
 from .deployment import TargetHolding
-from .errors import BatchError
-from .lineage import BatchLineage, Experiment, Lineage, RefState, describe_ref
+from .errors import BatchError, NothingToActOn, UnknownSubject
+from .lineage import BatchLineage, Experiment, Lineage, PreparedPromotion, RefState, Round, describe_ref
+from .manifests import read_rejected_drafts
 from .phase import Promotion, ReleaseReading
 from .proposals import BatchProposal
+from .replay import CaseSet, Evaluator, Harness, History, Replay, read_replays
 from .schema import format_rfc3339
 from .state import staged_bundle
 
@@ -83,6 +97,29 @@ SCHEMA_VERSION = 1
 # The two readings, by the name the document states about itself.
 DOCUMENT_INDEX = "index"
 DOCUMENT_DETAIL = "detail"
+
+# The subjects a detail read expands, and the slot each is published in. One
+# tuple rather than a constant per kind, because the union the schema subset
+# cannot state is checked against exactly this: a document states one kind and
+# carries one object, and every other slot is a stated null. A kind added here
+# is a key added to every detail document, which is why the vocabulary widens by
+# the task that first emits a member rather than by anyone who fancies a name.
+DETAIL_BATCH = "batch"
+DETAIL_PROPOSAL = "proposal"
+# The pool waiting behind the offer. Named because the shape is published and a
+# reader dispatches on the vocabulary; its builder is the projections task, and
+# asking for it here is refused as a subject this reading does not yet hold
+# rather than answered with an empty document.
+DETAIL_POOL = "pool"
+DETAIL_KINDS = (DETAIL_BATCH, DETAIL_PROPOSAL, DETAIL_POOL)
+_BUILT_KINDS = (DETAIL_BATCH, DETAIL_PROPOSAL)
+
+# Where one proposal stands at a batch's admission gate. `consumed` and
+# `declined` are both terminal for it; `waiting` is a proposal no experiment
+# has taken and nothing has turned down.
+_DRAFT_WAITING = "waiting"
+_DRAFT_CONSUMED = "consumed"
+_DRAFT_DECLINED = "declined"
 
 # How far a batch's own reading of the release before it has got. `none` is most
 # batches: there was no release in front of them, or the one there was belongs to
@@ -134,10 +171,12 @@ class Observations:
     # the answer where no `.ai-tasks/` is here to consult, which is every clone
     # but the one the work was done on.
     completions: tuple[tuple[str, bool | None], ...]
-    # The current batch and whether its analysis stage has ended. None when no
-    # batch is current — a concluded batch's stage is history, read from the
-    # committed closure record rather than from a file on this machine.
-    analysis: tuple[str, bool] | None
+    # Each frozen batch and whether its analysis stage has ended. Every batch and
+    # not only the one in play: a concluded batch's stage answer is ordinarily
+    # the committed closure record, but a task file that is here and unfinished
+    # holds the stage open against it (`batches.awaiting_analysis`), and a detail
+    # read publishes that answer for whichever batch it was asked about.
+    analysis: tuple[tuple[str, bool], ...]
     # Every frozen batch's claimed reports, and which of their bundles are staged
     # here.
     staged: tuple[tuple[str, bool], ...]
@@ -147,6 +186,11 @@ class Observations:
     # reading the clock alone moves. None where no offer stands or none of its
     # members is pooled.
     waited_days: int | None
+    # How this checkout reads each attempt's ref against its record's pins, held
+    # as the value rather than as the sentence `resolved` digests below: the
+    # detail read publishes this diagnosis, and a projection that asked Git for
+    # it a second time would publish an answer the token is not over.
+    refs: tuple[tuple[str, RefState], ...]
     # What this checkout could and could not settle: each attempt's ref against
     # its record's pins, each recorded inverse commit against the promotion it
     # takes back out and against the line it was made for, where each report of a
@@ -166,8 +210,7 @@ class Observations:
 
         stated: list[tuple[str, str]] = []
         stated.extend((f"task:{name}", _answer(value)) for name, value in self.completions)
-        if self.analysis is not None:
-            stated.append((f"analysis:{self.analysis[0]}", _answer(self.analysis[1])))
+        stated.extend((f"analysis:{batch_id}", _answer(value)) for batch_id, value in self.analysis)
         stated.extend((f"staged:{key}", _answer(value)) for key, value in self.staged)
         if self.targets is not None:
             stated.extend(
@@ -296,6 +339,38 @@ class Index:
 
 
 @dataclass(frozen=True)
+class Detail:
+    """One subject the index named, expanded.
+
+    The subject is held as the projection itself rather than as a tree of value
+    objects: what a batch detail carries is the records' own content, and a
+    second set of dataclasses between the records and the document would be a
+    second place for the shape to drift from the schema that settles it. The
+    index is the other way round because its rows are computed — a denominator,
+    a count of attempts, how far a reading has got — and a computed row is worth
+    naming.
+
+    `kind` and the slot are one statement: the named slot carries the subject and
+    every other is a stated null, which is the union the schema subset cannot
+    express and `Portfolio` checks in both directions.
+    """
+
+    kind: str
+    subject_id: str | None
+    subject: dict[str, Any]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            # What was asked for, where the subject has an identity. The standing
+            # offer and the pool have none — there is one of each — so `id` is
+            # null there rather than carrying a name this controller invented.
+            "id": self.subject_id,
+            **{slot: self.subject if slot == self.kind else None for slot in DETAIL_KINDS},
+        }
+
+
+@dataclass(frozen=True)
 class Portfolio:
     """One portfolio document: which reading it is, what state it is of, and the
     reading itself.
@@ -309,13 +384,24 @@ class Portfolio:
     document: str
     snapshot: Snapshot
     index: Index | None = None
+    detail: Detail | None = None
 
     def __post_init__(self) -> None:
-        if (self.index is not None) != (self.document == DOCUMENT_INDEX):
+        for name, carried, document in (
+            ("index", self.index is not None, DOCUMENT_INDEX),
+            ("detail", self.detail is not None, DOCUMENT_DETAIL),
+        ):
+            if carried != (self.document == document):
+                raise BatchError(
+                    f"a portfolio document says it is {self.document!r} and carries "
+                    f"{'a' if carried else 'no'} {name}; the two are one statement, and a reading that "
+                    "published them apart would be a document nothing could dispatch on"
+                )
+        if self.detail is not None and self.detail.kind not in DETAIL_KINDS:
             raise BatchError(
-                f"a portfolio document says it is {self.document!r} and carries "
-                f"{'an' if self.index is not None else 'no'} index; the two are one statement, and a reading "
-                "that published them apart would be a document nothing could dispatch on"
+                f"a portfolio detail states kind {self.detail.kind!r}, which is no subject this reading "
+                f"publishes ({', '.join(DETAIL_KINDS)}); the kind and the slot carrying the subject are one "
+                "statement, and a kind with no slot is a document nothing could read the subject out of"
             )
 
     def to_json(self) -> dict[str, Any]:
@@ -323,10 +409,10 @@ class Portfolio:
             "schema_version": SCHEMA_VERSION,
             "document": self.document,
             "snapshot": self.snapshot.to_json(),
-            "index": None if self.index is None else self.index.to_json(),
-            # The other half of the union. Written as a stated absence rather
+            # Both halves of the union are stated, the absent one as null rather
             # than left out, because this reading promises its exact key set.
-            "detail": None,
+            "index": None if self.index is None else self.index.to_json(),
+            "detail": None if self.detail is None else self.detail.to_json(),
         }
 
 
@@ -339,29 +425,92 @@ def index(config: EvolutionConfig, *, now: datetime | None = None) -> Portfolio:
     a history the next operation refuses to act on is worse than one that says it
     cannot be read.
 
-    Both tokens are taken over one bracket. The durable inputs are read, the
-    reading is taken twice, and the inputs are read again: equal inputs say no
-    writer finished underneath it, and two equal sets of observations say the
-    volatile answers it was assembled from were one set rather than two. Nothing
-    here takes the single-writer lock — a reading that waited on an operation
-    would be a very different promise, and taking that lock is itself a write.
+    Both tokens are taken over one bracket, which is `_taken`'s and is the same
+    one a detail read is published through.
     """
 
     moment = now or datetime.now(timezone.utc)
+    reading, snapshot = _taken(config, moment)
+    return Portfolio(document=DOCUMENT_INDEX, snapshot=snapshot, index=_index(config, reading))
+
+
+def detail(
+    config: EvolutionConfig,
+    kind: str,
+    subject_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> Portfolio:
+    """One subject the index named, expanded. Read-only.
+
+    The bound the whole document rests on: everything whose size is one batch's
+    own work — its members, the drafts at its gate, every attempt in it, what
+    measured each of them, and the release reading it owns — is here rather than
+    in the series, so the index grows by one row per freeze and this grows with
+    nothing at all.
+
+    Taken over the same bracket and the same question set as the index. That is
+    what lets the snapshot say what it says: a console asking for the series and
+    then for three of its batches can tell one reading of this repository from
+    four, and it could not if the questions asked depended on what was asked for.
+
+    A subject this state does not hold is refused rather than answered with an
+    empty document — the pairing between `kind` and the slot is what a reader
+    dispatches on, and a detail carrying no subject would be a document with
+    nothing in it and no way to say so.
+    """
+
+    moment = now or datetime.now(timezone.utc)
+    if kind not in _BUILT_KINDS:
+        held = ", ".join(_BUILT_KINDS)
+        raise UnknownSubject(
+            f"a portfolio detail of {kind!r} is not a reading this build takes; what it expands is {held}"
+            + (
+                f", and {DETAIL_POOL} is a published shape whose builder has not landed"
+                if kind == DETAIL_POOL
+                else ""
+            )
+        )
+    reading, snapshot = _taken(config, moment)
+    subject = (
+        _batch_detail(config, reading, subject_id)
+        if kind == DETAIL_BATCH
+        else _proposal_detail(reading.status.proposal)
+    )
+    return Portfolio(
+        document=DOCUMENT_DETAIL,
+        snapshot=snapshot,
+        # The batch is the only subject with an identity to echo back: there is
+        # one standing offer and one pool, so naming either would be this
+        # controller inventing a key nothing else uses.
+        detail=Detail(kind=kind, subject_id=subject_id if kind == DETAIL_BATCH else None, subject=subject),
+    )
+
+
+def _taken(config: EvolutionConfig, moment: datetime) -> tuple[_Reading, Snapshot]:
+    """One reading of this repository, and the two tokens that say what it is of.
+
+    The bracket both documents are published through, so neither can be taken any
+    other way: the durable inputs are read, the reading is taken twice, and the
+    inputs are read again. Equal inputs say no writer finished underneath it, and
+    two equal sets of observations say the volatile answers it was assembled from
+    were one set rather than two.
+
+    Nothing here takes the single-writer lock — a reading that waited on an
+    operation would be a very different promise, and taking that lock is itself a
+    write.
+    """
+
     inputs = guards.read_inputs(config)
     taken = _read(config, moment)
     for _ in range(_SNAPSHOT_ATTEMPTS):
         again = _read(config, moment)
         after = guards.read_inputs(config)
         if after == inputs and again.observations == taken.observations:
-            return Portfolio(
-                document=DOCUMENT_INDEX,
-                snapshot=Snapshot(
-                    taken_at=format_rfc3339(moment),
-                    state_revision=guards.state_revision(after),
-                    observations_revision=again.observations.revision,
-                ),
-                index=_index(config, again),
+            return again, Snapshot(
+                taken_at=format_rfc3339(moment),
+                state_revision=guards.state_revision(after),
+                observations_revision=again.observations.revision,
             )
         inputs, taken = after, again
     raise BatchError(
@@ -452,6 +601,7 @@ def _observe(
     documents are one reading.
     """
 
+    refs = _refs(config, lineage)
     return Observations(
         completions=_completions(config, lineage),
         # The stage answer rather than the task file: `awaiting_analysis` reads
@@ -460,9 +610,7 @@ def _observe(
         # local one. That is what digesting answers means, and it is the safe
         # direction — the token moving twice for one event costs a re-read, and
         # a local completion moving neither token is the gap this exists to close.
-        analysis=None
-        if status.current_batch is None
-        else (status.current_batch.batch_id, status.current_batch.analysis_complete),
+        analysis=_analysis(config, status, lineage),
         staged=_staged(config, lineage),
         targets=None
         if status.deployment is None
@@ -478,7 +626,57 @@ def _observe(
         # not it: a long-pooled report this base does not select cannot age this
         # batch out (`batches.evaluate_admission`).
         waited_days=None if status.proposal is None else status.decision.waited_days,
-        resolved=_resolved(config, lineage, owed),
+        refs=refs,
+        resolved=_resolved(config, lineage, owed, refs),
+    )
+
+
+def _analysis(
+    config: EvolutionConfig,
+    status: phase.LifecycleStatus,
+    lineage: Lineage,
+) -> tuple[tuple[str, bool], ...]:
+    """Whether each batch's analysis stage has ended.
+
+    Every batch rather than the one in play, for the reason the completions and
+    the staged bundles are asked of the whole series: a detail read publishes
+    this answer for whichever batch it was asked about, and a question asked only
+    where the index happens to need it would make an index and a batch detail of
+    one moment two readings.
+
+    The batch in play takes the answer the lifecycle derivation already reached
+    (`phase.read`, which chooses the phase from it) rather than asking again —
+    one question, one answer, and no window in which this document's stage and
+    its phase could disagree. Every other batch is asked directly, through the
+    same function that one came from.
+    """
+
+    current = None if status.current_batch is None else status.current_batch.batch_id
+    return tuple(
+        (
+            item.batch_id,
+            status.current_batch.analysis_complete
+            if status.current_batch is not None and item.batch_id == current
+            else not awaiting_analysis(config, item.batch),
+        )
+        for item in lineage.batches
+    )
+
+
+def _refs(config: EvolutionConfig, lineage: Lineage) -> tuple[tuple[str, RefState], ...]:
+    """How this checkout reads every attempt's ref against its record's pins.
+
+    Taken once and held, because two surfaces spend it: the digest states it as
+    the whole diagnosis (`_ref_answer`), and a batch detail publishes the same
+    reading field by field. Asking Git a second time for the detail would put a
+    published answer outside the token that is supposed to cover it — and would
+    pay for the same walk twice.
+    """
+
+    return tuple(
+        (experiment.experiment_id, _ref_state(config, item, experiment))
+        for item in lineage.batches
+        for experiment in item.experiments
     )
 
 
@@ -536,6 +734,7 @@ def _resolved(
     config: EvolutionConfig,
     lineage: Lineage,
     owed: tuple[ReleaseReading, ...],
+    refs: tuple[tuple[str, RefState], ...],
 ) -> tuple[tuple[str, str], ...]:
     """What this checkout could and could not settle.
 
@@ -563,11 +762,14 @@ def _resolved(
     unplaceable for the same reason while changing which of the two revisions the
     published exclusion blames.
 
-    The open attempt's ref is taken from the lineage rather than asked again —
-    the derivation already resolved it, and asking a second time would be a
-    second answer to one question inside one reading. The base question is asked
-    through the admission's own predicate for that reason: a second spelling of
-    it here would be a token over an answer no gate reads.
+    The ref diagnoses are handed in rather than taken here, because the detail
+    read publishes them too: one reading of each ref, stated as a sentence for
+    the digest and as fields for the document. The open attempt's is taken from
+    the lineage rather than asked again for the same reason — the derivation
+    already resolved it, and asking a second time would be a second answer to one
+    question inside one reading. The base question is asked through the
+    admission's own predicate for that reason: a second spelling of it here would
+    be a token over an answer no gate reads.
 
     Asked of every attempt in the series, so the cost of this reading grows with
     history while its payload does not. That is the trade the shared snapshot
@@ -576,11 +778,10 @@ def _resolved(
     the one thing the pair is published for.
     """
 
-    stated: list[tuple[str, str]] = []
+    stated: list[tuple[str, str]] = [
+        (f"ref:{experiment_id}", _ref_answer(state)) for experiment_id, state in refs
+    ]
     for item in lineage.batches:
-        for experiment in item.experiments:
-            state = _ref_state(config, item, experiment)
-            stated.append((f"ref:{experiment.experiment_id}", _ref_answer(state)))
         if item.rollback is not None:
             # The lineage's own answer, taken while it held the record to it: the
             # empty string is a confirmed inverse, and a sentence is why this
@@ -870,3 +1071,715 @@ def _answer(value: bool | int | str | None) -> str:
     if isinstance(value, bool):
         return _ANSWER_YES if value else _ANSWER_NO
     return str(value)
+
+
+def _batch_detail(config: EvolutionConfig, reading: _Reading, batch_id: str | None) -> dict[str, Any]:
+    """One batch, expanded.
+
+    The manifest's own membership and denominator, the stage, what this machine
+    holds of the evidence, the gate with the drafts themselves, every attempt in
+    one shape, the ending, and the release reading this batch owes. Each of them
+    is read off the derivation this document was taken over — never asked again
+    here — so that what the tokens cover and what the document states are the
+    same answers.
+    """
+
+    item = next((entry for entry in reading.lineage.batches if entry.batch_id == batch_id), None)
+    if item is None:
+        known = ", ".join(entry.batch_id for entry in reading.lineage.batches) or "none"
+        raise UnknownSubject(
+            f"no batch {batch_id!r} has been frozen in this repository; the series holds {known}, and a detail "
+            "read expands a batch the index named"
+        )
+    batch = item.batch
+    staged = dict(reading.observations.staged)
+    outcome = item.outcome or {}
+    release = next((entry for entry in reading.owed if entry.batch_id == item.batch_id), None)
+    return {
+        "batch_id": item.batch_id,
+        "frozen_at": batch.created_at,
+        "base_revision": item.base_revision,
+        "forced": batch.manifest["forced"],
+        # Optional on the manifest: null unless the freeze waived the target.
+        "force_justification": batch.manifest.get("force_justification"),
+        "current": item.current,
+        "selection": {
+            "considered": batch.considered,
+            "auto_selected": batch.auto_selected,
+            "human_included": batch.human_included,
+        },
+        "reports": [_report_json(report) for report in batch.reports],
+        "not_selected": [_exclusion_json(entry) for entry in batch.not_selected],
+        "analysis": {
+            "task_id": batch.analysis_task_id,
+            # The dispositions exist, which is necessary for the stage to end and
+            # never sufficient: the analysis task writes them while it is still
+            # being developed.
+            "findings_recorded": batch.findings_recorded,
+            "complete": dict(reading.observations.analysis)[item.batch_id],
+        },
+        "evidence": {
+            "report_count": len(batch.reports),
+            "local": sum(1 for key in batch.report_keys if staged.get(key)),
+        },
+        "gate": _gate_detail(config, item),
+        "experiments": [
+            _experiment_detail(config, item, experiment, reading.observations)
+            for experiment in item.experiments
+        ],
+        "outcome": None
+        if item.current
+        else {
+            "outcome": outcome["outcome"],
+            "decided_at": outcome["decided_at"],
+            "reason": outcome["reason"],
+            "experiment_id": outcome["experiment_id"],
+            # The batch's own promotion, with what this checkout could confirm
+            # about a reversal of it — the same shape the series row carries,
+            # because "what this batch did to the source line" is one fact.
+            "promotion": _promotion_json(_batch_promotion(reading, item.batch_id)),
+        },
+        "release": None if release is None else _release_detail(release),
+    }
+
+
+def _batch_promotion(reading: _Reading, batch_id: str) -> Promotion | None:
+    """What this batch put on the source line, as the series states it.
+
+    Read off the status projection's rows rather than derived again: `status`
+    already builds a promotion for the batch that made one, and a second
+    derivation here would be a second answer to which merge unit went.
+    """
+
+    record = next((entry for entry in reading.status.batches if entry.batch_id == batch_id), None)
+    return None if record is None else record.promotion
+
+
+def _report_json(report: Mapping[str, Any]) -> dict[str, Any]:
+    """One member's entry, as the immutable manifest froze it.
+
+    Stated field by field rather than handed through, because this document
+    promises its exact key set and the manifest's own grows: a passthrough would
+    publish a key the schema never named the first time a manifest version added
+    one.
+
+    The evaluator and the protocol identity are published as the manifest holds
+    them, the empty string included. A freeze copies both blocks from the staged
+    record without touching them and the import contract accepts values this
+    document must not narrow — a projection that refused one could not publish a
+    batch that froze it.
+    """
+
+    selection = report["selection"]
+    evaluator = report["evaluator"]
+    provenance = report["provenance"]
+    return {
+        "report_key": report["report_key"],
+        "repo_id": report["repo_id"],
+        "task_id": report["task_id"],
+        "generated_at": report["generated_at"],
+        "bundle_sha256": report["bundle_sha256"],
+        "mode": selection["mode"],
+        "justification": selection["justification"],
+        "actor": selection["actor"],
+        "moved_at": selection["moved_at"],
+        "evaluator": {
+            "backend": evaluator["backend"],
+            "model": evaluator["model"],
+            # Optional on the manifest and required here: absence is the one
+            # variant a projection may settle, and it settles it as null.
+            "rubric_revision": evaluator.get("rubric_revision"),
+        },
+        "protocol": {
+            "effective_revision": provenance["effective_revision"],
+            "deploy_lock_hash": provenance["deploy_lock_hash"],
+        },
+    }
+
+
+def _exclusion_json(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """One considered task the batch left out, as its manifest recorded it."""
+
+    return {
+        "repo_id": entry["repo_id"],
+        "task_id": entry["task_id"],
+        "report_keys": list(entry["report_keys"]),
+        "reason": entry["reason"],
+        "justification": entry["justification"],
+        "actor": entry["actor"],
+        "moved_at": entry["moved_at"],
+    }
+
+
+def _gate_detail(config: EvolutionConfig, item: BatchLineage) -> dict[str, Any]:
+    """The admission gate, one record per draft, with the taskfile itself.
+
+    Derived from the same `Gate` the next-action reading is offered from rather
+    than from the directory: admission copies a draft and leaves it in place, so
+    what is present is every proposal ever made and not the ones still to decide.
+    What is added is what an operator being asked to admit something needs and an
+    id cannot carry — the bytes, and whether they are still the bytes the
+    decision pinned.
+
+    A file whose bytes are gone or are not text is stated as a decided draft with
+    no content: the record keeps the id and the hash of what was decided, and the
+    bytes are recoverable from history. The two hashes are stated apart because
+    that is the only thing that shows a file edited after the decision that took
+    it.
+    """
+
+    gate = item.gate
+    declined = {entry["draft_id"]: entry for entry in read_rejected_drafts(config, item.batch)}
+    admitted = {
+        task.draft_id: (experiment.experiment_id, task)
+        for experiment in item.experiments
+        for round_ in experiment.rounds
+        for task in round_.tasks
+    }
+    drafts: list[dict[str, Any]] = []
+    for draft_id in sorted(set(gate.waiting) | set(gate.consumed) | set(gate.declined)):
+        content, content_sha256 = _draft_content(item, draft_id)
+        rejection = declined.get(draft_id)
+        admission = admitted.get(draft_id)
+        state = (
+            _DRAFT_DECLINED
+            if rejection is not None
+            else _DRAFT_CONSUMED
+            if admission is not None
+            else _DRAFT_WAITING
+        )
+        drafts.append(
+            {
+                "draft_id": draft_id,
+                "state": state,
+                "experiment_id": None if admission is None else admission[0],
+                "decided_at": rejection["rejected_at"]
+                if rejection is not None
+                else None
+                if admission is None
+                else admission[1].admitted_at,
+                # The declining operator's words. An admission's reason belongs
+                # to the round it opened, not to the draft.
+                "reason": None if rejection is None else rejection["reason"],
+                "recorded_sha256": rejection["draft_sha256"]
+                if rejection is not None
+                else None
+                if admission is None
+                else admission[1].draft_sha256,
+                "content": content,
+                "content_sha256": content_sha256,
+            }
+        )
+    return {"drafts": drafts, "unusable": list(gate.unusable)}
+
+
+def _draft_content(item: BatchLineage, draft_id: str) -> tuple[str | None, str | None]:
+    """A draft's bytes as they stand here, and their hash.
+
+    Two nulls where there are no bytes to publish — the decided draft whose file
+    is gone, and the one that is not UTF-8 text and so is not the taskfile this
+    document states. Reported rather than refused: a read that failed on one
+    unreadable proposal would take the whole batch's history with it, and the
+    hash the decision pinned still says what was decided.
+    """
+
+    path = item.batch.directory / PROPOSED_TASKS_DIRNAME / f"{draft_id}.md"
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None, None
+    try:
+        return raw.decode("utf-8"), sha256_bytes(raw)
+    except UnicodeDecodeError:
+        return None, None
+
+
+def _experiment_detail(
+    config: EvolutionConfig,
+    item: BatchLineage,
+    experiment: Experiment,
+    observations: Observations,
+) -> dict[str, Any]:
+    """One attempt, in the shape that serves the open one and every terminal one.
+
+    One shape rather than two: a reader reconstructing what happened needs the
+    same fields from a superseded attempt it needs from the one running, and
+    `decision` is what tells them apart. Which is also why the replay history is
+    read for every attempt — a terminal one's runs are what say why it ended, and
+    nothing reads them today.
+    """
+
+    open_experiment = item.open_experiment
+    return {
+        "experiment_id": experiment.experiment_id,
+        "batch_id": experiment.batch_id,
+        "created_at": experiment.created_at,
+        "base_revision": experiment.base_revision,
+        "base_release_ref": experiment.base_release_ref,
+        "ref": experiment.ref,
+        "ref_state": _ref_state_json(dict(observations.refs).get(experiment.experiment_id)),
+        "open": open_experiment is not None and open_experiment.experiment_id == experiment.experiment_id,
+        "rounds": [_round_json(experiment, round_, observations) for round_ in experiment.rounds],
+        "prepared_promotion": _prepared_json(experiment.promotion),
+        "decision": None
+        if experiment.decision is None
+        else {
+            "outcome": experiment.decision.outcome,
+            "decided_at": experiment.decision.decided_at,
+            "reason": experiment.decision.reason,
+            "superseded_by": experiment.decision.superseded_by,
+            "promotion_revision": experiment.decision.promotion_revision,
+        },
+        "replays": _replays_json(read_replays(config, experiment)),
+    }
+
+
+def _ref_state_json(state: RefState | None) -> dict[str, Any] | None:
+    """The reading this checkout took of one attempt's ref, as the document
+    states it.
+
+    The same reading the volatile token digests, published field by field: what
+    the record pins is durable, and where the ref stands against it is not.
+    """
+
+    if state is None:
+        return None
+    return {
+        "ref": state.ref,
+        "tip": state.tip,
+        "pinned": state.pinned,
+        "state": state.state,
+        "chain": state.chain,
+        "chain_break": list(state.chain_break) if state.chain_break else None,
+        "consistent": state.consistent,
+    }
+
+
+def _round_json(experiment: Experiment, round_: Round, observations: Observations) -> dict[str, Any]:
+    """One revision pass: what was admitted into it, and what it produced."""
+
+    completions = dict(observations.completions)
+    return {
+        "number": round_.number,
+        "opened_at": round_.opened_at,
+        "reason": round_.reason,
+        "tasks": [
+            {
+                "task_id": task.task_id,
+                "draft_id": task.draft_id,
+                "draft_sha256": task.draft_sha256,
+                "admitted_at": task.admitted_at,
+                "completion_observed_at": task.completion_observed_at,
+                # The durable observation and the machine-local one, side by
+                # side. Null where nothing was asked: a task the record shows
+                # complete is not consulted at all, and a clone with no
+                # `.ai-tasks/` has nothing to consult — two different absences
+                # from a task file that is here and unfinished.
+                "file_complete": None
+                if task.complete
+                else completions.get(f"{experiment.experiment_id}/{round_.number}/{task.task_id}"),
+            }
+            for task in round_.tasks
+        ],
+        "seal": None
+        if round_.seal is None
+        else {"sealed_at": round_.seal.sealed_at, "candidate_revision": round_.seal.candidate_revision},
+    }
+
+
+def _replays_json(history: History) -> dict[str, Any]:
+    """Every run recorded against one attempt, the request that has not become
+    one, and the positions given up without becoming runs.
+
+    The whole history rather than the reading over it: `status` publishes what
+    the open round's evidence comes to, which is the right answer for a surface
+    about to promote and the wrong one for a reader asking what measured each
+    attempt. Read through the same parser either way, so the two cannot disagree
+    about what is on disk.
+    """
+
+    return {
+        "runs": [_run_json(run) for run in history.replays],
+        "request": None
+        if history.pending is None
+        else {
+            "round": history.pending.round_number,
+            "attempt": history.pending.attempt,
+            "requested_at": history.pending.requested_at,
+            "candidate_revision": history.pending.integration.candidate_revision,
+            "merge_input_revision": history.pending.integration.merge_input_revision,
+            "merge_input_ref": history.pending.integration.merge_input_ref,
+            "tree": history.pending.integration.tree,
+            "expectation": history.pending.expectation,
+        },
+        "withdrawn": [
+            {
+                "round": taken.round_number,
+                "attempt": taken.attempt,
+                "requested_at": taken.requested_at,
+                "withdrawn_at": taken.withdrawn_at,
+                "candidate_revision": taken.integration.candidate_revision,
+                "merge_input_revision": taken.integration.merge_input_revision,
+                "merge_input_ref": taken.integration.merge_input_ref,
+                "tree": taken.integration.tree,
+            }
+            for taken in history.withdrawn
+        ],
+    }
+
+
+def _run_json(run: Replay) -> dict[str, Any]:
+    """One recorded run: the tree it measured, what exercised it, and how it
+    ended.
+
+    The whole record and not the headline `status` carries. What a reader
+    reconstructing an attempt asks is why a round was revised, and the answer is
+    in the cohort, the evaluator, the harness and the result — a run reported as
+    an outcome and a date cannot be asked that at all.
+    """
+
+    return {
+        "round": run.round_number,
+        "attempt": run.attempt,
+        "started_at": run.started_at,
+        "candidate_revision": run.integration.candidate_revision,
+        "merge_input_revision": run.integration.merge_input_revision,
+        "merge_input_ref": run.integration.merge_input_ref,
+        "tree": run.integration.tree,
+        "cases": _cases_json(run.cases),
+        "evaluator": _evaluator_json(run.evaluator),
+        "harness": _harness_json(run.harness),
+        "expectation": run.expectation,
+        "result": None
+        if run.result is None
+        else {
+            "outcome": run.result.outcome,
+            "concluded_at": run.result.concluded_at,
+            "detail": run.result.detail,
+            "elapsed_seconds": run.result.elapsed_seconds,
+            "metrics": [
+                {
+                    "metric": measurement.metric,
+                    "unit": measurement.unit,
+                    "baseline": measurement.baseline,
+                    "candidate": measurement.candidate,
+                    "better": measurement.better,
+                }
+                for measurement in run.result.metrics
+            ],
+            "regressions": [
+                {"case_id": regression.case_id, "summary": regression.summary}
+                for regression in run.result.regressions
+            ],
+            "ambiguity": run.result.ambiguity,
+        },
+    }
+
+
+def _cases_json(cases: CaseSet) -> dict[str, Any]:
+    """The eligible cohort a run exercised, and what was held out of it."""
+
+    return {
+        "case_set_id": cases.case_set_id,
+        "case_set_sha256": cases.case_set_sha256,
+        "count": cases.count,
+        "excluded": [{"case_id": item.case_id, "reason": item.reason} for item in cases.excluded],
+    }
+
+
+def _evaluator_json(evaluator: Evaluator) -> dict[str, Any]:
+    """Who judged a run, in the imported vocabulary's own spelling — the empty
+    rubric revision included, which both source contracts accept."""
+
+    return {
+        "backend": evaluator.backend,
+        "model": evaluator.model,
+        "rubric_revision": evaluator.rubric_revision,
+    }
+
+
+def _harness_json(harness: Harness) -> dict[str, Any]:
+    """Which harness produced the evidence, how it was configured, and its own
+    name for the run. The handle is opaque here and is what a conclusion is asked
+    for; null is a run whose harness never issued one."""
+
+    return {
+        "id": harness.id,
+        "revision": harness.revision,
+        "config_sha256": harness.config_sha256,
+        "handle": harness.handle,
+    }
+
+
+def _prepared_json(prepared: PreparedPromotion | None) -> dict[str, Any] | None:
+    """The merge a promotion of this attempt was prepared as, if one stands.
+
+    Null is one state and only one on an open attempt: no promotion prepared. On
+    a terminal attempt it is also the version-1 record that kept no merge unit at
+    all — which is why a promoted batch's merge unit is taken from its outcome
+    rather than from here.
+    """
+
+    if prepared is None:
+        return None
+    return {
+        "round": prepared.round_number,
+        "candidate_revision": prepared.candidate_revision,
+        "merge_input_revision": prepared.merge_input_revision,
+        "merge_input_ref": prepared.merge_input_ref,
+        "tree": prepared.tree,
+        "revision": prepared.revision,
+        "reason": prepared.reason,
+        "planned_targets": list(prepared.planned_targets),
+        "prepared_at": prepared.prepared_at,
+    }
+
+
+def _release_detail(entry: ReleaseReading) -> dict[str, Any]:
+    """This batch's reading of the release before it, whole.
+
+    The frame is stated whether or not anything was recorded, because the
+    denominators and the exclusions are what a reader judges an absent or a
+    zero-report reading by: two empty sides are absent evidence, never a reading
+    against the release, and only the exclusions say which of the two this is.
+
+    Every placement here is one this checkout answered and the volatile token
+    already digested report by report (`_placements`), so what is rendered and
+    what is covered are the same walk. Whose obligation it is, and whether it is
+    still outstanding, are facts about the *series* and sit on the row — a batch
+    detail is already the answer to "whose".
+    """
+
+    frame = entry.frame
+    reading = entry.reading
+    assessed = entry.assessed
+    return {
+        "assessed": {
+            "batch_id": assessed.batch_id,
+            "experiment_id": assessed.experiment_id,
+            "revision": assessed.revision,
+            # The question the reading answered, never what the line carries now:
+            # settling `rolled-back` writes the decision onto a reading formed
+            # while the release stood and lands the inverse commit after it.
+            "standing": assessed.standing,
+            "rollback_revision": assessed.rollback_revision,
+            "planned_targets": list(assessed.planned_targets),
+            "source_line": {
+                "standing": frame.subject.standing,
+                "rollback_revision": frame.subject.rollback_revision,
+            },
+        },
+        # `sides`, not the `cohorts` the next-action payload still publishes: a
+        # document published for the first time speaks the vocabulary the
+        # controller speaks rather than inheriting a name it never shipped.
+        "sides": {
+            "before": _side_json(frame.before),
+            "after": _side_json(frame.after),
+            "minimum_task_count": frame.minimum_task_count,
+            "catalog_count": len(frame.catalog),
+            "excluded": [
+                {
+                    "report_key": item.report_key,
+                    "batch_id": item.batch_id,
+                    "reason": item.reason,
+                    "detail": item.detail,
+                }
+                for item in frame.excluded
+            ],
+            # Reports this checkout could not place at all. A fact about the
+            # clone, never agreement.
+            "unverified": list(frame.unverified),
+        },
+        "comparability": {
+            "coherent": frame.comparability.coherent,
+            "incoherent": list(frame.comparability.incoherent),
+            # The two ways a facet lands in `incoherent`, stated apart rather
+            # than left to be re-derived: deriving them means knowing that a
+            # value carried as null is a missing one, which is this controller's
+            # rule and not a consumer's.
+            "unstated": list(frame.comparability.unstated),
+            "differing": list(frame.comparability.differing),
+            "facets": [
+                {
+                    "facet": facet.facet,
+                    "coherent": facet.coherent,
+                    "before": list(facet.before),
+                    "after": list(facet.after),
+                }
+                for facet in frame.comparability.facets
+            ],
+            "sides_support_direction": frame.cohorts_support_direction,
+        },
+        "counterfactual": _counterfactual_json(entry),
+        "reading": None
+        if reading is None
+        else {
+            "verdict": reading.verdict,
+            "confidence": reading.confidence,
+            "rationale": reading.rationale,
+            # What the reading says should happen, in the words the settlement
+            # answers in. Advice and not the answer, and the two may disagree.
+            "recommendation": reading.recommendation,
+            "formed_at": reading.formed_at,
+            "directional": reading.directional,
+            "metrics": [_release_metric_json(measurement) for measurement in reading.metrics],
+        },
+        "decision": None
+        if reading is None or reading.decision is None
+        else {
+            "settlement": reading.decision.settlement,
+            "decided_at": reading.decision.decided_at,
+            "reason": reading.decision.reason,
+            "rollback_revision": reading.decision.rollback_revision,
+        },
+    }
+
+
+def _side_json(side: Side) -> dict[str, Any]:
+    """One side of the comparison: which reports it holds, and the denominator
+    they come to. Tasks rather than reports, so an evaluator rerun cannot inflate
+    a side into significance."""
+
+    return {"report_keys": list(side.report_keys), "task_count": side.task_count}
+
+
+def _release_metric_json(measurement: ReleaseMeasurement) -> dict[str, Any]:
+    """One quantity on both sides of a release, with whether it is something the
+    release was meant to move."""
+
+    return {
+        "metric": measurement.metric,
+        "unit": measurement.unit,
+        "before": measurement.before,
+        "after": measurement.after,
+        "better": measurement.better,
+        "goal": measurement.goal,
+    }
+
+
+def _counterfactual_json(entry: ReleaseReading) -> dict[str, Any]:
+    """The pinned before/after run a directional claim may rest on.
+
+    `state` and the records are stated together rather than folded into one: a
+    request may stand over a failed run, and the run it retries is still what an
+    operator reads to know why.
+
+    The run carries what the replay runs carry — the cohort, the evaluator, the
+    harness and the whole result — because it answers the same question about a
+    different pair of revisions, and a reading whose direction rests on it is one
+    a reader has to be able to check.
+    """
+
+    reading = entry.reading
+    run = entry.counterfactual
+    requested = None if reading is None else reading.requested
+    return {
+        "state": entry.counterfactual_state,
+        "run": None
+        if run is None
+        else {
+            "experiment_id": run.position.experiment_id,
+            "round": run.position.round_number,
+            "attempt": run.position.attempt,
+            "started_at": run.started_at,
+            "base_revision": run.integration.base_revision,
+            "candidate_revision": run.integration.candidate_revision,
+            "source_ref": run.integration.source_ref,
+            "tree": run.integration.tree,
+            "cases": _cases_json(run.cases),
+            "evaluator": _evaluator_json(run.evaluator),
+            "harness": _harness_json(run.harness),
+            "expectation": run.expectation,
+            "result": None
+            if run.result is None
+            else {
+                "outcome": run.result.outcome,
+                "concluded_at": run.result.concluded_at,
+                "detail": run.result.detail,
+                "elapsed_seconds": run.result.elapsed_seconds,
+                "metrics": [_release_metric_json(item) for item in run.result.metrics],
+                "regressions": [
+                    {"case_id": item.case_id, "summary": item.summary} for item in run.result.regressions
+                ],
+                "ambiguity": run.result.ambiguity,
+            },
+        },
+        "request": None
+        if requested is None
+        else {
+            "experiment_id": requested.position.experiment_id,
+            "round": requested.position.round_number,
+            "attempt": requested.position.attempt,
+            "requested_at": requested.requested_at,
+            "base_revision": requested.integration.base_revision,
+            "candidate_revision": requested.integration.candidate_revision,
+            "source_ref": requested.integration.source_ref,
+            "tree": requested.integration.tree,
+            "expectation": requested.expectation,
+        },
+        "withdrawn": [
+            {
+                "experiment_id": taken.position.experiment_id,
+                "round": taken.position.round_number,
+                "attempt": taken.position.attempt,
+                "requested_at": taken.requested_at,
+                "withdrawn_at": taken.withdrawn_at,
+                "base_revision": taken.integration.base_revision,
+                "candidate_revision": taken.integration.candidate_revision,
+                "source_ref": taken.integration.source_ref,
+                "tree": taken.integration.tree,
+            }
+            for taken in (() if reading is None else reading.withdrawn)
+        ],
+    }
+
+
+def _proposal_detail(proposal: BatchProposal | None) -> dict[str, Any]:
+    """The standing offer, member by member.
+
+    Machine-local runtime state, and the only thing in this reading that can say
+    a human has been offered a membership and has not answered. Carried because
+    it is a state a surface acts on: `batch-include` and `batch-exclude` are
+    gated verbs like any other, and either takes the two identity halves exactly
+    as they stand here — two fields and never one joined id, since either half
+    may hold a slash.
+
+    No offer standing is refused rather than answered with an empty document. The
+    offer is not a thing that exists in every state: `start` builds one, a freeze
+    consumes it, and a batch being current means there is nothing to offer.
+    """
+
+    if proposal is None:
+        raise NothingToActOn(
+            "no batch proposal stands, so there is nothing to expand; `start` builds one when the pool holds "
+            "unclaimed evidence and no batch is current, and a freeze consumes the one it publishes"
+        )
+    return {
+        "built_at": proposal.built_at,
+        "source_line_ref": proposal.source_line_ref,
+        "base_revision": proposal.base_revision,
+        "selected": [
+            {
+                "repo_id": member.repo_id,
+                "task_id": member.task_id,
+                "report_keys": list(member.report_keys),
+                "mode": member.mode,
+                "justification": member.justification,
+                "actor": member.actor,
+                "moved_at": member.moved_at,
+            }
+            for member in proposal.selected
+        ],
+        "not_selected": [
+            {
+                "repo_id": item.repo_id,
+                "task_id": item.task_id,
+                "report_keys": list(item.report_keys),
+                "reason": item.reason,
+                "justification": item.justification,
+                "actor": item.actor,
+                "moved_at": item.moved_at,
+            }
+            for item in proposal.not_selected
+        ],
+    }
