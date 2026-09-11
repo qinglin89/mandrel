@@ -2,9 +2,9 @@
   "schema_version": 1,
   "document": "index",
   "snapshot": {
-    "taken_at": "2026-09-04T09:15:00Z",
-    "state_revision": "1-0f1e2d3c4b5a6978",
-    "observations_revision": "1-9a8b7c6d5e4f3021"
+    "taken_at": "2026-09-09T07:12:00Z",
+    "state_revision": "1-5a69780f1e2d3c4b",
+    "observations_revision": "1-6d5e4f30219a8b7c"
   },
   "index": {
     "phase": "batch-proposed",
@@ -12,6 +12,7 @@
       "task_count": 5,
       "target": 8,
       "minimum": 3,
+      "max_wait_days": 14,
       "complete": true
     },
     "proposal": {
@@ -21,6 +22,8 @@
       "task_count": 2,
       "considered": 5,
       "human_included": 1,
+      "oldest_member_imported_at": "2026-09-02T06:40:00Z",
+      "waited_days": 7,
       "not_selected": [
         {
           "reason": "identity-differs",
@@ -58,7 +61,7 @@
           "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
           "merge_input_revision": "0707070707070707070707070707070707070707",
           "merge_input_ref": "refs/heads/dev",
-          "tree": "t000000000000000000000000000000000000000",
+          "tree": "3971a28032eb4328382052791dcab1aa9b4dcaa6",
           "planned_targets": [
             "mandrel",
             "orch-hub"

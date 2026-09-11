@@ -98,29 +98,58 @@
         "local": 2
       },
       "gate": {
-        "waiting": [],
-        "consumed": [
-          {
-            "draft_id": "prefetch-injection",
-            "experiment_id": "evolution-batch-0007-exp-01"
-          },
-          {
-            "draft_id": "review-isolation",
-            "experiment_id": "evolution-batch-0007-exp-02"
-          },
+        "drafts": [
           {
             "draft_id": "handoff-shape",
-            "experiment_id": "evolution-batch-0007-exp-02"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0007-exp-02",
+            "decided_at": "2026-06-10T08:22:00Z",
+            "reason": null,
+            "recorded_sha256": "db1d711fe565c85b3a27e753100b1860213fc1f57c491c1c167ee3f758528771",
+            "content": null,
+            "content_sha256": null
           },
           {
             "draft_id": "isolation-narrowing",
-            "experiment_id": "evolution-batch-0007-exp-02"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0007-exp-02",
+            "decided_at": "2026-06-19T10:05:00Z",
+            "reason": null,
+            "recorded_sha256": "e5c3587a3e216554e030c6d8ad5e62e48d211694100e403caa10c59c7aff70bd",
+            "content": "---\nid: isolation-narrowing\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Narrow what review isolation excludes\n\nBatch: evolution-batch-0007. Contract: `evolution/README.md`.\n\n## Goal\n\nExcluding the whole session log took the findings of the previous review with it.\n\n## Scope\n\n- Exclude the developer's reasoning; keep prior review entries.\n\n## Acceptance\n\n- A remediation review reads the findings it is remediating.\n\n## Session log\n",
+            "content_sha256": "e5c3587a3e216554e030c6d8ad5e62e48d211694100e403caa10c59c7aff70bd"
+          },
+          {
+            "draft_id": "loader-rewrite",
+            "state": "declined",
+            "experiment_id": null,
+            "decided_at": "2026-06-04T15:00:00Z",
+            "reason": "the deploy-time rendering it proposes is a payload change, not a protocol one",
+            "recorded_sha256": "e60db3157adf0bc51c9219265e171bf952903f48af8a11c9d2d4b4ccd755feaf",
+            "content": "---\nid: loader-rewrite\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Rewrite the loader as a generated file\n\nBatch: evolution-batch-0007. Contract: `evolution/README.md`.\n\n## Goal\n\nThe loader's imports are maintained by hand in three places.\n\n## Scope\n\n- Generate the eager import block at deploy from one mapping.\n\n## Acceptance\n\n- A new eager topic reaches all three agents from one edit.\n\n## Session log\n",
+            "content_sha256": "aff3d6a24c9f7d0f641032c1a120e3106909f54a416fd2f0caa9e6978808c4f1"
+          },
+          {
+            "draft_id": "prefetch-injection",
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0007-exp-01",
+            "decided_at": "2026-06-03T09:40:00Z",
+            "reason": null,
+            "recorded_sha256": "32776f9dd759fcfc205339aea7e66e8903e542cc1a094985f52af9a99b8bd0e2",
+            "content": "---\nid: prefetch-injection\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Inject prefetch documents into the session prompt\n\nBatch: evolution-batch-0007. Contract: `evolution/README.md`.\n\n## Goal\n\nA declared prefetch list is a hint nothing delivers, so the first act of every session is a read the taskfile already named.\n\n## Scope\n\n- Render each `prefetch:` path into the invocation prompt.\n\n## Acceptance\n\n- A session with a prefetch list opens no file the list already named.\n\n## Session log\n",
+            "content_sha256": "32776f9dd759fcfc205339aea7e66e8903e542cc1a094985f52af9a99b8bd0e2"
+          },
+          {
+            "draft_id": "review-isolation",
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0007-exp-02",
+            "decided_at": "2026-06-10T08:20:00Z",
+            "reason": null,
+            "recorded_sha256": "58ad15a109bc703ae7cd372812fe17cbd8b4c3aa4d9dcd4136b66f9b9b76841f",
+            "content": "---\nid: review-isolation\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Keep a review session off the dev session's reasoning\n\nBatch: evolution-batch-0007. Contract: `evolution/README.md`.\n\n## Goal\n\nA reviewer handed the developer's account of the change reviews the account.\n\n## Scope\n\n- Deliver the diff and the contract, never the dev session log.\n\n## Acceptance\n\n- The review contract states what a reviewer is given and what it is not.\n\n## Session log\n",
+            "content_sha256": "58ad15a109bc703ae7cd372812fe17cbd8b4c3aa4d9dcd4136b66f9b9b76841f"
           }
         ],
-        "declined": [
-          "loader-rewrite"
-        ],
-        "missing": [],
         "unusable": []
       },
       "experiments": [
@@ -150,7 +179,7 @@
                 {
                   "task_id": "2026-06-03-prefetch-injection",
                   "draft_id": "prefetch-injection",
-                  "draft_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+                  "draft_sha256": "32776f9dd759fcfc205339aea7e66e8903e542cc1a094985f52af9a99b8bd0e2",
                   "admitted_at": "2026-06-03T09:00:00Z",
                   "completion_observed_at": null,
                   "file_complete": null
@@ -199,7 +228,7 @@
                 {
                   "task_id": "2026-06-10-review-isolation",
                   "draft_id": "review-isolation",
-                  "draft_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "draft_sha256": "58ad15a109bc703ae7cd372812fe17cbd8b4c3aa4d9dcd4136b66f9b9b76841f",
                   "admitted_at": "2026-06-10T09:00:00Z",
                   "completion_observed_at": "2026-06-18T15:00:00Z",
                   "file_complete": null
@@ -207,7 +236,7 @@
                 {
                   "task_id": "2026-06-10-handoff-shape",
                   "draft_id": "handoff-shape",
-                  "draft_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                  "draft_sha256": "db1d711fe565c85b3a27e753100b1860213fc1f57c491c1c167ee3f758528771",
                   "admitted_at": "2026-06-10T09:00:00Z",
                   "completion_observed_at": "2026-06-18T15:00:00Z",
                   "file_complete": null
@@ -226,7 +255,7 @@
                 {
                   "task_id": "2026-06-19-isolation-narrowing",
                   "draft_id": "isolation-narrowing",
-                  "draft_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                  "draft_sha256": "e5c3587a3e216554e030c6d8ad5e62e48d211694100e403caa10c59c7aff70bd",
                   "admitted_at": "2026-06-19T08:30:00Z",
                   "completion_observed_at": "2026-06-24T10:00:00Z",
                   "file_complete": null
@@ -243,7 +272,7 @@
             "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
             "merge_input_revision": "0707070707070707070707070707070707070707",
             "merge_input_ref": "refs/heads/dev",
-            "tree": "t000000000000000000000000000000000000000",
+            "tree": "3971a28032eb4328382052791dcab1aa9b4dcaa6",
             "revision": "1818181818181818181818181818181818181818",
             "reason": "round 2 held convergence and cut review turns",
             "planned_targets": [
@@ -268,11 +297,56 @@
                 "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
                 "merge_input_revision": "0707070707070707070707070707070707070707",
                 "merge_input_ref": "refs/heads/dev",
-                "tree": "t000000000000000000000000000000000000000",
-                "harness": "stated",
-                "handle": "replay-0007-1",
-                "outcome": "completed",
-                "concluded_at": "2026-06-19T02:00:00Z"
+                "tree": "36c007c1604564d51f0550dd0b941a6014f073a8",
+                "cases": {
+                  "case_set_id": "protocol-cases-2026-06",
+                  "case_set_sha256": "032e834e8fd0267288804118f131d2681200987c119ffc17f05d80ea80d9d54c",
+                  "count": 24,
+                  "excluded": []
+                },
+                "evaluator": {
+                  "backend": "claude",
+                  "model": "claude-opus-5",
+                  "rubric_revision": "rubric-2026-05"
+                },
+                "harness": {
+                  "id": "stated",
+                  "revision": "2026.06.1",
+                  "config_sha256": "1fc7d2ae18149e2f06fd6d8e59d54bc796fcaf9217e3c5033269adc37ad052fc",
+                  "handle": "replay-0007-1"
+                },
+                "expectation": "review turns down against the base, convergence no worse",
+                "result": {
+                  "outcome": "completed",
+                  "concluded_at": "2026-06-19T02:00:00Z",
+                  "detail": "review turns down on 19 of 24 cases; convergence unchanged",
+                  "elapsed_seconds": 36000,
+                  "metrics": [
+                    {
+                      "metric": "review-turns",
+                      "unit": "turns",
+                      "baseline": 3.4,
+                      "candidate": 2.6,
+                      "better": "lower"
+                    },
+                    {
+                      "metric": "convergence",
+                      "unit": "ratio",
+                      "baseline": 0.82,
+                      "candidate": 0.83,
+                      "better": "higher"
+                    },
+                    {
+                      "metric": "quota",
+                      "unit": "tokens",
+                      "baseline": 1840000,
+                      "candidate": 1910000,
+                      "better": "neither"
+                    }
+                  ],
+                  "regressions": [],
+                  "ambiguity": null
+                }
               },
               {
                 "round": 2,
@@ -280,12 +354,35 @@
                 "started_at": "2026-06-24T11:00:00Z",
                 "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
                 "merge_input_revision": "0707070707070707070707070707070707070707",
-                "merge_input_ref": "refs/heads/dev",
-                "tree": "t000000000000000000000000000000000000000",
-                "harness": "stated",
-                "handle": "replay-0007-2",
-                "outcome": "failed",
-                "concluded_at": "2026-06-24T12:30:00Z"
+                "merge_input_ref": null,
+                "tree": "6c37954715711e1f6a421ce98742c3d27d61efc1",
+                "cases": {
+                  "case_set_id": "protocol-cases-2026-06",
+                  "case_set_sha256": "032e834e8fd0267288804118f131d2681200987c119ffc17f05d80ea80d9d54c",
+                  "count": 24,
+                  "excluded": []
+                },
+                "evaluator": {
+                  "backend": "claude",
+                  "model": "claude-opus-5",
+                  "rubric_revision": "rubric-2026-05"
+                },
+                "harness": {
+                  "id": "stated",
+                  "revision": "2026.06.1",
+                  "config_sha256": "1fc7d2ae18149e2f06fd6d8e59d54bc796fcaf9217e3c5033269adc37ad052fc",
+                  "handle": "replay-0007-2"
+                },
+                "expectation": "the narrowing holds the round-1 improvement",
+                "result": {
+                  "outcome": "failed",
+                  "concluded_at": "2026-06-24T12:30:00Z",
+                  "detail": "the harness lost its worktree at case 7 and measured no cohort",
+                  "elapsed_seconds": 5400,
+                  "metrics": [],
+                  "regressions": [],
+                  "ambiguity": null
+                }
               },
               {
                 "round": 2,
@@ -294,11 +391,66 @@
                 "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
                 "merge_input_revision": "0707070707070707070707070707070707070707",
                 "merge_input_ref": "refs/heads/dev",
-                "tree": "t000000000000000000000000000000000000000",
-                "harness": "stated",
-                "handle": "replay-0007-3",
-                "outcome": "completed",
-                "concluded_at": "2026-06-26T04:00:00Z"
+                "tree": "c8375630fa3b80e8378118aaa852b073ff51fab7",
+                "cases": {
+                  "case_set_id": "protocol-cases-2026-06",
+                  "case_set_sha256": "032e834e8fd0267288804118f131d2681200987c119ffc17f05d80ea80d9d54c",
+                  "count": 23,
+                  "excluded": [
+                    {
+                      "case_id": "case-17",
+                      "reason": "its fixture repository was rewritten between the two rounds"
+                    }
+                  ]
+                },
+                "evaluator": {
+                  "backend": "claude",
+                  "model": "claude-opus-5",
+                  "rubric_revision": "rubric-2026-05"
+                },
+                "harness": {
+                  "id": "stated",
+                  "revision": "2026.06.1",
+                  "config_sha256": "1fc7d2ae18149e2f06fd6d8e59d54bc796fcaf9217e3c5033269adc37ad052fc",
+                  "handle": null
+                },
+                "expectation": "the narrowing holds the round-1 improvement",
+                "result": {
+                  "outcome": "completed",
+                  "concluded_at": "2026-06-26T04:00:00Z",
+                  "detail": "review turns held at 2.6; one case regressed on handoff wording",
+                  "elapsed_seconds": 68400,
+                  "metrics": [
+                    {
+                      "metric": "review-turns",
+                      "unit": "turns",
+                      "baseline": 3.4,
+                      "candidate": 2.6,
+                      "better": "lower"
+                    },
+                    {
+                      "metric": "convergence",
+                      "unit": "ratio",
+                      "baseline": 0.82,
+                      "candidate": 0.85,
+                      "better": "higher"
+                    },
+                    {
+                      "metric": "quota",
+                      "unit": "tokens",
+                      "baseline": 1840000,
+                      "candidate": 1880000,
+                      "better": "neither"
+                    }
+                  ],
+                  "regressions": [
+                    {
+                      "case_id": "case-04",
+                      "summary": "handoff wording read as a question by the next session"
+                    }
+                  ],
+                  "ambiguity": "case-04 and case-11 are within the run-to-run spread of this cohort"
+                }
               }
             ],
             "request": null,
@@ -308,7 +460,10 @@
                 "attempt": 2,
                 "requested_at": "2026-06-19T03:00:00Z",
                 "withdrawn_at": "2026-06-19T08:00:00Z",
-                "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+                "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+                "merge_input_revision": "0707070707070707070707070707070707070707",
+                "merge_input_ref": "refs/heads/dev",
+                "tree": "86afe0ff976d6544b1d38bb5b0fb2f22b529d560"
               }
             ]
           }
@@ -327,7 +482,7 @@
           "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
           "merge_input_revision": "0707070707070707070707070707070707070707",
           "merge_input_ref": "refs/heads/dev",
-          "tree": "t000000000000000000000000000000000000000",
+          "tree": "3971a28032eb4328382052791dcab1aa9b4dcaa6",
           "planned_targets": [
             "mandrel",
             "orch-hub"
@@ -337,6 +492,7 @@
       },
       "release": null
     },
-    "proposal": null
+    "proposal": null,
+    "pool": null
   }
 }

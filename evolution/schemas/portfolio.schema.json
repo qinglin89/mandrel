@@ -36,7 +36,7 @@
   "additionalProperties": false,
   "$defs": {
     "snapshot": {
-      "description": "What state this reading is of, in two tokens, and when it was taken.\n\nTwo rather than one, because the facts a reading is built from fall into two kinds that move for different reasons and are worth different guarantees. Together they cover every fact any allowed action is derived from; apart, each says what it is for.",
+      "description": "What state this reading is of, in two tokens, and when it was taken.\n\nTwo rather than one, because the facts a reading is built from fall into two kinds that move for different reasons and are worth different guarantees. Between them they cover every fact either reading derives an allowed action from — nothing is in neither — and apart, each says what it is for.\n\nBoth are taken over one bracket, which is what makes them tokens of a moment rather than of two: the input sets are read, the reading is taken, and they are read again. Equal, and nothing moved under it; different, and the reading is taken again. A reading that straddled a write would publish a token naming a state nothing was ever read at, which is precisely what a caller handing one back is entitled to rely on it not being.",
       "type": "object",
       "required": [
         "taken_at",
@@ -50,12 +50,12 @@
           "format": "date-time"
         },
         "state_revision": {
-          "description": "The durable half, and the same token `status` publishes and `--expect` compares (`mandrel/evolution/guards.py`). It digests the versioned records under `evolution/`, the policy that reads them, this machine's pending pool and standing proposal, and the tip of every ref those records name — everything a writer of this lifecycle changes. What it guarantees is therefore exact: while it holds, no mutation has landed, and a mutation handed it back refuses rather than acting on a lifecycle that moved. What it deliberately excludes is the clock, the audit ledger, `.ai-tasks/`, and the operator's `HEAD`.\n\nIt is the only one of the two a mutation accepts. A token from another scheme is refused rather than compared, which is why the version leads it.",
+          "description": "The durable half, and the same token `status` publishes and `--expect` compares (`mandrel/evolution/guards.py`). It digests the versioned records under `evolution/`, the policy that reads them, this machine's pending pool and standing proposal, and the tip of every ref those records name — everything a writer of this lifecycle changes. What it guarantees is therefore exact: while it holds, no mutation has landed, and a mutation handed it back refuses rather than acting on a lifecycle that moved.\n\nFour things are outside it, and they are not all outside for one reason. The clock and `.ai-tasks/` are readings this repository takes and no writer here moves, so they belong to the token beside it and are covered there. The audit ledger records that operations happened and is read back as state by nothing. The operator's `HEAD` is resolved by no derivation and no write in this package, so it is in neither token and is not an omission.\n\nIt is the only one of the two a mutation accepts. A token from another scheme is refused rather than compared, which is why the version leads it.",
           "type": "string",
           "pattern": "^[1-9][0-9]*-[0-9a-f]+$"
         },
         "observations_revision": {
-          "description": "The volatile half: the readings this repository takes of things it does not own and no writer of this lifecycle moves — whether each admitted task's file stands complete in `.ai-tasks/`, which of a batch's report bundles are staged on this machine, and what each planned target's deploy receipt holds.\n\nIt exists because those readings are not decoration. `seal-round` is allowed exactly when every admitted task of the open round is observed complete, so an allowed-action set moves when a task file does — under a `state_revision` that has not moved and must not, since nothing was written and every mutation re-reads `.ai-tasks/` under the lock anyway. A surface holding one token could not tell a reading that still stands from one whose offered actions have changed underneath it.\n\nWhat it guarantees is weaker on purpose, and stated so no caller mistakes it for the other: it says this reading was taken over the same observations, and nothing more. It is not a lock, no mutation accepts it, and it moves on its own — a colleague finishing a task in another window moves it, and so does deploying a target. A console re-reads on it; it never refuses on it.",
+          "description": "The volatile half: every reading this controller takes of something no writer of this lifecycle moves. That is exactly the set `state_revision` leaves out and a reading still turns on, and the list is the definition rather than an illustration of it:\n\n- whether each task admitted into an open round stands complete in `.ai-tasks/`;\n- whether the current batch's analysis task stands complete there, which is what tells `batch-frozen` from every stage after it and what the gate verbs are offered from;\n- which of a batch's claimed report bundles are staged on this machine;\n- what each planned target's deploy receipt holds;\n- the age the clock gives the standing offer, since `max_wait_days` past its oldest member has the policy release a batch the same offer needed an argued force for yesterday;\n- what this checkout can resolve: the revisions records name and no watched ref holds, so a fetch that moves no tip still settles a release placement or an attempt's ref chain that read unverified an hour ago.\n\nIt exists because those readings are not decoration. `seal-round` is allowed exactly when every admitted task of the open round is observed complete, so an allowed-action set moves when a task file does — under a `state_revision` that has not moved and must not, since nothing was written and every mutation re-reads `.ai-tasks/` under the lock anyway. A surface holding one token could not tell a reading that still stands from one whose offered actions have changed underneath it.\n\nIt digests the answers and never the inputs they were read from, which is what makes it a token at all. `now` differs at every call and an object store is not a thing that can be enumerated, so a digest over either would move on every reading and guarantee nothing; a digest over a task file's bytes would move for an edit that changed no answer. What is hashed is what the reading made of them — each completion answer, the staged set, each target's state, the admission trigger the age produced, and each placement or chain link this checkout could or could not settle.\n\nWhat it guarantees is weaker on purpose, and stated so no caller mistakes it for the other: it says this reading was taken over the same observations, and nothing more. It is not a lock, no mutation accepts it, and it moves on its own — a colleague finishing a task in another window moves it, so does deploying a target, and so does the clock passing a threshold nobody touched. A console re-reads on it; it never refuses on it.",
           "type": "string",
           "pattern": "^[1-9][0-9]*-[0-9a-f]+$"
         }
@@ -111,7 +111,7 @@
       "additionalProperties": false
     },
     "detail": {
-      "description": "One subject the index named, expanded. `kind` says which, and exactly one of the subject slots below is an object — the controller enforces that pairing, which this subset cannot state.\n\nTwo kinds, and the vocabulary is one this controller owns: it is widened by the task that first emits a new member, without a version bump, the rule a batch outcome's endings already follow. A reader then keeps reading every kind it always could and refuses exactly the one it cannot describe, naming the value.",
+      "description": "One subject the index named, expanded. `kind` says which, and exactly one of the subject slots below is an object — the controller enforces that pairing, which this subset cannot state.\n\nThe vocabulary is one this controller owns: it is widened by the task that first emits a new member, without a version bump, the rule a batch outcome's endings already follow. A reader then keeps reading every kind it always could and refuses exactly the one it cannot describe, naming the value.",
       "type": [
         "object",
         "null"
@@ -120,18 +120,20 @@
         "kind",
         "id",
         "batch",
-        "proposal"
+        "proposal",
+        "pool"
       ],
       "properties": {
         "kind": {
-          "description": "`batch` expands one frozen batch: its membership denominator, its admission gate, every experiment made in it with every round, and the release reading it owes or owns. `proposal` expands the offer standing between the pool and the first manifest, member by member.\n\nThere is deliberately no `experiment` kind. An experiment's size is bounded by its own rounds and a batch's by its own attempts, so one read per batch is already the coarsest unit that does not grow with history, and a second way to ask for the same records is a second place for them to disagree.",
+          "description": "`batch` expands one frozen batch: its membership denominator, its admission gate with the drafts themselves, every experiment made in it with every round and every run, and the release reading it owes or owns. `proposal` expands the offer standing between the pool and the first manifest, member by member. `pool` expands what is waiting behind that offer, entry by entry.\n\nThere is deliberately no `experiment` kind. An experiment's size is bounded by its own rounds and a batch's by its own attempts, so one read per batch is already the coarsest unit that does not grow with history, and a second way to ask for the same records is a second place for them to disagree.",
           "enum": [
             "batch",
-            "proposal"
+            "proposal",
+            "pool"
           ]
         },
         "id": {
-          "description": "Which subject, in the identity the index stated it under. Null for `proposal`: at most one stands, and it is named by the base it was built at rather than by an id of its own.",
+          "description": "Which subject, in the identity the index stated it under. Null for `proposal` and `pool`: at most one of each exists, and neither is named by an id — an offer is named by the base it was built at, and the pool is this machine's one pool.",
           "type": [
             "string",
             "null"
@@ -143,17 +145,21 @@
         },
         "proposal": {
           "$ref": "#/$defs/proposal"
+        },
+        "pool": {
+          "$ref": "#/$defs/pool_detail"
         }
       },
       "additionalProperties": false
     },
     "pool": {
-      "description": "Everything imported and not yet claimed by a batch, with the policy it is measured against. The denominator and never what a freeze would form — the offer's own count is on the proposal.",
+      "description": "Everything imported and not yet claimed by a batch, with the policy it is measured against. The denominator and never what a freeze would form — the offer's own count is on the proposal, and the entries behind these counts are a detail read of their own.",
       "type": "object",
       "required": [
         "task_count",
         "target",
         "minimum",
+        "max_wait_days",
         "complete"
       ],
       "properties": {
@@ -172,8 +178,86 @@
           "type": "integer",
           "minimum": 0
         },
+        "max_wait_days": {
+          "description": "Days past its oldest member at which an offer that has met the minimum is released without reaching the target. Stated beside the age below so a reader has the threshold the clock is measured against rather than a number with nothing to read it by.",
+          "type": "integer",
+          "minimum": 0
+        },
         "complete": {
           "description": "Whether the feed has been drained to exhaustion. False also means never synced: completeness is shown rather than assumed.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pool_detail": {
+      "description": "The pending pool, entry by entry: each unique completed task waiting for a batch, the one report pack that is its evidence, and when it first arrived. Machine-local runtime state and the same tier as the standing offer — a decision in progress rather than a consequence of the durable records — which is why the index carries its counts and this is asked for.\n\nBounded by the pool and not by history, which is what keeps it a detail read: a freeze claims its members and the pool empties behind them. Two things that accumulate with import history rather than with the pool are deliberately not here — the permanent rejections, and the packs a later evaluation superseded. Both grow with every sync forever, and a detail read that grew with history would give away the bound this document is built around.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "description": "One per pending task, ordered by identity so a poll that changed nothing produces the same document.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pool_entry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "pool_entry": {
+      "description": "One unique completed task waiting for a batch, and the one report pack that is its evidence. A batch counts tasks rather than reports, and a second evaluation of a pooled task takes the slot rather than joining it — so an entry states one pack and never two.",
+      "type": "object",
+      "required": [
+        "repo_id",
+        "task_id",
+        "first_imported_at",
+        "report_key",
+        "evaluation_id",
+        "generated_at",
+        "bundle_sha256",
+        "staged"
+      ],
+      "properties": {
+        "repo_id": {
+          "description": "The repository the completed task belongs to. Half of the identity and never joined to the other, since either half may contain a slash.",
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "first_imported_at": {
+          "description": "When this task first entered the pool — the moment its age is measured from, and not the moment the pack now standing for it arrived.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "report_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generated_at": {
+          "description": "When the evaluation was produced, which is what chooses the survivor when two packs claim one task.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "bundle_sha256": {
+          "description": "The bytes this entry's evidence was validated as.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "staged": {
+          "description": "Whether that bundle is present on this machine — a volatile reading, covered by `observations_revision`. Where it is staged is this machine's own path and is not a fact about the lifecycle, so it is not carried.",
           "type": "boolean"
         }
       },
@@ -192,6 +276,8 @@
         "task_count",
         "considered",
         "human_included",
+        "oldest_member_imported_at",
+        "waited_days",
         "not_selected"
       ],
       "properties": {
@@ -223,6 +309,21 @@
           "description": "Members argued in past the identity test, each attributed.",
           "type": "integer",
           "minimum": 0
+        },
+        "oldest_member_imported_at": {
+          "description": "When the oldest member of this offer was first imported, which is what its age is measured from — the pool's oldest is deliberately not it, since a long-pooled report that is no member of this batch cannot age this batch out. Null when the offer has no members.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "waited_days": {
+          "description": "Whole days from that moment to when this reading was taken. Carried because it is the one thing in this document the clock alone moves: an offer refused a freeze yesterday is released today with no writer having touched anything, which is why the clock is covered by `observations_revision` and not by the durable token. Negative where the source clock ran ahead of this one — the skew is shown rather than assumed away — and null wherever there is no member to measure from.",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "not_selected": {
           "description": "Why the considered tasks that are not members were left out, counted per reason. A surface offering the human window needs the grounds and not only the shortfall: a fetch answers an unresolvable revision and nothing but a person answers an absent one.",
@@ -765,9 +866,9 @@
           "format": "date-time"
         },
         "bundle_sha256": {
-          "description": "What was analyzed, pinned. The bundle itself is machine-local and may be gone.",
+          "description": "What was analyzed, pinned, in the manifest's own digest form. The bundle itself is machine-local and may be gone; this is what says which bytes it was.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9a-f]{64}$"
         },
         "mode": {
           "enum": [
@@ -852,49 +953,22 @@
       "additionalProperties": false
     },
     "gate": {
-      "description": "The batch's admission gate, derived rather than read off the directory: admission copies a draft and leaves it in place, so what is present is every proposal ever made rather than the ones still to decide.",
+      "description": "The batch's admission gate, derived rather than read off the directory: admission copies a draft and leaves it in place, so what is present is every proposal ever made rather than the ones still to decide.\n\nOne record per draft carrying its own state, rather than four lists of ids: a draft appears once, and the taskfile a surface renders sits on it. That is why the gate is here at all — a console that had to open `proposed-tasks/` to show an operator what they are being asked to admit is a second reader of the batch directory, and a decision made from an id is not a decision.",
       "type": "object",
       "required": [
-        "waiting",
-        "consumed",
-        "declined",
-        "missing",
+        "drafts",
         "unusable"
       ],
       "properties": {
-        "waiting": {
-          "description": "Draft ids no experiment has taken and nothing has turned down.",
+        "drafts": {
+          "description": "Every proposal this gate knows of, decided or not, in draft-id order.",
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "consumed": {
-          "description": "Each admitted draft and the experiment that took it.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/consumed_draft"
-          }
-        },
-        "declined": {
-          "description": "Draft ids a durable rejection turned down.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "missing": {
-          "description": "Consumed or declined drafts whose file is gone. The lineage is intact — the record holds the id and the hash of what was admitted — and the bytes are recoverable from history. Reported, not refused.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/draft"
           }
         },
         "unusable": {
-          "description": "Files under `proposed-tasks/` whose stem could never be a draft id, named by file: no admission could record one, so they are waiting for no decision.",
+          "description": "Files under `proposed-tasks/` whose stem could never be a draft id, named by file: no admission could record one, so they wait for no decision and are not proposals.",
           "type": "array",
           "items": {
             "type": "string",
@@ -904,21 +978,79 @@
       },
       "additionalProperties": false
     },
-    "consumed_draft": {
-      "description": "One draft and the attempt that admitted it.",
+    "draft": {
+      "description": "One proposal at the gate: where it stands, what decided it, and the taskfile itself. Committed content, so it reads the same in every clone, and its size is this batch's own drafts — the unit a detail read already bounds.",
       "type": "object",
       "required": [
         "draft_id",
-        "experiment_id"
+        "state",
+        "experiment_id",
+        "decided_at",
+        "reason",
+        "recorded_sha256",
+        "content",
+        "content_sha256"
       ],
       "properties": {
         "draft_id": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "state": {
+          "description": "`waiting` is a proposal no experiment has taken and nothing has turned down. `consumed` and `declined` are both terminal for it: proposing the idea again means a new draft id.",
+          "enum": [
+            "waiting",
+            "consumed",
+            "declined"
+          ]
         },
         "experiment_id": {
-          "type": "string",
+          "description": "The attempt that admitted it, null unless consumed.",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "decided_at": {
+          "description": "When it was admitted or declined. Null while waiting.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reason": {
+          "description": "Why it was declined, in the operator's words. Null in every other state: an admission's reason belongs to the round it opened, not to the draft.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "recorded_sha256": {
+          "description": "The bytes the decision pinned, from the record that made it. Null while waiting, because nothing has pinned anything yet.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "content": {
+          "description": "The draft taskfile as it stands here. A waiting draft is one the directory holds, so it always has content; null is the decided draft whose file is gone, which is reported rather than refused — the record keeps the id and the hash of what was decided, and the bytes are recoverable from history.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "content_sha256": {
+          "description": "The hash of those bytes, null with them. Stated beside `recorded_sha256` rather than assumed equal to it: a file edited after the decision that took it differs here, and that difference is the only thing that shows the file on disk is no longer what was decided.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "additionalProperties": false
@@ -1190,14 +1322,14 @@
           "minLength": 1
         },
         "draft_id": {
-          "description": "The draft it was admitted from.",
+          "description": "The draft it was admitted from, in the kebab slug that makes a draft id one path segment.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
         },
         "draft_sha256": {
           "description": "The bytes admitted, pinned — the draft file itself may be gone.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9a-f]{64}$"
         },
         "admitted_at": {
           "type": "string",
@@ -1275,20 +1407,21 @@
               "pattern": "^[0-9a-f]{40}$"
             },
             "merge_input_ref": {
-              "type": "string",
-              "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
-            },
-            "tree": {
-              "description": "The integration tree the request pinned.",
-              "type": "string",
-              "minLength": 1
-            },
-            "expectation": {
-              "description": "What the run was expected to show, stated before it produced anything.",
+              "description": "The ref that commit was read from, null where the run was driven from a detached revision. Null and a name are both ordinary: without the name a later reader cannot see that the source line has moved since, which is why the record keeps it when there is one. The pattern is the replay record's own and accepts what it accepts — a projection that refused a name the record permits would be a history this reading could not publish.",
               "type": [
                 "string",
                 "null"
               ],
+              "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+            },
+            "tree": {
+              "description": "The integration tree the request pinned.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "expectation": {
+              "description": "What the run was expected to show, stated before it produced anything.",
+              "type": "string",
               "minLength": 1
             }
           },
@@ -1305,7 +1438,7 @@
       "additionalProperties": false
     },
     "replay_run": {
-      "description": "One recorded run: which round's candidate it measured, what it integrated onto, the tree that produced, who ran it, and how it ended.",
+      "description": "One recorded run: which round's candidate it measured, what it integrated onto, the tree that produced, the cohort and the evaluator that judged it, what drove it, what it was expected to show, and how it ended.\n\nEverything a rerun would have to be handed back is here, because that is what reproducible means: a rerun asks the harness for these selections rather than for whatever it would select today. The batch's base is not restated — every run of an attempt carries the attempt's, which is stated once on the experiment.",
       "type": "object",
       "required": [
         "round",
@@ -1315,10 +1448,11 @@
         "merge_input_revision",
         "merge_input_ref",
         "tree",
+        "cases",
+        "evaluator",
         "harness",
-        "handle",
-        "outcome",
-        "concluded_at"
+        "expectation",
+        "result"
       ],
       "properties": {
         "round": {
@@ -1326,6 +1460,7 @@
           "minimum": 1
         },
         "attempt": {
+          "description": "Which run of that round this is. Attempts are allocated with none missing, across runs and withdrawn requests together, and are never reused.",
           "type": "integer",
           "minimum": 1
         },
@@ -1334,65 +1469,60 @@
           "format": "date-time"
         },
         "candidate_revision": {
-          "description": "The sealed candidate this run measured.",
+          "description": "The sealed candidate this run measured, fixed by the seal before the run started.",
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         },
         "merge_input_revision": {
-          "description": "The source-line commit it was integrated onto.",
+          "description": "The source-line commit it was integrated onto. It moves for reasons that have nothing to do with the attempt, and each time it does this result stops describing the tree a promotion would produce.",
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         },
         "merge_input_ref": {
-          "type": "string",
-          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+          "description": "The ref that commit was read from, null where the run was driven from a detached revision. Null and a name are both ordinary: without the name a later reader cannot see that the source line has moved since, which is why the record keeps it when there is one. The pattern is the replay record's own and accepts what it accepts — a projection that refused a name the record permits would be a history this reading could not publish.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
         },
         "tree": {
-          "description": "The integration tree that produced — what was actually exercised.",
+          "description": "The Git tree the run actually exercised — the result of integrating the candidate onto the merge input, and what a promotion has to reproduce. The two revisions say what was combined; this says what came out, which a different merge strategy or a conflict resolved by hand does not preserve.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "cases": {
+          "$ref": "#/$defs/case_cohort"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/run_evaluator"
         },
         "harness": {
-          "description": "Who ran it.",
+          "$ref": "#/$defs/harness_run"
+        },
+        "expectation": {
+          "description": "What the run was expected to show, written before it produced anything. Kept for the reason it is recorded at all: numbers read back onto a prediction nobody wrote down agree with it every time.",
           "type": "string",
           "minLength": 1
         },
-        "handle": {
-          "description": "Their own name for the run. Opaque here, and the only thing connecting this record to the work.",
-          "type": "string",
-          "minLength": 1
-        },
-        "outcome": {
-          "description": "Null while the run is going: an unfinished run rather than one that produced nothing.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "enum": [
-            "completed",
-            "failed",
-            null
-          ]
-        },
-        "concluded_at": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
+        "result": {
+          "$ref": "#/$defs/run_result"
         }
       },
       "additionalProperties": false
     },
     "withdrawn_request": {
-      "description": "A request taken back before any run answered it.",
+      "description": "A request taken back before any run answered it. It is not evidence and states no run: whether the harness began one is exactly what nobody here can learn. What it keeps is the position — never reissued, because a run may be going under it — and the integration that was pinned, which is what an operator needs to go and find that run. The expectation is deliberately not kept: it is a prediction held to be read back against numbers this request produced none of.",
       "type": "object",
       "required": [
         "round",
         "attempt",
         "requested_at",
         "withdrawn_at",
-        "candidate_revision"
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree"
       ],
       "properties": {
         "round": {
@@ -1404,16 +1534,268 @@
           "minimum": 1
         },
         "requested_at": {
+          "description": "When the integration was pinned — the start of the window a stray run would have begun in.",
           "type": "string",
           "format": "date-time"
         },
         "withdrawn_at": {
+          "description": "When the request was given up. With `requested_at` it bounds that window, and it is never a statement that the run stopped.",
           "type": "string",
           "format": "date-time"
         },
         "candidate_revision": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "description": "The ref that commit was read from, null where the run was driven from a detached revision. Null and a name are both ordinary: without the name a later reader cannot see that the source line has moved since, which is why the record keeps it when there is one. The pattern is the replay record's own and accepts what it accepts — a projection that refused a name the record permits would be a history this reading could not publish.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+        },
+        "tree": {
+          "description": "The Git tree the run actually exercised — the result of integrating the candidate onto the merge input, and what a promotion has to reproduce. The two revisions say what was combined; this says what came out, which a different merge strategy or a conflict resolved by hand does not preserve.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "case_cohort": {
+      "description": "The eligible cohort a run exercised. Identity and hash together, because a case set edited between two runs makes their numbers incomparable while its name goes on matching, and the exclusions beside them because a cohort quietly narrowed to the cases that agreed with the change reads as a clean result.",
+      "type": "object",
+      "required": [
+        "case_set_id",
+        "case_set_sha256",
+        "count",
+        "excluded"
+      ],
+      "properties": {
+        "case_set_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "count": {
+          "description": "Cases exercised, after the exclusions below. A run over none measured nothing, so it is not a cohort size a record can hold.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/case_exclusion"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "case_exclusion": {
+      "description": "One case held out of the cohort, and why.",
+      "type": "object",
+      "required": [
+        "case_id",
+        "reason"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "run_evaluator": {
+      "description": "Who judged the run, in the vocabulary an imported report uses for the same fact. The same spelling on purpose: sides are separated by evaluator, rubric and materially different model revisions, and a comparison across two vocabularies cannot make that separation.",
+      "type": "object",
+      "required": [
+        "backend",
+        "model",
+        "rubric_revision"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rubric_revision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "harness_run": {
+      "description": "What drove the run and how it was configured. The harness and the case suite are a replaceable dependency, so the record names which one produced this evidence rather than assuming there has only ever been one; two runs of one harness over one case set still differ by how it was told to run them, which is what the configuration hash is for.",
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "config_sha256",
+        "handle"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "handle": {
+          "description": "The harness's own name for the run, opaque here: the controller stores what it was handed and gives it back unread. A run still going has one, since it is what a later poll asks by; a concluded run keeps it as provenance, and null records a harness that issued none — which a concluded run may perfectly well have had. Null or a name, never an empty string: a handle nothing can be looked up by is the absence this field spells with null.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "run_result": {
+      "description": "How a run ended, or null while it is still going — an unfinished run rather than one that produced nothing. One object rather than an outcome beside loose numbers, so a run that is half-reported is not a shape this reading can hold: `completed` measured the cohort and carries at least one measurement, `failed` measured nothing readable as a cohort result and carries none, with its story in `detail`.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "outcome",
+        "concluded_at",
+        "detail",
+        "elapsed_seconds",
+        "metrics",
+        "regressions",
+        "ambiguity"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "concluded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "detail": {
+          "description": "One line: what the numbers came to, or why the run produced none. What a later reader has instead of the console it scrolled past.",
+          "type": "string",
+          "minLength": 1
+        },
+        "elapsed_seconds": {
+          "description": "Wall-clock time the run took, null where the harness did not report it — absent rather than zero, since elapsed time is one of the things a change is judged on.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metrics": {
+          "description": "Every measurement the run made, never one: quality, convergence, quota and elapsed time are judged together.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run_measurement"
+          }
+        },
+        "regressions": {
+          "description": "Cases the candidate did worse on. An empty array is the claim that there were none, which is what a promotion is read against — not the absence of a claim.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run_regression"
+          }
+        },
+        "ambiguity": {
+          "description": "What the run could not settle, null when it settled everything it measured. Null is the claim that there was none; the alternative is a promotion decided from numbers whose reader was never told which of them were close.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "run_measurement": {
+      "description": "One quantity, on the base and on the candidate — the replay record's own two sides. `better` says which direction counts as improvement, and `neither` marks an observation recorded beside the goals: quota consumed and elapsed time are the ordinary examples, and raw token counts compared across providers are not a comparison at all.",
+      "type": "object",
+      "required": [
+        "metric",
+        "unit",
+        "baseline",
+        "candidate",
+        "better"
+      ],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseline": {
+          "description": "The same quantity on the base revision, null where the run measured only the candidate. A direction other than `neither` needs one: an improvement claim with nothing to improve on is a number rather than a finding.",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "candidate": {
+          "type": "number"
+        },
+        "better": {
+          "enum": [
+            "lower",
+            "higher",
+            "neither"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "run_regression": {
+      "description": "One case the candidate did worse on.",
+      "type": "object",
+      "required": [
+        "case_id",
+        "summary"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": false
@@ -1454,7 +1836,8 @@
         },
         "tree": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The Git tree the merge unit produces — what a promotion has to reproduce, and the identity a pair of commits does not fix on its own."
         },
         "revision": {
           "description": "The exact commit this operation made. Its identity, which is how a later run finds it again.",
@@ -1529,7 +1912,8 @@
         },
         "tree": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The Git tree the merge unit produces — what a promotion has to reproduce, and the identity a pair of commits does not fix on its own."
         },
         "planned_targets": {
           "description": "What the promotion was recorded as intending to redeploy, and never what any target holds: that is per target, lags every promotion until the target is redeployed, and is read from that target's own receipt.",
@@ -1793,7 +2177,7 @@
               ]
             },
             "run": {
-              "description": "The recorded run, null when none has been.",
+              "description": "The recorded run, null when none has been. The pinned pair, what exercised it, and how it ended — the same account a replay run gives, because it answers the same question about a different pair of revisions.",
               "type": [
                 "object",
                 "null"
@@ -1806,12 +2190,12 @@
                 "base_revision",
                 "candidate_revision",
                 "source_ref",
+                "tree",
+                "cases",
+                "evaluator",
                 "harness",
-                "handle",
                 "expectation",
-                "outcome",
-                "concluded_at",
-                "detail"
+                "result"
               ],
               "properties": {
                 "experiment_id": {
@@ -1832,10 +2216,12 @@
                   "format": "date-time"
                 },
                 "base_revision": {
+                  "description": "The pre-promotion commit — the before half of the pair.",
                   "type": "string",
                   "pattern": "^[0-9a-f]{40}$"
                 },
                 "candidate_revision": {
+                  "description": "The promotion itself — the after half. A run of any other pair measured a different question and is refused as this assessment's counterfactual.",
                   "type": "string",
                   "pattern": "^[0-9a-f]{40}$"
                 },
@@ -1843,46 +2229,27 @@
                   "type": "string",
                   "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
                 },
-                "harness": {
+                "tree": {
+                  "description": "The tree the promoted revision carries — the same tree its replay measured, restated so the run is checkable against the release rather than merely dated after it.",
                   "type": "string",
-                  "minLength": 1
+                  "pattern": "^[0-9a-f]{40}$"
                 },
-                "handle": {
-                  "type": "string",
-                  "minLength": 1
+                "cases": {
+                  "$ref": "#/$defs/case_cohort"
+                },
+                "evaluator": {
+                  "$ref": "#/$defs/run_evaluator"
+                },
+                "harness": {
+                  "$ref": "#/$defs/harness_run"
                 },
                 "expectation": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
+                  "description": "The directional change the run was expected to produce, recorded before it produced any and deliberately not handed to the harness: a prediction given to the thing being measured is an instruction.",
+                  "type": "string",
                   "minLength": 1
                 },
-                "outcome": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "enum": [
-                    "completed",
-                    "failed",
-                    null
-                  ]
-                },
-                "concluded_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "detail": {
-                  "description": "What the harness said about how it ended.",
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "minLength": 1
+                "result": {
+                  "$ref": "#/$defs/counterfactual_result"
                 }
               },
               "additionalProperties": false
@@ -1900,6 +2267,8 @@
                 "requested_at",
                 "base_revision",
                 "candidate_revision",
+                "source_ref",
+                "tree",
                 "expectation"
               ],
               "properties": {
@@ -1928,11 +2297,18 @@
                   "pattern": "^[0-9a-f]{40}$"
                 },
                 "expectation": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
+                  "description": "What the run was expected to show, written before it produced anything.",
+                  "type": "string",
                   "minLength": 1
+                },
+                "source_ref": {
+                  "type": "string",
+                  "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+                },
+                "tree": {
+                  "description": "The tree the promoted revision carries, pinned with the pair.",
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
                 }
               },
               "additionalProperties": false
@@ -2045,6 +2421,66 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "counterfactual_result": {
+      "description": "How the counterfactual ended, or null while it is still going. The replay result's shape, with the one difference the record itself makes: its quantities are on the side produced before the release and the side produced after it, not on a base and a candidate. A failed run is why a suspected regression stays inconclusive — the comparison it was going to settle was not made.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "outcome",
+        "concluded_at",
+        "detail",
+        "elapsed_seconds",
+        "metrics",
+        "regressions",
+        "ambiguity"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "concluded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "elapsed_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metrics": {
+          "description": "What the run measured on each side. Distinct from the reading's own `metrics`, which are the quantities a verdict was rested on: a run may measure more than a reading argues from.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/release_metric"
+          }
+        },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run_regression"
+          }
+        },
+        "ambiguity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
         }
       },
       "additionalProperties": false
@@ -2196,14 +2632,18 @@
       "additionalProperties": false
     },
     "release_withdrawn": {
-      "description": "A counterfactual position given up without becoming a run.",
+      "description": "A counterfactual position given up without becoming a run, with the pair that was pinned for it: the position stays allocated so it is never asked for twice, and the pinned pair is what an operator needs to find a run that may still be going at a harness this controller will never hear from again.",
       "type": "object",
       "required": [
         "experiment_id",
         "round",
         "attempt",
         "requested_at",
-        "withdrawn_at"
+        "withdrawn_at",
+        "base_revision",
+        "candidate_revision",
+        "source_ref",
+        "tree"
       ],
       "properties": {
         "experiment_id": {
@@ -2225,6 +2665,22 @@
         "withdrawn_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "base_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
         }
       },
       "additionalProperties": false

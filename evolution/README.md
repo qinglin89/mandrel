@@ -2284,8 +2284,9 @@ The split is not a size optimisation. The portfolio carries no
 `allowed_actions`, because an action offered from it would be offered by a
 reading that never asked whether the state permits it; `status` stays a row
 deep, because an operator asking what happens next should not be handed the
-record to search. The two are paired by the tokens below, never by being taken
-close together.
+record to search. The two are paired by the durable token below rather than by
+being taken close together — and exactly what that pairing covers, and what it
+does not, is stated with the tokens themselves.
 
 **What a token guarantees, and there are two of them.** `state_revision` is the
 durable half: a digest of the versioned records, the policy that reads them,
@@ -2296,29 +2297,57 @@ back checks it first under the single-writer lock and refuses rather than acting
 on a lifecycle that moved. A token from another scheme is refused rather than
 compared, which is why the scheme version leads it: "this does not describe this
 repository" and "this repository moved" are different facts, and a caller
-reading them as one retries the wrong thing forever. The clock, the audit
-ledger, `.ai-tasks/` and the operator's `HEAD` are outside it, each for a reason
-stated where it is computed.
+reading them as one retries the wrong thing forever.
 
-`observations_revision` is the volatile half: what this repository reads of
-things it does not own and no writer of this lifecycle moves — whether each
-admitted task's file stands complete in `.ai-tasks/`, which of a batch's report
-bundles are staged on this machine, and what each planned target's deploy
-receipt holds. It exists because those readings are not decoration. `seal-round`
-is accepted exactly when every admitted task of the open round is observed
-complete, so the set of actions a state accepts moves when a task file does —
-under a `state_revision` that has not moved and must not, since nothing was
-written and every operation re-reads `.ai-tasks/` under the lock regardless. One
-token could not tell a reading that still stands from one whose offered actions
-changed underneath it.
+Four things are outside it, and not all for one reason. The clock and
+`.ai-tasks/` are readings this repository takes of things no writer here moves,
+so they belong to the token beside it and are covered there. The audit ledger
+records that operations happened and is read back as state by nothing. The
+operator's `HEAD` is resolved by no derivation and no write in this package, so
+it belongs to neither token and its absence is not a gap.
+
+`observations_revision` is the volatile half: every reading this controller
+takes of something no writer of this lifecycle moves. That is the set the
+durable token leaves out and a reading still turns on, and the list is the
+definition rather than an illustration of it — whether each task admitted into
+an open round stands complete in `.ai-tasks/`; whether the current batch's
+analysis task stands complete there, which is what tells `batch-frozen` from
+every stage after it and what the gate verbs are offered from; which of a
+batch's claimed report bundles are staged on this machine; what each planned
+target's deploy receipt holds; the age the clock gives the standing offer, since
+`max_wait_days` past its oldest member has the policy release a batch the same
+offer needed an argued force for the day before; and what this checkout can
+resolve, since the revisions records name are held by no watched ref and a fetch
+that moves no tip still settles a release placement or an attempt's ref chain
+that read unverified an hour ago.
+
+It exists because those readings are not decoration. `seal-round` is accepted
+exactly when every admitted task of the open round is observed complete, so the
+set of actions a state accepts moves when a task file does — under a
+`state_revision` that has not moved and must not, since nothing was written and
+every operation re-reads `.ai-tasks/` under the lock regardless. One token could
+not tell a reading that still stands from one whose offered actions changed
+underneath it.
+
+It digests the answers and never the inputs they were read from, which is what
+makes it a token at all: `now` differs at every call and an object store is not
+a thing that can be enumerated, so a digest over either would move on every
+reading and say nothing, and a digest over a task file's bytes would move for an
+edit that changed no answer. What is hashed is what the reading made of them —
+each completion answer, the staged set, each target's state, the admission
+trigger the age produced, and each placement or chain link this checkout could
+or could not settle. Both tokens are then taken over one bracket: the input sets
+are read, the reading is taken, and they are read again; equal, and nothing
+moved under it, different, and the reading is taken again.
 
 Its guarantee is deliberately weaker, and stating that is the point: it says a
 reading was taken over the same observations and nothing more. It is not a lock,
 no mutation accepts it, and it moves on its own — a colleague finishing a task
-in another window moves it, and so does deploying a target. A surface re-reads
-on it and never refuses on it. What the pair guarantees together is the property
-neither has alone: every fact any allowed action is derived from is covered by
-one of them, so two readings agreeing on both are one reading.
+in another window moves it, so does deploying a target, and so does the clock
+passing a threshold nobody touched. A surface re-reads on it and never refuses
+on it. What the pair covers together is the property neither has alone: every
+fact either reading derives an allowed action from is under one of them, so two
+readings of one payload agreeing on both tokens are one reading.
 
 **What `allowed_actions` means.** Every verb the lifecycle has is named in every
 state, the refused ones included, each with the reason it is refused — a menu
@@ -2329,33 +2358,55 @@ re-derives every refusal under the lock, and what closes the gap between the
 reading and the write is `--expect`. A verb absent from the list is a build that
 does not have it, which is a different fact from one refusing.
 
-**Schema compatibility, for both payloads.** Each reading promises its exact key
-set. Adding, removing, or repurposing a key bumps that reading's version,
-additive changes included, because the surfaces that drive a lifecycle from a
-payload key on the set they parse. The two versions are independent of each
-other and of every persisted record's: those version a shape a writer committed,
-and these version a reading. A vocabulary is the one thing that widens without a
-bump — a new member of an enum this controller owns is added by the task that
-first emits it, the rule a batch outcome's endings already follow, so an older
-reader keeps reading every value it always could and refuses exactly the one it
-cannot describe, naming it.
+**Schema compatibility, for both payloads.** `status --json` is at schema
+version 11 and the portfolio at 1. Each promises its exact key set: adding,
+removing, or repurposing a key bumps that reading's version, additive changes
+included, because the surfaces that drive a lifecycle from a payload key on the
+set they parse. The two versions are independent of each other and of every
+persisted record's — those version a shape a writer committed, and these version
+a reading. A vocabulary is the one thing that widens without a bump: a new
+member of an enum this controller owns is added by the task that first emits it,
+the rule a batch outcome's endings already follow, so an older reader keeps
+reading every value it always could and refuses exactly the one it cannot
+describe, naming it.
+
+**What a client may check across the two payloads, and what it may not.** Status
+v11 publishes `state_revision` and no `observations_revision`; the portfolio
+publishes both. So the checkable pairing is over the durable token alone: read
+`status`, read the portfolio, read `status` again, and identical
+`state_revision` values across the three say the two readings describe one
+lifecycle — the same bracket each reading takes internally, applied by the
+caller across them. The volatile half pairs a portfolio reading only with
+another portfolio reading, which is the honest shape of it: a client that needs
+to know whether an offered action still stands re-reads `status`, which is the
+cheap call and the one that answers that question. Closing the gap means status
+publishing the second token too, and that is a bump of its key set rather than
+something this contract can assert of v11.
 
 **How the payload is bounded.** Not by a documented limit, which is a sentence
 rather than a mechanism, and not by truncation, which would contradict the one
 thing the reading is for. The portfolio is two documents at one version: an
 index that is one row per batch and nothing else that grows with use, and a
 detail read that expands exactly one subject the index named: a batch — its
-membership, its gate, its attempts, their rounds and their runs, and the release
-reading it owns — or the offer standing before a freeze, member by member.
-Everything whose size is a function of one batch's own work sits behind that
-read, so the series grows by one row per freeze and no detail read grows with
-history at all. Both documents carry the same snapshot, which is what lets a
+membership, its gate with the drafts themselves, its attempts, their rounds,
+what measured each of them, and the release reading it owns — or the offer
+standing before a freeze, member by member, or the pool waiting behind that
+offer. Everything whose size is a function of one batch's own work sits behind
+that read, so the series grows by one row per freeze and no detail read grows
+with history at all. What does accumulate with history rather than with a
+subject — the permanent import rejections, the packs a later evaluation
+superseded — is deliberately in none of them, because a detail read that grew
+with history would give the bound away. Both documents carry the same snapshot, which is what lets a
 console assembling an index and several details know whether it assembled one
 reading or several.
 
 The reading half of this boundary is settled here; the verb that emits it is not
 shipped yet, and until it is, `status --json` is the only reading this console
-produces.
+produces. What ships with that verb is the volatile token computed over exactly
+the input set named above, with a regression per input showing it move while
+`state_revision` holds: a token computed over a narrower set than its own
+definition is a guarantee nothing keeps. The two gaps that exist today — the
+task tree and the clock — are pinned that way already.
 
 ## Evolution task requirements
 

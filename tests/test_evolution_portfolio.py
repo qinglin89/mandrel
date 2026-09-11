@@ -30,6 +30,7 @@ left to the eye.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -131,9 +132,11 @@ def test_document_and_payload_agree(name: str) -> None:
     assert filled == {kind}
     if kind == "detail":
         detail = payload["detail"]
-        subjects = {key for key in ("batch", "proposal") if detail[key] is not None}
+        subjects = {key for key in ("batch", "proposal", "pool") if detail[key] is not None}
         assert subjects == {detail["kind"]}
-        assert (detail["id"] is None) == (detail["kind"] == "proposal")
+        # A batch is named by the id the index stated it under; the other two
+        # are the one offer and the one pool, and neither has an id to state.
+        assert (detail["id"] is None) == (detail["kind"] in {"proposal", "pool"})
 
 
 @pytest.mark.parametrize("name", FIXTURES)
@@ -188,11 +191,222 @@ def test_terminal_replay_history_is_readable() -> None:
     promoted = next(item for item in experiments if item["decision"]["outcome"] == "promoted")
     runs = promoted["replays"]["runs"]
     assert {run["round"] for run in runs} == {1, 2}
-    assert [run["outcome"] for run in runs] == ["completed", "failed", "completed"]
+    assert [run["result"]["outcome"] for run in runs] == ["completed", "failed", "completed"]
     assert promoted["replays"]["withdrawn"]
 
     superseded = read("experiment-superseded.json")["detail"]["batch"]["experiments"][0]
     assert superseded["replays"]["request"] is not None, "a request outstanding when an attempt ended is still a fact"
+
+
+def test_a_run_carries_what_would_reproduce_it() -> None:
+    """The evidence, not a verdict on it.
+
+    A promotion is argued from numbers, and a reader asking what was measured
+    needs the cohort they were measured over, who judged them, what drove the
+    run and how it was configured. Without those the reading names an outcome
+    and sends its consumer to `replays.json` for everything that outcome means —
+    which is the second reader of the lineage this document exists to remove.
+    """
+
+    runs = read("batch-promoted.json")["detail"]["batch"]["experiments"][1]["replays"]["runs"]
+    measured, failed = runs[0], runs[1]
+
+    assert measured["cases"]["count"] == 24 and measured["cases"]["case_set_sha256"]
+    assert measured["evaluator"]["backend"] and measured["evaluator"]["model"]
+    assert measured["harness"]["revision"] and measured["harness"]["config_sha256"]
+    assert measured["expectation"], "what it was expected to show, written before it showed anything"
+    assert [item["metric"] for item in measured["result"]["metrics"]] == [
+        "review-turns",
+        "convergence",
+        "quota",
+    ]
+    assert measured["result"]["regressions"] == [], "an empty array is the claim that there were none"
+
+    # A failed run measured no cohort, so it carries no measurement and says why
+    # in `detail` — the half a reader otherwise has to infer from an absence.
+    assert failed["result"]["outcome"] == "failed"
+    assert failed["result"]["metrics"] == [] and failed["result"]["detail"]
+
+    # And the last one says what it could not settle, which is the thing a
+    # promotion decided from close numbers is read back against.
+    assert runs[2]["result"]["ambiguity"]
+
+    withdrawn = read("batch-promoted.json")["detail"]["batch"]["experiments"][1]["replays"]["withdrawn"][0]
+    assert withdrawn["tree"] and withdrawn["merge_input_revision"], (
+        "a position given up still names the integration it pinned: the run may be going at a harness "
+        "this repository will never hear from"
+    )
+
+
+def test_the_valid_nullable_histories_are_worked_documents() -> None:
+    """Two shapes the records permit and a reading must not reject.
+
+    A run driven from a detached revision records the commit and no ref, and a
+    harness that issued no name for a run it finished leaves the handle null. A
+    projection that required either would be a history no reading could publish
+    — and the way that is found is a promotion nobody can read, long after the
+    run itself.
+    """
+
+    runs = read("batch-promoted.json")["detail"]["batch"]["experiments"][1]["replays"]["runs"]
+    detached = [run for run in runs if run["merge_input_ref"] is None]
+    nameless = [run for run in runs if run["harness"]["handle"] is None and run["result"] is not None]
+    assert detached and nameless
+
+    counterfactual = read("batch-rolled-back.json")["detail"]["batch"]["release"]["counterfactual"]["run"]
+    assert counterfactual["harness"]["handle"] is None and counterfactual["result"]["outcome"] == "completed"
+
+
+def test_identity_fields_are_checked_and_not_merely_present() -> None:
+    """The identities a consumer is told it may rely on are enforced here.
+
+    A hash-shaped field that accepts any non-empty string protects nothing: the
+    records these project require 64 hex characters for a digest and 40 for a
+    Git object id, and a reading that accepted `t000` would publish an identity
+    nothing can be looked up by. Asserted as refusals, because a pattern that is
+    present and wrong fails no fixture.
+    """
+
+    schema = load_schema(SCHEMA_PATH)
+    assert validate(read("batch-promoted.json"), schema) == []
+
+    weakened = [
+        (["detail", "batch", "experiments", 1, "replays", "runs", 0, "tree"], "t000"),
+        (["detail", "batch", "outcome", "promotion", "tree"], "not-a-tree"),
+        (["detail", "batch", "reports", 0, "bundle_sha256"], "deadbeef"),
+        (["detail", "batch", "experiments", 0, "rounds", 0, "tasks", 0, "draft_sha256"], "1234"),
+        (["detail", "batch", "gate", "drafts", 0, "content_sha256"], "abc"),
+        (["detail", "batch", "experiments", 1, "replays", "runs", 0, "cases", "case_set_sha256"], "aa"),
+        (["detail", "batch", "experiments", 1, "replays", "runs", 0, "harness", "config_sha256"], "aa"),
+        (["detail", "batch", "experiments", 1, "replays", "withdrawn", 0, "merge_input_revision"], "beef"),
+    ]
+    for route, value in weakened:
+        payload = read("batch-promoted.json")
+        node = payload
+        for step in route[:-1]:
+            node = node[step]
+        node[route[-1]] = value
+        assert validate(payload, schema), f"{'.'.join(str(step) for step in route)} accepted {value!r}"
+
+
+def test_the_gate_carries_the_drafts_themselves() -> None:
+    """What a person is asked to decide, rather than the name of it.
+
+    A console showing an operator a draft id and asking for an admission has
+    sent them to `proposed-tasks/` to read the proposal — a second reader of the
+    batch directory, and the one place in this lifecycle where a human decision
+    is actually taken.
+    """
+
+    gate = read("batch-promoted.json")["detail"]["batch"]["gate"]
+    by_id = {item["draft_id"]: item for item in gate["drafts"]}
+    assert {item["state"] for item in gate["drafts"]} == {"consumed", "declined"}
+
+    admitted = by_id["prefetch-injection"]
+    assert admitted["content"].startswith("---\n"), "the taskfile itself"
+    assert admitted["content_sha256"] == admitted["recorded_sha256"], "unedited since it was admitted"
+
+    # The decided draft whose file is gone: reported rather than refused, and the
+    # record still pins what was decided.
+    gone = by_id["handoff-shape"]
+    assert gone["content"] is None and gone["content_sha256"] is None
+    assert gone["recorded_sha256"] and gone["state"] == "consumed"
+
+    # And the one edited after the decision that turned it down, which is only
+    # visible because the two hashes are stated apart.
+    edited = by_id["loader-rewrite"]
+    assert edited["state"] == "declined" and edited["reason"]
+    assert edited["content_sha256"] != edited["recorded_sha256"]
+
+    # What an admission pinned is one fact, and the two places it appears agree.
+    pinned = {
+        task["draft_id"]: task["draft_sha256"]
+        for experiment in read("batch-promoted.json")["detail"]["batch"]["experiments"]
+        for rnd in experiment["rounds"]
+        for task in rnd["tasks"]
+    }
+    assert all(by_id[draft_id]["recorded_sha256"] == sha for draft_id, sha in pinned.items())
+
+    superseded = read("experiment-superseded.json")["detail"]["batch"]["gate"]
+    assert superseded["unusable"] == ["notes.txt"], "a file that could never be a draft waits for no decision"
+
+
+def test_the_pool_is_a_subject_of_its_own() -> None:
+    """The entries behind the counts, and nothing that grows with history.
+
+    The index says how many tasks are waiting and what the policy asks for; a
+    surface rendering the pool needs which tasks those are and what evidence
+    each stands on. It is bounded by the pool rather than by history — a freeze
+    claims its members and the pool empties behind them — which is why the
+    permanent rejections and the superseded packs, both of which accumulate with
+    every sync forever, are deliberately not here.
+    """
+
+    entries = read("pool.json")["detail"]["pool"]["entries"]
+    assert len({(item["repo_id"], item["task_id"]) for item in entries}) == len(entries), "one entry per task"
+    assert all(len(item["bundle_sha256"]) == 64 for item in entries)
+    assert {item["staged"] for item in entries} == {True, False}, (
+        "whether the body is on this machine is the volatile half; the hash is not"
+    )
+    # The pool's own counts stay on the index row, and the entries stay here.
+    assert set(read("index.json")["index"]["pool"]) == {
+        "task_count",
+        "target",
+        "minimum",
+        "max_wait_days",
+        "complete",
+    }
+
+
+def test_the_offer_states_the_age_its_freeze_turns_on() -> None:
+    """The one fact in this document the clock alone moves.
+
+    `max_wait_days` past its oldest member, the policy releases a batch the same
+    offer needed an argued force for the day before — with no writer having
+    touched anything, which is why the clock is covered by
+    `observations_revision` and not by the durable token.
+
+    The age is the offer's and never the pool's: the pool's oldest entry here is
+    a task the identity test left out, and measuring from it would release every
+    later batch on the day that one report arrived.
+    """
+
+    index = read("index-batch-proposed.json")
+    proposal = index["index"]["proposal"]
+    entries = {
+        (item["repo_id"], item["task_id"]): item["first_imported_at"]
+        for item in read("pool.json")["detail"]["pool"]["entries"]
+    }
+    members = {
+        (item["repo_id"], item["task_id"]) for item in read("proposal.json")["detail"]["proposal"]["selected"]
+    }
+
+    assert proposal["oldest_member_imported_at"] == min(entries[key] for key in members)
+    assert proposal["oldest_member_imported_at"] > min(entries.values()), "the pool holds an older non-member"
+
+    def moment(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    taken = moment(index["snapshot"]["taken_at"])
+    assert (taken - moment(proposal["oldest_member_imported_at"])).days == proposal["waited_days"]
+    assert proposal["waited_days"] < index["index"]["pool"]["max_wait_days"], "not released by waiting yet"
+
+
+def test_one_reading_assembles_from_several_documents() -> None:
+    """The index and the details a console reads beside it are one reading or
+    they are not, and the snapshot is what says which.
+
+    Three documents of one state here — the series, the offer standing in it,
+    and the pool behind that offer — carrying one snapshot between them. The
+    series taken of a different state carries a different token, which is the
+    only thing that stops a console rendering two moments as one.
+    """
+
+    offer = [read(name)["snapshot"] for name in ("index-batch-proposed.json", "proposal.json", "pool.json")]
+    assert offer[0] == offer[1] == offer[2]
+    assert read("index.json")["snapshot"]["state_revision"] != offer[0]["state_revision"], (
+        "a series with no offer standing is a different state from one with"
+    )
 
 
 def test_a_rolled_back_batch_reads_its_release_both_ways() -> None:

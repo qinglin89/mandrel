@@ -55,12 +55,18 @@
         "local": 1
       },
       "gate": {
-        "waiting": [
-          "conduct-tightening"
+        "drafts": [
+          {
+            "draft_id": "conduct-tightening",
+            "state": "waiting",
+            "experiment_id": null,
+            "decided_at": null,
+            "reason": null,
+            "recorded_sha256": null,
+            "content": "---\nid: conduct-tightening\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Tighten the conduct contract's scope clause\n\nBatch: evolution-batch-0012. Contract: `evolution/README.md`.\n\n## Goal\n\nMid-task discoveries are recorded inconsistently across sessions.\n\n## Scope\n\n- State the two cases — blocking and not — with the action for each.\n\n## Acceptance\n\n- A session log shows which case a discovery was handled as.\n\n## Session log\n",
+            "content_sha256": "1195b6dce98f6aaffa969be43ffb44ea2c913255e45efdfb7fc86b5f05347940"
+          }
         ],
-        "consumed": [],
-        "declined": [],
-        "missing": [],
         "unusable": []
       },
       "experiments": [],
@@ -167,12 +173,64 @@
             "base_revision": "0707070707070707070707070707070707070707",
             "candidate_revision": "1818181818181818181818181818181818181818",
             "source_ref": "refs/heads/dev",
-            "harness": "stated",
-            "handle": "counterfactual-0012-2",
+            "tree": "56972737c509efb6c3d507705afc138fef2d7c2c",
+            "cases": {
+              "case_set_id": "protocol-cases-2026-08",
+              "case_set_sha256": "9e703f07e73ed3a1927c6aadef84c78d28bb8895138748f2be26b12526b10718",
+              "count": 19,
+              "excluded": []
+            },
+            "evaluator": {
+              "backend": "claude",
+              "model": "claude-opus-5",
+              "rubric_revision": "rubric-2026-08"
+            },
+            "harness": {
+              "id": "stated",
+              "revision": "2026.06.1",
+              "config_sha256": "e31e6f17bd02884d3f917b4b2608287504e1e2fcbdd69b365befaa510a252eff",
+              "handle": null
+            },
             "expectation": "convergence at least as high as before the release",
-            "outcome": "completed",
-            "concluded_at": "2026-09-05T20:00:00Z",
-            "detail": null
+            "result": {
+              "outcome": "completed",
+              "concluded_at": "2026-09-05T20:00:00Z",
+              "detail": "convergence 0.84 before the release against 0.71 after it, over 19 cases",
+              "elapsed_seconds": 302400,
+              "metrics": [
+                {
+                  "metric": "convergence",
+                  "unit": "ratio",
+                  "before": 0.84,
+                  "after": 0.71,
+                  "better": "higher",
+                  "goal": true
+                },
+                {
+                  "metric": "review-turns",
+                  "unit": "turns",
+                  "before": 2.7,
+                  "after": 3.6,
+                  "better": "lower",
+                  "goal": true
+                },
+                {
+                  "metric": "quota",
+                  "unit": "tokens",
+                  "before": 1810000,
+                  "after": 1990000,
+                  "better": "neither",
+                  "goal": false
+                }
+              ],
+              "regressions": [
+                {
+                  "case_id": "case-09",
+                  "summary": "the released loader re-read the snapshot on every turn"
+                }
+              ],
+              "ambiguity": null
+            }
           },
           "request": null,
           "withdrawn": [
@@ -181,7 +239,11 @@
               "round": 1,
               "attempt": 1,
               "requested_at": "2026-08-31T09:00:00Z",
-              "withdrawn_at": "2026-09-02T08:30:00Z"
+              "withdrawn_at": "2026-09-02T08:30:00Z",
+              "base_revision": "0707070707070707070707070707070707070707",
+              "candidate_revision": "1818181818181818181818181818181818181818",
+              "source_ref": "refs/heads/dev",
+              "tree": "56972737c509efb6c3d507705afc138fef2d7c2c"
             }
           ]
         },
@@ -219,6 +281,7 @@
         }
       }
     },
-    "proposal": null
+    "proposal": null,
+    "pool": null
   }
 }

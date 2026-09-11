@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "document": "detail",
+  "snapshot": {
+    "taken_at": "2026-09-09T07:12:00Z",
+    "state_revision": "1-5a69780f1e2d3c4b",
+    "observations_revision": "1-6d5e4f30219a8b7c"
+  },
+  "index": null,
+  "detail": {
+    "kind": "pool",
+    "id": null,
+    "batch": null,
+    "proposal": null,
+    "pool": {
+      "entries": [
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-09-01-r",
+          "first_imported_at": "2026-09-02T06:40:00Z",
+          "report_key": "mandrel:2026-09-01-r:1",
+          "evaluation_id": "eval-9557a168d8f6",
+          "generated_at": "2026-09-01T22:10:00Z",
+          "bundle_sha256": "248d1335986f77083ca00760cd760b8a6082a9b764548be67e7ebbac0ed9fa54",
+          "staged": true
+        },
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-08-30-t",
+          "first_imported_at": "2026-08-30T07:14:00Z",
+          "report_key": "mandrel:2026-08-30-t:2",
+          "evaluation_id": "eval-3083b52fe9a0",
+          "generated_at": "2026-09-05T11:00:00Z",
+          "bundle_sha256": "0483e7503a8a4f82460777c9b14a48ab79426a775ef8ecf2d2ea2d0386b744ee",
+          "staged": true
+        },
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-08-31-u",
+          "first_imported_at": "2026-08-31T19:02:00Z",
+          "report_key": "mandrel:2026-08-31-u:1",
+          "evaluation_id": "eval-115329d3f317",
+          "generated_at": "2026-08-31T18:30:00Z",
+          "bundle_sha256": "58ed8a96e4f8c4d3686a8a7bfa6b9ea804e15679573e7a785d8d7ca64b1f0fd6",
+          "staged": true
+        },
+        {
+          "repo_id": "orch-hub",
+          "task_id": "2026-09-02-v",
+          "first_imported_at": "2026-09-02T09:55:00Z",
+          "report_key": "orch-hub:2026-09-02-v:1",
+          "evaluation_id": "eval-b4d5891b158d",
+          "generated_at": "2026-09-02T09:30:00Z",
+          "bundle_sha256": "a412f4216062fc80ee1a4d0639dbfc0b82550a531304644e4d920705e2e37e13",
+          "staged": false
+        },
+        {
+          "repo_id": "orch-hub",
+          "task_id": "2026-09-03-s",
+          "first_imported_at": "2026-09-03T14:20:00Z",
+          "report_key": "orch-hub:2026-09-03-s:1",
+          "evaluation_id": "eval-4bd490b115aa",
+          "generated_at": "2026-09-03T13:45:00Z",
+          "bundle_sha256": "52ada2735d148c77e45bbfb9954b92a0fd6ddb58fa48f0d505cb05d799051005",
+          "staged": true
+        }
+      ]
+    }
+  }
+}

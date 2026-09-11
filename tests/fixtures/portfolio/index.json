@@ -12,6 +12,7 @@
       "task_count": 4,
       "target": 8,
       "minimum": 3,
+      "max_wait_days": 14,
       "complete": true
     },
     "proposal": null,
@@ -37,7 +38,7 @@
           "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
           "merge_input_revision": "0707070707070707070707070707070707070707",
           "merge_input_ref": "refs/heads/dev",
-          "tree": "t000000000000000000000000000000000000000",
+          "tree": "3971a28032eb4328382052791dcab1aa9b4dcaa6",
           "planned_targets": [
             "mandrel",
             "orch-hub"

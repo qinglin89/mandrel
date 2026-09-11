@@ -55,15 +55,18 @@
         "local": 0
       },
       "gate": {
-        "waiting": [],
-        "consumed": [
+        "drafts": [
           {
             "draft_id": "ledger-recovery",
-            "experiment_id": "evolution-batch-0011-exp-01"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0011-exp-01",
+            "decided_at": "2026-08-30T13:30:00Z",
+            "reason": null,
+            "recorded_sha256": "6b23a37cd2a76a5448ff3932feb60fbcea730f8b2a6cd6f693a006dfbf8732d6",
+            "content": "---\nid: ledger-recovery\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Recover from a truncated ledger\n\nBatch: evolution-batch-0011. Contract: `evolution/README.md`.\n\n## Goal\n\nA half-written audit line refuses every later mutation.\n\n## Scope\n\n- Read the ledger to the last complete record and report the tail.\n\n## Acceptance\n\n- A truncated ledger is repaired without losing a recorded operation.\n\n## Session log\n",
+            "content_sha256": "6b23a37cd2a76a5448ff3932feb60fbcea730f8b2a6cd6f693a006dfbf8732d6"
           }
         ],
-        "declined": [],
-        "missing": [],
         "unusable": []
       },
       "experiments": [
@@ -93,7 +96,7 @@
                 {
                   "task_id": "2026-08-30-ledger-recovery",
                   "draft_id": "ledger-recovery",
-                  "draft_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "draft_sha256": "6b23a37cd2a76a5448ff3932feb60fbcea730f8b2a6cd6f693a006dfbf8732d6",
                   "admitted_at": "2026-08-30T09:00:00Z",
                   "completion_observed_at": "2026-09-02T11:00:00Z",
                   "file_complete": null
@@ -122,7 +125,10 @@
                 "attempt": 1,
                 "requested_at": "2026-09-02T12:00:00Z",
                 "withdrawn_at": "2026-09-04T08:00:00Z",
-                "candidate_revision": "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"
+                "candidate_revision": "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6",
+                "merge_input_revision": "0707070707070707070707070707070707070707",
+                "merge_input_ref": "refs/heads/dev",
+                "tree": "89b7c55204ad54e569f24dd5177d7e2304b64b2e"
               }
             ]
           }
@@ -131,6 +137,7 @@
       "outcome": null,
       "release": null
     },
-    "proposal": null
+    "proposal": null,
+    "pool": null
   }
 }

@@ -2,9 +2,9 @@
   "schema_version": 1,
   "document": "detail",
   "snapshot": {
-    "taken_at": "2026-09-04T09:15:00Z",
-    "state_revision": "1-0f1e2d3c4b5a6978",
-    "observations_revision": "1-9a8b7c6d5e4f3021"
+    "taken_at": "2026-09-09T07:12:00Z",
+    "state_revision": "1-5a69780f1e2d3c4b",
+    "observations_revision": "1-6d5e4f30219a8b7c"
   },
   "index": null,
   "detail": {
@@ -74,6 +74,7 @@
           "moved_at": "2026-09-09T08:05:00Z"
         }
       ]
-    }
+    },
+    "pool": null
   }
 }

@@ -98,34 +98,67 @@
         "local": 1
       },
       "gate": {
-        "waiting": [
-          "loader-prefetch"
-        ],
-        "consumed": [
+        "drafts": [
           {
             "draft_id": "intake-contract",
-            "experiment_id": "evolution-batch-0009-exp-01"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0009-exp-01",
+            "decided_at": "2026-08-22T09:00:00Z",
+            "reason": null,
+            "recorded_sha256": "7d4c77ac6901dce55e619a3ba9f6160c2751c1dff5b64c2185c83e01493c765b",
+            "content": "---\nid: intake-contract\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# State the intake contract's admission test\n\nBatch: evolution-batch-0009. Contract: `evolution/README.md`.\n\n## Goal\n\nIntake accepts anything a person types, so the pool holds work no session can start.\n\n## Scope\n\n- Require a goal, a scope and an acceptance line before a task is written.\n\n## Acceptance\n\n- A task file missing any of the three is refused with the missing one named.\n\n## Session log\n",
+            "content_sha256": "7d4c77ac6901dce55e619a3ba9f6160c2751c1dff5b64c2185c83e01493c765b"
           },
           {
             "draft_id": "intake-index",
-            "experiment_id": "evolution-batch-0009-exp-01"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0009-exp-01",
+            "decided_at": "2026-08-22T09:02:00Z",
+            "reason": null,
+            "recorded_sha256": "395658e035903c4d1ff907366487e95a84e24d3f9aa8678ee315a31940edb089",
+            "content": null,
+            "content_sha256": null
           },
           {
             "draft_id": "intake-schema",
-            "experiment_id": "evolution-batch-0009-exp-02"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0009-exp-02",
+            "decided_at": "2026-09-01T11:00:00Z",
+            "reason": null,
+            "recorded_sha256": "a249a2e0c0f4e0f86cf3e980c16864486f2f7fef6f5423de2e557d91a90cbb1c",
+            "content": "---\nid: intake-schema\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Version the taskfile frontmatter\n\nBatch: evolution-batch-0009. Contract: `evolution/README.md`.\n\n## Goal\n\nReaders guess the shape of a task file from the fields present.\n\n## Scope\n\n- Add a schema version to the frontmatter and state the reader's fallback.\n\n## Acceptance\n\n- An unversioned file is read as version 1 rather than refused.\n\n## Session log\n",
+            "content_sha256": "a249a2e0c0f4e0f86cf3e980c16864486f2f7fef6f5423de2e557d91a90cbb1c"
           },
           {
             "draft_id": "intake-skill",
-            "experiment_id": "evolution-batch-0009-exp-02"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0009-exp-02",
+            "decided_at": "2026-09-01T11:01:00Z",
+            "reason": null,
+            "recorded_sha256": "2cc07e741b6527ee1cf0975c62ca3c50c47e3ff11c0c8a355cc7bbc50e23bd9f",
+            "content": "---\nid: intake-skill\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Make the intake skill write what the contract requires\n\nBatch: evolution-batch-0009. Contract: `evolution/README.md`.\n\n## Goal\n\nThe skill and the contract describe different frontmatter.\n\n## Scope\n\n- Derive the skill's template from the schema document.\n\n## Acceptance\n\n- A schema change that the skill would break fails the derivation test.\n\n## Session log\n",
+            "content_sha256": "2cc07e741b6527ee1cf0975c62ca3c50c47e3ff11c0c8a355cc7bbc50e23bd9f"
           },
           {
             "draft_id": "intake-tests",
-            "experiment_id": "evolution-batch-0009-exp-02"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0009-exp-02",
+            "decided_at": "2026-09-01T11:02:00Z",
+            "reason": null,
+            "recorded_sha256": "8372ad76f0d58500f3d5d920445749c5f4ec1bd38ac52de4e6bca416d8d749c7",
+            "content": "---\nid: intake-tests\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Cover intake refusals\n\nBatch: evolution-batch-0009. Contract: `evolution/README.md`.\n\n## Goal\n\nEvery intake test asserts the happy path.\n\n## Scope\n\n- Add refusal cases for each required field.\n\n## Acceptance\n\n- Each refusal names the field it refused on.\n\n## Session log\n",
+            "content_sha256": "8372ad76f0d58500f3d5d920445749c5f4ec1bd38ac52de4e6bca416d8d749c7"
+          },
+          {
+            "draft_id": "loader-prefetch",
+            "state": "waiting",
+            "experiment_id": null,
+            "decided_at": null,
+            "reason": null,
+            "recorded_sha256": null,
+            "content": "---\nid: loader-prefetch\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Load prefetch documents through the routing index\n\nBatch: evolution-batch-0009. Contract: `evolution/README.md`.\n\n## Goal\n\nA prefetch path naming a document that moved is read as absent rather than as stale.\n\n## Scope\n\n- Resolve each declared path through `.ai/index.md` before reading it.\n\n## Acceptance\n\n- A moved document is reported by name rather than skipped.\n\n## Session log\n",
+            "content_sha256": "daa7ba0bacc4d62509be7b2e6ff62acd95a659167a4ba8d0bbc16f312567485f"
           }
-        ],
-        "declined": [],
-        "missing": [
-          "intake-index"
         ],
         "unusable": [
           "notes.txt"
@@ -158,7 +191,7 @@
                 {
                   "task_id": "2026-08-22-intake-contract",
                   "draft_id": "intake-contract",
-                  "draft_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+                  "draft_sha256": "7d4c77ac6901dce55e619a3ba9f6160c2751c1dff5b64c2185c83e01493c765b",
                   "admitted_at": "2026-08-22T09:00:00Z",
                   "completion_observed_at": "2026-08-27T12:00:00Z",
                   "file_complete": null
@@ -166,7 +199,7 @@
                 {
                   "task_id": "2026-08-22-intake-index",
                   "draft_id": "intake-index",
-                  "draft_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+                  "draft_sha256": "395658e035903c4d1ff907366487e95a84e24d3f9aa8678ee315a31940edb089",
                   "admitted_at": "2026-08-22T09:00:00Z",
                   "completion_observed_at": "2026-08-27T12:00:00Z",
                   "file_complete": null
@@ -195,11 +228,34 @@
                 "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
                 "merge_input_revision": "0707070707070707070707070707070707070707",
                 "merge_input_ref": "refs/heads/dev",
-                "tree": "t000000000000000000000000000000000000000",
-                "harness": "stated",
-                "handle": "replay-0009-1",
-                "outcome": "failed",
-                "concluded_at": "2026-08-28T01:00:00Z"
+                "tree": "bc5a6044c708b4d7f2927d5c6d61abe090362a5c",
+                "cases": {
+                  "case_set_id": "protocol-cases-2026-08",
+                  "case_set_sha256": "9e703f07e73ed3a1927c6aadef84c78d28bb8895138748f2be26b12526b10718",
+                  "count": 18,
+                  "excluded": []
+                },
+                "evaluator": {
+                  "backend": "claude",
+                  "model": "claude-opus-5",
+                  "rubric_revision": "rubric-2026-08"
+                },
+                "harness": {
+                  "id": "stated",
+                  "revision": "2026.08.2",
+                  "config_sha256": "1fc7d2ae18149e2f06fd6d8e59d54bc796fcaf9217e3c5033269adc37ad052fc",
+                  "handle": "replay-0009-1"
+                },
+                "expectation": "intake refusals reported by field, with no change to convergence",
+                "result": {
+                  "outcome": "failed",
+                  "concluded_at": "2026-08-28T01:00:00Z",
+                  "detail": "eleven cases could not build the candidate worktree; no cohort result",
+                  "elapsed_seconds": 43200,
+                  "metrics": [],
+                  "regressions": [],
+                  "ambiguity": null
+                }
               }
             ],
             "request": {
@@ -209,7 +265,7 @@
               "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
               "merge_input_revision": "0707070707070707070707070707070707070707",
               "merge_input_ref": "refs/heads/dev",
-              "tree": "t000000000000000000000000000000000000000",
+              "tree": "b2b2e1149bdf36720edffb8c650561cfd03bab73",
               "expectation": "convergence at or above the batch base, review turns no higher"
             },
             "withdrawn": []
@@ -241,7 +297,7 @@
                 {
                   "task_id": "2026-09-01-intake-schema",
                   "draft_id": "intake-schema",
-                  "draft_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+                  "draft_sha256": "a249a2e0c0f4e0f86cf3e980c16864486f2f7fef6f5423de2e557d91a90cbb1c",
                   "admitted_at": "2026-09-01T10:05:00Z",
                   "completion_observed_at": "2026-09-03T16:00:00Z",
                   "file_complete": null
@@ -249,7 +305,7 @@
                 {
                   "task_id": "2026-09-01-intake-skill",
                   "draft_id": "intake-skill",
-                  "draft_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+                  "draft_sha256": "2cc07e741b6527ee1cf0975c62ca3c50c47e3ff11c0c8a355cc7bbc50e23bd9f",
                   "admitted_at": "2026-09-01T10:05:00Z",
                   "completion_observed_at": null,
                   "file_complete": true
@@ -257,7 +313,7 @@
                 {
                   "task_id": "2026-09-01-intake-tests",
                   "draft_id": "intake-tests",
-                  "draft_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "draft_sha256": "8372ad76f0d58500f3d5d920445749c5f4ec1bd38ac52de4e6bca416d8d749c7",
                   "admitted_at": "2026-09-01T10:05:00Z",
                   "completion_observed_at": null,
                   "file_complete": false
@@ -278,6 +334,7 @@
       "outcome": null,
       "release": null
     },
-    "proposal": null
+    "proposal": null,
+    "pool": null
   }
 }

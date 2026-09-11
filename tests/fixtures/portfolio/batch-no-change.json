@@ -75,17 +75,28 @@
         "local": 2
       },
       "gate": {
-        "waiting": [],
-        "consumed": [
+        "drafts": [
+          {
+            "draft_id": "conduct-rewrite",
+            "state": "declined",
+            "experiment_id": null,
+            "decided_at": "2026-07-21T16:40:00Z",
+            "reason": "restating every clause is a rewrite of the contract, not a change this batch measured",
+            "recorded_sha256": "1870d4dfffc1bfa9765124012e244558ca9a2e87501265bf135dca2a6acc936a",
+            "content": "---\nid: conduct-rewrite\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Rewrite the conduct contract as rules\n\nBatch: evolution-batch-0008. Contract: `evolution/README.md`.\n\n## Goal\n\nConduct reads as prose and is cited by paragraph.\n\n## Scope\n\n- Restate every clause as a numbered rule.\n\n## Acceptance\n\n- Every citation in the workflow layer names a rule number.\n\n## Session log\n",
+            "content_sha256": "1870d4dfffc1bfa9765124012e244558ca9a2e87501265bf135dca2a6acc936a"
+          },
           {
             "draft_id": "review-scope-probe",
-            "experiment_id": "evolution-batch-0008-exp-01"
+            "state": "consumed",
+            "experiment_id": "evolution-batch-0008-exp-01",
+            "decided_at": "2026-07-22T08:15:00Z",
+            "reason": null,
+            "recorded_sha256": "4c3bdfbcfe7c89bcd802e0fc4eb9984ac845ccbd79f4e3d83ebaf502e372fa3d",
+            "content": "---\nid: review-scope-probe\nstatus: pending\nsession-est: 0/2\nblockers: []\nprefetch: [.ai/design.md]\n---\n\n# Probe what a review session actually reads\n\nBatch: evolution-batch-0008. Contract: `evolution/README.md`.\n\n## Goal\n\nNothing measures whether the review contract's inputs are the ones used.\n\n## Scope\n\n- Instrument one batch of review sessions and record the files opened.\n\n## Acceptance\n\n- The measurement is recorded as a disposition, and no canonical file changes.\n\n## Session log\n",
+            "content_sha256": "4c3bdfbcfe7c89bcd802e0fc4eb9984ac845ccbd79f4e3d83ebaf502e372fa3d"
           }
         ],
-        "declined": [
-          "conduct-rewrite"
-        ],
-        "missing": [],
         "unusable": []
       },
       "experiments": [
@@ -115,7 +126,7 @@
                 {
                   "task_id": "2026-07-22-review-scope-probe",
                   "draft_id": "review-scope-probe",
-                  "draft_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "draft_sha256": "4c3bdfbcfe7c89bcd802e0fc4eb9984ac845ccbd79f4e3d83ebaf502e372fa3d",
                   "admitted_at": "2026-07-22T09:00:00Z",
                   "completion_observed_at": "2026-07-28T14:00:00Z",
                   "file_complete": null
@@ -144,11 +155,49 @@
                 "candidate_revision": "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6",
                 "merge_input_revision": "0707070707070707070707070707070707070707",
                 "merge_input_ref": "refs/heads/dev",
-                "tree": "t000000000000000000000000000000000000000",
-                "harness": "stated",
-                "handle": "replay-0008-1",
-                "outcome": "completed",
-                "concluded_at": "2026-07-30T02:00:00Z"
+                "tree": "231fb8257934d55cdd08093fcbcb99b2deea7b81",
+                "cases": {
+                  "case_set_id": "protocol-cases-2026-06",
+                  "case_set_sha256": "032e834e8fd0267288804118f131d2681200987c119ffc17f05d80ea80d9d54c",
+                  "count": 21,
+                  "excluded": []
+                },
+                "evaluator": {
+                  "backend": "claude",
+                  "model": "claude-opus-5",
+                  "rubric_revision": "rubric-2026-05"
+                },
+                "harness": {
+                  "id": "stated",
+                  "revision": "2026.07.1",
+                  "config_sha256": "1fc7d2ae18149e2f06fd6d8e59d54bc796fcaf9217e3c5033269adc37ad052fc",
+                  "handle": "replay-0008-1"
+                },
+                "expectation": "the probe changes no metric; it records what a review session reads",
+                "result": {
+                  "outcome": "completed",
+                  "concluded_at": "2026-07-30T02:00:00Z",
+                  "detail": "no metric moved beyond the cohort's spread, which is what the probe predicted",
+                  "elapsed_seconds": 126000,
+                  "metrics": [
+                    {
+                      "metric": "review-turns",
+                      "unit": "turns",
+                      "baseline": 2.6,
+                      "candidate": 2.6,
+                      "better": "lower"
+                    },
+                    {
+                      "metric": "convergence",
+                      "unit": "ratio",
+                      "baseline": 0.83,
+                      "candidate": 0.83,
+                      "better": "higher"
+                    }
+                  ],
+                  "regressions": [],
+                  "ambiguity": null
+                }
               }
             ],
             "request": null,
@@ -263,12 +312,59 @@
             "base_revision": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
             "candidate_revision": "1818181818181818181818181818181818181818",
             "source_ref": "refs/heads/dev",
-            "harness": "stated",
-            "handle": "counterfactual-0008-1",
+            "tree": "17cd5a45f74a40ce4cc5200850cc18f9837a0186",
+            "cases": {
+              "case_set_id": "protocol-cases-2026-06",
+              "case_set_sha256": "032e834e8fd0267288804118f131d2681200987c119ffc17f05d80ea80d9d54c",
+              "count": 21,
+              "excluded": []
+            },
+            "evaluator": {
+              "backend": "claude",
+              "model": "claude-opus-5",
+              "rubric_revision": "rubric-2026-05"
+            },
+            "harness": {
+              "id": "stated",
+              "revision": "2026.06.1",
+              "config_sha256": "e31e6f17bd02884d3f917b4b2608287504e1e2fcbdd69b365befaa510a252eff",
+              "handle": "counterfactual-0008-1"
+            },
             "expectation": "review turns lower on the released protocol, convergence no worse",
-            "outcome": "completed",
-            "concluded_at": "2026-07-24T18:00:00Z",
-            "detail": null
+            "result": {
+              "outcome": "completed",
+              "concluded_at": "2026-07-24T18:00:00Z",
+              "detail": "review turns 2.9 before the release against 2.6 after it, over 21 cases",
+              "elapsed_seconds": 288000,
+              "metrics": [
+                {
+                  "metric": "review-turns",
+                  "unit": "turns",
+                  "before": 2.9,
+                  "after": 2.6,
+                  "better": "lower",
+                  "goal": true
+                },
+                {
+                  "metric": "convergence",
+                  "unit": "ratio",
+                  "before": 0.81,
+                  "after": 0.83,
+                  "better": "higher",
+                  "goal": true
+                },
+                {
+                  "metric": "quota",
+                  "unit": "tokens",
+                  "before": 1760000,
+                  "after": 1830000,
+                  "better": "neither",
+                  "goal": false
+                }
+              ],
+              "regressions": [],
+              "ambiguity": null
+            }
           },
           "request": null,
           "withdrawn": []
@@ -315,6 +411,7 @@
         }
       }
     },
-    "proposal": null
+    "proposal": null,
+    "pool": null
   }
 }

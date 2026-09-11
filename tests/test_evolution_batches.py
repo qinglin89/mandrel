@@ -343,6 +343,36 @@ def test_an_aged_pool_that_meets_the_minimum_freezes_without_a_force(
     assert read_manifest(result)["forced"] is False
 
 
+def test_the_clock_moves_the_freeze_a_state_revision_holds_through(
+    config: evolution.EvolutionConfig, feed_root: Path
+) -> None:
+    """The age rule is the second thing a reading turns on that no writer moves.
+
+    The wait releasing a batch is the whole point of the rule, and it happens
+    over a repository nobody wrote to: the offer that needed an argued `--force`
+    yesterday is released by the policy today, with the same evidence and the
+    same line. The durable token is deliberately stable across that — one that
+    expired overnight would refuse operations for the passage of time — so what
+    a reading says a freeze would do moves underneath it, exactly as the set of
+    verbs a state accepts moves when a task file completes. That pair of gaps is
+    what the portfolio's second token covers
+    (`evolution/schemas/portfolio.schema.json`).
+    """
+
+    fill_pool(config, feed_root, MINIMUM)
+    almost = NOW - timedelta(days=config.batch.max_wait_days - 1)
+    backdate(config, almost.isoformat().replace("+00:00", "Z"))
+    batches.build_proposal(config, now=NOW)
+
+    early = phase.describe(config, now=NOW)
+    late = phase.describe(config, now=NOW + timedelta(days=1))
+
+    assert early.decision.freeze is False and early.decision.reason == batches.REASON_BELOW_TARGET
+    assert late.decision.freeze is True and late.decision.trigger == batches.TRIGGER_MAX_WAIT
+    assert early.decision.waited_days != late.decision.waited_days
+    assert early.state_revision == late.state_revision
+
+
 def test_a_young_pool_between_minimum_and_target_waits(
     config: evolution.EvolutionConfig, feed_root: Path
 ) -> None:

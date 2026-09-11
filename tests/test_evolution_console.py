@@ -1506,6 +1506,36 @@ def test_the_state_revision_follows_the_artifacts_and_not_the_clock(
     assert status(config).state_revision != first
 
 
+def test_a_task_file_moves_an_allowed_action_under_a_state_revision_that_holds(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The gap the durable token leaves, pinned as a fact rather than as prose.
+
+    `seal-round` is accepted exactly when every admitted task of the open round
+    is observed complete, and that observation is a file in `.ai-tasks/` this
+    lifecycle never writes. So the set of verbs a state accepts moves while the
+    token a caller would re-read on does not — correctly, because nothing was
+    written and every operation re-reads the task tree under the lock anyway.
+
+    A surface holding only this token cannot tell a reading that still stands
+    from one whose offered actions changed underneath it, which is what the
+    portfolio's second token is for (`evolution/schemas/portfolio.schema.json`).
+    """
+
+    freeze_batch(config, FIRST, effective=None)
+    analyzed(config, FIRST, drafts=("loader-fallback",))
+    admission = experiments.create(config, ["loader-fallback"], now=FROZEN_AT)
+
+    before = status(config).state_revision
+    assert "seal-round" not in allows(config)
+
+    for item in admission.admitted:
+        complete_task(config, item.task_id)
+
+    assert "seal-round" in allows(config)
+    assert status(config).state_revision == before
+
+
 def test_the_state_revision_covers_the_commit_a_formation_would_read(
     config: evolution.EvolutionConfig, release: str
 ) -> None:
