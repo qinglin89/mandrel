@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "document": "detail",
+  "snapshot": {
+    "taken_at": "2026-09-04T09:15:00Z",
+    "state_revision": "1-0f1e2d3c4b5a6978",
+    "observations_revision": "1-9a8b7c6d5e4f3021"
+  },
+  "index": null,
+  "detail": {
+    "kind": "batch",
+    "id": "evolution-batch-0009",
+    "batch": {
+      "batch_id": "evolution-batch-0009",
+      "frozen_at": "2026-08-20T09:30:00Z",
+      "base_revision": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "forced": false,
+      "force_justification": null,
+      "current": true,
+      "selection": {
+        "considered": 4,
+        "auto_selected": 1,
+        "human_included": 1
+      },
+      "reports": [
+        {
+          "report_key": "mandrel:2026-08-05-e:1",
+          "repo_id": "mandrel",
+          "task_id": "2026-08-05-e",
+          "generated_at": "2026-08-06T10:00:00Z",
+          "bundle_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+          "mode": "auto",
+          "justification": null,
+          "actor": null,
+          "moved_at": null,
+          "evaluator": {
+            "backend": "claude",
+            "model": "opus-5",
+            "rubric_revision": "rubric-3"
+          },
+          "protocol": {
+            "effective_revision": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+            "deploy_lock_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        },
+        {
+          "report_key": "orch-hub:2026-08-09-f:1",
+          "repo_id": "orch-hub",
+          "task_id": "2026-08-09-f",
+          "generated_at": "2026-08-10T10:00:00Z",
+          "bundle_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+          "mode": "human-included",
+          "justification": "same protocol content, identity differs only by a docs commit",
+          "actor": "qinglin89",
+          "moved_at": "2026-08-19T18:00:00Z",
+          "evaluator": {
+            "backend": "claude",
+            "model": "opus-5",
+            "rubric_revision": "rubric-3"
+          },
+          "protocol": {
+            "effective_revision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "deploy_lock_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      ],
+      "not_selected": [
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-08-11-g",
+          "report_keys": [
+            "mandrel:2026-08-11-g:1"
+          ],
+          "reason": "human-excluded",
+          "justification": "the run was interrupted halfway and the L2 artifact is a stub",
+          "actor": "qinglin89",
+          "moved_at": "2026-08-19T18:05:00Z"
+        },
+        {
+          "repo_id": "orch-hub",
+          "task_id": "2026-08-12-h",
+          "report_keys": [
+            "orch-hub:2026-08-12-h:1"
+          ],
+          "reason": "revision-unresolvable",
+          "justification": null,
+          "actor": null,
+          "moved_at": null
+        }
+      ],
+      "analysis": {
+        "task_id": "2026-08-20-evolution-batch-0009-analysis",
+        "findings_recorded": true,
+        "complete": true
+      },
+      "evidence": {
+        "report_count": 2,
+        "local": 1
+      },
+      "gate": {
+        "waiting": [
+          "loader-prefetch"
+        ],
+        "consumed": [
+          {
+            "draft_id": "intake-contract",
+            "experiment_id": "evolution-batch-0009-exp-01"
+          },
+          {
+            "draft_id": "intake-index",
+            "experiment_id": "evolution-batch-0009-exp-01"
+          },
+          {
+            "draft_id": "intake-schema",
+            "experiment_id": "evolution-batch-0009-exp-02"
+          },
+          {
+            "draft_id": "intake-skill",
+            "experiment_id": "evolution-batch-0009-exp-02"
+          },
+          {
+            "draft_id": "intake-tests",
+            "experiment_id": "evolution-batch-0009-exp-02"
+          }
+        ],
+        "declined": [],
+        "missing": [
+          "intake-index"
+        ],
+        "unusable": [
+          "notes.txt"
+        ]
+      },
+      "experiments": [
+        {
+          "experiment_id": "evolution-batch-0009-exp-01",
+          "batch_id": "evolution-batch-0009",
+          "created_at": "2026-08-22T08:45:00Z",
+          "base_revision": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+          "base_release_ref": "refs/tags/protocol-2026.08",
+          "ref": "refs/evolution/experiments/evolution-batch-0009-exp-01",
+          "ref_state": {
+            "ref": "refs/evolution/experiments/evolution-batch-0009-exp-01",
+            "tip": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+            "pinned": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+            "state": "at-pinned-revision",
+            "chain": true,
+            "chain_break": null,
+            "consistent": true
+          },
+          "open": false,
+          "rounds": [
+            {
+              "number": 1,
+              "opened_at": "2026-08-22T09:00:00Z",
+              "reason": "first attempt at the intake-contract drafts",
+              "tasks": [
+                {
+                  "task_id": "2026-08-22-intake-contract",
+                  "draft_id": "intake-contract",
+                  "draft_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+                  "admitted_at": "2026-08-22T09:00:00Z",
+                  "completion_observed_at": "2026-08-27T12:00:00Z",
+                  "file_complete": null
+                },
+                {
+                  "task_id": "2026-08-22-intake-index",
+                  "draft_id": "intake-index",
+                  "draft_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+                  "admitted_at": "2026-08-22T09:00:00Z",
+                  "completion_observed_at": "2026-08-27T12:00:00Z",
+                  "file_complete": null
+                }
+              ],
+              "seal": {
+                "sealed_at": "2026-08-27T12:00:00Z",
+                "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+              }
+            }
+          ],
+          "prepared_promotion": null,
+          "decision": {
+            "outcome": "superseded",
+            "decided_at": "2026-09-01T10:00:00Z",
+            "reason": "the replay never came back; the successor splits the contract change in two",
+            "superseded_by": "evolution-batch-0009-exp-02",
+            "promotion_revision": null
+          },
+          "replays": {
+            "runs": [
+              {
+                "round": 1,
+                "attempt": 1,
+                "started_at": "2026-08-27T13:00:00Z",
+                "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+                "merge_input_revision": "0707070707070707070707070707070707070707",
+                "merge_input_ref": "refs/heads/dev",
+                "tree": "t000000000000000000000000000000000000000",
+                "harness": "stated",
+                "handle": "replay-0009-1",
+                "outcome": "failed",
+                "concluded_at": "2026-08-28T01:00:00Z"
+              }
+            ],
+            "request": {
+              "round": 1,
+              "attempt": 2,
+              "requested_at": "2026-08-28T08:00:00Z",
+              "candidate_revision": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+              "merge_input_revision": "0707070707070707070707070707070707070707",
+              "merge_input_ref": "refs/heads/dev",
+              "tree": "t000000000000000000000000000000000000000",
+              "expectation": "convergence at or above the batch base, review turns no higher"
+            },
+            "withdrawn": []
+          }
+        },
+        {
+          "experiment_id": "evolution-batch-0009-exp-02",
+          "batch_id": "evolution-batch-0009",
+          "created_at": "2026-09-01T10:00:00Z",
+          "base_revision": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+          "base_release_ref": "refs/tags/protocol-2026.08",
+          "ref": "refs/evolution/experiments/evolution-batch-0009-exp-02",
+          "ref_state": {
+            "ref": "refs/evolution/experiments/evolution-batch-0009-exp-02",
+            "tip": "3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a",
+            "pinned": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+            "state": "ahead",
+            "chain": true,
+            "chain_break": null,
+            "consistent": true
+          },
+          "open": true,
+          "rounds": [
+            {
+              "number": 1,
+              "opened_at": "2026-09-01T10:05:00Z",
+              "reason": "split the intake contract change into the schema half and the skill half",
+              "tasks": [
+                {
+                  "task_id": "2026-09-01-intake-schema",
+                  "draft_id": "intake-schema",
+                  "draft_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+                  "admitted_at": "2026-09-01T10:05:00Z",
+                  "completion_observed_at": "2026-09-03T16:00:00Z",
+                  "file_complete": null
+                },
+                {
+                  "task_id": "2026-09-01-intake-skill",
+                  "draft_id": "intake-skill",
+                  "draft_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+                  "admitted_at": "2026-09-01T10:05:00Z",
+                  "completion_observed_at": null,
+                  "file_complete": true
+                },
+                {
+                  "task_id": "2026-09-01-intake-tests",
+                  "draft_id": "intake-tests",
+                  "draft_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "admitted_at": "2026-09-01T10:05:00Z",
+                  "completion_observed_at": null,
+                  "file_complete": false
+                }
+              ],
+              "seal": null
+            }
+          ],
+          "prepared_promotion": null,
+          "decision": null,
+          "replays": {
+            "runs": [],
+            "request": null,
+            "withdrawn": []
+          }
+        }
+      ],
+      "outcome": null,
+      "release": null
+    },
+    "proposal": null
+  }
+}

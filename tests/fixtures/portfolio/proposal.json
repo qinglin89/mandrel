@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "document": "detail",
+  "snapshot": {
+    "taken_at": "2026-09-04T09:15:00Z",
+    "state_revision": "1-0f1e2d3c4b5a6978",
+    "observations_revision": "1-9a8b7c6d5e4f3021"
+  },
+  "index": null,
+  "detail": {
+    "kind": "proposal",
+    "id": null,
+    "batch": null,
+    "proposal": {
+      "built_at": "2026-09-09T07:10:00Z",
+      "source_line_ref": "refs/heads/dev",
+      "base_revision": "1818181818181818181818181818181818181818",
+      "selected": [
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-09-01-r",
+          "report_keys": [
+            "mandrel:2026-09-01-r:1"
+          ],
+          "mode": "auto",
+          "justification": null,
+          "actor": null,
+          "moved_at": null
+        },
+        {
+          "repo_id": "orch-hub",
+          "task_id": "2026-09-03-s",
+          "report_keys": [
+            "orch-hub:2026-09-03-s:1"
+          ],
+          "mode": "human-included",
+          "justification": "the deployed protocol content is identical; the identity differs by a docs commit",
+          "actor": "qinglin89",
+          "moved_at": "2026-09-09T08:00:00Z"
+        }
+      ],
+      "not_selected": [
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-08-30-t",
+          "report_keys": [
+            "mandrel:2026-08-30-t:1"
+          ],
+          "reason": "identity-differs",
+          "justification": null,
+          "actor": null,
+          "moved_at": null
+        },
+        {
+          "repo_id": "mandrel",
+          "task_id": "2026-08-31-u",
+          "report_keys": [
+            "mandrel:2026-08-31-u:1"
+          ],
+          "reason": "revision-malformed",
+          "justification": null,
+          "actor": null,
+          "moved_at": null
+        },
+        {
+          "repo_id": "orch-hub",
+          "task_id": "2026-09-02-v",
+          "report_keys": [
+            "orch-hub:2026-09-02-v:1"
+          ],
+          "reason": "human-excluded",
+          "justification": "the evaluation ran against a rubric nothing else in the pool used",
+          "actor": "qinglin89",
+          "moved_at": "2026-09-09T08:05:00Z"
+        }
+      ]
+    }
+  }
+}

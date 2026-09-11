@@ -1,0 +1,2315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mandrel.local/evolution/portfolio.schema.json",
+  "title": "Evolution portfolio reading",
+  "description": "The whole evolution portfolio, as a surface that renders it reads it: every batch this repository has frozen, every attempt made inside one, what measured each attempt, how each ended, and what the release each batch followed was judged to be. A console holding these documents reconstructs the history without reading Git, the versioned records, `.ai-tasks/`, the drafts, or any target's deploy receipt — which is the whole point of publishing it: a second reader of those files is a second implementation of the lineage, and the two come to disagree about what happened.\n\n**This is not `status`, and it deliberately does not replace it.** `status` answers what to do next: one phase, the current batch, the open experiment, the reading that gates the next admission, every verb with whether this state accepts it, and the series and its endings as rows beside them. What it drops at the projection boundary is what happened inside them — the rounds an attempt took, what measured each of them, the drafts at the gate, the offer standing before a freeze — all of which it derives on every call and publishes none of, because an operator asking what happens next should not be handed the history to search. This answers the other question — what is, and what was — and carries no `allowed_actions`: a surface that offered an action from here would be offering it from a reading that never asked whether the state permits it. The two are paired by their tokens below, never by being taken close together.\n\n**Two documents at one version.** `document` says which this is. An `index` is one row per batch and nothing else that grows with use; a `detail` expands exactly one subject the index named. Both carry the same `snapshot`, so a console that assembles an index and several details knows whether it assembled one reading or several. Exactly one of `index` and `detail` is an object and the other is null, paired with `document`; the implemented JSON Schema subset cannot state that, and the controller enforces it in both directions.\n\n**Why it is split that way.** The payload has to be bounded by something, and the two obvious answers are both wrong here: a documented size limit is a sentence rather than a mechanism, and truncating the series would contradict the one thing this document is for. So the index carries, per batch, only what a row needs — identity, denominators, how it ended, the promotion if it made one — and everything whose size is a function of that batch's own work sits behind a detail read of it. The index then grows by one row per freeze and by nothing else, and no detail read grows with history at all.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "document",
+    "snapshot",
+    "index",
+    "detail"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "1. Independent of the `status` payload version and of every persisted record's: those version a shape a writer committed, and this versions a reading. It promises its exact key set the way `status` does — adding, removing, or repurposing a key bumps it, additive changes included — because the surfaces that render a portfolio drive a lifecycle from it.",
+      "const": 1
+    },
+    "document": {
+      "description": "Which of the two readings this is. `index` is the series; `detail` is one subject of it, expanded.",
+      "enum": [
+        "index",
+        "detail"
+      ]
+    },
+    "snapshot": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "index": {
+      "$ref": "#/$defs/index"
+    },
+    "detail": {
+      "$ref": "#/$defs/detail"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "snapshot": {
+      "description": "What state this reading is of, in two tokens, and when it was taken.\n\nTwo rather than one, because the facts a reading is built from fall into two kinds that move for different reasons and are worth different guarantees. Together they cover every fact any allowed action is derived from; apart, each says what it is for.",
+      "type": "object",
+      "required": [
+        "taken_at",
+        "state_revision",
+        "observations_revision"
+      ],
+      "properties": {
+        "taken_at": {
+          "description": "When the reading was taken. Not a token: it orders two readings for a person and settles nothing, since a repository nobody wrote to produces the same tokens an hour later.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "state_revision": {
+          "description": "The durable half, and the same token `status` publishes and `--expect` compares (`mandrel/evolution/guards.py`). It digests the versioned records under `evolution/`, the policy that reads them, this machine's pending pool and standing proposal, and the tip of every ref those records name — everything a writer of this lifecycle changes. What it guarantees is therefore exact: while it holds, no mutation has landed, and a mutation handed it back refuses rather than acting on a lifecycle that moved. What it deliberately excludes is the clock, the audit ledger, `.ai-tasks/`, and the operator's `HEAD`.\n\nIt is the only one of the two a mutation accepts. A token from another scheme is refused rather than compared, which is why the version leads it.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*-[0-9a-f]+$"
+        },
+        "observations_revision": {
+          "description": "The volatile half: the readings this repository takes of things it does not own and no writer of this lifecycle moves — whether each admitted task's file stands complete in `.ai-tasks/`, which of a batch's report bundles are staged on this machine, and what each planned target's deploy receipt holds.\n\nIt exists because those readings are not decoration. `seal-round` is allowed exactly when every admitted task of the open round is observed complete, so an allowed-action set moves when a task file does — under a `state_revision` that has not moved and must not, since nothing was written and every mutation re-reads `.ai-tasks/` under the lock anyway. A surface holding one token could not tell a reading that still stands from one whose offered actions have changed underneath it.\n\nWhat it guarantees is weaker on purpose, and stated so no caller mistakes it for the other: it says this reading was taken over the same observations, and nothing more. It is not a lock, no mutation accepts it, and it moves on its own — a colleague finishing a task in another window moves it, and so does deploying a target. A console re-reads on it; it never refuses on it.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*-[0-9a-f]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "index": {
+      "description": "The series: where the lifecycle stands, what is waiting to become a batch, and one row per batch that ever was.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "phase",
+        "pool",
+        "proposal",
+        "batches",
+        "deployment"
+      ],
+      "properties": {
+        "phase": {
+          "description": "The same phase `status` names, from the same derivation over the same lineage and in the same vocabulary. Carried so a console does not need two calls for the headline; the tokens above are what say the two readings are of one state, and taking them apart is what makes them able to disagree.",
+          "enum": [
+            "idle",
+            "pool",
+            "batch-proposed",
+            "batch-frozen",
+            "dispositions-ready",
+            "proposals-pending",
+            "implementing",
+            "candidate-ready",
+            "supersede-pending",
+            "conclusion-pending"
+          ]
+        },
+        "pool": {
+          "$ref": "#/$defs/pool"
+        },
+        "proposal": {
+          "$ref": "#/$defs/proposal_summary"
+        },
+        "batches": {
+          "description": "Every frozen batch in freeze order, the current one included. Which batch is current is a position in this series rather than a property any batch states about itself, and so is which release a batch follows.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/batch_row"
+          }
+        },
+        "deployment": {
+          "$ref": "#/$defs/deployment"
+        }
+      },
+      "additionalProperties": false
+    },
+    "detail": {
+      "description": "One subject the index named, expanded. `kind` says which, and exactly one of the subject slots below is an object — the controller enforces that pairing, which this subset cannot state.\n\nTwo kinds, and the vocabulary is one this controller owns: it is widened by the task that first emits a new member, without a version bump, the rule a batch outcome's endings already follow. A reader then keeps reading every kind it always could and refuses exactly the one it cannot describe, naming the value.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "kind",
+        "id",
+        "batch",
+        "proposal"
+      ],
+      "properties": {
+        "kind": {
+          "description": "`batch` expands one frozen batch: its membership denominator, its admission gate, every experiment made in it with every round, and the release reading it owes or owns. `proposal` expands the offer standing between the pool and the first manifest, member by member.\n\nThere is deliberately no `experiment` kind. An experiment's size is bounded by its own rounds and a batch's by its own attempts, so one read per batch is already the coarsest unit that does not grow with history, and a second way to ask for the same records is a second place for them to disagree.",
+          "enum": [
+            "batch",
+            "proposal"
+          ]
+        },
+        "id": {
+          "description": "Which subject, in the identity the index stated it under. Null for `proposal`: at most one stands, and it is named by the base it was built at rather than by an id of its own.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "batch": {
+          "$ref": "#/$defs/batch_detail"
+        },
+        "proposal": {
+          "$ref": "#/$defs/proposal"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pool": {
+      "description": "Everything imported and not yet claimed by a batch, with the policy it is measured against. The denominator and never what a freeze would form — the offer's own count is on the proposal.",
+      "type": "object",
+      "required": [
+        "task_count",
+        "target",
+        "minimum",
+        "complete"
+      ],
+      "properties": {
+        "task_count": {
+          "description": "Unique completed tasks pending, one report pack each.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "target": {
+          "description": "The admission target this policy sets.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "minimum": {
+          "description": "Below this a freeze is refused, forced or not.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "complete": {
+          "description": "Whether the feed has been drained to exhaustion. False also means never synced: completeness is shown rather than assumed.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposal_summary": {
+      "description": "The batch on offer, as a row. Null when none stands, which is every state but `batch-proposed`.\n\nTwo counts and never one: what a freeze would form is not what the pool holds, and a reader given a single number cannot tell a short pool from a pool whose evidence is about another protocol.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "built_at",
+        "source_line_ref",
+        "base_revision",
+        "task_count",
+        "considered",
+        "human_included",
+        "not_selected"
+      ],
+      "properties": {
+        "built_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_line_ref": {
+          "description": "The configured line the base was read from.",
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "base_revision": {
+          "description": "That line's tip when the offer was built. A freeze refuses a line that has moved since, and publishes this same commit as the batch's base and runner protocol revision.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "task_count": {
+          "description": "Members: what a freeze would form.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "considered": {
+          "description": "Members plus every non-selection below.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "human_included": {
+          "description": "Members argued in past the identity test, each attributed.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_selected": {
+          "description": "Why the considered tasks that are not members were left out, counted per reason. A surface offering the human window needs the grounds and not only the shortfall: a fetch answers an unresolvable revision and nothing but a person answers an absent one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason_count"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "reason_count": {
+      "description": "One non-selection reason and how many considered tasks it accounts for. An array of pairs rather than an object keyed by reason, so the vocabulary is checked: this subset can constrain an enum in an item and cannot constrain a key.",
+      "type": "object",
+      "required": [
+        "reason",
+        "count"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "identity-differs",
+            "revision-absent",
+            "revision-malformed",
+            "revision-unresolvable",
+            "human-excluded"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposal": {
+      "description": "The standing offer, member by member. Machine-local runtime state, and the same tier as the pool: it is a decision in progress rather than a consequence of the durable records, and nothing else in this reading can say a human has been offered a membership and has not answered.\n\nCarried here because it is a state a surface can act on — `batch-include` and `batch-exclude` are gated verbs like any other, and either takes the two identity halves as they stand here.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "built_at",
+        "source_line_ref",
+        "base_revision",
+        "selected",
+        "not_selected"
+      ],
+      "properties": {
+        "built_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_line_ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "base_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "selected": {
+          "description": "The members, in a stable order independent of report arrival.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/proposal_member"
+          }
+        },
+        "not_selected": {
+          "description": "Every considered task left out, with the reason it was. Kept beside the members rather than derived against the pool, which moves.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/proposal_exclusion"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposal_member": {
+      "description": "One pooled task the offer would put in the batch.",
+      "type": "object",
+      "required": [
+        "repo_id",
+        "task_id",
+        "report_keys",
+        "mode",
+        "justification",
+        "actor",
+        "moved_at"
+      ],
+      "properties": {
+        "repo_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "description": "The completed task this evidence is about. Two fields rather than one joined identity, because either half may contain a `/`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "report_keys": {
+          "description": "The report pack held for this task.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "mode": {
+          "description": "`auto` is the identity test's own answer: this task's report pack states the same deployable canonical identity the base does. `human-included` is the only override there is, and it carries its attribution below.",
+          "enum": [
+            "auto",
+            "human-included"
+          ]
+        },
+        "justification": {
+          "description": "Why a human argued this task in, in their own words. Null for `auto`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "actor": {
+          "description": "Who argued it in. Null for `auto`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "moved_at": {
+          "description": "When they did. Null for `auto`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposal_exclusion": {
+      "description": "One considered task the offer leaves out, and why.",
+      "type": "object",
+      "required": [
+        "repo_id",
+        "task_id",
+        "report_keys",
+        "reason",
+        "justification",
+        "actor",
+        "moved_at"
+      ],
+      "properties": {
+        "repo_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "report_keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "description": "The four machine reasons are answers about this task's report pack against the base; `human-excluded` is the other direction of the window, and the only one with an actor.",
+          "enum": [
+            "identity-differs",
+            "revision-absent",
+            "revision-malformed",
+            "revision-unresolvable",
+            "human-excluded"
+          ]
+        },
+        "justification": {
+          "description": "Null for every machine reason, which is already its own explanation.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "moved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "batch_row": {
+      "description": "One frozen batch, as a row: what it was drawn from, how many attempts it took, how it ended, and whether it owes a reading of the release before it. Everything whose size is that batch's own work — its reports, its gate, its experiments, its rounds, its reading — is behind a detail read of it.",
+      "type": "object",
+      "required": [
+        "batch_id",
+        "frozen_at",
+        "base_revision",
+        "task_count",
+        "report_count",
+        "considered",
+        "human_included",
+        "experiment_count",
+        "current",
+        "outcome",
+        "decided_at",
+        "reason",
+        "promotion",
+        "release"
+      ],
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "frozen_at": {
+          "description": "When the immutable manifest was published — the moment membership stopped moving.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "base_revision": {
+          "description": "This batch's base, which is also its runner protocol revision: one commit, fixed at freeze from the configured source line, and the base every experiment of this batch starts from.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "task_count": {
+          "description": "Members: unique completed tasks this batch was frozen over.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "report_count": {
+          "description": "Report packs claimed, one per member.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "considered": {
+          "description": "The denominator the formation answered for. A batch of ten drawn from eleven is a different batch from one drawn from thirty, and a recurrence claim is about the set it was drawn from.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "human_included": {
+          "description": "Members argued in past the identity test.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "experiment_count": {
+          "description": "Attempts made in this batch, terminal and open.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "current": {
+          "description": "Whether this is the batch in play. Exactly one row carries true unless every batch has concluded, and which row it is is a position in the series rather than a fact any batch states about itself.",
+          "type": "boolean"
+        },
+        "outcome": {
+          "description": "Null while the batch is current: an outcome is what ends one, so its absence is a batch still running rather than an ending nobody recorded. `rolled-back` is the batch that ended without deciding anything itself — the release it was formed to judge came back off the line under it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "promoted",
+            "no-change",
+            "rolled-back",
+            null
+          ]
+        },
+        "decided_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "promotion": {
+          "$ref": "#/$defs/promotion"
+        },
+        "release": {
+          "description": "How far this batch's own reading of the release before it has got. `none` is most batches and is ordinary rather than missing: there was no release in front of them. `owed` is a reading this batch must record before its first experiment is admitted, `recorded` is one formed and not answered, and `settled` is one the gate has answered either way.\n\nAn obligation an ended batch never answered stays with that batch and is read from its own row, which is why this describes the batch it is on rather than the batch in play.",
+          "enum": [
+            "none",
+            "owed",
+            "recorded",
+            "settled"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "batch_detail": {
+      "description": "One batch, expanded: the membership its manifest fixed, what this machine holds of the evidence behind it, the analysis stage, the admission gate, every attempt made in it, how it ended, and the release reading it owns.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "batch_id",
+        "frozen_at",
+        "base_revision",
+        "forced",
+        "force_justification",
+        "current",
+        "selection",
+        "reports",
+        "not_selected",
+        "analysis",
+        "evidence",
+        "gate",
+        "experiments",
+        "outcome",
+        "release"
+      ],
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "frozen_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "base_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "forced": {
+          "description": "Whether the freeze waived the admission target. The minimum is never waivable.",
+          "type": "boolean"
+        },
+        "force_justification": {
+          "description": "Why, in the operator's words. Null unless forced.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "selection": {
+          "description": "The denominator, as the immutable manifest states it.",
+          "type": "object",
+          "required": [
+            "considered",
+            "auto_selected",
+            "human_included"
+          ],
+          "properties": {
+            "considered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "auto_selected": {
+              "description": "Members the canonical-identity test selected on its own.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "human_included": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "reports": {
+          "description": "One entry per member, in the manifest's order: what was analyzed, what produced it, and how it came to be a member.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/batch_report"
+          }
+        },
+        "not_selected": {
+          "description": "Every considered task this batch left out, with its reason and, for the human direction, its attribution. Committed content, so it reads the same in every clone.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/proposal_exclusion"
+          }
+        },
+        "analysis": {
+          "description": "The analysis stage: the generated task, whether its dispositions were recorded, and whether the stage has ended. The stage ending is an earlier and different moment from the batch ending.",
+          "type": "object",
+          "required": [
+            "task_id",
+            "findings_recorded",
+            "complete"
+          ],
+          "properties": {
+            "task_id": {
+              "description": "The analysis task freeze generated. Null for a batch frozen before the manifest carried it.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            },
+            "findings_recorded": {
+              "type": "boolean"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "description": "What this machine holds of the report bundles this batch claimed. A machine-local observation, covered by `observations_revision` and by neither the manifest nor any durable record: a clone that never staged them holds a manifest with no bundles behind it, which is a fact to show rather than damage — the manifest's hashes still say what was analyzed.",
+          "type": "object",
+          "required": [
+            "report_count",
+            "local"
+          ],
+          "properties": {
+            "report_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "local": {
+              "description": "Staged bundles present here.",
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "gate": {
+          "$ref": "#/$defs/gate"
+        },
+        "experiments": {
+          "description": "Every attempt made in this batch, in ordinal order, open and terminal alike in one shape.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/experiment"
+          }
+        },
+        "outcome": {
+          "description": "How the batch ended. Null while it is current.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "outcome",
+            "decided_at",
+            "reason",
+            "experiment_id",
+            "promotion"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "promoted",
+                "no-change",
+                "rolled-back"
+              ]
+            },
+            "decided_at": {
+              "description": "When the human decision was recorded, not when the last round concluded.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "experiment_id": {
+              "description": "The promoted attempt. Null for `no-change` and `rolled-back`, which promoted nothing.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+            },
+            "promotion": {
+              "$ref": "#/$defs/promotion"
+            }
+          },
+          "additionalProperties": false
+        },
+        "release": {
+          "$ref": "#/$defs/release"
+        }
+      },
+      "additionalProperties": false
+    },
+    "batch_report": {
+      "description": "One report's membership entry: what was analyzed, what produced it, and why it is in the batch.",
+      "type": "object",
+      "required": [
+        "report_key",
+        "repo_id",
+        "task_id",
+        "generated_at",
+        "bundle_sha256",
+        "mode",
+        "justification",
+        "actor",
+        "moved_at",
+        "evaluator",
+        "protocol"
+      ],
+      "properties": {
+        "report_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "bundle_sha256": {
+          "description": "What was analyzed, pinned. The bundle itself is machine-local and may be gone.",
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "auto",
+            "human-included"
+          ]
+        },
+        "justification": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "moved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "evaluator": {
+          "description": "What produced the evaluation. Recorded per report and never a membership gate: a facet that differs across a batch's reports is stated rather than selected on.",
+          "type": "object",
+          "required": [
+            "backend",
+            "model",
+            "rubric_revision"
+          ],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rubric_revision": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "protocol": {
+          "description": "The deployable protocol identity this report was produced under, copied verbatim from the feed. Both halves or neither: a half-stated identity is two nulls, never a partial claim.",
+          "type": "object",
+          "required": [
+            "effective_revision",
+            "deploy_lock_hash"
+          ],
+          "properties": {
+            "effective_revision": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            },
+            "deploy_lock_hash": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "gate": {
+      "description": "The batch's admission gate, derived rather than read off the directory: admission copies a draft and leaves it in place, so what is present is every proposal ever made rather than the ones still to decide.",
+      "type": "object",
+      "required": [
+        "waiting",
+        "consumed",
+        "declined",
+        "missing",
+        "unusable"
+      ],
+      "properties": {
+        "waiting": {
+          "description": "Draft ids no experiment has taken and nothing has turned down.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "consumed": {
+          "description": "Each admitted draft and the experiment that took it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/consumed_draft"
+          }
+        },
+        "declined": {
+          "description": "Draft ids a durable rejection turned down.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "missing": {
+          "description": "Consumed or declined drafts whose file is gone. The lineage is intact — the record holds the id and the hash of what was admitted — and the bytes are recoverable from history. Reported, not refused.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unusable": {
+          "description": "Files under `proposed-tasks/` whose stem could never be a draft id, named by file: no admission could record one, so they are waiting for no decision.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "consumed_draft": {
+      "description": "One draft and the attempt that admitted it.",
+      "type": "object",
+      "required": [
+        "draft_id",
+        "experiment_id"
+      ],
+      "properties": {
+        "draft_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "experiment": {
+      "description": "One attempt, in the one shape that serves the open attempt and every terminal one.\n\nOne shape rather than two on purpose. The next-action surface answers about the open attempt and summarises the rest, which is right for the question it answers and wrong for this one: a reader reconstructing what happened needs the same fields from a superseded attempt it needs from the one running, and a history projected through a narrower shape cannot be asked why an attempt ended where it did. Nothing here is asked only of an open attempt, and `decision` is what tells them apart.",
+      "type": "object",
+      "required": [
+        "experiment_id",
+        "batch_id",
+        "created_at",
+        "base_revision",
+        "base_release_ref",
+        "ref",
+        "ref_state",
+        "open",
+        "rounds",
+        "prepared_promotion",
+        "decision",
+        "replays"
+      ],
+      "properties": {
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "batch_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "base_revision": {
+          "description": "The batch's base. Every experiment of one batch carries the same value.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "base_release_ref": {
+          "description": "The most recent release tag reachable from the base when this attempt was created, or null when the checkout had none. Recorded rather than re-derived, so it still says which released protocol the attempt built on after the tag is gone.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "ref": {
+          "description": "The durable ref holding this attempt's rounds. Fast-forward only, so every sealed candidate stays reachable.",
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "ref_state": {
+          "$ref": "#/$defs/ref_state"
+        },
+        "open": {
+          "description": "Non-terminal: no decision recorded. Age, an empty ref and a sealed last round are none of them terminal — only a decision is.",
+          "type": "boolean"
+        },
+        "rounds": {
+          "description": "Every round, in order and append-only. At most one is unsealed and it is the last; every earlier one is candidate-ready and is never edited again.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/round"
+          }
+        },
+        "prepared_promotion": {
+          "description": "The merge unit a promotion of this attempt was prepared as, as this attempt's own record holds it. Read as exactly that and nothing more: on an open attempt it is durable in-flight state that narrows it to one verb, while on a terminal one an absence may mean the record was written at a schema version that kept no merge unit at all. What a promotion that *happened* went as is its batch's outcome, which states it at every version.",
+          "$ref": "#/$defs/prepared_promotion"
+        },
+        "decision": {
+          "description": "The terminal decision that turned this attempt into history. Null while it is open.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "outcome",
+            "decided_at",
+            "reason",
+            "superseded_by",
+            "promotion_revision"
+          ],
+          "properties": {
+            "outcome": {
+              "description": "`promoted` reached the source line. `abandoned` was given up. `superseded` was replaced by a successor the supersession recorded and did not create — which is why the successor may not exist yet.",
+              "enum": [
+                "promoted",
+                "abandoned",
+                "superseded"
+              ]
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "reason": {
+              "description": "Why, in the operator's words. One line, as the record collapsed it.",
+              "type": "string",
+              "minLength": 1
+            },
+            "superseded_by": {
+              "description": "The successor named by a supersession, null otherwise.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+            },
+            "promotion_revision": {
+              "description": "The source-line commit a promoted attempt made, null otherwise.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "replays": {
+          "$ref": "#/$defs/replays"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ref_state": {
+      "description": "Where this attempt's ref actually sits against where its record pins it. Null in a clone that cannot say — the ordinary answer for one that never fetched the namespace, and never a finding about the record.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "ref",
+        "tip",
+        "pinned",
+        "state",
+        "chain",
+        "chain_break",
+        "consistent"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tip": {
+          "description": "Where the ref stands here, null where this checkout does not hold it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "pinned": {
+          "description": "Where the record says it should be: the newest candidate any round sealed, or the base.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "state": {
+          "enum": [
+            "absent",
+            "at-pinned-revision",
+            "ahead",
+            "diverged",
+            "unknown"
+          ]
+        },
+        "chain": {
+          "description": "Whether the record's own pins form one appending history — base, then each sealed candidate in order, each reachable from the next. Null when this checkout does not hold the objects to say.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "chain_break": {
+          "description": "The first pair that does not, as `[earlier, later]`. Null unless `chain` is false: naming the break is what makes it something an operator can act on.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "consistent": {
+          "description": "Whether ref and record agree. Null where this checkout cannot say; a definite break outranks an unanswerable link, because half a history checked is enough to know it is wrong and never enough to call it right.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "round": {
+      "description": "One revision pass: what was admitted into it, and what it produced.",
+      "type": "object",
+      "required": [
+        "number",
+        "opened_at",
+        "reason",
+        "tasks",
+        "seal"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "opened_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "description": "Why the round was opened, in the operator's words.",
+          "type": "string",
+          "minLength": 1
+        },
+        "tasks": {
+          "description": "Every draft admitted into this round, and whether it was seen through.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/admitted_task"
+          }
+        },
+        "seal": {
+          "description": "What made the round candidate-ready. Null while it is still taking work — the last round of an open attempt, and no other.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "sealed_at",
+            "candidate_revision"
+          ],
+          "properties": {
+            "sealed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "candidate_revision": {
+              "description": "The revision this round pinned, fixed before any run measured it. Evidence naming an attempt but not a round says nothing after the next revision.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "admitted_task": {
+      "description": "One draft's admission into a round, and whether it was seen through.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "draft_id",
+        "draft_sha256",
+        "admitted_at",
+        "completion_observed_at",
+        "file_complete"
+      ],
+      "properties": {
+        "task_id": {
+          "description": "The local task id the admitted copy was published under.",
+          "type": "string",
+          "minLength": 1
+        },
+        "draft_id": {
+          "description": "The draft it was admitted from.",
+          "type": "string",
+          "minLength": 1
+        },
+        "draft_sha256": {
+          "description": "The bytes admitted, pinned — the draft file itself may be gone.",
+          "type": "string",
+          "minLength": 1
+        },
+        "admitted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completion_observed_at": {
+          "description": "When a seal observed this task complete. Durable, because the task file is machine-local and close-out archives it away; null means no seal has observed it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "file_complete": {
+          "description": "Whether the task file standing at that id is complete on this machine right now — the volatile reading a seal would take, and the reason `observations_revision` exists: this moves with a file nothing in this lifecycle wrote.\n\nNull when nothing was asked, which is either of two states and both are already answered above: the durable observation stands, so no file is consulted, or this machine holds no `.ai-tasks/` to consult. A seal is not gated on this field — it re-reads under the lock — but the action a surface may offer moves with it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "replays": {
+      "description": "This attempt's whole replay history: every run recorded against any of its rounds, a request that never became a run, and the positions given up without becoming one.\n\nCarried for terminal attempts as well as the open one, which is the half no other surface reads: what measured a candidate is the evidence a promotion was argued from, and an attempt that ended is exactly when somebody asks. The derived reading of whether a round's evidence still stands is deliberately not here — it asks whether the source line has moved since, which is a question about now and belongs to the surface that answers what to do next.",
+      "type": "object",
+      "required": [
+        "runs",
+        "request",
+        "withdrawn"
+      ],
+      "properties": {
+        "runs": {
+          "description": "Every recorded run, oldest first, across every round of this attempt.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/replay_run"
+          }
+        },
+        "request": {
+          "description": "A durable request that has not been answered with a run. Null when none stands. It measured nothing and changes no state; what it changes is the next step, and it may be going at a harness this repository will never hear from again.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "round",
+            "attempt",
+            "requested_at",
+            "candidate_revision",
+            "merge_input_revision",
+            "merge_input_ref",
+            "tree",
+            "expectation"
+          ],
+          "properties": {
+            "round": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "requested_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "candidate_revision": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "merge_input_revision": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "merge_input_ref": {
+              "type": "string",
+              "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+            },
+            "tree": {
+              "description": "The integration tree the request pinned.",
+              "type": "string",
+              "minLength": 1
+            },
+            "expectation": {
+              "description": "What the run was expected to show, stated before it produced anything.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "withdrawn": {
+          "description": "Positions given up without ever becoming runs. Never reissued, and each may be a run still going that nothing here will hear about.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/withdrawn_request"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "replay_run": {
+      "description": "One recorded run: which round's candidate it measured, what it integrated onto, the tree that produced, who ran it, and how it ended.",
+      "type": "object",
+      "required": [
+        "round",
+        "attempt",
+        "started_at",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree",
+        "harness",
+        "handle",
+        "outcome",
+        "concluded_at"
+      ],
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "candidate_revision": {
+          "description": "The sealed candidate this run measured.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "description": "The source-line commit it was integrated onto.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "description": "The integration tree that produced — what was actually exercised.",
+          "type": "string",
+          "minLength": 1
+        },
+        "harness": {
+          "description": "Who ran it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "handle": {
+          "description": "Their own name for the run. Opaque here, and the only thing connecting this record to the work.",
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "description": "Null while the run is going: an unfinished run rather than one that produced nothing.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "completed",
+            "failed",
+            null
+          ]
+        },
+        "concluded_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "withdrawn_request": {
+      "description": "A request taken back before any run answered it.",
+      "type": "object",
+      "required": [
+        "round",
+        "attempt",
+        "requested_at",
+        "withdrawn_at",
+        "candidate_revision"
+      ],
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "withdrawn_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "prepared_promotion": {
+      "description": "A merge unit prepared but not yet recorded as a promotion.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "round",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree",
+        "revision",
+        "reason",
+        "planned_targets",
+        "prepared_at"
+      ],
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "description": "The exact commit this operation made. Its identity, which is how a later run finds it again.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "planned_targets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "prepared_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "promotion": {
+      "description": "A change this repository recorded as reaching the source line, with the merge unit it went as. Null on a batch that promoted nothing.\n\nThe merge unit and not only the revision: a commit on its own is something an operator cannot check against anything, while with the round and the candidate it names what was measured and with the merge input it names the line it went onto.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "batch_id",
+        "experiment_id",
+        "revision",
+        "round",
+        "candidate_revision",
+        "merge_input_revision",
+        "merge_input_ref",
+        "tree",
+        "planned_targets",
+        "rollback"
+      ],
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "revision": {
+          "description": "The source-line commit carrying the change.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_input_ref": {
+          "type": "string",
+          "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+        },
+        "tree": {
+          "type": "string",
+          "minLength": 1
+        },
+        "planned_targets": {
+          "description": "What the promotion was recorded as intending to redeploy, and never what any target holds: that is per target, lags every promotion until the target is redeployed, and is read from that target's own receipt.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rollback": {
+          "description": "The reversal, if this promotion has one. Not a second promotion and not an absence of this one: the commit stays on the line and stays recorded, and this says a later commit took the change back out.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "revision",
+            "reverted_from",
+            "reverted_at",
+            "reason",
+            "unconfirmed"
+          ],
+          "properties": {
+            "revision": {
+              "description": "The inverse commit.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "reverted_from": {
+              "description": "The promotion it takes back out.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "reverted_at": {
+              "description": "Null while the inverse commit exists and the line has not been recorded as carrying it — an operation in flight, which is a different next step from one that finished.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unconfirmed": {
+              "description": "Why this checkout could not settle that the recorded commit is the promotion taken back out of the line it was made from — an object it does not hold, or a Git that cannot compute the revert. Null where it could. A reading carries on where the rollback operation refuses.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "release": {
+      "description": "This batch's reading of the release before it: the frame its own frozen provenance supports, what was measured against it, and how the gate answered. Null when there was no release in front of this batch, which is most batches and is ordinary rather than missing.\n\nThe frame is stated whether or not anything was recorded, because the denominators and the exclusions are what a reader judges an absent or a zero-report reading by: two empty sides are absent evidence, never a reading against the release, and only the exclusions say which of the two this is.\n\nIt sits on the batch that owes it. Ordinarily that is the batch in play; where an owing batch ended without answering, it is not, and a reader finds the outstanding obligation as the row of the series whose `release` is `owed` or `recorded` rather than by asking the current batch about somebody else's record.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "assessed",
+        "sides",
+        "comparability",
+        "counterfactual",
+        "reading",
+        "decision"
+      ],
+      "properties": {
+        "assessed": {
+          "description": "Which release this reads, and whether it still stood when the reading was formed.",
+          "type": "object",
+          "required": [
+            "batch_id",
+            "experiment_id",
+            "revision",
+            "standing",
+            "rollback_revision",
+            "planned_targets",
+            "source_line"
+          ],
+          "properties": {
+            "batch_id": {
+              "type": "string",
+              "pattern": "^evolution-batch-[0-9]{4,}$"
+            },
+            "experiment_id": {
+              "type": "string",
+              "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+            },
+            "revision": {
+              "description": "The promotion commit this reading is about.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "standing": {
+              "description": "Whether the release stood when the reading was formed — the question the reading answered, and never what the line carries now. Settling `rolled-back` writes the decision onto a reading formed while the release stood and lands the inverse commit after it, so on the path a regression finding ordinarily ends, this and `source_line.standing` disagree.",
+              "type": "boolean"
+            },
+            "rollback_revision": {
+              "description": "The inverse commit as the reading saw it, null when it saw none.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "planned_targets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "source_line": {
+              "description": "The same release as the source line holds it now — the other half of that pair, and the half a rollback moves. Identity is not repeated because it cannot differ: a record naming another promotion is refused at read.",
+              "type": "object",
+              "required": [
+                "standing",
+                "rollback_revision"
+              ],
+              "properties": {
+                "standing": {
+                  "type": "boolean"
+                },
+                "rollback_revision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{40}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "sides": {
+          "description": "The two sides the frozen manifests put each report on, and everything that put a report on neither. `sides` and not `cohorts`: the next-action payload keeps the older wire spelling it already published, and a document published for the first time adopts the vocabulary the controller now speaks rather than inheriting a name it never shipped.",
+          "type": "object",
+          "required": [
+            "before",
+            "after",
+            "minimum_task_count",
+            "catalog_count",
+            "excluded",
+            "unverified"
+          ],
+          "properties": {
+            "before": {
+              "$ref": "#/$defs/release_side"
+            },
+            "after": {
+              "$ref": "#/$defs/release_side"
+            },
+            "minimum_task_count": {
+              "description": "What each side must reach before it may carry a direction at all.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "catalog_count": {
+              "description": "Frozen reports the frame drew from, placed or not.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "excluded": {
+              "description": "Every frozen report on neither side, and why. All the reasons are about what a report's provenance can be shown to say, never about what its numbers came to.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/release_exclusion"
+              }
+            },
+            "unverified": {
+              "description": "Report keys this checkout could not place at all — a fact about the clone, never agreement. The two exclusions a frozen manifest settles by itself are held to agree exactly in every clone; only a placement Git must answer may differ this way.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "comparability": {
+          "description": "Whether the release is the only difference between the sides, facet by facet.",
+          "type": "object",
+          "required": [
+            "coherent",
+            "incoherent",
+            "unstated",
+            "differing",
+            "facets",
+            "sides_support_direction"
+          ],
+          "properties": {
+            "coherent": {
+              "type": "boolean"
+            },
+            "incoherent": {
+              "description": "Every facet that is not coherent, by name.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "unstated": {
+              "description": "Facets whose evidence is missing: the feed does not publish the value, so the sides say nothing about the release either way. Stated apart from `differing` rather than left to be re-derived, because deriving it means knowing that a value carried as null is a missing one, which is this controller's rule and not a consumer's.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "differing": {
+              "description": "Facets whose stated values genuinely differ across the sides — evidence about these sides, and the half of `incoherent` that is a finding.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "facets": {
+              "description": "Each facet and the values each side states for it.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/release_facet"
+              }
+            },
+            "sides_support_direction": {
+              "description": "Whether the sides alone could carry a direction, before any measurement. False on every frame while no manifest states the shape of the work, which is why a directional claim rests on the counterfactual instead.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "counterfactual": {
+          "description": "The pinned before/after run this reading may rest a direction on, in whichever of its states it stands. `state` and the two records are stated together rather than folded into one: a request may stand over a failed run, and the run it retries is still what an operator reads to know why.",
+          "type": "object",
+          "required": [
+            "state",
+            "run",
+            "request",
+            "withdrawn"
+          ],
+          "properties": {
+            "state": {
+              "description": "`requested` outranks a failed run, because a request may only ever stand over one and when it does the retry is what is live.",
+              "enum": [
+                "none",
+                "requested",
+                "running",
+                "failed",
+                "completed"
+              ]
+            },
+            "run": {
+              "description": "The recorded run, null when none has been.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "experiment_id",
+                "round",
+                "attempt",
+                "started_at",
+                "base_revision",
+                "candidate_revision",
+                "source_ref",
+                "harness",
+                "handle",
+                "expectation",
+                "outcome",
+                "concluded_at",
+                "detail"
+              ],
+              "properties": {
+                "experiment_id": {
+                  "description": "The position this run was allocated at, kept clear of every position the batch's own experiments could take.",
+                  "type": "string",
+                  "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+                },
+                "round": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "attempt": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "started_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "base_revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "candidate_revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "pattern": "^refs/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+                },
+                "harness": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "handle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "expectation": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "outcome": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "completed",
+                    "failed",
+                    null
+                  ]
+                },
+                "concluded_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "detail": {
+                  "description": "What the harness said about how it ended.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "request": {
+              "description": "A run asked for and not yet answered. Null when none stands.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "experiment_id",
+                "round",
+                "attempt",
+                "requested_at",
+                "base_revision",
+                "candidate_revision",
+                "expectation"
+              ],
+              "properties": {
+                "experiment_id": {
+                  "type": "string",
+                  "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+                },
+                "round": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "attempt": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "requested_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "base_revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "candidate_revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "expectation": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "withdrawn": {
+              "description": "Positions given up without becoming runs.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/release_withdrawn"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "reading": {
+          "description": "What the batch concluded about the release. Null while nothing has been recorded — which, with the frame above stated, is an obligation outstanding rather than an answer of no.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "verdict",
+            "confidence",
+            "rationale",
+            "recommendation",
+            "formed_at",
+            "directional",
+            "metrics"
+          ],
+          "properties": {
+            "verdict": {
+              "description": "`inconclusive` is a real answer and the honest one wherever the evidence cannot carry a direction: a facet gap and a genuine side difference both land here, and neither is evidence against the release.",
+              "enum": [
+                "improved",
+                "neutral",
+                "regressed",
+                "inconclusive"
+              ]
+            },
+            "confidence": {
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recommendation": {
+              "description": "What this reading says should happen to the release, in the words the settlement answers in. Advice and not the answer: a surface offering the gate shows it beside the two choices rather than pre-pressing one, and the two are allowed to disagree.",
+              "enum": [
+                "retain",
+                "rolled-back"
+              ]
+            },
+            "formed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "directional": {
+              "description": "Whether the verdict claims a direction, as opposed to declining to.",
+              "type": "boolean"
+            },
+            "metrics": {
+              "description": "The quantities the reading rests on, each on both sides.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/release_metric"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "decision": {
+          "description": "How the gate answered. Null while it has not. `retain` releases the frozen base for this batch's first admission; `rolled-back` takes the release off the line and ends the batch standing on it.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "settlement",
+            "decided_at",
+            "reason",
+            "rollback_revision"
+          ],
+          "properties": {
+            "settlement": {
+              "enum": [
+                "retain",
+                "rolled-back"
+              ]
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rollback_revision": {
+              "description": "The inverse commit a `rolled-back` settlement landed, null for `retain`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "release_side": {
+      "description": "One side of the comparison: the reports produced under that protocol, and how many unique tasks they cover.",
+      "type": "object",
+      "required": [
+        "report_keys",
+        "task_count"
+      ],
+      "properties": {
+        "report_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "task_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "release_exclusion": {
+      "description": "One frozen report on neither side, and why.",
+      "type": "object",
+      "required": [
+        "report_key",
+        "batch_id",
+        "reason",
+        "detail"
+      ],
+      "properties": {
+        "report_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "batch_id": {
+          "description": "The frozen batch whose manifest carries this report.",
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}$"
+        },
+        "reason": {
+          "description": "The first two are settled by the frozen bytes alone and read the same in every clone. `effective-revision-unresolvable` is a reading of a repository. `effective-revision-other-protocol` is the price of placing by canonical identity rather than by ancestry: identity answers same-or-different and never before-or-after, so a target that held a third protocol belongs to no side and says so.",
+          "enum": [
+            "effective-revision-absent",
+            "effective-revision-malformed",
+            "effective-revision-unresolvable",
+            "effective-revision-other-protocol"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "release_facet": {
+      "description": "One comparability facet and what each side states for it. A null among the values is a report that does not state the facet — which is what makes the facet `unstated` rather than `differing`.",
+      "type": "object",
+      "required": [
+        "facet",
+        "coherent",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "facet": {
+          "description": "The facet's name. A plain string rather than an enum, as the persisted record has it: the vocabulary lives in `mandrel/evolution/assessment.py` and widening it in two places is how the two come to disagree.",
+          "type": "string",
+          "minLength": 1
+        },
+        "coherent": {
+          "type": "boolean"
+        },
+        "before": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "release_metric": {
+      "description": "One quantity, on the side produced before the release and on the side produced after it.",
+      "type": "object",
+      "required": [
+        "metric",
+        "unit",
+        "before",
+        "after",
+        "better",
+        "goal"
+      ],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "before": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "after": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "better": {
+          "description": "Which direction is an improvement. `neither` marks an observation recorded beside the goals.",
+          "enum": [
+            "lower",
+            "higher",
+            "neither"
+          ]
+        },
+        "goal": {
+          "description": "Whether the release was meant to move this, as opposed to it being recorded beside one.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "release_withdrawn": {
+      "description": "A counterfactual position given up without becoming a run.",
+      "type": "object",
+      "required": [
+        "experiment_id",
+        "round",
+        "attempt",
+        "requested_at",
+        "withdrawn_at"
+      ],
+      "properties": {
+        "experiment_id": {
+          "type": "string",
+          "pattern": "^evolution-batch-[0-9]{4,}-exp-(0[1-9]|[1-9][0-9]+)$"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "withdrawn_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "deployment": {
+      "description": "What the targets the last promotion was planned for actually hold, beside the two commits those answers are relative to. Null when nothing has been promoted: the plan is where the targets in play come from, so with no promotion there is no list to answer for — never an empty one, which would read as a promotion that planned nothing.\n\nMachine-local, all of it, and covered by `observations_revision`: the registry is this machine's inventory and a receipt is a file in a repository this system does not own. A clone that manages nothing reads every planned target as unregistered, which is the ordinary answer and not a finding. Nothing here is lifecycle state — it gates no verb, and a redeploy is not a lifecycle write.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "promotion",
+        "rollback",
+        "targets"
+      ],
+      "properties": {
+        "promotion": {
+          "description": "The promotion the states below are relative to.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "rollback": {
+          "description": "Its inverse, when one exists. Asked first, because a line that took the reversal contains the promotion too, and asking about the promotion alone would report a target that gave the change back as one still running it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "targets": {
+          "description": "One reading per planned target name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target_holding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "target_holding": {
+      "description": "One planned target, and what its own deploy receipt says it holds.\n\nThe target's name and no machine path: where a repository sits on the machine that ran the reading is not a fact about the lifecycle, and a portfolio published to a surface should not carry one.",
+      "type": "object",
+      "required": [
+        "target",
+        "revision",
+        "state",
+        "detail"
+      ],
+      "properties": {
+        "target": {
+          "description": "The name the promotion planned for.",
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "description": "The receipt's own source commit, as it states it. Null wherever there is none to read.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "state": {
+          "description": "The first four are placements of a revision this reading could read; the rest are the ways there was none to place. A receipt naming `HEAD`, a branch, or an abbreviation is `unstated` rather than resolved, because resolving it would answer against this checkout instead of against what that target holds.",
+          "enum": [
+            "carries",
+            "reversed",
+            "behind",
+            "unplaceable",
+            "unstated",
+            "no-receipt",
+            "unreadable",
+            "unregistered",
+            "ambiguous"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

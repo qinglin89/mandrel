@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "document": "index",
+  "snapshot": {
+    "taken_at": "2026-09-04T09:15:00Z",
+    "state_revision": "1-0f1e2d3c4b5a6978",
+    "observations_revision": "1-9a8b7c6d5e4f3021"
+  },
+  "index": {
+    "phase": "implementing",
+    "pool": {
+      "task_count": 4,
+      "target": 8,
+      "minimum": 3,
+      "complete": true
+    },
+    "proposal": null,
+    "batches": [
+      {
+        "batch_id": "evolution-batch-0007",
+        "frozen_at": "2026-06-02T08:00:00Z",
+        "base_revision": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "task_count": 9,
+        "report_count": 9,
+        "considered": 11,
+        "human_included": 0,
+        "experiment_count": 2,
+        "current": false,
+        "outcome": "promoted",
+        "decided_at": "2026-06-27T16:20:00Z",
+        "reason": "replay showed the convergence the analysis predicted",
+        "promotion": {
+          "batch_id": "evolution-batch-0007",
+          "experiment_id": "evolution-batch-0007-exp-02",
+          "revision": "1818181818181818181818181818181818181818",
+          "round": 2,
+          "candidate_revision": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+          "merge_input_revision": "0707070707070707070707070707070707070707",
+          "merge_input_ref": "refs/heads/dev",
+          "tree": "t000000000000000000000000000000000000000",
+          "planned_targets": [
+            "mandrel",
+            "orch-hub"
+          ],
+          "rollback": null
+        },
+        "release": "none"
+      },
+      {
+        "batch_id": "evolution-batch-0008",
+        "frozen_at": "2026-07-14T07:40:00Z",
+        "base_revision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "task_count": 8,
+        "report_count": 8,
+        "considered": 8,
+        "human_included": 0,
+        "experiment_count": 1,
+        "current": false,
+        "outcome": "no-change",
+        "decided_at": "2026-08-01T11:05:00Z",
+        "reason": "the finding did not recur outside one repository",
+        "promotion": null,
+        "release": "settled"
+      },
+      {
+        "batch_id": "evolution-batch-0009",
+        "frozen_at": "2026-08-20T09:30:00Z",
+        "base_revision": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "task_count": 10,
+        "report_count": 10,
+        "considered": 12,
+        "human_included": 1,
+        "experiment_count": 2,
+        "current": true,
+        "outcome": null,
+        "decided_at": null,
+        "reason": null,
+        "promotion": null,
+        "release": "none"
+      }
+    ],
+    "deployment": {
+      "promotion": "1818181818181818181818181818181818181818",
+      "rollback": null,
+      "targets": [
+        {
+          "target": "mandrel",
+          "revision": "1818181818181818181818181818181818181818",
+          "state": "carries",
+          "detail": null
+        },
+        {
+          "target": "orch-hub",
+          "revision": "0707070707070707070707070707070707070707",
+          "state": "behind",
+          "detail": null
+        },
+        {
+          "target": "sandbox",
+          "revision": null,
+          "state": "unregistered",
+          "detail": "no registry entry on this machine names 'sandbox'"
+        }
+      ]
+    }
+  },
+  "detail": null
+}

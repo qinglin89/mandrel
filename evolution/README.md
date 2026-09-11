@@ -2180,8 +2180,8 @@ Every operation above is reached by one `mandrel evolution` verb, and the consol
 is sufficient on its own: a Web surface, orch-hub, or a script is an adapter over
 these verbs and never a second implementation of the lifecycle. What this section
 fixes is the part of that boundary an adapter is entitled to depend on — how an
-answer is classified — so that routing a lifecycle never means reading a
-sentence written for a person.
+answer is classified, and what the reading it acts on carries — so that driving
+a lifecycle never means reading a sentence written for a person.
 
 **Three response families, not two.** A verb completes, fails, or records a
 request only a person can answer. The third is not an error dressed as one: a
@@ -2261,6 +2261,101 @@ prints what it has always printed, and what a verb *did* is read from
 `status --json`, which is derived from the same records the verb wrote — including
 the pinned request an `unanswered` answer leaves behind. A second shape for the
 same facts, invented one verb at a time, is what this section exists to prevent.
+
+**Two readings, and the question each one answers.** `status` answers what to do
+next: one phase, the batch in play, the attempt open in it, the reading that
+gates the next admission, every verb with whether this state accepts it, and —
+beside them, as rows — the series and how each of its batches and attempts
+ended. What it drops at the projection boundary is what happened *inside* them:
+the rounds an attempt took, what measured each of them, the drafts still at the
+gate, the offer standing before a freeze, and the pool behind it. It derives all
+of that on every call and publishes none of it, which is right for an operator
+about to type something and wrong for a surface rendering the portfolio. The
+second reading answers the other question — what is, and what was — and is
+specified by `evolution/schemas/portfolio.schema.json`: every batch ever frozen,
+every attempt made inside one, what measured each attempt, how each ended, and
+what the release each batch followed was judged to be. A console holding it
+reconstructs the history without reading Git, the versioned records,
+`.ai-tasks/`, the drafts, or any target's deploy receipt. A second reader of
+those files is a second implementation of the lineage, and the two come to
+disagree about what happened.
+
+The split is not a size optimisation. The portfolio carries no
+`allowed_actions`, because an action offered from it would be offered by a
+reading that never asked whether the state permits it; `status` stays a row
+deep, because an operator asking what happens next should not be handed the
+record to search. The two are paired by the tokens below, never by being taken
+close together.
+
+**What a token guarantees, and there are two of them.** `state_revision` is the
+durable half: a digest of the versioned records, the policy that reads them,
+this machine's pending pool and standing proposal, and the tip of every ref
+those records name — everything a writer of this lifecycle changes. Its
+guarantee is exact, and it is the only one a mutation accepts: a verb given it
+back checks it first under the single-writer lock and refuses rather than acting
+on a lifecycle that moved. A token from another scheme is refused rather than
+compared, which is why the scheme version leads it: "this does not describe this
+repository" and "this repository moved" are different facts, and a caller
+reading them as one retries the wrong thing forever. The clock, the audit
+ledger, `.ai-tasks/` and the operator's `HEAD` are outside it, each for a reason
+stated where it is computed.
+
+`observations_revision` is the volatile half: what this repository reads of
+things it does not own and no writer of this lifecycle moves — whether each
+admitted task's file stands complete in `.ai-tasks/`, which of a batch's report
+bundles are staged on this machine, and what each planned target's deploy
+receipt holds. It exists because those readings are not decoration. `seal-round`
+is accepted exactly when every admitted task of the open round is observed
+complete, so the set of actions a state accepts moves when a task file does —
+under a `state_revision` that has not moved and must not, since nothing was
+written and every operation re-reads `.ai-tasks/` under the lock regardless. One
+token could not tell a reading that still stands from one whose offered actions
+changed underneath it.
+
+Its guarantee is deliberately weaker, and stating that is the point: it says a
+reading was taken over the same observations and nothing more. It is not a lock,
+no mutation accepts it, and it moves on its own — a colleague finishing a task
+in another window moves it, and so does deploying a target. A surface re-reads
+on it and never refuses on it. What the pair guarantees together is the property
+neither has alone: every fact any allowed action is derived from is covered by
+one of them, so two readings agreeing on both are one reading.
+
+**What `allowed_actions` means.** Every verb the lifecycle has is named in every
+state, the refused ones included, each with the reason it is refused — a menu
+that omitted them would leave an operator meeting a refusal nothing on the
+surface had mentioned. `allowed` means this state accepts the verb, which is a
+statement about the state read and not a promise about the write: the operation
+re-derives every refusal under the lock, and what closes the gap between the
+reading and the write is `--expect`. A verb absent from the list is a build that
+does not have it, which is a different fact from one refusing.
+
+**Schema compatibility, for both payloads.** Each reading promises its exact key
+set. Adding, removing, or repurposing a key bumps that reading's version,
+additive changes included, because the surfaces that drive a lifecycle from a
+payload key on the set they parse. The two versions are independent of each
+other and of every persisted record's: those version a shape a writer committed,
+and these version a reading. A vocabulary is the one thing that widens without a
+bump — a new member of an enum this controller owns is added by the task that
+first emits it, the rule a batch outcome's endings already follow, so an older
+reader keeps reading every value it always could and refuses exactly the one it
+cannot describe, naming it.
+
+**How the payload is bounded.** Not by a documented limit, which is a sentence
+rather than a mechanism, and not by truncation, which would contradict the one
+thing the reading is for. The portfolio is two documents at one version: an
+index that is one row per batch and nothing else that grows with use, and a
+detail read that expands exactly one subject the index named: a batch — its
+membership, its gate, its attempts, their rounds and their runs, and the release
+reading it owns — or the offer standing before a freeze, member by member.
+Everything whose size is a function of one batch's own work sits behind that
+read, so the series grows by one row per freeze and no detail read grows with
+history at all. Both documents carry the same snapshot, which is what lets a
+console assembling an index and several details know whether it assembled one
+reading or several.
+
+The reading half of this boundary is settled here; the verb that emits it is not
+shipped yet, and until it is, `status --json` is the only reading this console
+produces.
 
 ## Evolution task requirements
 

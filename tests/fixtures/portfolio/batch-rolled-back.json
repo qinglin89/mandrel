@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "document": "detail",
+  "snapshot": {
+    "taken_at": "2026-09-04T09:15:00Z",
+    "state_revision": "1-0f1e2d3c4b5a6978",
+    "observations_revision": "1-9a8b7c6d5e4f3021"
+  },
+  "index": null,
+  "detail": {
+    "kind": "batch",
+    "id": "evolution-batch-0012",
+    "batch": {
+      "batch_id": "evolution-batch-0012",
+      "frozen_at": "2026-08-29T08:00:00Z",
+      "base_revision": "1818181818181818181818181818181818181818",
+      "forced": false,
+      "force_justification": null,
+      "current": false,
+      "selection": {
+        "considered": 1,
+        "auto_selected": 1,
+        "human_included": 0
+      },
+      "reports": [
+        {
+          "report_key": "mandrel:2026-08-24-p:1",
+          "repo_id": "mandrel",
+          "task_id": "2026-08-24-p",
+          "generated_at": "2026-08-25T10:00:00Z",
+          "bundle_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+          "mode": "auto",
+          "justification": null,
+          "actor": null,
+          "moved_at": null,
+          "evaluator": {
+            "backend": "claude",
+            "model": "opus-5",
+            "rubric_revision": "rubric-3"
+          },
+          "protocol": {
+            "effective_revision": "1818181818181818181818181818181818181818",
+            "deploy_lock_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      ],
+      "not_selected": [],
+      "analysis": {
+        "task_id": "2026-08-29-evolution-batch-0012-analysis",
+        "findings_recorded": true,
+        "complete": true
+      },
+      "evidence": {
+        "report_count": 1,
+        "local": 1
+      },
+      "gate": {
+        "waiting": [
+          "conduct-tightening"
+        ],
+        "consumed": [],
+        "declined": [],
+        "missing": [],
+        "unusable": []
+      },
+      "experiments": [],
+      "outcome": {
+        "outcome": "rolled-back",
+        "decided_at": "2026-09-06T15:00:00Z",
+        "reason": "the release this batch was formed to judge came back off the line; its claimed reports stay spent",
+        "experiment_id": null,
+        "promotion": null
+      },
+      "release": {
+        "assessed": {
+          "batch_id": "evolution-batch-0010",
+          "experiment_id": "evolution-batch-0010-exp-01",
+          "revision": "1818181818181818181818181818181818181818",
+          "standing": true,
+          "rollback_revision": null,
+          "planned_targets": [
+            "mandrel",
+            "orch-hub"
+          ],
+          "source_line": {
+            "standing": false,
+            "rollback_revision": "2929292929292929292929292929292929292929"
+          }
+        },
+        "sides": {
+          "before": {
+            "report_keys": [
+              "mandrel:2026-05-20-a:1",
+              "orch-hub:2026-05-22-b:1",
+              "mandrel:2026-05-29-j:1"
+            ],
+            "task_count": 3
+          },
+          "after": {
+            "report_keys": [
+              "mandrel:2026-07-02-k:1",
+              "orch-hub:2026-07-05-l:1",
+              "mandrel:2026-07-08-m:1"
+            ],
+            "task_count": 3
+          },
+          "minimum_task_count": 3,
+          "catalog_count": 8,
+          "excluded": [],
+          "unverified": [
+            "orch-hub:2026-08-26-q:1"
+          ]
+        },
+        "comparability": {
+          "coherent": false,
+          "incoherent": [
+            "evaluator-rubric-revision",
+            "task-shape"
+          ],
+          "unstated": [
+            "task-shape"
+          ],
+          "differing": [
+            "evaluator-rubric-revision"
+          ],
+          "facets": [
+            {
+              "facet": "evaluator-backend",
+              "coherent": true,
+              "before": [
+                "claude"
+              ],
+              "after": [
+                "claude"
+              ]
+            },
+            {
+              "facet": "evaluator-rubric-revision",
+              "coherent": false,
+              "before": [
+                "rubric-3"
+              ],
+              "after": [
+                "rubric-4"
+              ]
+            },
+            {
+              "facet": "task-shape",
+              "coherent": false,
+              "before": [
+                null
+              ],
+              "after": [
+                null
+              ]
+            }
+          ],
+          "sides_support_direction": false
+        },
+        "counterfactual": {
+          "state": "completed",
+          "run": {
+            "experiment_id": "evolution-batch-0012-exp-99",
+            "round": 1,
+            "attempt": 2,
+            "started_at": "2026-09-02T09:00:00Z",
+            "base_revision": "0707070707070707070707070707070707070707",
+            "candidate_revision": "1818181818181818181818181818181818181818",
+            "source_ref": "refs/heads/dev",
+            "harness": "stated",
+            "handle": "counterfactual-0012-2",
+            "expectation": "convergence at least as high as before the release",
+            "outcome": "completed",
+            "concluded_at": "2026-09-05T20:00:00Z",
+            "detail": null
+          },
+          "request": null,
+          "withdrawn": [
+            {
+              "experiment_id": "evolution-batch-0012-exp-99",
+              "round": 1,
+              "attempt": 1,
+              "requested_at": "2026-08-31T09:00:00Z",
+              "withdrawn_at": "2026-09-02T08:30:00Z"
+            }
+          ]
+        },
+        "reading": {
+          "verdict": "regressed",
+          "confidence": "high",
+          "rationale": "the pinned pair lost convergence on the released protocol and review turns rose with it",
+          "recommendation": "rolled-back",
+          "formed_at": "2026-09-06T09:00:00Z",
+          "directional": true,
+          "metrics": [
+            {
+              "metric": "convergence",
+              "unit": "ratio",
+              "before": 0.83,
+              "after": 0.61,
+              "better": "higher",
+              "goal": true
+            },
+            {
+              "metric": "review-turns",
+              "unit": "turns",
+              "before": 2.2,
+              "after": 3.9,
+              "better": "lower",
+              "goal": true
+            }
+          ]
+        },
+        "decision": {
+          "settlement": "rolled-back",
+          "decided_at": "2026-09-06T14:40:00Z",
+          "reason": "both goals moved against the release and the counterfactual pinned the pair",
+          "rollback_revision": "2929292929292929292929292929292929292929"
+        }
+      }
+    },
+    "proposal": null
+  }
+}
