@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-10
-verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # Project Map
@@ -20,7 +20,7 @@ verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 | Unified verification | check script, hook installer, CI workflows | `scripts/check.sh`, optional pre-push hook, GitHub Actions |
 | Workflow skills | deploy, paths, canonical Claude skills | deploy manifest/lock, `status` shadow check, backend closeout pointers |
 | Evolution policy | evolution contract/config/schemas/ledger | versioned policy, manifests, closures, cases, experiments, audit |
-| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v11 status, state revision and allowed/refused/recovery actions, typed recovery-specific refusal codes, schema-v1 JSON non-completion envelope |
+| Evolution controller | evolution package, CLI | complete standalone `mandrel evolution` verb set, ignored runtime pool/artifacts/proposal, canonical-identity selection and human membership window, schema-v11 next-action status, schema-v1 portfolio index/bounded detail with durable and observation revisions, typed recovery-specific refusal codes, schema-v1 JSON non-completion envelope |
 | Evolution change lineage | lineage/experiment/guard services, evolution policy | versioned experiment/outcome/rejection records, durable refs, guarded admission/round/decision operations |
 | Evolution replay/releases | replay/rollback/revision/harness services, evolution policy | operator-stated replay histories, prepared promotion, exact merge unit, source-line inverse commits, rollback interruption recovery, and base-keyed `rolled-back` batch ending; phase JSON v11 |
 | Release effectiveness gate | assessment/lineage/experiment/rollback/harness services, lockfile identity, evolution policy | Canonical-identity sides/exclusions with unstated/differing facet failures, CLI-visible assessment recommendation, pinned counterfactual, human retain/rollback settlement, retained-base admission or rollback ending |

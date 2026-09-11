@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-10
-verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # Modules
@@ -22,7 +22,7 @@ verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 | Boundary lint | `scripts/boundary-lint.sh` | Mechanical charter, reference, eager-channel, prompt checks |
 | Verification gate | `scripts/check.sh`, `scripts/install-git-hooks.sh`, `.github/workflows/` | Single deterministic local/CI/hook entrypoint; manual credentialed probe path |
 | Evolution policy | `evolution/` | Normative workflow, config, schemas, batches/cases/experiments/ledger |
-| Evolution controller | `mandrel/evolution/batches.py`, `proposals.py`, `manifests.py`, `state.py`, `errors.py`, `phase.py`, `render.py`; `mandrel/cli.py` | Canonical-identity proposal selection and human window, immutable semantic manifest publication, schema-v11 whole-lifecycle JSON/human status, state revision, per-verb allowed/refused/recovery projection, stable kind/code taxonomy with refusal codes split by recovery, schema-v1 JSON non-completion envelopes, and standalone CLI routing |
+| Evolution controller | `mandrel/evolution/batches.py`, `proposals.py`, `manifests.py`, `state.py`, `errors.py`, `phase.py`, `portfolio.py`, `render.py`; `mandrel/cli.py` | Canonical-identity proposal selection and human window, immutable semantic manifest publication, schema-v11 next-action status, schema-v1 portfolio index/bounded detail with durable and observation revisions, per-verb allowed/refused/recovery projection, stable kind/code taxonomy with refusal codes split by recovery, schema-v1 JSON non-completion envelopes, and standalone CLI routing |
 | Evolution lineage | `mandrel/evolution/lineage.py`, `experiments.py`, `guards.py` | Whole-history derivation; shared durable-state guards; experiment refs/records; admission, round, terminal-decision, promotion, and batch-outcome operations |
 | Evolution replay/releases | `mandrel/evolution/replay.py`, `rollback.py`, `revisions.py` | Durable replay request/run histories; exact integration trees; source-ref promotion helpers; latest-effective inverse rollback, interruption recovery, and base-keyed ending of the zero-attempt batch standing on the reversed release |
 | Evolution release assessment | `mandrel/evolution/assessment.py`, `lockfile.py`, `experiments.py` | Canonical-identity before/after sides, visible exclusions, and unstated/differing facet split; assessment formation/read validation with settlement recommendation; pinned counterfactual recovery; human retain/rollback settlement; first-base sequencing |

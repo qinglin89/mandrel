@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-10
-verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # Architecture
@@ -121,7 +121,7 @@ if it concludes before answering and stays repeatable for recovery. Replay and
 counterfactual harness crossings are operator-stated, durable two-step
 request/run exchanges; promotion remains separate from deployment.
 
-One whole-lineage derivation governs both status and mutations: manifests,
+One whole-lineage derivation governs status, portfolio, and mutations: manifests,
 closure, experiment/outcome/rejection records, durable refs, and Git determine
 the current batch, open attempt, gate, round, and revisions from any checkout.
 Release-assessment sides use the same canonical identity as deploy status:
@@ -137,6 +137,13 @@ allowed/refused/recovery actions and a machine-local reading of planned targets'
 validated deploy locks; the deployment reading neither enters the digest nor
 gates lifecycle actions. Its release block distinguishes missing facet evidence
 from genuine side differences and exposes the reading's recommendation.
+Schema-v1 portfolio reuses that derivation for a one-row-per-batch index and
+bounded batch/proposal details, including terminal replay history and draft
+content. It carries the durable `state_revision` plus an
+`observations_revision` over local task completion, staged evidence, deployment,
+clock thresholds, and clone-resolvability answers; the complete document is
+built inside the snapshot bracket so projection-only record reads cannot escape
+the token beside them. Status v11 intentionally carries only the durable token.
 Versioned `evolution/` holds safe policy, schemas,
 manifests, lineage, sanitized cases, and audit while raw report content and
 credentials stay ignored. Analysis, canonical implementation, replay,

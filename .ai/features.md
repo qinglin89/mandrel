@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-10
-verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # Features
@@ -20,7 +20,7 @@ verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 | Evolution report feed | published; client reconciled; complete protocol identity live-proven | orch-hub catalog/raw-artifact routes, `ReportFeed`, atomic pair translation in `hub.py`, manual probe |
 | Evolution import/pending pool | implemented | protected/file feeds, validated bundles, ignored state/artifacts, sanitized ledger |
 | Batch proposal, human membership window, freeze and analysis-task creation | implemented | canonical-identity selection, proposal-based admission, attributed include/exclude decisions, immutable manifest denominator, closure records, generated task/index |
-| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON status, stale-state token, allowed/refused/recovery actions; stable kind/code taxonomy with recovery-specific refusal codes and exits 3–12; every verb's classified non-completion uses a flat schema-v1 JSON stderr envelope, including durable `unanswered`, while success envelopes remain pending; README operator contract |
+| Evolution lifecycle CLI | implemented | complete standalone `mandrel evolution` verb set; schema-v11 human/JSON next-action status; schema-v1 portfolio index and bounded batch/proposal detail with durable/observation tokens, terminal replay history, and draft content; stable kind/code taxonomy with recovery-specific refusal codes and exits 3–12; every verb's classified non-completion uses a flat schema-v1 JSON stderr envelope, including durable `unanswered`, while success envelopes remain pending; README operator contract |
 | Evolution experiment lineage | implemented | grouped draft gate, durable refs/records, append-only rounds, candidate seal, terminal decisions, promoted/no-change/rolled-back outcomes; a landed rollback ends the zero-attempt batch whose base carries the reversed release, with public shared refusals aligning operations and console recovery |
 | Replay and release decisions | implemented | operator-stated durable replay requests/results, exact integration-tree promotion, latest-effective inverse rollback; execution remains explicit and human-triggered |
 | Cross-batch release assessment | implemented | canonical-identity before/after sides and clone-dependent exclusions; persisted/JSON `unstated` versus `differing` facet failures; CLI-visible durable assessment/counterfactual with retain/rollback recommendation; human settlement and next-base gate |

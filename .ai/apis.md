@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-09-10
-verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # APIs and Interfaces
@@ -18,6 +18,7 @@ verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 | `evolution list [--feed-dir <path>]` | Inspect feed candidates without changing cursor, pool, ledger, artifacts, batches, or tasks |
 | `evolution sync [--feed-dir <path>]` | Import, validate, hash, deduplicate, and audit eligible complete reports |
 | `evolution status [--json]` | Derive schema-v11 pool/proposal/batch/experiment/replay/release/deployment state, stable object IDs, `state_revision`, and every verb's allowed/refused/recovery result; release comparability separates unstated facets from genuine side differences and exposes the reading's recommendation |
+| `evolution portfolio [--json] [--batch <id> \| --proposal]` | Emit the schema-v1 portfolio index or one bounded batch/proposal detail from the shared whole-lineage derivation; every document carries `state_revision` plus `observations_revision`, terminal batch detail includes replay history and draft content, and the schema's pool subject remains unbuilt |
 | `evolution start` | Reconcile, sync, and write a machine-local base-keyed batch proposal; creates no manifest, report claim, analysis task, or batch audit line |
 | `evolution batch-include|batch-exclude <repo-id> <task-id> --reason ... --actor ...` | Record an attributed human override of the proposal's automatic canonical-identity membership; identities remain two arguments because either half may contain `/` |
 | `evolution freeze [--force --justification <text>]` | Revalidate and immutably publish the standing proposal, claim its reports, and generate its analysis task; force may waive the target but never the minimum |
@@ -26,7 +27,7 @@ verified-against: 20775f411888a13c341c41c23d1150ffa456cb1f
 | `evolution assess|assess-measure|assess-conclude|assess-abandon|assess-withdraw|assess-resolve|settle` | Record the next batch's release reading/counterfactual and settle retain or composed rollback |
 
 All evolution operations are human-invoked and make no evaluation model call.
-`list` and `status` are read-only; `start` may return no proposal when the pool
+`list`, `status`, and `portfolio` are read-only; `start` may return no proposal when the pool
 is empty or a batch is current, and `freeze` returning no batch is a normal
 successful outcome when policy is not met. Lifecycle mutations accept optional
 `--expect <state_revision>` and check it first under their writer lock. The
@@ -35,7 +36,8 @@ every ref those records name; it deliberately excludes `HEAD`, because no
 evolution write resolves the operator's checkout.
 
 Every evolution verb accepts `--json`. A completed `status` emits its schema-v11
-reading; any classified non-completion emits the flat schema-v1
+reading and a completed `portfolio` emits its schema-v1 index/detail reading;
+any classified non-completion emits the flat schema-v1
 `schema_version` / `verb` / `kind` / `code` / `message` envelope on stderr.
 Completed runs of other verbs retain human output until the separate success
 protocol lands. Exit 2 has no envelope because argparse and non-evolution
@@ -82,7 +84,7 @@ revert-tree needs 2.40, and an absent Git is the same `toolchain` family.
 | `orchestrator.toml` | Schema-v3 deployed defaults/profiles plus advisory per-backend/agent model catalog; uncatalogued models remain launchable |
 | `orchestrator.py --print-config` | Machine-readable effective launch snapshot plus selection-independent backend/profile/agent/model/effort option space; cursor effort axes are per-model |
 | `evolution/config.toml` | Versioned admission/storage policy plus one fully-qualified source line; `start` records its tip in the proposal, `freeze` publishes it as the batch base/runner commit after revalidation, and replays resolve it, while promotion/rollback take their line from evidence |
-| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, and ledger contracts |
+| `evolution/schemas/*.json` | Versioned import, batch, closure, experiment, replay, release-assessment, outcome, rollback, rejection, ledger, and portfolio read-model contracts |
 | `.ai-evolution/state.json` | Ignored schema-v3 cursor, feed-exhaustion proof, one-pack pending entries, and rejected/processed/superseded decisions; v1/v2 upgrade-on-read preserves every report key and chooses the survivor by `generated_at`, then `sequence`; together with its referenced staged bundles, one `runtime-state-corrupt` record that is never silently repaired |
 | `.ai-evolution/batch-proposal.json` | Ignored schema-v1 base, selected members, excluded denominator, and attributed human moves; included in `state_revision`, revalidated at freeze |
 | `.ai-evolution/imported-artifacts/` | Ignored normalized report records and raw L1/L2 artifact bodies; freeze re-verifies the pool's hashes/identities/bodies and reports missing or changed evidence as corrupt runtime state |

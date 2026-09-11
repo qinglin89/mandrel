@@ -1,6 +1,6 @@
 ---
-last-updated: 2026-08-31
-verified-against: ed5c3aeb9a077845ee1a7d13c002da3818377d0c
+last-updated: 2026-09-11
+verified-against: 1ac17fed46680731906681413c8c7499f35e81c4
 ---
 
 # Project Overview
@@ -28,8 +28,10 @@ by Claude Code, Cursor, Codex CLI, and the multi-session orchestrator.
   immutable batches, guarded draft/round/experiment decisions, operator-stated
   exact-integration replay, exact-tree promotion and inverse rollback,
   cross-batch assessment/recommendation/settlement, base-keyed rollback endings,
-  and schema-v11 status with stale-state
-  tokens, allowed actions, recovery forms, and per-target deployment readings.
+  schema-v11 next-action status, and a schema-v1 portfolio index with bounded
+  batch/proposal detail reads; the portfolio pairs the durable state revision
+  with a volatile observations revision while status retains allowed actions,
+  recovery forms, and per-target deployment readings.
 - One deterministic regression entrypoint shared by local runs, CI, and the
   optional pre-push hook; credentialed live probes remain manual.
 - Project-specific evolution workspace for evidence-batched changes to this
