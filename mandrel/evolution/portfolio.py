@@ -55,7 +55,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from . import assessment as assessment_ops, guards, phase
+from . import (
+    assessment as assessment_ops,
+    experiments as experiment_ops,
+    guards,
+    phase,
+    rollback as rollback_ops,
+)
 from .analysis_task import task_finished, tasks_root
 from .batches import AdmissionDecision
 from .config import EvolutionConfig
@@ -143,8 +149,10 @@ class Observations:
     waited_days: int | None
     # What this checkout could and could not settle: each attempt's ref against
     # its record's pins, each recorded inverse commit against the promotion it
-    # takes back out, and the reports a release frame could not place at all.
-    # A fetch moves these without moving any watched ref.
+    # takes back out and against the line it was made for, the reports a release
+    # frame could not place at all, and whether the base the next admission would
+    # build on carries the release it was formed to judge. A fetch moves these
+    # without moving any watched ref.
     resolved: tuple[tuple[str, str], ...]
 
     def answers(self) -> tuple[tuple[str, str], ...]:
@@ -531,15 +539,32 @@ def _resolved(
 ) -> tuple[tuple[str, str], ...]:
     """What this checkout could and could not settle.
 
-    Three questions Git answers and no watched ref carries, so a fetch that moves
-    no tip still changes them: whether an attempt's ref and its record's pins form
-    one history, whether a recorded inverse commit is the promotion taken back out
-    of the line it was made from, and which of a release frame's reports this
-    clone can place at all.
+    The questions Git answers over revisions no watched ref carries, so a fetch
+    that moves no tip still changes them: whether an attempt's ref and its
+    record's pins form one history, whether a recorded inverse commit is the
+    promotion taken back out of the line it was made from, whether the line has
+    already taken an inverse the record does not claim yet, which of a release
+    frame's reports this clone can place at all, and whether the base the next
+    admission would build on still carries the release it was formed to judge.
+
+    The set is the whole of what an ancestry answer here decides, rather than the
+    ones a reading happens to publish: `create` is refused or offered on the base
+    question (`phase._base_refusal`), `rollback` offers finishing a reversal on
+    the line's own answer, and the attempt's ref decides whether anything is
+    recorded onto it at all (`guards.ref_refusal`). Every one of them is an
+    allowed action moving with no record and no watched tip moving, which is the
+    property the pair of tokens exists to hold.
+
+    Each ref is stated as the whole diagnosis the surfaces publish rather than as
+    its headline: a missing pin arriving can leave `state` and `chain` exactly
+    where they were and move the first broken link, which is the pair an operator
+    is sent to repair.
 
     The open attempt's ref is taken from the lineage rather than asked again —
     the derivation already resolved it, and asking a second time would be a
-    second answer to one question inside one reading.
+    second answer to one question inside one reading. The base question is asked
+    through the admission's own predicate for that reason: a second spelling of
+    it here would be a token over an answer no gate reads.
 
     Asked of every attempt in the series, so the cost of this reading grows with
     history while its payload does not. That is the trade the shared snapshot
@@ -552,15 +577,46 @@ def _resolved(
     for item in lineage.batches:
         for experiment in item.experiments:
             state = _ref_state(config, item, experiment)
-            stated.append((f"ref:{experiment.experiment_id}", f"{state.state}|{_answer(state.chain)}"))
+            stated.append((f"ref:{experiment.experiment_id}", _ref_answer(state)))
         if item.rollback is not None:
             # The lineage's own answer, taken while it held the record to it: the
             # empty string is a confirmed inverse, and a sentence is why this
             # checkout could not confirm one.
             stated.append((f"inverse:{item.batch_id}", item.rollback_unconfirmed or ""))
+            if item.rollback["reverted_at"] is None:
+                # Only while the record is unfinished, which is the window that
+                # question exists for: the line may already carry the inverse,
+                # and whether this clone can see that it does is what turns
+                # `rollback` from a reversal into finishing the one on record.
+                stated.append(
+                    (
+                        f"reversal:{item.batch_id}",
+                        _answer(rollback_ops.unfinished_reversal(config, item) is not None),
+                    )
+                )
+    current = lineage.current
+    if current is not None:
+        # The admission's own question, and the one an ordinary fetch answers: a
+        # base whose relation to the release nobody here can compute refuses
+        # `create` outright, and the same base with the objects present offers it.
+        refusal = experiment_ops.base_on_the_line_refusal(config, lineage, current)
+        stated.append((f"base:{current.batch_id}", refusal or ""))
     for entry in owed:
         stated.append((f"placement:{entry.batch_id}", ",".join(sorted(entry.frame.unverified))))
     return tuple(stated)
+
+
+def _ref_answer(state: RefState) -> str:
+    """One attempt's ref, as the whole reading of it the surfaces publish.
+
+    `ref`, `pinned` and `pinned_expected` are the record's own and are covered by
+    the durable token; what is stated here is everything the checkout answered —
+    where the ref stands, how that stands against the pin, whether the pins form
+    one history, and which link broke first.
+    """
+
+    broken = "" if state.chain_break is None else ">".join(state.chain_break)
+    return f"{state.state}|{state.tip or ''}|{_answer(state.chain)}|{broken}"
 
 
 def _ref_state(config: EvolutionConfig, item: BatchLineage, experiment: Experiment) -> RefState:

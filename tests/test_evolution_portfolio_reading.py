@@ -24,6 +24,13 @@ clone. Every one of them asserts the same pair — `observations_revision` moves
 `state_revision` does not — because a token computed over a narrower set than its
 own definition is a guarantee nothing keeps, and the way that happens is one of
 these six quietly not being asked.
+
+The sixth is the one with several questions inside it, so it has one regression
+each: an unanswerable pin chain settling, a first broken link moving under an
+unchanged chain reading, and the base a `create` is offered or refused on
+becoming placeable. And the bracket that carries both tokens is held to the two
+ways it breaks — a write or an observation landing between the two readings,
+and a repository that never stops moving.
 """
 
 from __future__ import annotations
@@ -36,12 +43,14 @@ from pathlib import Path
 import pytest
 from evolution_fixtures import (
     RELEASE_REF,
+    admitted_task,
     at_line,
     complete_task,
     experiment_round,
     git_canonical_commit,
     git_repo,
     git_rev,
+    git_sibling_commit,
     git_update_ref,
     make_manifest_report,
     make_record,
@@ -57,6 +66,7 @@ from evolution_fixtures import (
 
 from mandrel import cli, evolution, lockfile
 from mandrel.evolution import experiments, phase, portfolio, rollback, state
+from mandrel.evolution.lineage import RefState
 from mandrel.evolution.schema import load_schema, validate
 
 FIRST = "evolution-batch-0001"
@@ -119,15 +129,18 @@ def freeze_batch(
     prefix: str = "a",
     left_out: int = 0,
     human_included: int = 0,
+    base: str | None = None,
 ) -> None:
     """A frozen batch of three members whose reports were produced at
     `effective`, drawn out of a denominator this test chose.
 
-    Formed at the source line as it stands, which is what a real formation reads
-    and the base every experiment of this batch then starts from. The
-    denominator is stated coherently — members plus non-selections, counted over
-    unique completed tasks — because a manifest that contradicts itself is
-    refused as it is read (`manifests.require_coherent_selection`).
+    Formed at the source line as it stands unless `base` says otherwise, which is
+    what a real formation reads and the base every experiment of this batch then
+    starts from — stated apart only where the point is a base this checkout reads
+    differently from the clone that froze it. The denominator is stated
+    coherently — members plus non-selections, counted over unique completed
+    tasks — because a manifest that contradicts itself is refused as it is read
+    (`manifests.require_coherent_selection`).
     """
 
     members = [
@@ -147,7 +160,7 @@ def freeze_batch(
         batch_id,
         [],
         analysis_task_id=f"2026-08-10-{batch_id}",
-        runner_protocol_revision=git_rev(config.repo_root, RELEASE_REF),
+        runner_protocol_revision=base if base is not None else git_rev(config.repo_root, RELEASE_REF),
         reports=members,
         selection={
             "considered": len(members) + left_out,
@@ -231,21 +244,48 @@ def with_target(config: evolution.EvolutionConfig, target: int) -> evolution.Evo
     return evolution.load_config(config.repo_root)
 
 
-def fetch(repo_root: Path, source: Path, ref: str) -> None:
+def fetch(repo_root: Path, source: Path, ref: str, *, source_ref: str = "HEAD") -> None:
     """Bring another clone's objects into this one, onto a ref no record names."""
 
     subprocess.run(
-        ["git", "-C", str(repo_root), "fetch", "--quiet", str(source), f"HEAD:{ref}"],
+        ["git", "-C", str(repo_root), "fetch", "--quiet", str(source), f"{source_ref}:{ref}"],
         check=True,
     )
+
+
+def clone(repo_root: Path, into: Path) -> Path:
+    """Another working copy of this repository, holding its objects.
+
+    What a colleague's checkout is, and the only honest way to have a commit made
+    *on this history* that this repository does not yet hold: a revision built
+    here would already be in its object store, and the question under test is
+    what arrives.
+    """
+
+    subprocess.run(["git", "clone", "--quiet", str(repo_root), str(into)], check=True)
+    return into
+
+
+def _ref_state(config: evolution.EvolutionConfig) -> RefState:
+    """How this checkout reads the open attempt's ref against its record's pins."""
+
+    reading = phase.describe(config, now=NOW)
+    assert reading.ref is not None
+    return reading.ref
 
 
 def _chain(config: evolution.EvolutionConfig) -> bool | None:
     """Whether this checkout can say the open attempt's pins form one history."""
 
-    lineage = phase.describe(config, now=NOW)
-    assert lineage.ref is not None
-    return lineage.ref.chain
+    return _ref_state(config).chain
+
+
+def _action(config: evolution.EvolutionConfig, name: str) -> phase.Action:
+    """One verb as the next-action reading offers it, which is where every
+    observation this suite is about is finally spent."""
+
+    reading = phase.describe(config, now=NOW)
+    return next(action for action in reading.actions if action.action == name)
 
 
 def backdate(config: evolution.EvolutionConfig, moment: datetime) -> None:
@@ -678,6 +718,233 @@ def test_an_object_arriving_moves_the_volatile_token_alone(
     after = tokens(config)
     assert after[0] == durable
     assert after[1] != volatile
+
+
+def test_an_earlier_pin_arriving_moves_the_broken_link_and_the_token_with_it(
+    config: evolution.EvolutionConfig, release: str, tmp_path: Path
+) -> None:
+    """The same reading one level down, and the reason a ref is digested as the
+    whole diagnosis rather than as its headline.
+
+    A record pinning base → an unheld candidate → two candidates on histories of
+    their own reads as a broken chain whose first break is the pair this checkout
+    could compare. The missing object arriving moves that break to the earlier
+    pair — which is the revision an operator is sent to repair
+    (`guards.ref_refusal`) — while `state` and `chain` say exactly what they said
+    before. A token over those two alone would hold the two readings equal."""
+
+    freeze_batch(config, FIRST)
+    analyzed(config, FIRST)
+    base = git_rev(config.repo_root, RELEASE_REF)
+    elsewhere = git_repo(make_repo(tmp_path / "elsewhere"), tag=None)
+    unheld = git_canonical_commit(elsewhere, "a candidate sealed in another clone")
+    # Two commits off the batch's base and off each other: neither descends from
+    # the other, so the pair between them is a break this clone can already see.
+    side = git_sibling_commit(config.repo_root, base, "one\n", "a candidate on its own line")
+    later = git_sibling_commit(config.repo_root, base, "two\n", "another, unrelated to it")
+    write_experiment(
+        config.experiments_root,
+        f"{FIRST}-exp-01",
+        base_revision=base,
+        rounds=[
+            # One draft per round: an attempt admits a draft once, and a record
+            # admitting the same one twice is refused as it is read.
+            experiment_round(1, candidate_revision=unheld, tasks=[admitted_task("loader-fallback")]),
+            experiment_round(2, candidate_revision=side, tasks=[admitted_task("hook-side-loader")]),
+            experiment_round(3, candidate_revision=later, tasks=[admitted_task(DRAFT)]),
+        ],
+    )
+
+    before = _ref_state(config)
+    durable, volatile = tokens(config)
+    assert before.chain is False and before.chain_break == (side, later)
+
+    fetch(config.repo_root, elsewhere, "refs/heads/arrived")
+
+    after = _ref_state(config)
+    assert after.chain_break == (base, unheld), "the first link this checkout can answer is the earlier one now"
+    assert (after.state, after.chain) == (before.state, before.chain), "the headline is unchanged, by construction"
+    assert tokens(config)[0] == durable
+    assert tokens(config)[1] != volatile
+
+
+def test_an_object_arriving_settles_the_base_the_next_admission_would_build_on(
+    config: evolution.EvolutionConfig, release: str, tmp_path: Path
+) -> None:
+    """The reading `create` is offered or refused on, and the one no record and no
+    watched ref carries.
+
+    A batch is formed at the source line as it stands, so its base has the release
+    before it in its history (invariant 17) — and whether *this* checkout can see
+    that is a fact about the clone. Until it can, the admission refuses rather
+    than admitting onto a base it cannot place; once the objects are here, the
+    same records offer the same verb. Two different action readings, and before
+    this was observed they carried one token pair."""
+
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        at=PROMOTED_AT,
+        canonical=True,
+        reports=[
+            make_manifest_report(
+                key=f"b{index}",
+                sequence=index,
+                task_id=f"2026-07-0{index}-task",
+                effective_revision=release,
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    # The line as it stands after the promotion, moved on by a commit this
+    # repository does not hold: the batch below is formed at that commit, which is
+    # what a freeze run in the other clone would have recorded.
+    elsewhere = clone(config.repo_root, tmp_path / "elsewhere")
+    unheld = git_sibling_commit(
+        elsewhere, promotion.promotion_revision, "carried\n", "the line moved on in another clone"
+    )
+    git_update_ref(elsewhere, "refs/heads/carried", unheld)
+    freeze_batch(config, SECOND, effective=promotion.promotion_revision, base=unheld)
+    analyzed(config, SECOND, drafts=(DRAFT,))
+    settle_release(config, at=NOW)
+
+    durable, volatile = tokens(config)
+    refused = _action(config, phase.ACTION_CREATE).refusal
+    assert refused is not None and "cannot be answered in this checkout" in refused
+
+    fetch(config.repo_root, elsewhere, "refs/heads/arrived", source_ref="refs/heads/carried")
+
+    assert _action(config, phase.ACTION_CREATE).refusal is None, "the base places now, and the verb is offered"
+    after = tokens(config)
+    assert after[0] == durable
+    assert after[1] != volatile
+
+
+def test_a_line_carrying_an_unrecorded_inverse_is_a_reading_this_snapshot_takes(
+    config: evolution.EvolutionConfig, release: str
+) -> None:
+    """The last clone-dependent answer the next-action reading spends: whether
+    the source line has already taken an inverse commit whose record does not say
+    so yet.
+
+    That window is invisible to the records — the promotion still reads as
+    effective — and what it changes is what `rollback` run again would do. The
+    answer is Git's, so it is one of this snapshot's own: a truncated clone
+    answers it differently from a whole one over records nobody touched."""
+
+    promotion = promote_candidate(config, batch_id=FIRST, at=PROMOTED_AT, canonical=True)
+    reversal = rollback.rollback(config, reason="the release regressed the loader", now=NOW)
+    # The interrupted state itself: the inverse is on the line and the record was
+    # written before it could say so (`rollback._finish`).
+    path = config.batches_root / FIRST / "rollback.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["reverted_at"] = None
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+    stated = dict(portfolio._read(config, NOW).observations.answers())
+    offered = _action(config, phase.ACTION_ROLLBACK)
+
+    assert stated[f"reversal:{FIRST}"] == "yes"
+    assert offered.refusal is None and offered.recovery is not None
+    assert f"already carries {reversal.revision[:12]}" in offered.recovery
+    assert git_rev(config.repo_root, RELEASE_REF) == reversal.revision
+    row = rows(payload(config))[FIRST]
+    assert row["promotion"]["revision"] == promotion.promotion_revision
+    assert row["promotion"]["rollback"]["reverted_at"] is None, "which the records alone cannot say"
+
+
+# --- the bracket -------------------------------------------------------------
+
+
+def interleaved(monkeypatch: pytest.MonkeyPatch, move) -> list[int]:
+    """Take every reading with `move` applied straight after it, and count them.
+
+    A race needs an interleaving, and a suite running in one process has to place
+    the other writer itself. This places it exactly where the bracket exists to
+    catch one: after a reading has been taken and before the next is, which is
+    the window a reading published unbracketed would straddle.
+
+    `move` is handed the ordinal of the reading it follows, so a test can move
+    something once or on every reading — the difference between a writer that
+    finished and a repository being written to continuously, which the bracket
+    owes two different answers.
+    """
+
+    ordinals: list[int] = []
+    taken = portfolio._read
+
+    def interrupted(config: evolution.EvolutionConfig, moment: datetime):
+        ordinals.append(len(ordinals) + 1)
+        reading = taken(config, moment)
+        move(len(ordinals))
+        return reading
+
+    monkeypatch.setattr(portfolio, "_read", interrupted)
+    return ordinals
+
+
+def test_a_record_written_between_the_two_readings_is_read_again(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The durable half of the bracket: the token is read, the reading is taken,
+    and the token is read again — so a writer that finished in between is caught
+    by the inputs no longer matching, and the pair published is of the state that
+    is actually there rather than of two."""
+
+    ordinals = interleaved(
+        monkeypatch,
+        lambda ordinal: write_draft(config.batches_root, SECOND, "late-proposal") if ordinal == 1 else None,
+    )
+
+    document = read(config)
+
+    assert ordinals == [1, 2, 3], "the first pair straddled the write, so the reading was taken again"
+    monkeypatch.undo()
+    assert document.snapshot.state_revision == phase.describe(config, now=NOW).state_revision
+
+
+def test_an_observation_moving_between_the_two_readings_is_read_again(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The volatile half, which the durable bracket cannot catch: nothing was
+    written, so the inputs match on both sides of a task file finishing. What
+    catches it is the reading being taken twice and its answers compared — the
+    reason this module takes one derivation more than `status` does."""
+
+    admission = admitted(config)
+    task_id = admission.admitted[0].task_id
+    before = read(config).snapshot.observations_revision
+
+    ordinals = interleaved(
+        monkeypatch, lambda ordinal: complete_task(config, task_id) if ordinal == 1 else None
+    )
+    document = read(config)
+
+    assert ordinals == [1, 2, 3]
+    assert document.snapshot.observations_revision != before, "the published reading is the one after it"
+    monkeypatch.undo()
+    assert (document.snapshot.state_revision, document.snapshot.observations_revision) == tokens(config)
+
+
+def test_a_repository_observed_moving_on_every_reading_is_reported(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And the third losing as well is a state to report rather than to keep
+    retrying through: a pair naming a moment nothing was ever read at is the one
+    thing a caller handing these tokens back is entitled to rely on not getting,
+    so the reading fails instead of publishing one."""
+
+    staging = iter(("b1", "b2", "b3", "a1"))
+
+    def stage(_ordinal: int) -> None:
+        (config.artifacts_root / state.artifacts_dir_name(next(staging))).mkdir(parents=True)
+
+    ordinals = interleaved(monkeypatch, stage)
+
+    with pytest.raises(evolution.BatchError, match="changed under the portfolio reading"):
+        read(config)
+
+    assert len(ordinals) == 1 + portfolio._SNAPSHOT_ATTEMPTS, "bounded, and every attempt spent"
 
 
 # --- the verb ----------------------------------------------------------------

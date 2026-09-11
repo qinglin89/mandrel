@@ -2319,8 +2319,16 @@ target's deploy receipt holds; the age the clock gives the standing offer, since
 `max_wait_days` past its oldest member has the policy release a batch the same
 offer needed an argued force for the day before; and what this checkout can
 resolve, since the revisions records name are held by no watched ref and a fetch
-that moves no tip still settles a release placement or an attempt's ref chain
-that read unverified an hour ago.
+that moves no tip still settles a release placement, the whole diagnosis of an
+attempt's ref, whether the line has already taken an inverse commit its record
+does not claim yet, or whether the base the next admission would build on
+carries the release it was formed to judge — the answer `create` is offered or
+refused on.
+
+Each of those is stated as the whole answer this checkout gave rather than as
+the headline a surface leads with: a missing pin arriving can leave an attempt's
+ref state and chain exactly as they read before and move which link broke first,
+which is the pair an operator is sent to repair.
 
 It exists because those readings are not decoration. `seal-round` is accepted
 exactly when every admitted task of the open round is observed complete, so the
@@ -2336,10 +2344,11 @@ a thing that can be enumerated, so a digest over either would move on every
 reading and say nothing, and a digest over a task file's bytes would move for an
 edit that changed no answer. What is hashed is what the reading made of them —
 each completion answer, the staged set, each target's state, the admission
-trigger the age produced, and each placement or chain link this checkout could
-or could not settle. Both tokens are then taken over one bracket: the input sets
-are read, the reading is taken, and they are read again; equal, and nothing
-moved under it, different, and the reading is taken again.
+trigger the age produced, and every placement, ref diagnosis, landed inverse and
+base relation this checkout could or could not settle. Both tokens are then
+taken over one bracket: the input sets are read, the reading is taken, and they
+are read again; equal, and nothing moved under it, different, and the reading is
+taken again.
 
 Its guarantee is deliberately weaker, and stating that is the point: it says a
 reading was taken over the same observations and nothing more. It is not a lock,
@@ -2418,9 +2427,13 @@ reading or several.
 here and is not shipped yet, so what is inside a batch is still read from
 `status` for the batch in play and from the records themselves for every batch
 before it. The volatile token is computed over exactly the input set named
-above, with a regression per input showing it move while `state_revision` holds
+above, with a regression per input showing it move while `state_revision` holds,
+and the bracket is held to the two ways it can be broken — a record written and
+an observation moved between the two readings, each read again, and a repository
+moving on every reading reported rather than retried through
 (`tests/test_evolution_portfolio_reading.py`): a token computed over a narrower
-set than its own definition is a guarantee nothing keeps.
+set than its own definition is a guarantee nothing keeps, and one published
+across a write describes a moment nobody read.
 
 ## Evolution task requirements
 
