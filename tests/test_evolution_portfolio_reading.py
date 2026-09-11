@@ -27,10 +27,12 @@ these six quietly not being asked.
 
 The sixth is the one with several questions inside it, so it has one regression
 each: an unanswerable pin chain settling, a first broken link moving under an
-unchanged chain reading, and the base a `create` is offered or refused on
-becoming placeable. And the bracket that carries both tokens is held to the two
-ways it breaks — a write or an observation landing between the two readings,
-and a repository that never stops moving.
+unchanged chain reading, the base a `create` is offered or refused on becoming
+placeable, why a report places nowhere changing under an unchanged reason and an
+unchanged unplaceable set, and a line found already carrying an inverse its
+record does not claim. And the bracket that carries both tokens is held to the
+two ways it breaks — a write or an observation landing between the two
+readings, and a repository that never stops moving.
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import cli, evolution, lockfile
-from mandrel.evolution import experiments, phase, portfolio, rollback, state
+from mandrel.evolution import assessment, experiments, phase, portfolio, rollback, state
 from mandrel.evolution.lineage import RefState
 from mandrel.evolution.schema import load_schema, validate
 
@@ -818,6 +820,89 @@ def test_an_object_arriving_settles_the_base_the_next_admission_would_build_on(
     after = tokens(config)
     assert after[0] == durable
     assert after[1] != volatile
+
+
+def withheld(config: evolution.EvolutionConfig, revision: str) -> None:
+    """Take one commit object out of this repository, whose records still name it.
+
+    A clone fetched to a depth that stopped short of it: the promotion is
+    described by records that all stand, and the commit the release was merged
+    into is not here to read a protocol off. Written rather than cloned, because
+    a clone holds whatever its refs reach and the object this needs missing is
+    reachable from the source line itself.
+    """
+
+    loose = config.repo_root / ".git" / "objects" / revision[:2] / revision[2:]
+    # A repository this small keeps its objects loose; a packed one would need
+    # unpacking first, and deleting nothing would make the test pass for the
+    # wrong reason.
+    assert loose.is_file()
+    loose.unlink()
+
+
+def _exclusions(config: evolution.EvolutionConfig) -> dict[str, tuple[str, str]]:
+    """Why this checkout places each report of the release frame nowhere, as a
+    surface publishes it (`status --json`, `release.cohorts.excluded`)."""
+
+    stated = phase.describe(config, now=NOW).to_json()["release"]
+    return {item["report_key"]: (item["reason"], item["detail"]) for item in stated["cohorts"]["excluded"]}
+
+
+def test_an_object_arriving_moves_why_a_report_places_nowhere(
+    config: evolution.EvolutionConfig, release: str, tmp_path: Path
+) -> None:
+    """The placement reading is where every report of a release frame goes and
+    why, and not the set this clone could place nowhere.
+
+    A truncated clone holding neither the side before the release nor the
+    revision the reports after it state excludes them naming their own revision:
+    that is the question `assessment._place` asks first. The revision arriving
+    answers that one and leaves the same reports excluded all the same — for the
+    missing *side* now, which is a different published sentence under an
+    unchanged reason, and the unplaceable set is identical across the two. A
+    token over that set alone holds the two readings equal, and a console
+    re-reading on it would keep rendering the first explanation over the second
+    one's repository."""
+
+    promotion = promote_candidate(
+        config,
+        batch_id=FIRST,
+        at=PROMOTED_AT,
+        canonical=True,
+        reports=[
+            make_manifest_report(
+                key=f"b{index}",
+                sequence=index,
+                task_id=f"2026-07-0{index}-task",
+                effective_revision=release,
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    withheld(config, promotion.merge_input_revision)
+    # The revision this batch's reports state: a protocol built where that target
+    # ran, which this checkout has no object for until it arrives.
+    elsewhere = git_repo(make_repo(tmp_path / "elsewhere"), tag=None)
+    unheld = git_canonical_commit(elsewhere, "the protocol a target elsewhere was running")
+    freeze_batch(config, SECOND, effective=unheld)
+    analyzed(config, SECOND, drafts=(DRAFT,))
+
+    before = _exclusions(config)
+    durable, volatile = tokens(config)
+    reason, detail = before["a1"]
+    assert reason == assessment.EXCLUDED_REVISION_UNRESOLVABLE
+    assert unheld in detail, "the report's own revision is what this clone cannot read"
+
+    fetch(config.repo_root, elsewhere, "refs/heads/arrived")
+
+    after = _exclusions(config)
+    assert {key: item[0] for key, item in after.items()} == {
+        key: item[0] for key, item in before.items()
+    }, "the same reports are unplaceable, for the same reason, in both readings"
+    assert promotion.merge_input_revision in after["a1"][1], "the side nobody here holds is what excludes it now"
+    assert after["a1"][1] != before["a1"][1]
+    assert tokens(config)[0] == durable
+    assert tokens(config)[1] != volatile
 
 
 def test_a_line_carrying_an_unrecorded_inverse_is_a_reading_this_snapshot_takes(

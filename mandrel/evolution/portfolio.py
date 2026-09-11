@@ -149,10 +149,10 @@ class Observations:
     waited_days: int | None
     # What this checkout could and could not settle: each attempt's ref against
     # its record's pins, each recorded inverse commit against the promotion it
-    # takes back out and against the line it was made for, the reports a release
-    # frame could not place at all, and whether the base the next admission would
-    # build on carries the release it was formed to judge. A fetch moves these
-    # without moving any watched ref.
+    # takes back out and against the line it was made for, where each report of a
+    # release frame places and why some of them place nowhere, and whether the
+    # base the next admission would build on carries the release it was formed to
+    # judge. A fetch moves these without moving any watched ref.
     resolved: tuple[tuple[str, str], ...]
 
     def answers(self) -> tuple[tuple[str, str], ...]:
@@ -543,9 +543,10 @@ def _resolved(
     that moves no tip still changes them: whether an attempt's ref and its
     record's pins form one history, whether a recorded inverse commit is the
     promotion taken back out of the line it was made from, whether the line has
-    already taken an inverse the record does not claim yet, which of a release
-    frame's reports this clone can place at all, and whether the base the next
-    admission would build on still carries the release it was formed to judge.
+    already taken an inverse the record does not claim yet, where each report of
+    a release frame places and why some of them place nowhere, and whether the
+    base the next admission would build on still carries the release it was
+    formed to judge.
 
     The set is the whole of what an ancestry answer here decides, rather than the
     ones a reading happens to publish: `create` is refused or offered on the base
@@ -555,10 +556,12 @@ def _resolved(
     allowed action moving with no record and no watched tip moving, which is the
     property the pair of tokens exists to hold.
 
-    Each ref is stated as the whole diagnosis the surfaces publish rather than as
-    its headline: a missing pin arriving can leave `state` and `chain` exactly
-    where they were and move the first broken link, which is the pair an operator
-    is sent to repair.
+    Each of them is stated as the whole answer the surfaces publish rather than
+    as its headline: a missing pin arriving can leave a ref's `state` and `chain`
+    exactly where they were and move the first broken link, which is the pair an
+    operator is sent to repair, and a report's own revision arriving can leave it
+    unplaceable for the same reason while changing which of the two revisions the
+    published exclusion blames.
 
     The open attempt's ref is taken from the lineage rather than asked again —
     the derivation already resolved it, and asking a second time would be a
@@ -602,8 +605,63 @@ def _resolved(
         refusal = experiment_ops.base_on_the_line_refusal(config, lineage, current)
         stated.append((f"base:{current.batch_id}", refusal or ""))
     for entry in owed:
-        stated.append((f"placement:{entry.batch_id}", ",".join(sorted(entry.frame.unverified))))
+        stated.extend(_placements(entry))
     return tuple(stated)
+
+
+def _placements(entry: ReleaseReading) -> tuple[tuple[str, str], ...]:
+    """Where this checkout puts every report of one release frame, and why it
+    puts some of them nowhere.
+
+    The whole per-report answer rather than the set it could place nowhere, for
+    the reason a ref is the whole diagnosis rather than its headline: the reports
+    it could not place are one field of what the surfaces publish
+    (`phase._release_json`), and the rest of that answer moves under an unchanged
+    one. A report is excluded naming its own effective revision while this
+    checkout cannot read it, and once that revision arrives the same report is
+    excluded naming the side of the release nobody here holds
+    (`assessment._place`) — one reason, one unplaceable set, two different
+    published readings. A digest over the set alone holds them equal.
+
+    Which side a placed report went to comes out of the same walk and is stated
+    with it, so the side counts and the denominators beside them need no question
+    of their own: they are totals over these answers, and a report that changed
+    sides changed its own.
+
+    Each report is asked for by the manifest it came from as well as by its key.
+    Two frozen batches are in the frame — the promoted one and the one assessing
+    it — and a report of one completed task can be named by both, so the key
+    alone would ask one question about two rows.
+
+    The two exclusions a frozen manifest settles by itself — a report stating no
+    effective revision, and one stating something that is not a commit id — ride
+    along rather than being filtered out. They cannot move while the record does
+    not, so they cost the digest nothing, and dropping them would mean knowing
+    here which reasons this checkout answers and which the record settles: a
+    second copy of a division `_place` already makes, in the place nobody would
+    think to correct when a reason is added to it.
+    """
+
+    frame = entry.frame
+    stated: list[tuple[str, str]] = [
+        (_placement(entry, member.batch_id, member.report_key), f"{side}||")
+        for side, members in (
+            (assessment_ops.SIDE_BEFORE, frame.before.members),
+            (assessment_ops.SIDE_AFTER, frame.after.members),
+        )
+        for member in members
+    ]
+    stated.extend(
+        (_placement(entry, item.batch_id, item.report_key), f"|{item.reason}|{item.detail}")
+        for item in frame.excluded
+    )
+    return tuple(stated)
+
+
+def _placement(entry: ReleaseReading, batch_id: str, report_key: str) -> str:
+    """One report of one release frame, as a question this reading answers."""
+
+    return f"placement:{entry.batch_id}:{batch_id}/{report_key}"
 
 
 def _ref_answer(state: RefState) -> str:

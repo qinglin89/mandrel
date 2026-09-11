@@ -2319,16 +2319,20 @@ target's deploy receipt holds; the age the clock gives the standing offer, since
 `max_wait_days` past its oldest member has the policy release a batch the same
 offer needed an argued force for the day before; and what this checkout can
 resolve, since the revisions records name are held by no watched ref and a fetch
-that moves no tip still settles a release placement, the whole diagnosis of an
-attempt's ref, whether the line has already taken an inverse commit its record
-does not claim yet, or whether the base the next admission would build on
-carries the release it was formed to judge — the answer `create` is offered or
-refused on.
+that moves no tip still settles where each report of a release frame places and
+why some of them place nowhere, the whole diagnosis of an attempt's ref, whether
+the line has already taken an inverse commit its record does not claim yet, or
+whether the base the next admission would build on carries the release it was
+formed to judge — the answer `create` is offered or refused on.
 
 Each of those is stated as the whole answer this checkout gave rather than as
 the headline a surface leads with: a missing pin arriving can leave an attempt's
 ref state and chain exactly as they read before and move which link broke first,
-which is the pair an operator is sent to repair.
+which is the pair an operator is sent to repair, and a report's own revision
+arriving can leave that report unplaceable under the same reason while moving
+the published exclusion from its revision to the side of the release nobody here
+holds. A reading kept to the headline — the set a frame could place nowhere, a
+ref's state — holds two repositories equal that a surface renders differently.
 
 It exists because those readings are not decoration. `seal-round` is accepted
 exactly when every admitted task of the open round is observed complete, so the
@@ -2344,8 +2348,9 @@ a thing that can be enumerated, so a digest over either would move on every
 reading and say nothing, and a digest over a task file's bytes would move for an
 edit that changed no answer. What is hashed is what the reading made of them —
 each completion answer, the staged set, each target's state, the admission
-trigger the age produced, and every placement, ref diagnosis, landed inverse and
-base relation this checkout could or could not settle. Both tokens are then
+trigger the age produced, and every report placement with the exclusion behind
+it, ref diagnosis, landed inverse and base relation this checkout could or could
+not settle. Both tokens are then
 taken over one bracket: the input sets are read, the reading is taken, and they
 are read again; equal, and nothing moved under it, different, and the reading is
 taken again.
