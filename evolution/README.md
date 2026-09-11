@@ -2352,9 +2352,15 @@ each completion answer, the staged set, each target's state, the admission
 trigger the age produced, and every report placement with the exclusion behind
 it, ref diagnosis, landed inverse and base relation this checkout could or could
 not settle. Both tokens are then
-taken over one bracket: the input sets are read, the reading is taken, and they
-are read again; equal, and nothing moved under it, different, and the reading is
-taken again.
+taken over one bracket: the input sets are read, the reading is taken, the
+document is built from it, and they are read again; equal, and nothing moved
+under it, different, and both are taken again. The document is inside the
+bracket rather than after it because a projection opens records of its own — the
+rejections at a gate, the drafts' bytes, a terminal attempt's replay history,
+none of which the lifecycle derivation has any use for — and those are
+`state_revision`'s own inputs. Built after the closing comparison, they would be
+published under a token taken before they were written, which is the one thing a
+token beside a document rules out.
 
 Its guarantee is deliberately weaker, and stating that is the point: it says a
 reading was taken over the same observations and nothing more. It is not a lock,
@@ -2436,9 +2442,11 @@ schema publishes and its builder has not landed, so the verb offers no argument
 for it and the reading refuses that kind by name rather than answering with an
 empty document. The volatile token is computed over exactly the input set named
 above, with a regression per input showing it move while `state_revision` holds,
-and the bracket is held to the two ways it can be broken — a record written and
-an observation moved between the two readings, each read again, and a repository
-moving on every reading reported rather than retried through
+and the bracket is held to every way it can be broken — a record written and an
+observation moved between the two readings, each read again; a repository moving
+on every reading reported rather than retried through; and each record a detail
+opens for itself written at the moment the bracket closes, published by the
+reading that follows rather than by the one already taken
 (`tests/test_evolution_portfolio_reading.py`): a token computed over a narrower
 set than its own definition is a guarantee nothing keeps, and one published
 across a write describes a moment nobody read.

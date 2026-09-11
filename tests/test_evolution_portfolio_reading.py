@@ -71,7 +71,7 @@ from evolution_fixtures import (
 )
 
 from mandrel import cli, evolution, lockfile
-from mandrel.evolution import assessment, experiments, phase, portfolio, rollback, state
+from mandrel.evolution import assessment, experiments, guards, phase, portfolio, rollback, state
 from mandrel.evolution.lineage import REF_ABSENT, RefState
 from mandrel.evolution.schema import format_rfc3339, load_schema, validate
 
@@ -1561,3 +1561,159 @@ def test_an_attempt_whose_ref_this_checkout_never_fetched_still_reads(
     # The record's own pin is durable and still stated beside the absence.
     assert attempt["ref_state"]["pinned"] == attempt["rounds"][0]["seal"]["candidate_revision"]
     assert attempt["decision"]["outcome"] == "promoted"
+
+
+# --- the bracket, over what a detail opens for itself -------------------------
+
+
+def bracketed(monkeypatch: pytest.MonkeyPatch, move) -> list[int]:
+    """Write straight after each durable-input comparison, and count them.
+
+    The other placement a race needs, and `interleaved`'s complement: that one
+    puts the other writer between the two readings, where the bracket is built to
+    catch it, and this one puts it at the moment the bracket closes — the window
+    a projection performed after that comparison would read in, and no comparison
+    would ever see.
+
+    `move` is handed the ordinal of the comparison it follows, so a test can
+    choose the side of the boundary it is about: after the opening read is under
+    the projection, after the closing read is outside the bracket entirely.
+    """
+
+    ordinals: list[int] = []
+    taken = guards.read_inputs
+
+    def watched(config: evolution.EvolutionConfig):
+        inputs = taken(config)
+        ordinals.append(len(ordinals) + 1)
+        move(len(ordinals))
+        return inputs
+
+    monkeypatch.setattr(guards, "read_inputs", watched)
+    return ordinals
+
+
+def test_a_draft_written_after_the_bracket_closed_is_not_in_the_document(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detail opens records the derivation has no use for — the drafts' own
+    bytes among them — and those are `state_revision`'s inputs like any other,
+    since `guards` walks `evolution/`. Projected after the closing comparison,
+    they would be published under a token taken before they were written: bytes
+    no comparison ever saw, beside a pair claiming to describe them.
+
+    So the projection runs inside the bracket, and a write landing after it is
+    simply the next reading's."""
+
+    path = config.batches_root / SECOND / "proposed-tasks" / f"{DRAFT}.md"
+    before = path.read_text(encoding="utf-8")
+    durable = tokens(config)[0]
+
+    ordinals = bracketed(
+        monkeypatch,
+        lambda ordinal: path.write_text(before + "\nappended after the bracket\n", encoding="utf-8")
+        if ordinal == 2
+        else None,
+    )
+    document = expanded(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert ordinals == [1, 2], "the bracket closed once, and the write landed outside it"
+    monkeypatch.undo()
+    waiting = next(
+        draft for draft in document["detail"]["batch"]["gate"]["drafts"] if draft["draft_id"] == DRAFT
+    )
+    assert waiting["content"] == before, "the bytes the published token was taken over"
+    assert waiting["content_sha256"] == draft_sha256(DRAFT)
+    assert document["snapshot"]["state_revision"] == durable
+    assert tokens(config)[0] != durable, "and the write did move the durable token"
+
+
+def test_a_rejection_recorded_after_the_bracket_closed_is_not_in_the_document(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same boundary for the record the gate is assembled from. A decision
+    read after the closing comparison would combine the `Gate` this reading
+    derived with a record written after it — one draft in two states, under a
+    token that knows about neither."""
+
+    durable = tokens(config)[0]
+
+    ordinals = bracketed(
+        monkeypatch,
+        lambda ordinal: write_rejected_drafts(
+            config.batches_root,
+            SECOND,
+            [rejection(DRAFT, reason="the loader change it proposes belongs to the payload task")],
+        )
+        if ordinal == 2
+        else None,
+    )
+    document = expanded(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert ordinals == [1, 2]
+    monkeypatch.undo()
+    draft = next(
+        item for item in document["detail"]["batch"]["gate"]["drafts"] if item["draft_id"] == DRAFT
+    )
+    assert (draft["state"], draft["decided_at"]) == ("waiting", None), "the gate the token was taken over"
+    assert document["snapshot"]["state_revision"] == durable
+    assert tokens(config)[0] != durable
+    assert subject(config, portfolio.DETAIL_BATCH, SECOND)["gate"]["drafts"][0]["state"] == "declined", (
+        "which the next reading states, with the token that goes with it"
+    )
+
+
+def test_a_replay_restated_after_the_bracket_closed_is_not_in_the_document(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And the third record only a detail opens: a terminal attempt's replay
+    history, which nothing else in this package reads at all. Being read by one
+    caller is exactly why it would be the last place a stale reading showed up,
+    so it is held to the same boundary as the other two."""
+
+    path = config.experiments_root / f"{FIRST}-exp-01" / "replays.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    before = record["replays"][0]["result"]["detail"]
+    durable = tokens(config)[0]
+
+    def restate(ordinal: int) -> None:
+        if ordinal != 2:
+            return
+        record["replays"][0]["result"]["detail"] = "re-read against the excluded case, and it regressed"
+        path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+    ordinals = bracketed(monkeypatch, restate)
+    document = expanded(config, portfolio.DETAIL_BATCH, FIRST)
+
+    assert ordinals == [1, 2]
+    monkeypatch.undo()
+    (run,) = document["detail"]["batch"]["experiments"][0]["replays"]["runs"]
+    assert run["result"]["detail"] == before
+    assert document["snapshot"]["state_revision"] == durable
+    assert tokens(config)[0] != durable
+
+
+def test_a_draft_written_under_the_projection_is_built_again(
+    config: evolution.EvolutionConfig, series: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of that boundary, and the one the retry is for: a write
+    landing while the gate is being projected is caught by the comparison after
+    it, and what a console receives is the document built at the reading that
+    won — never the one assembled over the state that lost, republished with the
+    newer token."""
+
+    path = config.batches_root / SECOND / "proposed-tasks" / f"{DRAFT}.md"
+    edited = path.read_text(encoding="utf-8") + "\nwritten under the projection\n"
+
+    ordinals = bracketed(
+        monkeypatch, lambda ordinal: path.write_text(edited, encoding="utf-8") if ordinal == 1 else None
+    )
+    document = expanded(config, portfolio.DETAIL_BATCH, SECOND)
+
+    assert ordinals == [1, 2, 3], "the first pair straddled the write, so both were taken again"
+    monkeypatch.undo()
+    waiting = next(
+        draft for draft in document["detail"]["batch"]["gate"]["drafts"] if draft["draft_id"] == DRAFT
+    )
+    assert waiting["content"] == edited
+    assert document["snapshot"]["state_revision"] == tokens(config)[0], "the pair that goes with them"

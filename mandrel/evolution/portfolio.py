@@ -41,6 +41,14 @@ ways is two questions, and the token would then be over the one nobody rendered.
 The cost is one extra derivation per call, which is what a read-only console verb
 can afford and a wrong token is not.
 
+And what the bracket closes over is the *document*, not the derivation behind it.
+A projection that opens a record for itself — the gate's rejections, a draft's
+bytes, an attempt's replay history, none of which the lineage has any use for —
+is reading state the durable token covers, so building it after the closing
+comparison would publish bytes under a token taken before they were written. The
+projection is therefore run inside the bracket, and what leaves it is what was
+read between the two comparisons.
+
 **The observation set is the same whichever document is asked for.** Both
 documents carry one snapshot so that a console assembling an index and several
 details can tell one reading from several, and a token over a per-document
@@ -60,10 +68,10 @@ dropped part of a history would contradict the one thing it is published for.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeVar
 
 from ..hashing import sha256_bytes
 from . import (
@@ -144,6 +152,12 @@ _REVISION_DIGITS = 16
 # the ordinary race and a third losing as well is a repository being written to
 # continuously — a state to report rather than to keep retrying through.
 _SNAPSHOT_ATTEMPTS = 3
+
+# What a projection handed the bracketed reading comes back with: the index's
+# value objects or a detail's subject. Left open rather than a union of the two,
+# because what the bracket is about is *when* the document was built and never
+# what shape it is.
+_Document = TypeVar("_Document")
 
 # How an answer is spelled in the digest. Booleans and absence are three values,
 # not two: a task nobody could ask about is a different reading from one asked
@@ -426,12 +440,13 @@ def index(config: EvolutionConfig, *, now: datetime | None = None) -> Portfolio:
     cannot be read.
 
     Both tokens are taken over one bracket, which is `_taken`'s and is the same
-    one a detail read is published through.
+    one a detail read is published through — and the document is built inside it,
+    so what the pair covers is what was published rather than what was derived.
     """
 
     moment = now or datetime.now(timezone.utc)
-    reading, snapshot = _taken(config, moment)
-    return Portfolio(document=DOCUMENT_INDEX, snapshot=snapshot, index=_index(config, reading))
+    document, snapshot = _taken(config, moment, lambda reading: _index(config, reading))
+    return Portfolio(document=DOCUMENT_INDEX, snapshot=snapshot, index=document)
 
 
 def detail(
@@ -454,6 +469,14 @@ def detail(
     then for three of its batches can tell one reading of this repository from
     four, and it could not if the questions asked depended on what was asked for.
 
+    A subject is built inside that bracket rather than from the reading it
+    returns, because a detail opens durable records the derivation itself has no
+    use for — the rejection record at a gate, the drafts' own bytes, every
+    attempt's replay history. Those are covered by `state_revision` like any
+    other record, so reading them after the bracket closed would publish bytes
+    newer than the token stating what they are, which is the one thing a token
+    beside a document is for.
+
     A subject this state does not hold is refused rather than answered with an
     empty document — the pairing between `kind` and the slot is what a reader
     dispatches on, and a detail carrying no subject would be a document with
@@ -471,11 +494,12 @@ def detail(
                 else ""
             )
         )
-    reading, snapshot = _taken(config, moment)
-    subject = (
-        _batch_detail(config, reading, subject_id)
+    subject, snapshot = _taken(
+        config,
+        moment,
+        (lambda reading: _batch_detail(config, reading, subject_id))
         if kind == DETAIL_BATCH
-        else _proposal_detail(reading.status.proposal)
+        else (lambda reading: _proposal_detail(reading.status.proposal)),
     )
     return Portfolio(
         document=DOCUMENT_DETAIL,
@@ -487,14 +511,29 @@ def detail(
     )
 
 
-def _taken(config: EvolutionConfig, moment: datetime) -> tuple[_Reading, Snapshot]:
-    """One reading of this repository, and the two tokens that say what it is of.
+def _taken(
+    config: EvolutionConfig,
+    moment: datetime,
+    project: Callable[[_Reading], _Document],
+) -> tuple[_Document, Snapshot]:
+    """One document of this repository, and the two tokens that say what it is of.
 
     The bracket both documents are published through, so neither can be taken any
-    other way: the durable inputs are read, the reading is taken twice, and the
-    inputs are read again. Equal inputs say no writer finished underneath it, and
-    two equal sets of observations say the volatile answers it was assembled from
-    were one set rather than two.
+    other way: the durable inputs are read, the reading is taken twice, the
+    document is built from the second one, and the inputs are read again. Equal
+    inputs say no writer finished underneath it, and two equal sets of
+    observations say the volatile answers it was assembled from were one set
+    rather than two.
+
+    The document is built here rather than by the caller, and that is the whole
+    reason this takes a projection instead of returning a reading: a projection
+    that opens a record for itself — which the detail read does, for the gate's
+    rejections, the drafts' bytes and each attempt's replays — would otherwise
+    read it after the closing comparison and publish it under a token taken
+    before. Inside, a write that lands there is caught as any other is, by the
+    inputs no longer matching, and the reading is taken again. What leaves this
+    function is therefore what was read between the two comparisons, and the
+    caller only names it.
 
     Nothing here takes the single-writer lock — a reading that waited on an
     operation would be a very different promise, and taking that lock is itself a
@@ -505,9 +544,10 @@ def _taken(config: EvolutionConfig, moment: datetime) -> tuple[_Reading, Snapsho
     taken = _read(config, moment)
     for _ in range(_SNAPSHOT_ATTEMPTS):
         again = _read(config, moment)
+        document = project(again)
         after = guards.read_inputs(config)
         if after == inputs and again.observations == taken.observations:
-            return again, Snapshot(
+            return document, Snapshot(
                 taken_at=format_rfc3339(moment),
                 state_revision=guards.state_revision(after),
                 observations_revision=again.observations.revision,
@@ -1078,10 +1118,17 @@ def _batch_detail(config: EvolutionConfig, reading: _Reading, batch_id: str | No
 
     The manifest's own membership and denominator, the stage, what this machine
     holds of the evidence, the gate with the drafts themselves, every attempt in
-    one shape, the ending, and the release reading this batch owes. Each of them
-    is read off the derivation this document was taken over — never asked again
-    here — so that what the tokens cover and what the document states are the
-    same answers.
+    one shape, the ending, and the release reading this batch owes. Every
+    volatile answer is read off the derivation this document was taken over —
+    never asked again here — so that what the tokens cover and what the document
+    states are the same answers.
+
+    The durable records a detail opens for itself, which the derivation has no
+    use for and so does not hold, are the gate's rejections, each draft's bytes
+    and each attempt's replay history. They are read here rather than earlier,
+    and this whole projection runs inside `_taken`'s bracket for that reason:
+    they are `state_revision`'s own inputs, and a write landing under them is
+    caught there like any other.
     """
 
     item = next((entry for entry in reading.lineage.batches if entry.batch_id == batch_id), None)
