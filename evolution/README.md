@@ -2370,6 +2370,19 @@ the rule a batch outcome's endings already follow, so an older reader keeps
 reading every value it always could and refuses exactly the one it cannot
 describe, naming it.
 
+**What the reading may not narrow.** A field projected from a persisted record
+accepts every value that record's own contract accepts. Saying less than the
+record is what a projection is for — the gate's lists of ids become one
+record per draft, an evaluator's own schema version is dropped — but accepting
+less is a different thing. A nullable string a replay or a manifest may hold
+empty, or a protocol identity copied verbatim from a feed that stated it that
+way, is then a history that exists on disk and has no reading; it surfaces as
+a batch a console cannot render, long after the line that narrowed it.
+Absence is the one variant that legitimately moves: a key a record omits is
+published as null, because this reading states its key set. Where a value
+genuinely has to be normalized, the normalization is stated here and applied
+by the builder — never left to the shape to refuse.
+
 **What a client may check across the two payloads, and what it may not.** Status
 v11 publishes `state_revision` and no `observations_revision`; the portfolio
 publishes both. So the checkable pairing is over the durable token alone: read

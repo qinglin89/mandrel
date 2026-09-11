@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mandrel.local/evolution/portfolio.schema.json",
   "title": "Evolution portfolio reading",
-  "description": "The whole evolution portfolio, as a surface that renders it reads it: every batch this repository has frozen, every attempt made inside one, what measured each attempt, how each ended, and what the release each batch followed was judged to be. A console holding these documents reconstructs the history without reading Git, the versioned records, `.ai-tasks/`, the drafts, or any target's deploy receipt — which is the whole point of publishing it: a second reader of those files is a second implementation of the lineage, and the two come to disagree about what happened.\n\n**This is not `status`, and it deliberately does not replace it.** `status` answers what to do next: one phase, the current batch, the open experiment, the reading that gates the next admission, every verb with whether this state accepts it, and the series and its endings as rows beside them. What it drops at the projection boundary is what happened inside them — the rounds an attempt took, what measured each of them, the drafts at the gate, the offer standing before a freeze — all of which it derives on every call and publishes none of, because an operator asking what happens next should not be handed the history to search. This answers the other question — what is, and what was — and carries no `allowed_actions`: a surface that offered an action from here would be offering it from a reading that never asked whether the state permits it. The two are paired by their tokens below, never by being taken close together.\n\n**Two documents at one version.** `document` says which this is. An `index` is one row per batch and nothing else that grows with use; a `detail` expands exactly one subject the index named. Both carry the same `snapshot`, so a console that assembles an index and several details knows whether it assembled one reading or several. Exactly one of `index` and `detail` is an object and the other is null, paired with `document`; the implemented JSON Schema subset cannot state that, and the controller enforces it in both directions.\n\n**Why it is split that way.** The payload has to be bounded by something, and the two obvious answers are both wrong here: a documented size limit is a sentence rather than a mechanism, and truncating the series would contradict the one thing this document is for. So the index carries, per batch, only what a row needs — identity, denominators, how it ended, the promotion if it made one — and everything whose size is a function of that batch's own work sits behind a detail read of it. The index then grows by one row per freeze and by nothing else, and no detail read grows with history at all.",
+  "description": "The whole evolution portfolio, as a surface that renders it reads it: every batch this repository has frozen, every attempt made inside one, what measured each attempt, how each ended, and what the release each batch followed was judged to be. A console holding these documents reconstructs the history without reading Git, the versioned records, `.ai-tasks/`, the drafts, or any target's deploy receipt — which is the whole point of publishing it: a second reader of those files is a second implementation of the lineage, and the two come to disagree about what happened.\n\n**This is not `status`, and it deliberately does not replace it.** `status` answers what to do next: one phase, the current batch, the open experiment, the reading that gates the next admission, every verb with whether this state accepts it, and the series and its endings as rows beside them. What it drops at the projection boundary is what happened inside them — the rounds an attempt took, what measured each of them, the drafts at the gate, the offer standing before a freeze — all of which it derives on every call and publishes none of, because an operator asking what happens next should not be handed the history to search. This answers the other question — what is, and what was — and carries no `allowed_actions`: a surface that offered an action from here would be offering it from a reading that never asked whether the state permits it. The two are paired by the durable token below rather than by being taken close together: `status` at schema version 11 publishes `state_revision` and no `observations_revision`, so a caller checks the pairing by reading `status`, this, and `status` again, while the volatile half pairs a portfolio reading only with another portfolio reading.\n\n**Two documents at one version.** `document` says which this is. An `index` is one row per batch and nothing else that grows with use; a `detail` expands exactly one subject the index named. Both carry the same `snapshot`, so a console that assembles an index and several details knows whether it assembled one reading or several. Exactly one of `index` and `detail` is an object and the other is null, paired with `document`; the implemented JSON Schema subset cannot state that, and the controller enforces it in both directions.\n\n**Why it is split that way.** The payload has to be bounded by something, and the two obvious answers are both wrong here: a documented size limit is a sentence rather than a mechanism, and truncating the series would contradict the one thing this document is for. So the index carries, per batch, only what a row needs — identity, denominators, how it ended, the promotion if it made one — and everything whose size is a function of that batch's own work sits behind a detail read of it. The index then grows by one row per freeze and by nothing else, and no detail read grows with history at all.",
   "type": "object",
   "required": [
     "schema_version",
@@ -915,17 +915,17 @@
               "minLength": 1
             },
             "rubric_revision": {
+              "description": "Null where the evaluator stated no rubric, and the empty string where it stated one that way. Both are what `evaluation-import.schema.json` accepts, and a freeze copies this block from the staged record without touching it, so a reading that narrowed them to one could not publish a batch that froze the other.",
               "type": [
                 "string",
                 "null"
-              ],
-              "minLength": 1
+              ]
             }
           },
           "additionalProperties": false
         },
         "protocol": {
-          "description": "The deployable protocol identity this report was produced under, copied verbatim from the feed. Both halves or neither: a half-stated identity is two nulls, never a partial claim.",
+          "description": "The deployable protocol identity this report was produced under, copied verbatim from the feed. Both halves or neither: a half-stated identity is two nulls, never a partial claim. Verbatim is the whole rule: whatever the manifest holds is what is published here, the empty string included, because the import contract accepts it and the freeze copies the record as staged. Whether a revision is a commit id at all, and whether it resolves in this checkout, are asked where the report is placed.",
           "type": "object",
           "required": [
             "effective_revision",
@@ -936,15 +936,13 @@
               "type": [
                 "string",
                 "null"
-              ],
-              "minLength": 1
+              ]
             },
             "deploy_lock_hash": {
               "type": [
                 "string",
                 "null"
-              ],
-              "minLength": 1
+              ]
             }
           },
           "additionalProperties": false
@@ -1037,12 +1035,11 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "content": {
-          "description": "The draft taskfile as it stands here. A waiting draft is one the directory holds, so it always has content; null is the decided draft whose file is gone, which is reported rather than refused — the record keeps the id and the hash of what was decided, and the bytes are recoverable from history.",
+          "description": "The draft taskfile as it stands here. A waiting draft is one the directory holds, so it always has content — the empty string included, since the gate lists a zero-byte file as waiting and the operator looking at a proposal nothing can be admitted from is exactly who needs to read it. Null is the decided draft whose file is gone, which is reported rather than refused: the record keeps the id and the hash of what was decided, and the bytes are recoverable from history.",
           "type": [
             "string",
             "null"
-          ],
-          "minLength": 1
+          ]
         },
         "content_sha256": {
           "description": "The hash of those bytes, null with them. Stated beside `recorded_sha256` rather than assumed equal to it: a file edited after the decision that took it differs here, and that difference is the only thing that shows the file on disk is no longer what was decided.",
@@ -1091,12 +1088,11 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "base_release_ref": {
-          "description": "The most recent release tag reachable from the base when this attempt was created, or null when the checkout had none. Recorded rather than re-derived, so it still says which released protocol the attempt built on after the tag is gone.",
+          "description": "The most recent release tag reachable from the base when this attempt was created, or null when the checkout had none. Recorded rather than re-derived, so it still says which released protocol the attempt built on after the tag is gone. The record's value unnarrowed, because `experiment.schema.json` accepts the empty string and the lineage reader hands it back: an attempt this repository can load is one this reading can publish.",
           "type": [
             "string",
             "null"
-          ],
-          "minLength": 1
+          ]
         },
         "ref": {
           "description": "The durable ref holding this attempt's rounds. Fast-forward only, so every sealed candidate stays reachable.",
@@ -1636,11 +1632,11 @@
           "minLength": 1
         },
         "rubric_revision": {
+          "description": "Null where the run named no rubric, and the empty string where it named one that way. `experiment-replays.schema.json` and `release-assessment.schema.json` both accept the pair, and both readers hand the value back unchanged, so a reading that admitted only the null could not publish a replay or a counterfactual either record already holds.",
           "type": [
             "string",
             "null"
-          ],
-          "minLength": 1
+          ]
         }
       },
       "additionalProperties": false

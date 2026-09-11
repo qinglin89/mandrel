@@ -29,6 +29,7 @@ left to the eye.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from mandrel.evolution.schema import SUPPORTED_KEYWORDS, load_schema, validate
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "evolution" / "schemas" / "portfolio.schema.json"
+SCHEMA_DIR = SCHEMA_PATH.parent
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "portfolio"
 
 FIXTURES = sorted(path.name for path in FIXTURE_DIR.glob("*.json"))
@@ -55,8 +57,83 @@ TERMINAL_FIXTURES = {
 }
 
 
+# One field of a persisted record that this reading projects, the edge its own
+# contract accepts, and where that contract states it. The value is the same
+# empty string in every row on purpose: it is the variant a nullable field
+# acquires by being written rather than by being designed, which is exactly why
+# narrowing it to `null | non-empty` reads as tidying and is not.
+SOURCE_VALID_EDGES: tuple[tuple[list[Any], Any, str, tuple[str, ...], Any], ...] = (
+    (
+        ["detail", "batch", "reports", 0, "evaluator", "rubric_revision"],
+        "",
+        "batch-manifest.schema.json",
+        ("$defs", "evaluator"),
+        {"backend": "claude", "model": "opus-5", "schema_version": 1, "rubric_revision": ""},
+    ),
+    (
+        ["detail", "batch", "experiments", 0, "replays", "runs", 0, "evaluator", "rubric_revision"],
+        "",
+        "experiment-replays.schema.json",
+        ("$defs", "evaluator"),
+        {"backend": "claude", "model": "claude-opus-5", "rubric_revision": ""},
+    ),
+    (
+        ["detail", "batch", "release", "counterfactual", "run", "evaluator", "rubric_revision"],
+        "",
+        "release-assessment.schema.json",
+        ("$defs", "counterfactual", "properties", "evaluator"),
+        {"backend": "claude", "model": "claude-opus-5", "rubric_revision": ""},
+    ),
+    (
+        ["detail", "batch", "reports", 0, "protocol", "effective_revision"],
+        "",
+        "batch-manifest.schema.json",
+        ("$defs", "provenance", "properties", "effective_revision"),
+        "",
+    ),
+    (
+        ["detail", "batch", "reports", 0, "protocol", "deploy_lock_hash"],
+        "",
+        "batch-manifest.schema.json",
+        ("$defs", "provenance", "properties", "deploy_lock_hash"),
+        "",
+    ),
+    (
+        ["detail", "batch", "experiments", 0, "base_release_ref"],
+        "",
+        "experiment.schema.json",
+        ("properties", "base_release_ref"),
+        "",
+    ),
+)
+
+
 def read(name: str) -> dict[str, Any]:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
+
+
+def place(payload: dict[str, Any], route: list[Any], value: Any) -> dict[str, Any]:
+    """The payload with one field replaced, addressed the way a finding is."""
+
+    node: Any = payload
+    for step in route[:-1]:
+        node = node[step]
+    node[route[-1]] = value
+    return payload
+
+
+def source_subschema(filename: str, route: tuple[str, ...]) -> dict[str, Any]:
+    """One field or block of a source contract, validatable on its own.
+
+    `$defs` travels with it because the validator resolves every `$ref` from the
+    root it is handed, and these blocks reference their own file's.
+    """
+
+    root = load_schema(SCHEMA_DIR / filename)
+    node: Any = root
+    for step in route:
+        node = node[step]
+    return {**node, "$defs": root.get("$defs", {})}
 
 
 def subschemas(node: Any, path: str = "$") -> Iterator[tuple[str, Mapping[str, Any]]]:
@@ -255,6 +332,60 @@ def test_the_valid_nullable_histories_are_worked_documents() -> None:
 
     counterfactual = read("batch-rolled-back.json")["detail"]["batch"]["release"]["counterfactual"]["run"]
     assert counterfactual["harness"]["handle"] is None and counterfactual["result"]["outcome"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "route, value, filename, source_route, instance",
+    SOURCE_VALID_EDGES,
+    ids=[".".join(str(step) for step in row[0]) for row in SOURCE_VALID_EDGES],
+)
+def test_a_source_valid_value_is_not_narrowed(
+    route: list[Any], value: Any, filename: str, source_route: tuple[str, ...], instance: Any
+) -> None:
+    """Every variant a record holds is a variant this reading can publish.
+
+    A projection may say less than the record it projects; it may not accept
+    less. A nullable field the source writes empty and this one refuses is a
+    history that exists on disk and has no reading — found, months later, as a
+    batch a console cannot render, rather than as the line that narrowed it.
+
+    So the premise is asserted rather than assumed: each edge is validated
+    against the contract it is projected from and then against this one. A row
+    that stops holding because a source tightened is a row to delete, and one
+    that stops holding because this narrowed is the finding.
+    """
+
+    assert validate(instance, source_subschema(filename, source_route)) == [], (
+        f"premise: {filename} accepts this, so the projection has to"
+    )
+    payload = read("batch-no-change.json")
+    assert validate(place(payload, route, value), load_schema(SCHEMA_PATH)) == []
+
+
+def test_a_zero_byte_draft_is_a_reading_and_not_a_refusal() -> None:
+    """The gate lists a file, not a valid taskfile.
+
+    `lineage` reports every `*.md` under `proposed-tasks/` whose stem could be a
+    draft id as waiting, and reads nothing of the bytes; admission is what asks
+    whether they are a taskfile at all. So an empty file is a waiting draft, and
+    the operator holding a proposal nothing can be admitted from is exactly the
+    one who has to see it.
+    """
+
+    payload = read("batch-no-change.json")
+    payload["detail"]["batch"]["gate"]["drafts"].append(
+        {
+            "draft_id": "zero-byte-proposal",
+            "state": "waiting",
+            "experiment_id": None,
+            "decided_at": None,
+            "reason": None,
+            "recorded_sha256": None,
+            "content": "",
+            "content_sha256": hashlib.sha256(b"").hexdigest(),
+        }
+    )
+    assert validate(payload, load_schema(SCHEMA_PATH)) == []
 
 
 def test_identity_fields_are_checked_and_not_merely_present() -> None:
