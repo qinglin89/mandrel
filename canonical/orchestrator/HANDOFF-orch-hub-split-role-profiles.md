@@ -93,7 +93,7 @@ The additive `profiles` object is authoritative:
   "available_profiles": ["excellent", "standard"],
   "dev": {
     "agent": "claude",
-    "model": "claude-opus-5",
+    "model": "claude-opus-5-5",
     "effort": "max"
   },
   "review": {
