@@ -2485,9 +2485,10 @@ def scenario_31_option_catalog(repo: Path) -> None:
 
     claude_entry = ('[catalog."cc-codex".claude]\n'
                     'models = ["claude-opus-4-8", "claude-opus-5", '
-                    '"claude-fable-5-1"]')
+                    '"claude-opus-5-5", "claude-fable-5-1"]')
     codex_entry = ('[catalog."cc-codex".codex]\n'
-                   'models = ["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"]')
+                   'models = ["gpt-5.5", "gpt-5.6-sol", "gpt-6-sol", '
+                   '"gpt-6-astra"]')
     catalog_start = source.index("[catalog.")
     assert claude_entry in source and codex_entry in source
     try:
@@ -2497,8 +2498,8 @@ def scenario_31_option_catalog(repo: Path) -> None:
         entries = o.build_option_catalog(extended)["agents"]["cc-codex"]
         for role in ("dev", "review"):
             assert [entry["id"] for entry in entries[role]["claude"]["models"]] \
-                == ["claude-opus-4-8", "claude-opus-5", "claude-fable-5-1",
-                    "some-new-model"]
+                == ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+                    "claude-fable-5-1", "some-new-model"]
             # a new id inherits its agent's axis with no per-model statement
             assert entries[role]["claude"]["models"][-1]["efforts"] == list(
                 o.EFFORT_VALUES["effort"])
@@ -2507,7 +2508,7 @@ def scenario_31_option_catalog(repo: Path) -> None:
         refuses(source.replace(codex_entry, ""),
                 "catalog.cc-codex.codex must be a table")
         refuses(source.replace(codex_entry, codex_entry.replace(
-            '["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"]', "[]")),
+            '["gpt-5.5", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra"]', "[]")),
             "catalog.cc-codex.codex.models must be a non-empty array")
         refuses(source.replace(codex_entry, codex_entry.replace(
             '"gpt-5.6-sol"', '"gpt-5.5"')),

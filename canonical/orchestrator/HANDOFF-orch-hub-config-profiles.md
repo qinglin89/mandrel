@@ -81,12 +81,12 @@ Representative response:
   "backend": "cc-codex",
   "dev": {
     "agent": "claude",
-    "model": "claude-opus-4-8",
+    "model": "claude-opus-5",
     "effort": "max"
   },
   "review": {
     "agent": "codex",
-    "model": "gpt-5.5",
+    "model": "gpt-5.6-sol",
     "effort": "xhigh"
   },
   "max_sessions": 40,
@@ -120,8 +120,8 @@ them.
 
 | Profile/backend | Dev | Review |
 |---|---|---|
-| Standard / Cursor | `claude-opus-5 @ max` | `gpt-5.6-sol @ xhigh` |
-| Standard / cc-codex | `claude:claude-opus-5 @ max` | `codex:gpt-5.6-sol @ xhigh` |
+| Standard / Cursor | `claude-opus-5-5 @ max` | `gpt-6-sol @ xhigh` |
+| Standard / cc-codex | `claude:claude-opus-5-5 @ max` | `codex:gpt-6-sol @ xhigh` |
 | Excellent / Cursor | `claude-fable-5-1 @ max` | `gpt-6-astra @ xhigh` |
 | Excellent / cc-codex | `claude:claude-fable-5-1 @ max` | `codex:gpt-6-astra @ xhigh` |
 

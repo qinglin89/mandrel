@@ -22,8 +22,8 @@ is pluggable:
 
 | | `--backend cursor` | `--backend cc-codex` (default) |
 |---|---|---|
-| dev role | Cursor SDK agent, `claude-opus-4-8` | `--dev-agent claude` (default): Claude Code headless (`claude -p`), `claude-opus-4-8` @ `max` effort; `--dev-agent codex`: Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort |
-| review role | Cursor SDK agent, `gpt-5.5` | `--review-agent codex` (default): Codex CLI (`codex exec`), `gpt-5.5` @ `xhigh` effort; `--review-agent claude`: Claude Code headless, `claude-opus-4-8` @ `max` effort |
+| dev role | Cursor SDK agent, `claude-opus-4-8` | `--dev-agent claude` (default): Claude Code headless (`claude -p`), `claude-opus-5` @ `max` effort; `--dev-agent codex`: Codex CLI (`codex exec`), `gpt-5.6-sol` @ `xhigh` effort |
+| review role | Cursor SDK agent, `gpt-5.5` | `--review-agent codex` (default): Codex CLI (`codex exec`), `gpt-5.6-sol` @ `xhigh` effort; `--review-agent claude`: Claude Code headless, `claude-opus-5` @ `max` effort |
 | auth | `CURSOR_API_KEY` (SDK; login not enough) | each selected CLI's own login: `claude` `/login` for any role on the Claude agent, `codex login` for any role on the Codex agent |
 | subscription | Cursor only (cheapest) | Claude + OpenAI by default; one provider only when both roles select the same agent |
 | protocol context | orchestrator injects it (SDK doesn't run hooks); `AI_ORCH=1` keeps `.cursor` hooks quiet | native: CC hooks + CLAUDE.md import chain, Codex `.codex` hooks (verified firing in `codex exec` and `claude -p`); no injection, no `AI_ORCH` |
@@ -66,11 +66,11 @@ It remains a backward-compatible shorthand that applies the same named
 profile to both roles. `--dev-profile` and `--review-profile` independently
 select a role; omitting either inherits `--profile`, while explicitly passing
 `default` restores environment/config inheritance for that role.
-`standard` resolves to Opus 5 @ max + GPT-5.6 Sol @ xhigh; `excellent`
+`standard` resolves to Opus 5.5 @ max + GPT-6 Sol @ xhigh; `excellent`
 resolves to Fable 5.1 @ max + GPT-6 Astra @ xhigh. Profiles use Claude Code's
-full model names (`claude-opus-5`, `claude-fable-5-1`); `opus` and `fable`
+full model names (`claude-opus-5-5`, `claude-fable-5-1`); `opus` and `fable`
 are the corresponding CLI aliases for whatever is latest in each family, and
-short forms such as `opus-5` or `fable-5-1` are not valid. An explicit role
+short forms such as `opus-5-5` or `fable-5-1` are not valid. An explicit role
 flag overrides the corresponding profile field. If `--dev-agent` or `--review-agent` changes a
 profile from Claude to Codex or vice versa, that role's `--…-model` and
 `--…-effort` must also be explicit: a profile states one complete
@@ -152,8 +152,8 @@ allowlist itself.
 | `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions |
 | `--review-agent` / `ORCH_CC_REVIEW_AGENT` (`cc-codex` only) | `codex` | same axis for the review role, including the close-out session it resumes |
 | `--plan-gate` | off | every dev session first proposes goal+plan and blocks for your confirmation before implementing (see §5.8) |
-| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_MODEL` (`cc-codex --dev-agent codex`) | `claude-opus-4-8` (cursor/Claude dev) / `gpt-5.5` (Codex dev) | dev-role model, in the selected agent's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
-| `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (`cc-codex --review-agent codex`) / `ORCH_CC_REVIEW_MODEL` (`cc-codex --review-agent claude`) | `gpt-5.5` (cursor/Codex review) / `claude-opus-4-8` (Claude review) | review-role model, in the selected agent's own namespace |
+| `--dev-model` / `ORCH_DEV_MODEL` (cursor) / `ORCH_CC_MODEL` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_MODEL` (`cc-codex --dev-agent codex`) | `claude-opus-4-8` (cursor) / `claude-opus-5` (Claude dev) / `gpt-5.6-sol` (Codex dev) | dev-role model, in the selected agent's own namespace (SDK wants **base** ids, not the `-thinking-high` variants `cursor-agent models` lists) |
+| `--review-model` / `ORCH_REVIEW_MODEL` (cursor) / `ORCH_CODEX_MODEL` (`cc-codex --review-agent codex`) / `ORCH_CC_REVIEW_MODEL` (`cc-codex --review-agent claude`) | `gpt-5.5` (cursor) / `gpt-5.6-sol` (Codex review) / `claude-opus-5` (Claude review) | review-role model, in the selected agent's own namespace |
 | `--dev-effort` / `ORCH_CURSOR_DEV_EFFORT` (cursor) / `ORCH_CC_EFFORT` (`cc-codex --dev-agent claude`) / `ORCH_CODEX_DEV_EFFORT` (`cc-codex --dev-agent codex`) | `high` (Cursor) / `max` (Claude dev) / `xhigh` (Codex dev) | dev-role effort. Cursor and Claude Code use the claude effort axis `low..max`; Codex dev uses the reasoning axis `none/minimal/low/medium/high/xhigh` |
 | `--review-effort` / `ORCH_CURSOR_REVIEW_EFFORT` (cursor) / `ORCH_CODEX_EFFORT` (`cc-codex --review-agent codex`) / `ORCH_CC_REVIEW_EFFORT` (`cc-codex --review-agent claude`) | `medium` (Cursor) / `xhigh` (Codex review) / `max` (Claude review) | review-role effort, validated on the selected review agent's axis. Codex/Cursor-gpt reasoning: `none/minimal/low/medium/high/xhigh` (canonical top-tier spelling is `xhigh`; Cursor calls it `extra-high`, and the orchestrator translates either spelling). Claude Code: `low..max` |
 | `ORCH_CODEX_SANDBOX` | `danger-full-access` | cc-codex only: codex `-s` sandbox mode. Full access by default (ruled 2026-07-04): `workspace-write` leaves `.git` read-only, so review-side ai-sync commits and close-out absorption fail |

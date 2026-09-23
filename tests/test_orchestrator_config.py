@@ -63,12 +63,12 @@ def test_default_config_is_visible_without_a_task_or_profile() -> None:
     assert config["backend"] == "cc-codex"
     assert config["dev"] == {
         "agent": "claude",
-        "model": "claude-opus-4-8",
+        "model": "claude-opus-5",
         "effort": "max",
     }
     assert config["review"] == {
         "agent": "codex",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "effort": "xhigh",
     }
     assert config["codex_sandbox"] == "danger-full-access"
@@ -129,10 +129,10 @@ def test_named_profiles_resolve_backend_specific_values() -> None:
 
     assert standard["dev"] == {
         "agent": "claude",
-        "model": "claude-opus-5",
+        "model": "claude-opus-5-5",
         "effort": "max",
     }
-    assert standard["review"]["model"] == "gpt-5.6-sol"
+    assert standard["review"]["model"] == "gpt-6-sol"
     assert standard["review"]["effort"] == "xhigh"
     assert standard["sources"]["dev.model"] == "profile:standard"
 
@@ -183,7 +183,7 @@ def test_role_profiles_can_be_selected_independently() -> None:
     }
     assert config["dev"] == {
         "agent": "claude",
-        "model": "claude-opus-5",
+        "model": "claude-opus-5-5",
         "effort": "max",
     }
     assert config["review"] == {
@@ -206,7 +206,7 @@ def test_role_profile_overrides_legacy_profile_for_only_that_role() -> None:
         "dev": "standard",
         "review": "excellent",
     }
-    assert config["dev"]["model"] == "claude-opus-5"
+    assert config["dev"]["model"] == "claude-opus-5-5"
     assert config["review"]["model"] == "gpt-6-astra"
 
 
@@ -253,7 +253,7 @@ def test_cc_codex_dev_agent_selects_its_default_namespace() -> None:
 
     assert config["dev"] == {
         "agent": "codex",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "effort": "xhigh",
     }
     assert config["sources"]["dev.agent"] == "cli"
@@ -267,7 +267,7 @@ def test_cc_codex_review_agent_selects_its_default_namespace() -> None:
 
     assert config["review"] == {
         "agent": "claude",
-        "model": "claude-opus-4-8",
+        "model": "claude-opus-5",
         "effort": "max",
     }
     assert config["sources"]["review.agent"] == "cli"
@@ -368,7 +368,7 @@ def test_profile_review_agent_override_requires_a_complete_custom_pair() -> None
         "model": "claude-opus-4-8",
         "effort": "max",
     }
-    assert config["dev"]["model"] == "claude-opus-5"
+    assert config["dev"]["model"] == "claude-opus-5-5"
     assert config["sources"]["dev.model"] == "profile:standard"
 
 
