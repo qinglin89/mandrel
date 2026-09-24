@@ -63,8 +63,8 @@ def test_default_config_is_visible_without_a_task_or_profile() -> None:
     assert config["backend"] == "cc-codex"
     assert config["dev"] == {
         "agent": "claude",
-        "model": "claude-opus-5",
-        "effort": "max",
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
     }
     assert config["review"] == {
         "agent": "codex",
@@ -267,8 +267,8 @@ def test_cc_codex_review_agent_selects_its_default_namespace() -> None:
 
     assert config["review"] == {
         "agent": "claude",
-        "model": "claude-opus-5",
-        "effort": "max",
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
     }
     assert config["sources"]["review.agent"] == "cli"
     assert config["dev"]["agent"] == "claude"
