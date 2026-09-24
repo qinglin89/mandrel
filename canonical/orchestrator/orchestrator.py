@@ -16,7 +16,7 @@ Backends (--backend):
            orchestrator injects protocol context itself and exports AI_ORCH=1
            to keep the .cursor hooks quiet. Needs CURSOR_API_KEY.
   cc-codex (default) each role picks its own CLI agent: dev defaults to
-           Claude Code headless (`claude -p`, opus-5 @ max effort) and
+           Claude Code headless (`claude -p`, opus-5.5 @ xhigh effort) and
            review to Codex CLI (`codex exec`, gpt-5.6-sol @ xhigh effort);
            `--dev-agent` / `--review-agent` swap either one. No Cursor
            dependency; each tool's own hook/import chain loads the protocol

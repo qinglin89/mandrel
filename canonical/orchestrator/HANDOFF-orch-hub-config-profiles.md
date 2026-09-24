@@ -81,8 +81,8 @@ Representative response:
   "backend": "cc-codex",
   "dev": {
     "agent": "claude",
-    "model": "claude-opus-5",
-    "effort": "max"
+    "model": "claude-opus-5-5",
+    "effort": "xhigh"
   },
   "review": {
     "agent": "codex",
