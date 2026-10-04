@@ -132,7 +132,7 @@ def test_named_profiles_resolve_backend_specific_values() -> None:
         "model": "claude-opus-5-5",
         "effort": "max",
     }
-    assert standard["review"]["model"] == "gpt-6-sol"
+    assert standard["review"]["model"] == "gpt-6.1-sol"
     assert standard["review"]["effort"] == "xhigh"
     assert standard["sources"]["dev.model"] == "profile:standard"
 
