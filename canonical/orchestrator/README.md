@@ -66,7 +66,7 @@ It remains a backward-compatible shorthand that applies the same named
 profile to both roles. `--dev-profile` and `--review-profile` independently
 select a role; omitting either inherits `--profile`, while explicitly passing
 `default` restores environment/config inheritance for that role.
-`standard` resolves to Opus 5.5 @ max + GPT-6 Sol @ xhigh; `excellent`
+`standard` resolves to Opus 5.5 @ max + GPT-6.1 Sol @ xhigh; `excellent`
 resolves to Fable 5.1 @ max + GPT-6 Astra @ xhigh. Profiles use Claude Code's
 full model names (`claude-opus-5-5`, `claude-fable-5-1`); `opus` and `fable`
 are the corresponding CLI aliases for whatever is latest in each family, and
