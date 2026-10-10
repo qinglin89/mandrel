@@ -11,7 +11,10 @@ file data (schema: `.ai-protocol/meta/taskfile.md`).
 The caller is a dumb scheduler: it re-parses the task file before every turn
 (no in-memory flow state), dispatches the next session, verifies declared
 outputs afterwards, and pauses for a human on every decision it may not make
-itself. The task file is ground truth; the caller NEVER writes it. Execution
+itself. The task file is ground truth. The caller never writes task work,
+findings, or lifecycle status. Its only mechanical writes are freezing a
+missing legacy `session-limit` and reserving `## Split` with
+`- Phase: preparing` before dispatch. Execution
 can stop at any session boundary and restart later — the turn re-derives from
 the file — and manual sessions can interleave freely with orchestrated ones.
 
@@ -31,17 +34,26 @@ remediation / review interim / review final gate.
 
 Decision order per iteration (re-parse the task file first):
 
-1. `status: completed` → **close-out** (the closeout skill,
+1. `status: completed` without a Split transfer → **close-out** (the closeout skill,
    `.ai-protocol/workflow/skills/closeout.md`), then stop.
 2. `status: blocked` → **surface the blocker to the human**, then resume the
-   blocked conversation with the answer (§4.3).
-3. Any dev session-log entry not yet named by a `review of <sid>` entry →
+   blocked conversation with the answer (§4.3). A blocked Split resumes its
+   original split conversation, preserving the reservation and Target.
+3. A recorded `## Split` (`Phase: preparing` or `ready`, including a completed
+   or already archived source needing verification) → **split
+   session**, resuming the reserved transfer rather than normal work. A
+   standing unresolved human dispute must be ruled on before closure.
+4. A finished review boundary, no pending dev entries, no open fix set, and
+   dev `session-est` current **at least** `session-limit` → **split session**
+   if work remains. Reserve `Phase: preparing` first. Ordinary completed tasks
+   already took step 1; never create an empty successor for a passed final gate.
+5. Any dev session-log entry not yet named by a `review of <sid>` entry →
    **review turn** (one review session covers the whole pending set) —
    UNLESS the frontmatter declares `fix-set: open` (see §3).
-4. `status: final_review` with nothing pending → the last review didn't
+6. `status: final_review` with nothing pending → the last review didn't
    conclude; **ask the human for a ruling**, then dispatch a fresh review
    with it (§4.6).
-5. Otherwise (`in_progress`/`pending`, nothing awaiting review) → **dev
+7. Otherwise (`in_progress`/`pending`, nothing awaiting review) → **dev
    turn**.
 
 Typical full cycle: dev advances scope (`in_progress`) → review of that
@@ -75,7 +87,22 @@ role-local meanings live in the role contracts:
   resumes after a `pass` verdict. (Keeps re-reviews delta-only and each
   convergence group single-chained.)
 - **`completed` is the sole close-out trigger**; per the transition table
-  only a final-gate review session sets it.
+  a final-gate review session sets it on pass, or `/split-task` sets it after
+  a verified administrative transfer. Split closure is never a review pass.
+- **Dev-session split budget**: `session-limit` is frozen at intake as the
+  initial `session-est` total + 3. At first attach to a legacy task missing
+  the field, the caller freezes its then-current total + 3 in the task file;
+  an unreadable estimate requires correction, not a guessed limit. Both
+  advancement and remediation consume current; review, plan, split, and
+  closeout do not. Re-estimation never moves the limit. This is explicitly a
+  **review-boundary** safeguard: an open remediation fix set continues,
+  even past the limit, until it is complete and its re-review finishes.
+  A partial review with pending work also finishes before splitting.
+  Re-evaluate the same predicate on attach so a stop/restart after review
+  cannot miss it. The split session uses the dev agent configuration with
+  no dev/review contract and invokes `.claude/skills/split-task/SKILL.md`.
+  It leaves one independent pending successor, completes and closes out the
+  source, then stops; the caller does not automatically run the successor.
 - **Context budget**: a session whose conversation outgrows the per-session
   context budget (~200k tokens) is told to wrap up (clean handoff, no new
   work); remaining work lands in a fresh session — the loop re-derives the
@@ -108,6 +135,13 @@ escalation pauses the loop for a binding human answer.
    human for a **binding ruling**, injected into the next dev prompt. A
    `Dispute-unresolved:` line skips the budget and escalates immediately — a
    two-sided disagreement is decided by the human on round 1, not looped.
+   Split scheduling must preserve a standing dispute or genuine blocker;
+   transferring a finding does not constitute a human ruling. A budget split
+   is a separate administrative action, not a fabricated convergence pass.
+   When split is due, skip the group-budget escalation because no further
+   remediation will be dispatched on the source. A `Dispute-unresolved:`
+   still asks the human; persist that binding answer as optional `Ruling` in
+   the Split reservation before launching the split session.
 6. **final_review stall**: everything reviewed, status sits at
    `final_review`, and the latest review did not conclude with a
    verdict-driven handback → ask for a ruling, appended to a fresh review
@@ -154,6 +188,12 @@ escalation pauses the loop for a binding human answer.
 - **Close-out (caller-dispatched)**: on `completed`, run the closeout skill —
   natively in-session (stop-hook chain forces it) or in a resumed/fresh
   conversation; verify per §4.7.
+- **Split (caller-dispatched)**: reserve the transfer before launch, run a
+  fresh session using the dev agent configuration and only the split skill's
+  procedure, then verify source archival, successor identity and pending
+  state, unchanged dev-session count/limit, transferred dependencies, and
+  the ordinary closeout checks. Reuse a reserved Target on retry. Split
+  bookkeeping is `Kind: split`, never a pending dev entry.
 
 ## 6. Manual execution (human as orchestrator)
 

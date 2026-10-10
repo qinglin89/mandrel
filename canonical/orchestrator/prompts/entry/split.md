@@ -1,0 +1,2 @@
+Invoke /split-task for task '{{task_id}}' now: read '{{split_skill}}' and follow it in full. {{sid_line}}
+This is a split administrative session using the dev agent configuration, without a dev or review role contract. Read the task's existing Split record (or its archive copy) first and resume any interrupted transfer using the same Target. Complete and verify the split closeout, then stop; leave the successor pending. Your final response must include the `Remaining-task audit:` line required by closeout.

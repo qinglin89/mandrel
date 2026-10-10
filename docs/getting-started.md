@@ -269,7 +269,8 @@ documents the task should preload, estimated the size in sessions, and drafted.
 Looks right, create it.
 ```
 
-**Result:** one new `.ai-tasks/<id>.md` at `session-est: 0/1`, and one new index
+**Result:** one new `.ai-tasks/<id>.md` at `session-est: 0/1` with a fixed
+`session-limit: 4`, and one new index
 row.
 
 ## Step 8: The dev turn

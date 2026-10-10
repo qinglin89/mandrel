@@ -13,7 +13,7 @@ session boundary from the file alone. Run-local inputs exist but are
 
 | Input | Durability |
 |---|---|
-| task file: `status`, latest `Verdict:`/`Group:`, `blockers`, unreviewed entries, `fix-set`, `Dispute-unresolved:`, `claimed-by` | **durable** (ground truth) |
+| task file: `status`, latest `Verdict:`/`Group:`, `blockers`, unreviewed entries, `fix-set`, `Dispute-unresolved:`, `claimed-by`, `session-limit`, `## Split` | **durable** (ground truth) |
 | session-id → tool routing (`logs/sessions.json`) | ephemeral (resume convenience) |
 | pending human ruling | ephemeral (re-escalates after the next failed review) |
 | followup / group-budget / max-session counters | ephemeral (group counts recompute from the file) |
@@ -34,6 +34,7 @@ contract, and "read it on demand" is not a delivery channel:
 | `review <id>` | `.ai-protocol/protocols/review.md` (interim at `in_progress`, final gate at `final_review`) |
 | plan gate (caller-initiated) | `.ai-protocol/protocols/plan.md` |
 | intake (new work) | `.ai-protocol/protocols/intake.md` |
+| split (caller-initiated or authorized manual invocation) | `.claude/skills/split-task/SKILL.md`; use the dev agent configuration, without a dev/review role contract |
 
 ## Session modes
 
@@ -52,6 +53,9 @@ Turn detection is stateless; attaching to any task state is fully supported:
 
 | Task state at attach | First action |
 |---|---|
+| missing `session-limit` on a legacy task | mechanically freeze then-current `session-est` total + 3, then select the action below; never infer an unavailable original estimate |
+| recorded `## Split` (`preparing` / `ready`), including completed/archived source | resume or verify split before normal dev/review, subject to genuine blockers and standing unresolved disputes |
+| finished review boundary, no pending dev entries/open fix set, current at least `session-limit`, remaining work | reserve `Phase: preparing`, then split; completed tasks still close out normally |
 | frontmatter `fix-set: open` (+ latest verdict changes-requested) | dev remediation turn (fix set still open; re-review deferred). The flag without an open remediation → ignored with a warning, normal dispatch |
 | dev entries unreviewed (any tool made them) | review turn (reviewer needs only task file + git, no transcript) |
 | all reviewed, `in_progress` (e.g. after a changes-requested review) | dev turn (remediation mode) |
@@ -59,10 +63,13 @@ Turn detection is stateless; attaching to any task state is fully supported:
 | `final_review`, all reviewed, latest verdict changes-requested | dev remediation turn (status stays `final_review`) |
 | `final_review`, all reviewed, no verdict-driven handback | ruling prompt (runbook §4.6) |
 | `blocked` | blocker prompt → resume (runbook §4.4); resumable only when the executor can reopen the `claimed-by` conversation — otherwise unblock manually first |
-| `completed` | close-out |
+| `completed` without Split | close-out |
 
 Group budgets are continuous across attach: counting re-scans ALL review
 entries in the file, including pre-orchestrator ones.
+The split threshold is also durable. Open fix sets may exceed it until their
+re-review finishes. `Kind: split` entries are administrative and excluded
+from pending dev work; split sessions never consume the dev estimate.
 
 ## Prompt composition (caller-assembled entry)
 
@@ -76,6 +83,7 @@ composition = mode contract + injected fragments:
 | review (interim/final gate) | preamble + conduct annex + review contract text + review invocation + independence note + entry checklist (pending set, no-est) + checks preview |
 | plan gate | the dev advancement composition as its base prompt (the plan shadow therefore carries the dev-advancement contract along; remediation never gates) + plan contract text + plan-gate instruction (+ plan feedback rounds midflight) |
 | close-out | closeout instruction (task id, active count, skill pointer) |
+| split | preamble + conduct annex + split instruction (source task id, session-id line, split skill pointer); read immutable limit, reserved phase/target, and any persisted Ruling from the task file; no dev/review contract, est increment, preReEst, or plan gate |
 
 The checks preview is GENERATED from the postcheck contract at dispatch time
 — never frozen prose. Fragments instantiate values; rules live in the

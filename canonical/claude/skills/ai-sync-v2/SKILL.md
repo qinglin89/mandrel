@@ -35,7 +35,10 @@ Stop hook fires this skill when the active task transitions to
 
 1. Read the task file. Verify `status: completed` AND working tree clean
    (`git status --porcelain` empty). If either check fails, print state
-   and abort.
+   and abort. For a split closure, require `Phase: ready`, the reserved
+   Target's independent pending task and index row, and the recorded complete
+   scope/finding transfer and dependency reconciliation. Never archive an
+   incomplete transfer.
 2. Gather absorption inputs:
    - Full `## Session log` from the task (all entries — multi-session
      tasks accumulate).
@@ -45,6 +48,9 @@ Stop hook fires this skill when the active task transitions to
 3. List candidate findings. Walk session-log `Done` items + session
    context (decisions, rejected alternatives, design notes); identify
    discrete facts / decisions / invariants that might warrant Snapshot.
+   Administrative split completion is not evidence that the original task
+   passed review or that transferred defects were fixed. Preserve actual
+   findings and validation limits when selecting memory updates.
 4. Apply protocol §3 admission tests to each finding (derivation cost /
    stability / leverage). Borderline → compress to one keyword-heavy line
    and keep.
@@ -86,7 +92,9 @@ Stop hook fires this skill when the active task transitions to
       no remaining task changes): audit every other active task under
       `.ai-tasks/` excluding `archive/`. Update blockers / scope /
       assumptions / acceptance criteria / prefetch / estimate / status
-      where this completed task changes them; remove blockers naming the
+      where this completed task changes them. For a split, first replace
+      dependencies on transferred work with the successor id; remove only
+      dependencies the source actually satisfied. Then remove blockers naming the
       just-archived (or any archived) task id. If a `blocked` task is left
       with no blockers, restore the active status inferable from its latest
       session-log heading, else `pending`.
@@ -110,6 +118,12 @@ Stop hook fires this skill when the active task transitions to
   admitted facts; the task itself still archives.
 - **Idempotency**: if the task file is absent or `status ≠ completed`,
   print state and exit. Do not silently re-run.
+- **Interrupted split closeout**: when `/split-task` explicitly resumes a
+  source already archived with `Phase: ready`, follow the closeout spec's
+  recovery procedure: verify the reserved pending successor, reconcile
+  remaining tasks, remove any stale source index row, and report the audit.
+  Never repeat intake or absorption; missing/conflicting/started successor
+  state requires a human ruling.
 - **No findings**: no absorption; task still archives.
 - **Routing-doc size**: `.ai/index.md` ≤ 1500 tokens (§4) — apply tighter
   scrutiny when editing routing.

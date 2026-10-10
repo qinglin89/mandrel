@@ -33,6 +33,7 @@ When the user requests new work and no active task in `.ai-tasks/index.md` cover
    | `id` | `<YYYY-MM-DD>-<short-kebab-slug>` (slug from purpose) |
    | `status` | `pending` |
    | `session-est` | `0/<total>` — estimate `<total>` by dividing expected work by ~200k tokens (one effective context window per session for Opus 4.7 1M context) |
+   | `session-limit` | `<total> + 3` — immutable positive integer; re-estimation does not move this review-boundary split threshold |
    | `blockers` | from user statement + LLM analysis of dependencies on existing active tasks; empty `[]` if none |
    | `prefetch` | suggest 2–5 **lazy** content docs (modules / apis / features / sub-indexes / etc.) from `.ai/index.md` routing relevant to the task. **Exclude eager docs** (overview / architecture / design / conventions) — already in baseline context per memory §2. |
    | `claimed-by` | empty at intake; set/updated at each session entry that picks up the task (claim rules: taskfile schema) |
@@ -78,6 +79,11 @@ When the user requests new work and no active task in `.ai-tasks/index.md` cover
    - `.ai-tasks/index.md` — append a row to the active table (create table header if file currently has only `(none)`)
 
 7. **Print summary**: `<id>` / title / file path. User can now invoke the task at the next session entry.
+
+For an authorized `/split-task` invocation, follow the intake contract's
+authorized-split exception: the source task's remaining scope and findings
+need no separate draft confirmation, and source/successor overlap is expected.
+The split skill owns target reservation, self-contained handoff, and retries.
 
 ## Tasks index format
 

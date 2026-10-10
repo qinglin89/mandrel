@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 
 from .config import EvolutionConfig
 from .errors import EvolutionError
@@ -195,21 +196,47 @@ def task_status(path: Path) -> str | None:
 
 
 def task_finished(config: EvolutionConfig, task_id: str) -> bool:
-    """Whether this machine's copy of the task has finished.
+    """Whether this task's entire responsibility has finished on this machine.
 
-    An archived task counts as finished by location: close-out moves a task to
-    `archive/` only after it reaches `completed` (taskfile schema §7-8), and the
-    active file is gone by then. False for a task that is not here at all —
-    `.ai-tasks/` is machine-local, so absence is not evidence of anything, and
-    every caller has its own reading of what a missing task means.
+    Legacy archives count as finished by location. An administrative split is
+    different: its completed source still owes the work transferred to Target.
+    Follow ready transfers until an ordinary completed task is reached; an
+    incomplete, missing, malformed, or cyclic transfer never permits analysis
+    closure or candidate sealing. Nothing about this walk mutates local tasks.
     """
 
-    if existing_task_path(config, task_id) is None:
-        return False
-    active = task_path(config, task_id)
-    if active.is_file():
-        return task_status(active) == STATUS_COMPLETED
-    return True
+    seen: set[str] = set()
+    while task_id not in seen:
+        seen.add(task_id)
+        path = existing_task_path(config, task_id)
+        if path is None:
+            return False
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return False
+        block = parse_frontmatter(text)
+        if len(seen) > 1 and (
+            not block.present or not block.closed or block.duplicated or block.fields.get("id") != task_id
+        ):
+            return False
+        sections = list(re.finditer(r"^## Split[ \t]*$", text, re.MULTILINE))
+        if not sections:
+            return path == archived_task_path(config, task_id) or block.fields.get("status") == STATUS_COMPLETED
+        if len(sections) != 1 or block.fields.get("status") != STATUS_COMPLETED:
+            return False
+        section = re.split(r"^## ", text[sections[0].end():], maxsplit=1, flags=re.MULTILINE)[0]
+        phases = re.findall(r"^- Phase:[ \t]*(.*?)[ \t]*$", section, re.MULTILINE)
+        targets = re.findall(r"^- Target:[ \t]*(.*?)[ \t]*$", section, re.MULTILINE)
+        if phases != ["ready"] or len(targets) != 1:
+            return False
+        target = targets[0]
+        # The transfer names a task id, never a path outside the local task
+        # set. Keep malformed targets away from both active and archive reads.
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", target) or target == "index":
+            return False
+        task_id = target
+    return False
 
 
 @dataclass(frozen=True)
@@ -298,9 +325,9 @@ def completion(config: EvolutionConfig, spec: AnalysisTaskSpec) -> bool | None:
     evidence either way, and a caller that reads it as "finished" concludes
     from a missing file that work it never saw is done.
 
-    An archived task counts as finished by location: close-out moves a task to
-    `archive/` only after it reaches `completed` (taskfile schema §7-8), and the
-    active file is gone by then.
+    Ordinary archives count as finished by location; a split archive counts
+    only after its entire successor chain finishes. Administrative closure must
+    not release an analysis gate while transferred work remains pending.
 
     The file is identified as this batch's generated task before any of that is
     read, because a status line is only a lifecycle when it belongs to the task
@@ -443,6 +470,7 @@ def render(spec: AnalysisTaskSpec) -> str:
 id: {spec.task_id}
 status: pending
 session-est: 0/{spec.session_est_total}
+session-limit: {spec.session_est_total + 3}
 blockers: []
 prefetch: [{", ".join(PREFETCH)}]
 claimed-by:
