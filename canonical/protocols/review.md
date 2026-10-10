@@ -91,9 +91,11 @@ To keep the finding-remediation loop bounded:
   while the current review passes; `style` findings never block.
   This is the review-pass gate. The separate `/split-task` administrative
   closure may transfer unresolved correctness findings with their evidence
-  into a pending successor after the dev-session budget is reached. Reviewers
-  still record the real verdict; they never pass a review because a split is
-  due, and the transfer does not resolve or accept a finding.
+  into a pending successor after a completed interim review passes at the
+  dev-session limit. The source must still be `in_progress`; the split skill
+  inventories its remaining scope and whole findings ledger. A current-group
+  pass need not clear earlier groups' findings. Never pass because a split is
+  due, and never treat a transfer as resolving or accepting a finding.
 - **Disputed findings**: when a pending work session recorded a dispute for a
   finding, evaluate the dispute on the merits against the actual code. If you
   agree the finding was invalid, mark it withdrawn in your entry. If you

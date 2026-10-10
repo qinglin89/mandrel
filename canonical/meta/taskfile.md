@@ -25,7 +25,7 @@ entries, markers, index, and archive semantics.
 id: <date-prefixed-slug>
 status: pending | in_progress | final_review | completed | blocked   # final_review = dev-complete claim standing, in the final-review loop. Legal transitions: §3.
 session-est: <current>/<total>      # progress/total in dev sessions; one estimated session ≈ one effective context window (~200k tokens). e.g., 0/3 pending, 1/3 after first session entry. `current` increments at DEV session entry (part of the claim, §4); review sessions do not consume the estimate. Raise `total` if estimate undershoots.
-session-limit: <positive integer>  # immutable dev-session budget: initial session-est total + 3, set at intake. Includes advancement and remediation. Legacy tasks missing it freeze the then-current total + 3 at first orchestrator attach. A review-boundary split threshold, not a limit on sessions in an open fix set.
+session-limit: <positive integer>  # immutable dev-session budget: initial session-est total + 3, set at intake. Includes advancement and remediation. Legacy tasks missing it freeze the then-current total + 3 at first orchestrator attach. New splits require in_progress and a completed review pass; failed reviews/open fix sets may exceed it.
 blockers: [<task-id> | external:<text>]   # only if status=blocked. task-id refs another active task by id (e.g., 2026-05-26-foo); external:<text> for non-task blockers (e.g., external:awaiting API spec)
 prefetch: [<.ai/*.md paths>]        # optional hint; lazy docs only (eager set per the memory loading contract is already loaded). Pre-load at start. Mutable — backfill with what was actually consulted.
 fix-set: open                       # optional; declared only by a remediation-mode dev session whose fix set is incomplete (not yet a re-reviewable unit). Remove the line when the fix set completes — absent = no open fix set. (Local meaning in the dev contract; scheduling consequences in the workflow runbook.)
@@ -48,7 +48,7 @@ runner maps kinds to contracts and prompts is the workflow layer's concern —
 | dev remediation   | in_progress / final_review   | unchanged — remediation never touches status; its session-log entry is its complete output |
 | review interim    | in_progress                  | in_progress (findings never gate an interim review) |
 | review final gate | final_review                 | completed (pass); final_review (changes required); in_progress (only if final_review was set in error, i.e. the task is not dev-complete — record why) |
-| split skill       | in_progress / final_review   | completed (administrative split closure, only after §5 Split transfer is ready); unchanged while preparing |
+| split skill       | in_progress                  | completed (administrative split closure, only after §5 Split transfer is ready); unchanged while preparing |
 | any session       | any                          | blocked (a question for the human; `blockers:` set) |
 
 A dev session never sets `completed`. A review session never advances the
@@ -62,6 +62,8 @@ it is not a review pass or a claim that transferred findings are fixed. It
 claims the source task without consuming `session-est` and invokes the normal
 closeout only after the transfer is ready. `session-limit` never increases
 with re-estimation, retries, or remediation.
+An already-reserved legacy split may also recover from `final_review`; that
+compatibility does not admit a new split from `final_review`.
 
 Verdict values (review entries): `pass` | `changes-requested` — semantics in
 the review contract (`.ai-protocol/protocols/review.md`); routing consequences
@@ -145,15 +147,18 @@ a prose mention of a field name elsewhere in an entry is not a declaration.
 
 ### Split (optional administrative closure)
 
-The `/split-task` skill transfers all unfinished scope and unresolved
-findings into one self-contained pending task. A source task records:
+The `/split-task` skill transfers all unfinished scope and unresolved findings
+into one self-contained pending task. A new transfer requires `in_progress`,
+the latest completed review's `pass`, current at least `session-limit`, and no
+pending dev entries or open fix set. The skill verifies actual remaining
+scope/acceptance/findings before creating a successor. A source records:
 
 ```
 ## Split
 
 - Phase: preparing
 - Target: <task-id>
-- Reason: review boundary reached session-limit <limit> at <current> dev sessions
+- Reason: interim review pass at <current> dev sessions, limit <limit>, with work remaining
 - Retained: <delivered scope and its actual acceptance evidence>
 - Transferred: <each remaining scope/acceptance item and unresolved finding>
 - Dependencies: <other active tasks whose remaining dependency moves to Target>
@@ -185,8 +190,10 @@ estimate and limit. A real blocker or unresolved human dispute prevents
 automatic split closure; do not clear it merely to meet the budget.
 
 An unfinished `preparing` or `ready` transfer is resumed before normal
-dev/review dispatch (after handling genuine blockers). Split bookkeeping
-entries record the transfer with `Kind: split`; final Next/Open are `none`
+dev/review dispatch (after handling genuine blockers), without reapplying the
+new-transfer gate; this includes old `final_review` or `changes-requested`
+reservations. Split bookkeeping entries record the transfer with `Kind: split`;
+final Next/Open are `none`
 because all remaining work has an owner. Completion via split is an
 administrative disposition, not a fabricated final-gate pass.
 

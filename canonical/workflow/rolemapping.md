@@ -55,7 +55,7 @@ Turn detection is stateless; attaching to any task state is fully supported:
 |---|---|
 | missing `session-limit` on a legacy task | mechanically freeze then-current `session-est` total + 3, then select the action below; never infer an unavailable original estimate |
 | recorded `## Split` (`preparing` / `ready`), including completed/archived source | resume or verify split before normal dev/review, subject to genuine blockers and standing unresolved disputes |
-| finished review boundary, no pending dev entries/open fix set, current at least `session-limit`, remaining work | reserve `Phase: preparing`, then split; completed tasks still close out normally |
+| finished review boundary at `in_progress`, latest verdict `pass`, no pending dev entries/open fix set, current at least `session-limit` | reserve `Phase: preparing`, then split after verifying remaining work; completed tasks still close out normally |
 | frontmatter `fix-set: open` (+ latest verdict changes-requested) | dev remediation turn (fix set still open; re-review deferred). The flag without an open remediation → ignored with a warning, normal dispatch |
 | dev entries unreviewed (any tool made them) | review turn (reviewer needs only task file + git, no transcript) |
 | all reviewed, `in_progress` (e.g. after a changes-requested review) | dev turn (remediation mode) |
@@ -67,9 +67,10 @@ Turn detection is stateless; attaching to any task state is fully supported:
 
 Group budgets are continuous across attach: counting re-scans ALL review
 entries in the file, including pre-orchestrator ones.
-The split threshold is also durable. Open fix sets may exceed it until their
-re-review finishes. `Kind: split` entries are administrative and excluded
-from pending dev work; split sessions never consume the dev estimate.
+The split threshold is also durable. Remediation may exceed it until its
+re-review passes; failed reviews retain the group budget. `Kind: split`
+entries are administrative and excluded from pending dev work; split sessions
+never consume the dev estimate.
 
 ## Prompt composition (caller-assembled entry)
 

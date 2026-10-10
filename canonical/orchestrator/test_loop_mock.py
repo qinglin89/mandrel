@@ -2657,7 +2657,7 @@ def scenario_33_split_review_boundary(repo: Path) -> None:
 
     def review(agent: FakeAgent, prompt: str) -> None:
         assert f"review {TASK_ID}" in prompt
-        append_review(repo, agent.agent_id, DEV_SID, "changes-requested",
+        append_review(repo, agent.agent_id, DEV_SID, "pass",
                       DEV_SID, "in_progress")
 
     FakeAgent.script = [review]
@@ -2679,7 +2679,7 @@ def scenario_33_split_review_boundary(repo: Path) -> None:
 
 
 def scenario_34_roleless_split(repo: Path) -> None:
-    split_fixture(repo, current=6, total=20)
+    split_fixture(repo, current=5, total=20)
     orch = new_orch(plan_gate=True)
     orch.once = False
     roles: list[str] = []
@@ -2696,7 +2696,7 @@ def scenario_34_roleless_split(repo: Path) -> None:
         assert str(o.SPLIT_SKILL) in prompt
         assert "===== BEGIN .ai-protocol/protocols/dev-advancement.md" not in prompt
         assert "===== BEGIN .ai-protocol/protocols/dev-remediation.md" not in prompt
-        assert "session-est: 6/20 →" not in prompt
+        assert "session-est: 5/20 →" not in prompt
         assert "PLAN GATE" not in prompt
         finish_split(repo, agent)
 
@@ -2705,7 +2705,7 @@ def scenario_34_roleless_split(repo: Path) -> None:
     archived = o.parse_task(o.ARCHIVE_DIR / f"{TASK_ID}.md")
     successor = o.parse_task(o.TASKS_DIR / f"{SPLIT_TARGET}.md")
     assert roles == ["dev"], "split must use fresh dev configuration only"
-    assert archived.est_tuple == (6, 20), "administrative split consumes no dev session"
+    assert archived.est_tuple == (5, 20), "administrative split consumes no dev session"
     assert archived.unreviewed_dev_sids() == []
     assert successor.status == "pending" and successor.est_tuple == (0, 1)
     assert not successor.entries, "the successor must not auto-run"
@@ -2822,11 +2822,12 @@ def scenario_39_split_convergence_priority(repo: Path) -> None:
 
     orch.ask_human = ask
     orch.check_convergence()
-    assert questions == [], "split due replaces ordinary group-budget escalation"
+    assert questions == ["convergence-budget"], "reached task limit cannot waive group budget"
     path.write_text(path.read_text() + "- Dispute-unresolved: behavior disputed\n")
     orch.check_convergence()
-    assert questions == ["dispute-unresolved"], "a real dispute still needs a ruling"
-    print("scenario 39 (split replaces group-budget escalation, preserves dispute): PASS")
+    assert questions == ["convergence-budget", "dispute-unresolved"], \
+        "a real dispute still needs a ruling"
+    print("scenario 39 (reached limit preserves group-budget and dispute escalation): PASS")
 
 
 def scenario_40_split_entry_parsing(repo: Path) -> None:
@@ -2863,30 +2864,23 @@ def scenario_41_split_invalid_baseline(repo: Path) -> None:
     print("scenario 41 (invalid missing-limit baseline refuses before launch): PASS")
 
 
-def scenario_42_split_attach_dispute(repo: Path) -> None:
+def scenario_42_split_legacy_reservation(repo: Path) -> None:
     path = split_fixture(repo, verdict="changes-requested")
-    path.write_text(path.read_text() + "- Dispute-unresolved: acceptance disputed\n")
+    write_split_marker(path, "preparing")
     orch = new_orch()
-    questions: list[str] = []
-
-    def ask(banner: str, kind: str = "") -> str:
-        questions.append(kind)
-        assert not o.parse_task(path).split_phase, "ruling must precede split reservation"
-        return "Transfer the remaining acceptance work with its documented dispute."
-
-    orch.ask_human = ask
 
     def split(agent: FakeAgent, prompt: str) -> None:
-        assert questions == ["dispute-unresolved"]
-        assert "- Ruling: Transfer the remaining acceptance work" in path.read_text()
+        task = o.parse_task(path)
+        assert not orch.split_due(task), "legacy CR cannot initiate a new split"
+        assert task.split_phase == "preparing" and task.split_target == SPLIT_TARGET
+        assert "split-task" in prompt
         finish_split(repo, agent)
 
     FakeAgent.script = [split]
     orch.loop()
     assert not FakeAgent.script
-    assert questions == ["dispute-unresolved"]
-    print("scenario 42 (attach with standing dispute obtains and persists ruling "
-          "before split): PASS")
+    assert o.parse_task(o.ARCHIVE_DIR / path.name).split_target == SPLIT_TARGET
+    print("scenario 42 (legacy CR split reservation resumes its existing transfer): PASS")
 
 
 def scenario_43_split_completed_ready_recovery(repo: Path) -> None:
@@ -3038,6 +3032,156 @@ def scenario_48_split_malformed_state(repo: Path) -> None:
           "without mutation or agent launch): PASS")
 
 
+def scenario_49_split_waits_for_remediation(repo: Path) -> None:
+    path = split_fixture(repo, verdict="changes-requested")
+    work_sid: list[str] = []
+
+    def remediate(agent: FakeAgent, prompt: str) -> None:
+        assert "REMEDIATION SESSION" in prompt
+        assert not o.parse_task(path).split_phase
+        work_sid.append(agent.agent_id)
+        bump_est(path, agent)
+        path.write_text(path.read_text() + (
+            f"\n### 2026-01-10 / {agent.agent_id} / "
+            "(in_progress → in_progress)\n- Done: repaired the current finding\n"
+            "- Next: remaining planned widget scope\n- Open: none\n"))
+
+    FakeAgent.script = [remediate]
+    new_orch().loop()
+    assert o.parse_task(path).est_tuple == (6, 6)
+    assert not o.parse_task(path).split_phase
+
+    def review(agent: FakeAgent, prompt: str) -> None:
+        assert f"review {TASK_ID}" in prompt
+        append_review(repo, agent.agent_id, work_sid[0], "pass", DEV_SID,
+                      "in_progress")
+
+    FakeAgent.script = [review]
+    new_orch().loop()
+    assert path.exists(), "--once stops after the passing review"
+    assert o.Orchestrator.split_due(o.parse_task(path))
+
+    def split(agent: FakeAgent, prompt: str) -> None:
+        assert "split-task" in prompt
+        finish_split(repo, agent)
+
+    FakeAgent.script = [split]
+    new_orch().loop()
+    assert not path.exists() and not FakeAgent.script
+    print("scenario 49 (over-limit changes-requested continues remediation; "
+          "passing re-review enables split on attach): PASS")
+
+
+def scenario_50_split_final_gate_completes(repo: Path) -> None:
+    path = split_fixture(repo, status="final_review", reviewed=False)
+    orch = new_orch()
+    orch.once = False
+    review_sid: list[str] = []
+
+    def review(agent: FakeAgent, prompt: str) -> None:
+        review_sid.append(agent.agent_id)
+        assert f"review {TASK_ID}" in prompt
+        append_review(repo, agent.agent_id, DEV_SID, "pass", DEV_SID,
+                      "completed")
+
+    def closeout(agent: FakeAgent, prompt: str) -> None:
+        assert agent.agent_id == review_sid[0]
+        assert "ai-sync-v2" in prompt and "split-task" not in prompt
+        assert not o.parse_task(path).split_phase
+        o.ARCHIVE_DIR.mkdir(exist_ok=True)
+        path.rename(o.ARCHIVE_DIR / path.name)
+        o.INDEX_FILE.write_text("")
+        assistant_text("Remaining-task audit: checked 0 active task(s); "
+                       "updated none; unchanged none.")
+
+    FakeAgent.script = [review, closeout]
+    orch.loop()
+    assert not FakeAgent.script
+    assert o.parse_task(o.ARCHIVE_DIR / path.name).status == "completed"
+    assert not (o.TASKS_DIR / f"{SPLIT_TARGET}.md").exists()
+    print("scenario 50 (over-limit final pass completes normally without a successor): PASS")
+
+
+def scenario_51_split_final_review_stall(repo: Path) -> None:
+    path = split_fixture(repo, status="final_review")
+    orch = new_orch()
+    asked: list[str] = []
+
+    def ask(banner: str, kind: str = "") -> str:
+        asked.append(kind)
+        assert kind == "final-review-stall"
+        return "Conclude the final review gate from the recorded evidence."
+
+    orch.ask_human = ask
+
+    def conclude(agent: FakeAgent, prompt: str) -> None:
+        assert f"review {TASK_ID}" in prompt
+        assert not o.parse_task(path).split_phase
+        append_review(repo, agent.agent_id, DEV_SID, "pass", DEV_SID,
+                      "completed")
+
+    FakeAgent.script = [conclude]
+    orch.loop()
+    assert asked == ["final-review-stall"]
+    assert o.parse_task(path).status == "completed"
+    assert not o.parse_task(path).split_phase
+    assert not FakeAgent.script
+    print("scenario 51 (passing final_review stall is escalated, never split): PASS")
+
+
+def scenario_52_split_partial_review_batch(repo: Path) -> None:
+    path = split_fixture(repo, reviewed=False)
+    path.write_text(path.read_text() + (
+        "\n### 2026-01-09 / batched-work-2 / (in_progress → in_progress)\n"
+        "- Done: second landed unit\n- Next: remaining scope\n- Open: none\n"
+        "\n### 2026-01-09 / batched-work-3 / (in_progress → in_progress)\n"
+        "- Done: third landed unit\n- Next: remaining scope\n- Open: none\n"))
+    orch = new_orch()
+    orch.once = False
+
+    def partial_batch(agent: FakeAgent, prompt: str) -> None:
+        assert f"review {TASK_ID}" in prompt
+        for sid in (DEV_SID, "batched-work-2"):
+            append_review(repo, agent.agent_id, sid, "pass", DEV_SID,
+                          "in_progress")
+        task = o.parse_task(path)
+        assert task.unreviewed_dev_sids() == ["batched-work-3"]
+        assert not orch.split_due(task), "batch-internal passes cannot skip pending work"
+
+    def finish_batch(agent: FakeAgent, prompt: str) -> None:
+        assert f"review {TASK_ID}" in prompt
+        assert not o.parse_task(path).split_phase
+        append_review(repo, agent.agent_id, "batched-work-3", "pass", DEV_SID,
+                      "in_progress")
+
+    def split(agent: FakeAgent, prompt: str) -> None:
+        assert "split-task" in prompt
+        finish_split(repo, agent)
+
+    FakeAgent.script = [partial_batch, finish_batch, split]
+    orch.loop()
+    assert not FakeAgent.script
+    assert (o.ARCHIVE_DIR / path.name).is_file()
+    print("scenario 52 (partial batched pass reviews every pending unit before split): PASS")
+
+
+def scenario_53_split_new_reservation_guard(repo: Path) -> None:
+    for status, verdict in (("in_progress", "changes-requested"),
+                            ("final_review", "pass"), ("completed", "pass")):
+        path = split_fixture(repo, status=status, verdict=verdict)
+        before = path.read_bytes()
+        created = list(FakeAgent.created)
+        FakeAgent.script = []
+        try:
+            new_orch().run_split()
+            raise AssertionError(f"new split accepted at {status}/{verdict}")
+        except SystemExit as err:
+            assert "cannot start split" in str(err)
+        assert path.read_bytes() == before
+        assert FakeAgent.created == created
+    print("scenario 53 (fresh split admission refuses CR and lifecycle-only states): PASS")
+
+
 @contextlib.contextmanager
 def isolated_mock_repo():
     repo = make_repo()
@@ -3103,7 +3247,7 @@ def main() -> None:
     with isolated_mock_repo() as repo:
         scenario_41_split_invalid_baseline(repo)
     with isolated_mock_repo() as repo:
-        scenario_42_split_attach_dispute(repo)
+        scenario_42_split_legacy_reservation(repo)
     with isolated_mock_repo() as repo:
         scenario_43_split_completed_ready_recovery(repo)
     with isolated_mock_repo() as repo:
@@ -3116,6 +3260,16 @@ def main() -> None:
         scenario_47_split_limit_immutable_postcheck(repo)
     with isolated_mock_repo() as repo:
         scenario_48_split_malformed_state(repo)
+    with isolated_mock_repo() as repo:
+        scenario_49_split_waits_for_remediation(repo)
+    with isolated_mock_repo() as repo:
+        scenario_50_split_final_gate_completes(repo)
+    with isolated_mock_repo() as repo:
+        scenario_51_split_final_review_stall(repo)
+    with isolated_mock_repo() as repo:
+        scenario_52_split_partial_review_batch(repo)
+    with isolated_mock_repo() as repo:
+        scenario_53_split_new_reservation_guard(repo)
     print("\nALL MOCK-LOOP SCENARIOS PASSED")
 
 

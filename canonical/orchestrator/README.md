@@ -202,7 +202,7 @@ flowchart TD
     CV -- yes --> B{group budget\nexceeded or reviewer\nescalated?}
     B -- no --> P
     B -- yes --> H2[HUMAN: binding ruling] --> P
-    U -- no --> L{review boundary\nand current >= session-limit?}
+    U -- no --> L{in_progress, review pass\nand current >= session-limit?}
     L -- yes --> S
     L -- no --> F{status ==\nfinal_review?}
     F -- yes --> V{latest verdict\nchanges-requested?}
@@ -218,12 +218,13 @@ orchestrator attach writes then-current total + 3 before any session can
 re-estimate; subsequent runs preserve it. Malformed estimates/limits refuse
 dispatch rather than guessing. `--print-config` remains read-only.
 
-At a completed review boundary, `current >= session-limit` dispatches
-`/split-task` if work remains. A passed final gate closes out normally.
-An open remediation fix set continues even beyond this threshold; its
-pending work is reviewed before the split check. Standing disputes still
-require a human ruling; a due split replaces ordinary group-budget escalation
-because no further dev turn will run on the source.
+After a completed review returns `pass`, an `in_progress` task at
+`current >= session-limit` dispatches `/split-task` for its remaining work.
+A passed final gate sets `completed` and closes out normally. Failed reviews
+continue remediation even beyond the threshold, with the normal group-budget
+and dispute rulings. Open fix sets and pending reviews finish before the
+split check. The skill verifies that substantive work remains; a plan-slice
+label or lifecycle bookkeeping alone does not justify creating a successor.
 
 Split uses a fresh session with the dev agent/model/effort, without a dev or
 review role, plan gate, or dev counter increment. The scheduler reserves

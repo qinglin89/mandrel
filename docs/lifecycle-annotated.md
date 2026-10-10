@@ -74,13 +74,13 @@ almost all of it:
    durable is archived with `.ai/` untouched.
 10. **The initial estimate has a fixed buffer.** Intake sets `session-limit`
     to the initial `session-est` total + 3; later re-estimation does not move
-    it. At a finished review boundary, reaching the limit with work remaining
-    dispatches `/split-task`. It transfers all remaining scope and findings
+    it. At the limit, a completed review must pass with the task still
+    `in_progress` to dispatch `/split-task`. It inventories remaining scope and findings
     into one independent pending task, updates the source's Scope/Acceptance
     and Split audit, and closes the source administratively through the normal
     closeout. Outstanding correctness findings remain outstanding in the
-    successor. Open remediation fix sets may exceed the limit until re-review
-    finishes. A genuine blocker or disputed finding still needs a human ruling.
+    successor. Remediation may exceed the limit until re-review passes. A genuine
+    blocker or disputed finding still needs a human ruling.
 
 The turn you should run next is always derivable from the file alone. Read top
 to bottom; the first row that matches is the turn:
@@ -90,19 +90,21 @@ to bottom; the first row that matches is the turn:
 | `status: completed` without a Split transfer | **closeout** — `/ai-sync-v2`. Usually the stop hook already ran it in the final-review conversation and the file is in `.ai-tasks/archive/` by now. A task still sitting in `.ai-tasks/` at `completed` means closeout was interrupted, disabled, or unavailable: finish it in a fresh conversation. `/ctd-tasks` flags this state as `⚠ Completed (unarchived)`. |
 | `status: blocked` | answer the question in `blockers:`, then resume that conversation; a blocked split resumes its original split conversation |
 | recorded `## Split` with `Phase: preparing` or `ready` | `/split-task <id>` — resume or verify the reserved transfer, including a completed or already archived source; reuse its Target |
-| finished review boundary, current at least `session-limit`, work remains | `/split-task <id>` — reserve `Phase: preparing`, transfer the remainder, close out the source, and leave the successor pending |
+| finished review boundary, `in_progress`, latest `pass`, current at least `session-limit` | `/split-task <id>` — reserve `Phase: preparing`, verify and transfer the remainder, close out the source, and leave the successor pending |
 | a dev entry that no `review of <sid>` entry names, or an open remediation fix set | `/invoke review <id>` (final gate at `final_review`), unless `fix-set: open` with a latest `changes-requested` verdict: then `/invoke dev <id>` continues remediation until the set is reviewable |
 | `status: final_review`, all reviewed, no verdict-driven handback | the last review didn't conclude: decide it yourself and dispatch a fresh review with your ruling |
 | otherwise: `pending` / `in_progress`, or all reviewed with latest verdict `changes-requested` | `/invoke dev <id>` — remediation after `changes-requested`, otherwise advancement |
 
-The split threshold requires no pending review work and no open fix set, so it
-never pre-empts the review or remediation continuation in the following row.
-An interrupted transfer takes precedence over ordinary work on restart. For a
-legacy task with no `session-limit`, the orchestrator freezes the then-current
-estimate total + 3 at first attach, before resuming blocked work. Split sessions
-use the dev agent configuration without a dev/review role and do not consume
-the dev estimate. A Split `Ruling` preserves any required human decision across
-restarts; meeting the split threshold bypasses only group-budget escalation.
+Splitting requires no pending review work or open fix set. The skill checks
+actual remaining scope, acceptance, and unresolved findings; final review or
+closeout alone do not count. If no work remains despite `in_progress`, it
+reports the lifecycle inconsistency through the existing blocked mechanism,
+without creating an empty task or claiming completion. No Plan-slice boundary
+is required. Recorded transfers retain recovery priority, including legacy
+`final_review`/failed-review reservations. A missing legacy limit freezes at
+current total + 3 before blocked work resumes. Split sessions use dev agent
+configuration without a role or estimate increment. Failed reviews retain
+normal remediation and group-budget escalation.
 
 ### When you need a fresh conversation
 
