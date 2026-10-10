@@ -274,7 +274,7 @@ def test_annotated_turn_selection_matches_the_runbook_order() -> None:
         "`status: completed` without a Split transfer",
         "`status: blocked`",
         "recorded `## Split` with `Phase: preparing` or `ready`",
-        "finished review boundary, current at least `session-limit`, work remains",
+        "finished review boundary, `in_progress`, latest `pass`, current at least `session-limit`",
         "a dev entry that no `review of <sid>` entry names, or an open remediation fix set",
         "`status: final_review`, all reviewed, no verdict-driven handback",
         "otherwise: `pending` / `in_progress`, or all reviewed with latest verdict `changes-requested`",
@@ -291,6 +291,10 @@ def test_annotated_turn_selection_matches_the_runbook_order() -> None:
     assert all("/split-task <id>" in rows[index][1] for index in (2, 3)), (
         "both interrupted transfer recovery and the completed-review budget "
         "boundary must dispatch split before ordinary dev/review work"
+    )
+    assert "`in_progress`" in rules[3][1] and "`pass`" in rules[3][1], (
+        "new splitting requires an interim pass with the task still in progress; "
+        "final-review and failed-review work must follow ordinary routing"
     )
     assert "fix-set: open" in rows[4][1] and "/invoke dev <id>" in rows[4][1], (
         "the review-boundary budget must preserve open-fix-set remediation "

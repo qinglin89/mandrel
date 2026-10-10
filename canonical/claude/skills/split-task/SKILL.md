@@ -1,6 +1,6 @@
 ---
 name: split-task
-description: Transfer an over-budget task's unfinished scope and unresolved findings into one independent pending task, then close out the source administratively. Use at a completed review boundary or to resume a recorded Split transfer.
+description: Transfer an in-progress task's remaining work into one independent pending task after a review pass at its dev-session limit, then close out the source administratively. Also resumes recorded Split transfers.
 ---
 
 This is an administrative workflow, not a dev or review role. Use the taskfile
@@ -22,11 +22,22 @@ previous conversation, supplies all durable state. Claim only an active source
 by refreshing `claimed-by`; leave archived source history intact on recovery.
 Do not increment `session-est`, change `session-limit`, or invoke a plan gate.
 
-For a new transfer, require all landed work reviewed, no `fix-set: open`,
-current dev count at least `session-limit`, remaining work, and a clean tree.
-The threshold is checked at a finished review boundary: open remediation fix
-sets and partial reviews must finish even if the count has already passed it.
-A completed task with no split takes ordinary closeout, not a new transfer.
+Before reserving a new transfer, the caller requires `status: in_progress`,
+the completed review's latest `Verdict: pass`, all landed work reviewed, no
+`fix-set: open`, and current at least `session-limit`. An authorized manual
+invocation without a reservation checks these conditions before reserving.
+An existing reservation represents prior admission: recover it without
+reapplying the new gate, including legacy `final_review`/failed-review cases.
+Failed reviews keep normal remediation and group-budget escalation. Completed
+tasks without a Split take ordinary closeout; recorded transfers still recover
+and verify. `final_review` never admits a new transfer.
+
+Before creating a successor, require a clean tree and inventory actual remaining
+scope, acceptance, and the whole findings ledger. Status advancement, final
+review, and closeout alone are not work to transfer; Plan-slice is not a gate.
+If no actual remainder exists despite `in_progress`, report the inconsistent
+lifecycle through the existing blocked mechanism. Preserve the reservation,
+create no empty successor, and do not fabricate `completed` to resolve it.
 
 Do not clear a genuine `blocked` state or settle an unresolved human dispute
 by transferring it. Report the decision needed; the caller obtains the human
@@ -114,7 +125,9 @@ created. Record split bookkeeping with `Kind: split` even when interrupted.
 - `preparing` or `ready` with an active source: read the persisted plan and
   Target, verify existing artifacts, and finish only missing steps. `ready`
   still requires its evidence to hold before completing the source. No new
-  target, duplicated log entry for the same session, or repeated intake.
+  target, duplicated log entry for the same session, or repeated intake. Do
+  not discard a recovery reservation because today's status/pass admission
+  gate would reject a new transfer.
 - Completed active source: verify its ready transfer, then invoke closeout.
 - Source already archived with `Phase: ready`: reuse the archived Target and
   follow closeout's interrupted-split recovery. Verify the existing pending

@@ -43,10 +43,11 @@ Decision order per iteration (re-parse the task file first):
    or already archived source needing verification) → **split
    session**, resuming the reserved transfer rather than normal work. A
    standing unresolved human dispute must be ruled on before closure.
-4. A finished review boundary, no pending dev entries, no open fix set, and
-   dev `session-est` current **at least** `session-limit` → **split session**
-   if work remains. Reserve `Phase: preparing` first. Ordinary completed tasks
-   already took step 1; never create an empty successor for a passed final gate.
+4. A finished review boundary at `in_progress` whose latest verdict is `pass`,
+   no pending dev entries/open fix set, and dev `session-est` current **at least**
+   `session-limit` → **split session**. Reserve `Phase: preparing` first; the
+   skill inventories remaining work before creating a successor. `final_review`
+   never initiates a new split; an ordinary `completed` task took step 1.
 5. Any dev session-log entry not yet named by a `review of <sid>` entry →
    **review turn** (one review session covers the whole pending set) —
    UNLESS the frontmatter declares `fix-set: open` (see §3).
@@ -95,9 +96,13 @@ role-local meanings live in the role contracts:
   an unreadable estimate requires correction, not a guessed limit. Both
   advancement and remediation consume current; review, plan, split, and
   closeout do not. Re-estimation never moves the limit. This is explicitly a
-  **review-boundary** safeguard: an open remediation fix set continues,
-  even past the limit, until it is complete and its re-review finishes.
-  A partial review with pending work also finishes before splitting.
+  **passing-review-boundary** safeguard: an open remediation fix set or a
+  `changes-requested` review continues remediation, even past the limit.
+  The source must remain `in_progress` after a pass; a partial review with
+  pending work cannot trigger it. The skill checks the actual remainder from
+  scope, acceptance, and the whole findings ledger, not a Plan-slice boundary.
+  If none remains, it reports the inconsistent lifecycle through the existing
+  blocked mechanism rather than creating an empty task or claiming completion.
   Re-evaluate the same predicate on attach so a stop/restart after review
   cannot miss it. The split session uses the dev agent configuration with
   no dev/review contract and invokes `.claude/skills/split-task/SKILL.md`.
@@ -138,10 +143,9 @@ escalation pauses the loop for a binding human answer.
    Split scheduling must preserve a standing dispute or genuine blocker;
    transferring a finding does not constitute a human ruling. A budget split
    is a separate administrative action, not a fabricated convergence pass.
-   When split is due, skip the group-budget escalation because no further
-   remediation will be dispatched on the source. A `Dispute-unresolved:`
-   still asks the human; persist that binding answer as optional `Ruling` in
-   the Split reservation before launching the split session.
+   Reaching the split limit never exempts a `changes-requested` review from
+   group-budget escalation. Persist any binding answer needed by an existing
+   split as optional `Ruling` in its reservation; recovery preserves it.
 6. **final_review stall**: everything reviewed, status sits at
    `final_review`, and the latest review did not conclude with a
    verdict-driven handback → ask for a ruling, appended to a fresh review

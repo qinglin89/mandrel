@@ -2972,11 +2972,6 @@ class Orchestrator:
             return
         if latest.verdict != "changes-requested":
             return
-        if self.split_due(task):
-            # No further remediation will be dispatched on this task. The
-            # task-level transfer replaces a group-budget waiver; genuine
-            # disputes above still require a human ruling.
-            return
         group = latest.group
         rounds = sum(1 for e in task.review_entries
                      if e.group == group and e.verdict == "changes-requested")
@@ -3014,18 +3009,21 @@ class Orchestrator:
 
     @staticmethod
     def split_due(task: TaskState) -> bool:
-        """Only a fully reviewed boundary can initiate a new transfer."""
+        """Only a fully reviewed, passing in-progress boundary can initiate a split."""
         return bool(
-            task.status in {"in_progress", "final_review"}
+            task.status == "in_progress"
             and task.session_limit is not None and task.est_tuple
             and task.est_tuple[0] >= task.session_limit
             and not task.fix_set and not task.unreviewed_dev_sids()
             and task.review_entries
-            and task.review_entries[-1].verdict in {"pass", "changes-requested"})
+            and task.review_entries[-1].verdict == "pass")
 
     def _reserve_split(self, task: TaskState) -> None:
         if task.split_phase:
             return
+        if not self.split_due(task):
+            sys.exit("cannot start split: requires in_progress, a fully reviewed "
+                     "passing boundary, and a reached session-limit")
         record = "## Split\n\n- Phase: preparing\n"
         if self.pending_ruling:
             record += "- Ruling: " + self.pending_ruling.replace("\n", "\n  ") + "\n"
