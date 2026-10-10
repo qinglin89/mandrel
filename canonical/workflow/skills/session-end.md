@@ -18,7 +18,9 @@ formats.
    status) must never run ahead of a clean tree.
 2. **Session-log entry** — append this session's `## Session log` entry
    (Done / Plan-slice if applicable / Next / Open), shapes per the taskfile
-   schema; review entries also carry Verdict / Group / Findings.
+   schema; review entries also carry Verdict / Group / Findings. A split
+   session's bookkeeping entry must declare `Kind: split`; it consumes no
+   dev estimate and is not pending review work.
 3. **Status** — declare `status` per the taskfile transition table for this
    session's kind.
 4. **Prefetch backfill** — update the task's `prefetch:` with what was
@@ -59,7 +61,8 @@ handoff, not an emergency:
 
 ## Completion trigger
 
-When `status` reaches `completed` (final-gate pass), the stop-hook chain
+When `status` reaches `completed` (final-gate pass or a verified administrative
+split closure), the stop-hook chain
 additionally fires the task-completion closeout
 (`.ai-protocol/workflow/skills/closeout.md`, packaged as `/ai-sync-v2`)
 before the session ends.

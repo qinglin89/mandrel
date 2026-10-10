@@ -30,7 +30,8 @@ Classify findings as:
    the change.
 2. Claim the task: update `claimed-by` to this session's id (shape per
    `.ai-protocol/meta/taskfile.md`).
-3. Determine the pending set: work entries (non-review session-log entries)
+3. Determine the pending set: dev work entries (non-review session-log entries
+   excluding administrative `Kind: split` entries)
    whose session-id is not yet named by any `review of <session-id>` review
    entry. If the frontmatter declares `fix-set: open`, the work is an open
    fix set — not yet a reviewable unit; report that and stop. If the
@@ -88,6 +89,11 @@ To keep the finding-remediation loop bounded:
   `final_review → completed`. A `design` or `test` finding is either fixed in
   place when cheap, or carried as a new pending task per the intake contract
   while the current review passes; `style` findings never block.
+  This is the review-pass gate. The separate `/split-task` administrative
+  closure may transfer unresolved correctness findings with their evidence
+  into a pending successor after the dev-session budget is reached. Reviewers
+  still record the real verdict; they never pass a review because a split is
+  due, and the transfer does not resolve or accept a finding.
 - **Disputed findings**: when a pending work session recorded a dispute for a
   finding, evaluate the dispute on the merits against the actual code. If you
   agree the finding was invalid, mark it withdrawn in your entry. If you

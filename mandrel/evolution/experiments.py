@@ -3609,7 +3609,14 @@ def _restore_task(
     existing = analysis_task.existing_task_path(config, task.task_id)
     if existing is not None:
         _require_admitted_copy(config, current, experiment, round_, task, existing)
-        if not (task.complete or analysis_task.task_finished(config, task.task_id)):
+        # Administrative closure leaves residual responsibility in a successor,
+        # but the original task has still left the active set. Restore only an
+        # active source row, never an archived/completed split source's row.
+        if not (
+            task.complete
+            or existing == analysis_task.archived_task_path(config, task.task_id)
+            or analysis_task.task_status(existing) == analysis_task.STATUS_COMPLETED
+        ):
             summary = _summary(experiment, task.draft_id, _title_of(existing, task.draft_id))
             analysis_task.append_row(config, task.task_id, summary)
         return _already(task, existing)

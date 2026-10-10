@@ -147,7 +147,7 @@ allowlist itself.
 | `--profile` | unset | backward-compatible run-wide `standard` or `excellent` selection; applies to both roles unless a role-specific profile overrides it |
 | `--dev-profile` | unset | `default`, `standard`, or `excellent` for dev; unset inherits `--profile`, while `default` explicitly inherits environment/config |
 | `--review-profile` | unset | `default`, `standard`, or `excellent` for review; unset inherits `--profile`, while `default` explicitly inherits environment/config |
-| `--once` | off | run exactly ONE session (dev or review, whichever is due), then exit |
+| `--once` | off | run exactly ONE session (dev, review, or split, whichever is due), then exit |
 | `--backend` / `ORCH_BACKEND` | `cc-codex` | `cursor` or `cc-codex` (see §0) |
 | `--dev-agent` / `ORCH_CC_DEV_AGENT` (`cc-codex` only) | `claude` | `claude` = Claude Code headless for dev sessions; `codex` = Codex CLI for dev sessions |
 | `--review-agent` / `ORCH_CC_REVIEW_AGENT` (`cc-codex` only) | `codex` | same axis for the review role, including the close-out session it resumes |
@@ -191,20 +191,55 @@ Cursor sessions: it re-derives the turn from the file. Implementation view:
 ```mermaid
 flowchart TD
     P[parse task file] --> C{status?}
+    C -- recorded Split --> S[resume split transfer\ndev agent, no role contract] --> X
     C -- completed --> CO[close-out: ai-sync-v2\nverify archive] --> X[exit]
     C -- blocked --> H[HUMAN: answer blocker] --> R1[resume blocked\nconversation] --> P
-    C -- else --> U{unreviewed\ndev entries?}
+    C -- else --> O{open remediation\nfix set?}
+    O -- yes --> DEV
+    O -- no --> U{unreviewed\ndev entries?}
     U -- yes --> REV[review session\nreview agent+model] --> CV{verdict\nchanges-requested?}
     CV -- no --> P
     CV -- yes --> B{group budget\nexceeded or reviewer\nescalated?}
     B -- no --> P
     B -- yes --> H2[HUMAN: binding ruling] --> P
-    U -- no --> F{status ==\nfinal_review?}
+    U -- no --> L{review boundary\nand current >= session-limit?}
+    L -- yes --> S
+    L -- no --> F{status ==\nfinal_review?}
     F -- yes --> V{latest verdict\nchanges-requested?}
     V -- yes --> DEV
     V -- no --> H3[HUMAN: ruling for\nfresh review] --> REV
     F -- no --> DEV[dev session\ndev agent+model] --> P
 ```
+
+`session-limit` is a task-level **review-boundary** safeguard, distinct from
+the run-local `--max-sessions` budget. Intake freezes it at the initial
+`session-est` total + 3. For an existing task without this field, the first
+orchestrator attach writes then-current total + 3 before any session can
+re-estimate; subsequent runs preserve it. Malformed estimates/limits refuse
+dispatch rather than guessing. `--print-config` remains read-only.
+
+At a completed review boundary, `current >= session-limit` dispatches
+`/split-task` if work remains. A passed final gate closes out normally.
+An open remediation fix set continues even beyond this threshold; its
+pending work is reviewed before the split check. Standing disputes still
+require a human ruling; a due split replaces ordinary group-budget escalation
+because no further dev turn will run on the source.
+
+Split uses a fresh session with the dev agent/model/effort, without a dev or
+review role, plan gate, or dev counter increment. The scheduler reserves
+`## Split` before launch; the skill persists its successor id before intake.
+Preparing/ready transfers resume before ordinary dispatch, including a
+completed or archived source whose closeout was interrupted. A blocked split
+resumes its recorded conversation after a human answer. Post-checks verify
+the source archive, unchanged count/limit, the same independent pending
+successor and its index row, and ordinary closeout obligations. The skill
+verifies semantic coverage and moves dependencies on unfinished work to the
+successor. Split bookkeeping carries `Kind: split` and is not pending dev
+work. Successful transfer ends this run; the successor is not auto-started.
+
+Split completion is administrative closure, not a review pass. Consumers
+that need the original whole scope completed must follow the recorded
+successor rather than treating the source archive alone as delivery evidence.
 
 
 ## 4. What one session looks like

@@ -25,6 +25,7 @@ entries, markers, index, and archive semantics.
 id: <date-prefixed-slug>
 status: pending | in_progress | final_review | completed | blocked   # final_review = dev-complete claim standing, in the final-review loop. Legal transitions: §3.
 session-est: <current>/<total>      # progress/total in dev sessions; one estimated session ≈ one effective context window (~200k tokens). e.g., 0/3 pending, 1/3 after first session entry. `current` increments at DEV session entry (part of the claim, §4); review sessions do not consume the estimate. Raise `total` if estimate undershoots.
+session-limit: <positive integer>  # immutable dev-session budget: initial session-est total + 3, set at intake. Includes advancement and remediation. Legacy tasks missing it freeze the then-current total + 3 at first orchestrator attach. A review-boundary split threshold, not a limit on sessions in an open fix set.
 blockers: [<task-id> | external:<text>]   # only if status=blocked. task-id refs another active task by id (e.g., 2026-05-26-foo); external:<text> for non-task blockers (e.g., external:awaiting API spec)
 prefetch: [<.ai/*.md paths>]        # optional hint; lazy docs only (eager set per the memory loading contract is already loaded). Pre-load at start. Mutable — backfill with what was actually consulted.
 fix-set: open                       # optional; declared only by a remediation-mode dev session whose fix set is incomplete (not yet a re-reviewable unit). Remove the line when the fix set completes — absent = no open fix set. (Local meaning in the dev contract; scheduling consequences in the workflow runbook.)
@@ -47,12 +48,20 @@ runner maps kinds to contracts and prompts is the workflow layer's concern —
 | dev remediation   | in_progress / final_review   | unchanged — remediation never touches status; its session-log entry is its complete output |
 | review interim    | in_progress                  | in_progress (findings never gate an interim review) |
 | review final gate | final_review                 | completed (pass); final_review (changes required); in_progress (only if final_review was set in error, i.e. the task is not dev-complete — record why) |
+| split skill       | in_progress / final_review   | completed (administrative split closure, only after §5 Split transfer is ready); unchanged while preparing |
 | any session       | any                          | blocked (a question for the human; `blockers:` set) |
 
 A dev session never sets `completed`. A review session never advances the
 lifecycle forward. Every non-`completed` status is in-flight: the session-end
 bookkeeping (clean tree, session-log entry) applies to review sessions
 unchanged.
+
+A split session uses the dev agent configuration but has no dev/review role
+contract. Its `completed` declaration closes the source task administratively;
+it is not a review pass or a claim that transferred findings are fixed. It
+claims the source task without consuming `session-est` and invokes the normal
+closeout only after the transfer is ready. `session-limit` never increases
+with re-estimation, retries, or remediation.
 
 Verdict values (review entries): `pass` | `changes-requested` — semantics in
 the review contract (`.ai-protocol/protocols/review.md`); routing consequences
@@ -77,6 +86,7 @@ The body should include:
 - `## Scope`
 - `## Acceptance`
 - optional `## Session plan`
+- optional `## Split` (before `## Session log`; format below)
 - required `## Session log`
 
 ### Session-log entries
@@ -117,6 +127,9 @@ Field semantics:
   resolved or spawned as a pending task.
 - **Verdict / Group / Findings** — review-entry fields; semantics in the
   review contract.
+- **Kind** — a split bookkeeping entry declares `- Kind: split`. It is not a
+  dev entry, consumes no estimate, and never enters the pending review set.
+  Other work entries retain the default dev interpretation.
 
 The session log is the single source for cross-session handoff and the input
 for close-out absorption review.
@@ -128,6 +141,54 @@ a prose mention of a field name elsewhere in an entry is not a declaration.
 
 - `- Dispute-unresolved: <finding, one line>` — declared in a review entry
   when a disputed finding is still held valid (review contract).
+- `- Kind: split` — declares a split bookkeeping entry, as above.
+
+### Split (optional administrative closure)
+
+The `/split-task` skill transfers all unfinished scope and unresolved
+findings into one self-contained pending task. A source task records:
+
+```
+## Split
+
+- Phase: preparing
+- Target: <task-id>
+- Reason: review boundary reached session-limit <limit> at <current> dev sessions
+- Retained: <delivered scope and its actual acceptance evidence>
+- Transferred: <each remaining scope/acceptance item and unresolved finding>
+- Dependencies: <other active tasks whose remaining dependency moves to Target>
+```
+
+`Phase` and `Target` are exact machine-readable list lines in this section.
+The caller first reserves `Phase: preparing`; Target is initially absent.
+An optional `- Ruling: <human instruction>` records a binding human ruling
+obtained before dispatch; continuation lines are indented. The caller may
+persist this alongside the phase reservation so a restart preserves the
+decision. Do not treat the transfer itself as a ruling on a disputed finding.
+The skill persists a collision-free Target and the transfer plan before
+creating that task. Target is immutable once selected. A retry resumes this
+transfer and reuses its target; it never generates a second successor.
+`Phase: ready` means the target exists with its index row, the entire
+remainder and finding evidence have been transferred, the source's current
+Scope/Acceptance reflect what it retains, and dependent tasks have been
+reconciled. Only then may the source become `completed` and enter closeout.
+
+The Split section preserves the original requirements' disposition; it does
+not replace updating current Scope/Acceptance. Preserve reviewed plan slices,
+session history, real verdicts, and finding severity. Transferring a finding
+is not fixing, withdrawing, or accepting it. A target needs no source-task
+reference: its goal, scope, acceptance, dependencies, evidence, and execution
+constraints must be usable without the source file. Preserve provenance and
+placement requirements such as an experiment's required branch. The target
+starts pending with its own new
+estimate and limit. A real blocker or unresolved human dispute prevents
+automatic split closure; do not clear it merely to meet the budget.
+
+An unfinished `preparing` or `ready` transfer is resumed before normal
+dev/review dispatch (after handling genuine blockers). Split bookkeeping
+entries record the transfer with `Kind: split`; final Next/Open are `none`
+because all remaining work has an owner. Completion via split is an
+administrative disposition, not a fabricated final-gate pass.
 
 ### Session plan (optional work slicing)
 

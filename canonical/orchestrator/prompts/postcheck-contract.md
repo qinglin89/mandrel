@@ -12,9 +12,13 @@ CHECKS preview, so what the agent is told and what gets verified cannot drift.
 
 working tree clean (`git status --porcelain` empty)
 
+## session-limit-unchanged
+
+keep the frozen `session-limit: {{limit}}` unchanged, including during re-estimation
+
 ## session-log-entry
 
-a `## Session log` entry for session id {{sid_disp}} (Done / Plan-slice if applicable / Next / Open)
+a dev/review `## Session log` entry for session id {{sid_disp}} (Done / Plan-slice if applicable / Next / Open); only administrative split sessions use `Kind: split`
 
 ## claim-sid
 

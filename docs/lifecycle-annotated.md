@@ -33,7 +33,7 @@ guide and a contract disagree, the contract wins.
 
 ## Every rule the loop runs on
 
-After the deploy, everything is one loop over one task file. Nine facts carry
+After the deploy, everything is one loop over one task file. Ten facts carry
 almost all of it:
 
 1. **The task file is ground truth.** `.ai-tasks/<id>.md` holds the goal, the
@@ -52,15 +52,16 @@ almost all of it:
 5. **Dev never writes `status: completed`.** A dev session may set
    `in_progress`, or `final_review` when the *whole* task scope is done, or
    `blocked`. That is the entire set.
-6. **Only a final-gate review session may set `completed`.** A review at
+6. **A final-gate review passes the task into `completed`.** A review at
    `final_review` that cannot pass records `changes-requested` and leaves the
-   status where it is.
+   status where it is. The split skill has a separate administrative completion
+   path described below; it never fabricates a review pass.
 7. **A `changes-requested` verdict routes the next dev turn to remediation.**
    Remediation fixes the recorded findings and changes no status at all. The
    re-review then checks only those findings and any regressions the fixes
    introduced.
-8. **Severity decides what blocks.** Only `correctness` findings can hold up
-   `final_review → completed`. A `design` or `test` finding is either fixed
+8. **Severity decides what blocks a review pass.** Only `correctness` findings
+   can hold up the final gate. A `design` or `test` finding is either fixed
    cheaply in place or carried out as a new pending task while the review
    passes. `style` findings never block.
 9. **Closeout is automatic, and it always archives.** When a task reaches
@@ -71,20 +72,37 @@ almost all of it:
    Absorption is conditional** — findings must pass three admission tests
    (derivation cost, stability, leverage), and a task that teaches nothing
    durable is archived with `.ai/` untouched.
+10. **The initial estimate has a fixed buffer.** Intake sets `session-limit`
+    to the initial `session-est` total + 3; later re-estimation does not move
+    it. At a finished review boundary, reaching the limit with work remaining
+    dispatches `/split-task`. It transfers all remaining scope and findings
+    into one independent pending task, updates the source's Scope/Acceptance
+    and Split audit, and closes the source administratively through the normal
+    closeout. Outstanding correctness findings remain outstanding in the
+    successor. Open remediation fix sets may exceed the limit until re-review
+    finishes. A genuine blocker or disputed finding still needs a human ruling.
 
 The turn you should run next is always derivable from the file alone. Read top
 to bottom; the first row that matches is the turn:
 
 | Task file says | Next turn |
 |---|---|
-| `status: completed` | **closeout** — `/ai-sync-v2`. Usually the stop hook already ran it in the final-review conversation and the file is in `.ai-tasks/archive/` by now. A task still sitting in `.ai-tasks/` at `completed` means the hook was interrupted, disabled, or unavailable, so closeout has *not* run: it is the turn, in a fresh conversation. `/ctd-tasks` flags this state as `⚠ Completed (unarchived)`. |
-| `status: blocked` | answer the question in `blockers:`, then resume that conversation |
-| frontmatter `fix-set: open` | `/invoke dev <id>` — the fix set is still open, so the re-review waits |
-| a dev entry that no `review of <sid>` entry names | `/invoke review <id>` (the final gate, if the status is `final_review`) |
-| `status: pending` | `/invoke dev <id>` |
-| all reviewed, latest verdict `changes-requested` | `/invoke dev <id>` — auto-selects remediation |
-| all reviewed, latest verdict `pass`, scope remains | `/invoke dev <id>` — advancement |
+| `status: completed` without a Split transfer | **closeout** — `/ai-sync-v2`. Usually the stop hook already ran it in the final-review conversation and the file is in `.ai-tasks/archive/` by now. A task still sitting in `.ai-tasks/` at `completed` means closeout was interrupted, disabled, or unavailable: finish it in a fresh conversation. `/ctd-tasks` flags this state as `⚠ Completed (unarchived)`. |
+| `status: blocked` | answer the question in `blockers:`, then resume that conversation; a blocked split resumes its original split conversation |
+| recorded `## Split` with `Phase: preparing` or `ready` | `/split-task <id>` — resume or verify the reserved transfer, including a completed or already archived source; reuse its Target |
+| finished review boundary, current at least `session-limit`, work remains | `/split-task <id>` — reserve `Phase: preparing`, transfer the remainder, close out the source, and leave the successor pending |
+| a dev entry that no `review of <sid>` entry names, or an open remediation fix set | `/invoke review <id>` (final gate at `final_review`), unless `fix-set: open` with a latest `changes-requested` verdict: then `/invoke dev <id>` continues remediation until the set is reviewable |
 | `status: final_review`, all reviewed, no verdict-driven handback | the last review didn't conclude: decide it yourself and dispatch a fresh review with your ruling |
+| otherwise: `pending` / `in_progress`, or all reviewed with latest verdict `changes-requested` | `/invoke dev <id>` — remediation after `changes-requested`, otherwise advancement |
+
+The split threshold requires no pending review work and no open fix set, so it
+never pre-empts the review or remediation continuation in the following row.
+An interrupted transfer takes precedence over ordinary work on restart. For a
+legacy task with no `session-limit`, the orchestrator freezes the then-current
+estimate total + 3 at first attach, before resuming blocked work. Split sessions
+use the dev agent configuration without a dev/review role and do not consume
+the dev estimate. A Split `Ruling` preserves any required human decision across
+restarts; meeting the split threshold bypasses only group-budget escalation.
 
 ### When you need a fresh conversation
 
@@ -95,7 +113,8 @@ to bottom; the first row that matches is the turn:
 | Remediation after a `changes-requested` review | **new** |
 | Continuing a remediation that ran out of context (`fix-set: open`) | **new** |
 | Answering a `blocked` task's question | **the same** conversation that blocked, so it keeps its role and its claim |
-| Closeout after a task completes | **the same** conversation as the final review — the hook drives it |
+| Starting or recovering a split transfer | **new**, except a blocked split resumes its original conversation |
+| Closeout after a task completes | **the same** conversation as the final review or split — the hook or split skill drives it |
 | Closeout for a task left at `completed` in `.ai-tasks/` | **new** — the hook did not run; invoke `/ai-sync-v2` yourself |
 
 The full scheduling spec is `.ai-protocol/workflow/runbook.md` in your target

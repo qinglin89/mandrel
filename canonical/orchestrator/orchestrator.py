@@ -28,6 +28,8 @@ Lifecycle the orchestrator owns (both backends):
   - convergence-group budget counting (Group: field in review entries)
   - blocked → surface question → resume with answer
   - completed → ai-sync-v2 close-out via the review agent → verify archive
+  - session-limit at a reviewed boundary → split-task via dev configuration
+    without a role → verify transfer/closeout and leave the successor pending
   - optional --plan-gate: every dev session is preceded by a read-only
     planning session that iterates a plan-report with the human and blocks
     until confirmation; only the confirmed plan-report (never conversation
@@ -96,6 +98,7 @@ POSTCHECK_CONTRACT = PROMPTS_DIR / "postcheck-contract.md"
 # canonical payload into .claude/skills/, and the personal-level (home) skill
 # set they replaced is retired.
 SYNC_SKILL = REPO / ".claude" / "skills" / "ai-sync-v2" / "SKILL.md"
+SPLIT_SKILL = REPO / ".claude" / "skills" / "split-task" / "SKILL.md"
 LOG_DIR = ORCH_DIR / "logs"
 SESSION_MAP = LOG_DIR / "sessions.json"  # sid -> tool/native-id/model/effort
 
@@ -774,6 +777,7 @@ def resolve_launch_config(
 
 MAX_FOLLOWUPS = 3     # post-check violation round-trips per session
 GROUP_BUDGET = 2      # changes-requested RE-reviews per group (so 3 entries total)
+SESSION_LIMIT_BUFFER = 3  # frozen at intake / first legacy attach, not re-estimation
 PLAN_GATE_BANNER_CHARS = 12_000
 # --plan-gate report artifact: a reply revises the plan-report by restating
 # it in full from this heading on; a reply that changes nothing must end
@@ -831,6 +835,7 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "entry/checks-preview-header": frozenset(),
     "entry/conduct-annex": frozenset(),
     "entry/closeout": frozenset({"task_id", "sync_skill", "active_count"}),
+    "entry/split": frozenset({"task_id", "split_skill", "sid_line"}),
     "entry/dev-advancement-wrapper": frozenset({"dev_rule"}),
     "entry/dev-remediation-wrapper": frozenset({"dev_rule"}),
     "entry/dev-invocation": frozenset({"task_id", "sid_line"}),
@@ -870,6 +875,7 @@ PROMPT_MANIFEST: dict[str, frozenset[str]] = {
     "midflight/blocked-violation": frozenset({"problems"}),
     "midflight/clean-howto": frozenset(),
     "midflight/closeout-incomplete": frozenset({"problems"}),
+    "midflight/split-incomplete": frozenset({"problems"}),
     "midflight/discussion-hint": frozenset(),
     "midflight/discussion-turn": frozenset({"question"}),
     "midflight/human-instruction": frozenset({"answer"}),
@@ -910,6 +916,7 @@ POSTCHECK_MANIFEST: dict[str, frozenset[str]] = {
     "review-status-final-gate": frozenset(),
     "review-status-interim": frozenset({"status_before"}),
     "review-entry-fields": frozenset(),
+    "session-limit-unchanged": frozenset({"limit"}),
 }
 
 
@@ -1000,7 +1007,8 @@ def _exercised_postcheck_ids() -> set[str]:
             ("review", "final_review", None, False)):
         specs = Orchestrator.check_specs(role, "startup-probe", status_before,
                                          est_before=est_before,
-                                         was_remediation=was_rem)
+                                         was_remediation=was_rem,
+                                         limit_before=5)
         ids.update(check_id for check_id, _, _ in specs)
     return ids
 
@@ -1101,6 +1109,11 @@ class LogEntry:
     body: str
 
     @property
+    def is_split(self) -> bool:
+        return not self.is_review and bool(re.search(
+            r"^\s*-\s*Kind:\s*split\s*$", self.body, re.MULTILINE))
+
+    @property
     def verdict(self) -> str | None:
         # Entry fields are machine-parsed as exact `- X:` list lines
         # (taskfile schema); anchored so a prose MENTION of a field name
@@ -1130,6 +1143,10 @@ class TaskState:
     # (not yet a reviewable unit — re-review deferred); absent ("") = no
     # open fix set. Declared only by remediation sessions (dev contract).
     fix_set: str = ""
+    session_limit: int | None = None
+    split_phase: str = ""
+    split_target: str = ""
+    task_id: str = ""
 
     @property
     def est_tuple(self) -> tuple[int, int] | None:
@@ -1144,7 +1161,7 @@ class TaskState:
         reviewed = {e.reviewed_sid for e in self.review_entries}
         seen: list[str] = []
         for e in self.entries:
-            if not e.is_review and e.session_id not in reviewed \
+            if not e.is_review and not e.is_split and e.session_id not in reviewed \
                     and e.session_id not in seen:
                 seen.append(e.session_id)
         return seen
@@ -1152,10 +1169,41 @@ class TaskState:
 
 def parse_task(path: Path) -> TaskState:
     text = path.read_text()
+    frontmatter = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.DOTALL)
 
     def fm(key: str) -> str:
-        m = re.search(rf"^{key}:\s*(.*?)\s*(?:#.*)?$", text, re.MULTILINE)
+        m = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*(?:#.*)?$",
+                      frontmatter.group(1) if frontmatter else "", re.MULTILINE)
         return m.group(1).strip() if m else ""
+
+    limit_raw = fm("session-limit")
+    if frontmatter and len(re.findall(r"^id:", frontmatter.group(1),
+                                      re.MULTILINE)) > 1:
+        raise ValueError(f"{path}: duplicate task id")
+    if frontmatter and len(re.findall(r"^session-limit:", frontmatter.group(1),
+                                      re.MULTILINE)) > 1:
+        raise ValueError(f"{path}: duplicate session-limit")
+    if limit_raw and not re.fullmatch(r"[1-9]\d*", limit_raw):
+        raise ValueError(f"{path}: session-limit must be a positive integer")
+    if frontmatter and re.search(r"^session-limit:", frontmatter.group(1),
+                                 re.MULTILINE) and not limit_raw:
+        raise ValueError(f"{path}: session-limit must be a positive integer")
+    split = re.search(r"^## Split[ \t]*\n(.*?)(?=^## |\Z)", text,
+                      re.MULTILINE | re.DOTALL)
+    if len(re.findall(r"^## Split[ \t]*$", text, re.MULTILINE)) > 1:
+        raise ValueError(f"{path}: duplicate Split section")
+
+    def split_field(key: str) -> str:
+        if not split:
+            return ""
+        values = re.findall(rf"^- {key}:[ \t]*(.*)$", split.group(1), re.MULTILINE)
+        if len(values) > 1:
+            raise ValueError(f"{path}: duplicate Split {key}")
+        return values[0].strip() if values else ""
+
+    phase = split_field("Phase")
+    if split and phase not in {"preparing", "ready"}:
+        raise ValueError(f"{path}: Split Phase must be preparing or ready")
 
     log_m = re.search(r"^## Session log\s*$(.*)", text, re.MULTILINE | re.DOTALL)
     log = log_m.group(1) if log_m else ""
@@ -1174,7 +1222,20 @@ def parse_task(path: Path) -> TaskState:
             is_review=reviewed is not None, reviewed_sid=reviewed, body=body))
     return TaskState(path=path, status=fm("status"), blockers=fm("blockers"),
                      claimed_by=fm("claimed-by"), est=fm("session-est"),
-                     entries=entries, fix_set=fm("fix-set"))
+                     entries=entries, fix_set=fm("fix-set"),
+                     session_limit=int(limit_raw) if limit_raw else None,
+                     split_phase=phase, split_target=split_field("Target"),
+                     task_id=fm("id"))
+
+
+def write_task_text(path: Path, text: str) -> None:
+    """Publish scheduler-owned metadata without exposing a partial task."""
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(text)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 # --- shell helpers ----------------------------------------------------------
@@ -2316,7 +2377,8 @@ class Orchestrator:
                              "manually")
                 problems = self.post_checks(role, sid, status_before,
                                             est_before=est_before,
-                                            was_remediation=was_remediation)
+                                            was_remediation=was_remediation,
+                                            limit_before=task_before.session_limit)
                 if not problems:
                     # Context-budget check (port of stop-context-check.sh):
                     # discipline satisfied, but if the conversation outgrew
@@ -2525,7 +2587,8 @@ class Orchestrator:
     @staticmethod
     def check_specs(role: str, sid: str | None, status_before: str,
                     est_before: tuple[int, int] | None = None,
-                    was_remediation: bool = False):
+                    was_remediation: bool = False,
+                    limit_before: int | None = None):
         """Single source for the end-of-session discipline. Each spec is
         (check-id, requirement line, check(task) -> problem | None): the
         requirement line comes from the postcheck contract by check-id
@@ -2547,12 +2610,19 @@ class Orchestrator:
             lambda task: None if tree_clean() else
             "working tree is not clean (git status --porcelain is "
             "non-empty)"))
+        if limit_before is not None:
+            specs.append((
+                "session-limit-unchanged",
+                contract_line("session-limit-unchanged", limit=limit_before),
+                lambda task: None if task.session_limit == limit_before else
+                f"session-limit changed or removed; restore {limit_before}"))
         specs.append((
             "session-log-entry",
             contract_line("session-log-entry", sid_disp=sid_disp),
             lambda task: None
-            if sid and any(e.session_id == sid for e in task.entries) else
-            f"no `## Session log` entry for session id {sid}"))
+            if sid and any(e.session_id == sid and not e.is_split
+                           for e in task.entries) else
+            f"no dev/review `## Session log` entry for session id {sid}"))
 
         def _claim_sid(task):
             # Character-exact claim check: a session re-typing its id (LLM
@@ -2675,19 +2745,23 @@ class Orchestrator:
 
     def post_checks(self, role: str, sid: str | None, status_before: str,
                     est_before: tuple[int, int] | None = None,
-                    was_remediation: bool = False) -> list[str]:
+                    was_remediation: bool = False,
+                    limit_before: int | None = None) -> list[str]:
         task = parse_task(self.task_path)
         specs = self.check_specs(role, sid, status_before,
                                  est_before=est_before,
-                                 was_remediation=was_remediation)
+                                 was_remediation=was_remediation,
+                                 limit_before=limit_before)
         return [p for _, _, check in specs if (p := check(task))]
 
     def checks_preview(self, role: str, sid: str | None, status_before: str,
                        est_before: tuple[int, int] | None = None,
-                       was_remediation: bool = False) -> str:
+                       was_remediation: bool = False,
+                       limit_before: int | None = None) -> str:
         specs = self.check_specs(role, sid, status_before,
                                  est_before=est_before,
-                                 was_remediation=was_remediation)
+                                 was_remediation=was_remediation,
+                                 limit_before=limit_before)
         return (render_prompt("entry/checks-preview-header") + "\n"
                 + "\n".join(f"- {line}" for _, line, _ in specs))
 
@@ -2775,7 +2849,7 @@ class Orchestrator:
             self.pending_ruling = None
         parts.append("\n" + self.checks_preview(
             "dev", sid, task.status, est_before=task.est_tuple,
-            was_remediation=remediation))
+            was_remediation=remediation, limit_before=task.session_limit))
         return "\n".join(parts)
 
     def review_prompt(self, sid: str | None) -> str:
@@ -2791,7 +2865,8 @@ class Orchestrator:
             "",
             self._entry_checklist("review", sid, task),
             "",
-            self.checks_preview("review", sid, task.status),
+            self.checks_preview("review", sid, task.status,
+                                limit_before=task.session_limit),
         ])
 
     # -- escalation paths --
@@ -2861,7 +2936,8 @@ class Orchestrator:
                 sys.exit(f"task file vanished without an archive copy "
                          f"mid-session: {self.task_path} — investigate "
                          "manually")
-            problems = self.post_checks(role, blocked_sid, status_before)
+            problems = self.post_checks(role, blocked_sid, status_before,
+                                        limit_before=task.session_limit)
             if problems:
                 session.turn(render_prompt("midflight/blocked-violation",
                                            problems="; ".join(problems)))
@@ -2896,6 +2972,11 @@ class Orchestrator:
             return
         if latest.verdict != "changes-requested":
             return
+        if self.split_due(task):
+            # No further remediation will be dispatched on this task. The
+            # task-level transfer replaces a group-budget waiver; genuine
+            # disputes above still require a human ruling.
+            return
         group = latest.group
         rounds = sum(1 for e in task.review_entries
                      if e.group == group and e.verdict == "changes-requested")
@@ -2909,11 +2990,196 @@ class Orchestrator:
                 role="review")
             self.pending_ruling = ruling
 
+    # -- review-boundary splitting --
+
+    def ensure_session_limit(self, task: TaskState) -> TaskState:
+        """Freeze a legacy task's budget once, before any session can re-estimate."""
+        if task.session_limit is not None or task.status == "completed":
+            return task
+        estimate = re.fullmatch(r"(\d+)\s*/\s*([1-9]\d*)", task.est)
+        if not estimate:
+            sys.exit(f"cannot initialize session-limit: invalid session-est "
+                     f"{task.est!r} in {task.path}")
+        limit = int(estimate.group(2)) + SESSION_LIMIT_BUFFER
+        text = task.path.read_text()
+        text, count = re.subn(r"\A(---[ \t]*\n)",
+                             rf"\g<1>session-limit: {limit}\n", text, count=1)
+        if not count:
+            sys.exit(f"cannot initialize session-limit: missing frontmatter "
+                     f"in {task.path}")
+        write_task_text(task.path, text)
+        self.log(f"froze legacy session-limit={limit} from current "
+                 f"session-est={task.est}; subsequent re-estimation preserves it")
+        return parse_task(task.path)
+
+    @staticmethod
+    def split_due(task: TaskState) -> bool:
+        """Only a fully reviewed boundary can initiate a new transfer."""
+        return bool(
+            task.status in {"in_progress", "final_review"}
+            and task.session_limit is not None and task.est_tuple
+            and task.est_tuple[0] >= task.session_limit
+            and not task.fix_set and not task.unreviewed_dev_sids()
+            and task.review_entries
+            and task.review_entries[-1].verdict in {"pass", "changes-requested"})
+
+    def _reserve_split(self, task: TaskState) -> None:
+        if task.split_phase:
+            return
+        record = "## Split\n\n- Phase: preparing\n"
+        if self.pending_ruling:
+            record += "- Ruling: " + self.pending_ruling.replace("\n", "\n  ") + "\n"
+        text, count = re.subn(r"^## Session log[ \t]*$",
+                             lambda m: record + "\n" + m.group(0),
+                             task.path.read_text(), count=1, flags=re.MULTILINE)
+        if not count:
+            sys.exit("cannot reserve Split: task has no Session log heading")
+        write_task_text(task.path, text)
+        self.pending_ruling = None
+
+    def _split_source(self) -> TaskState:
+        path = (self.task_path if self.task_path.exists()
+                else ARCHIVE_DIR / self.task_path.name)
+        return parse_task(path)
+
+    def _split_problems(self, before: TaskState,
+                        audit_text: str | None = None) -> list[str]:
+        """Structural checks complement the skill's semantic transfer audit."""
+        if not self.task_path.exists() and not (ARCHIVE_DIR / self.task_path.name).exists():
+            return ["source task missing from both active tasks and archive"]
+        source = self._split_source()
+        problems = self._closeout_problems(audit_text)
+        if source.status != "completed" or source.split_phase != "ready":
+            problems.append("source must be completed with Split Phase: ready")
+        if source.est_tuple != before.est_tuple or source.session_limit != before.session_limit:
+            problems.append("split changed session-est or the frozen session-limit")
+        if source.fix_set or source.unreviewed_dev_sids():
+            problems.append("source still has an open fix set or unreviewed dev entries")
+        if before.split_target and source.split_target != before.split_target:
+            problems.append("Split Target changed; restore the reserved successor")
+        target = source.split_target
+        if (not re.fullmatch(r"\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*", target)
+                or target == self.task_id):
+            problems.append("Split Target must name a different date-prefixed task id")
+            return problems
+        target_path = TASKS_DIR / f"{target}.md"
+        if not target_path.is_file():
+            problems.append(f"split successor missing: {target_path.name}")
+            return problems
+        successor = parse_task(target_path)
+        if successor.task_id != target:
+            problems.append("split successor frontmatter id does not match Split Target")
+        if (successor.status != "pending" or not successor.est_tuple
+                or successor.est_tuple[0] != 0 or successor.entries
+                or successor.claimed_by or successor.split_phase):
+            problems.append("split successor must be an unclaimed pending task with no sessions")
+        if (not successor.est_tuple or successor.est_tuple[1] < 1
+                or successor.session_limit != successor.est_tuple[1] + SESSION_LIMIT_BUFFER):
+            problems.append("split successor requires its own estimate and session-limit=total+3")
+        if self.task_id in self._blocker_items(successor.blockers):
+            problems.append("split successor cannot depend on the archived source")
+        rows = self._index_task_rows(target)
+        if len(rows) != 1:
+            problems.append("split successor must have exactly one active index row")
+        if not any(entry.is_split for entry in source.entries):
+            problems.append("source lacks a Kind: split administrative session-log entry")
+        return problems
+
+    def run_split(self) -> None:
+        """Use dev configuration, without dev role checks, counting or plan gate."""
+        before = self._split_source()
+        self._reserve_split(before)
+        before = self._split_source()
+        try:
+            if before.status == "blocked":
+                sid = before.claimed_by.split("@")[0].strip()
+                if not sid:
+                    sys.exit("blocked split has no claimed session; unblock manually")
+                session = self.backend.resume_session(sid, "dev")
+            else:
+                session = self.backend.new_session("dev")
+        except SessionStartError as err:
+            self._exit_session_start_error(err)
+        try:
+            self.log(f"--- split session start: sid={session.sid or '(pending)'} "
+                     f"backend={self.backend.describe('dev')}")
+            prompt = "\n".join([
+                *self._preamble(session.sid),
+                render_prompt("entry/split", task_id=self.task_id,
+                              split_skill=SPLIT_SKILL,
+                              sid_line=self._sid_line(session.sid)),
+            ])
+            if before.status == "blocked":
+                answer = self.ask_session_human(
+                    session, render_prompt("midflight/banner-blocked", role="split",
+                                           sid=session.sid, blockers=before.blockers,
+                                           open_context=before.path.read_text()),
+                    kind="blocked")
+                prompt += "\n" + render_prompt("midflight/blocked-resume", answer=answer)
+            followups = 0
+            while True:
+                try:
+                    result = session.turn(prompt)
+                except SessionStartError as err:
+                    self._exit_session_start_error(err)
+                # Once selected, a Target survives request/error/blocked
+                # turns too, not only ordinary post-check followups.
+                with contextlib.suppress(OSError, ValueError):
+                    current = self._split_source()
+                    if not before.split_target and current.split_target:
+                        before = dataclasses.replace(before, split_target=current.split_target)
+                if result.saw_request or result.status == "error":
+                    kind = "request" if result.saw_request else "run-error"
+                    values = {"role": "split", "sid": session.sid}
+                    if result.saw_request:
+                        values["log_file"] = self.log_file
+                    answer = self.ask_session_human(
+                        session, render_prompt(f"midflight/banner-{kind}", **values),
+                        kind=kind)
+                    prompt = render_prompt("midflight/answered-continue", answer=answer)
+                    continue
+                if self.task_path.exists():
+                    try:
+                        current = parse_task(self.task_path)
+                    except (OSError, ValueError):
+                        current = None  # report malformed artifacts through the repair loop
+                    if current and current.status == "blocked":
+                        answer = self.ask_session_human(
+                            session, render_prompt("midflight/banner-blocked", role="split",
+                                                   sid=session.sid, blockers=current.blockers,
+                                                   open_context=current.path.read_text()),
+                            kind="blocked")
+                        prompt = render_prompt("midflight/blocked-resume", answer=answer)
+                        continue
+                try:
+                    problems = self._split_problems(before, result.text)
+                except (OSError, ValueError) as err:
+                    problems = [f"split artifacts cannot be verified: {err}"]
+                if not problems:
+                    self.log(f"split close-out done; successor "
+                             f"{self._split_source().split_target} remains pending")
+                    return
+                self.log("split violations: " + "; ".join(problems))
+                if followups >= MAX_FOLLOWUPS or session.context_tokens > CONTEXT_BUDGET:
+                    sys.exit("split incomplete; rerun to resume the recorded transfer: "
+                             + "; ".join(problems))
+                followups += 1
+                prompt = render_prompt("midflight/split-incomplete",
+                                       problems="\n- ".join(problems))
+        finally:
+            session.close()
+
     # -- close-out --
 
     def _active_task_paths(self) -> list[Path]:
         return sorted(p for p in TASKS_DIR.glob("*.md")
                       if p.name != INDEX_FILE.name)
+
+    @staticmethod
+    def _index_task_rows(task_id: str) -> list[str]:
+        return [line for line in INDEX_FILE.read_text().splitlines()
+                if line.lstrip().startswith("|") and re.search(
+                    rf"(?<![\w-]){re.escape(task_id)}(?![\w-])", line.split("|")[1])]
 
     @staticmethod
     def _blocker_items(raw: str) -> list[str]:
@@ -2935,7 +3201,7 @@ class Orchestrator:
                             "(not archived)")
         if not (ARCHIVE_DIR / self.task_path.name).exists():
             problems.append("archive copy missing")
-        if self.task_id in INDEX_FILE.read_text():
+        if self._index_task_rows(self.task_id):
             problems.append("task row still present in .ai-tasks/index.md")
         archived_ids = {self.task_id}
         if ARCHIVE_DIR.exists():
@@ -3027,8 +3293,14 @@ class Orchestrator:
                          "tree — question/answer files will dirty the tree "
                          "and fail post-checks; use a run dir outside the "
                          "repo")
+        if self.control_dir and (self.control_dir / "stop.flag").exists():
+            self.log("control-dir stop request (stop.flag) — stopping at session boundary")
+            return
         if not self.task_path.exists():
             if (ARCHIVE_DIR / self.task_path.name).exists():
+                if self._split_source().split_phase:
+                    self.run_split()
+                    return
                 sys.exit(f"task already archived: {self.task_path.name}")
             sys.exit(f"task file not found: {self.task_path}")
         sessions = 0
@@ -3045,8 +3317,14 @@ class Orchestrator:
                 sys.exit(f"task file vanished without an archive copy: "
                          f"{self.task_path} — investigate manually")
             task = parse_task(self.task_path)
+            task = self.ensure_session_limit(task)
             self.log(f"state: status={task.status} "
                      f"pending-review={task.unreviewed_dev_sids()}")
+            if task.split_phase:
+                # A partial transfer (including interrupted closeout) owns
+                # routing until verified. Never reinterpret its log as DEV.
+                self.run_split()
+                return
             if task.status == "completed":
                 self.close_out()
                 return
@@ -3085,6 +3363,13 @@ class Orchestrator:
                     "review", self.review_prompt)
                 sessions += 1
                 self.check_convergence()
+            elif self.split_due(task):
+                # Review may have run in another process or manually. On
+                # attach, a standing dispute must still be ruled on first.
+                if not self.pending_ruling:
+                    self.check_convergence()
+                self.run_split()
+                return
             elif task.status == "final_review":
                 latest_rev = (task.review_entries[-1]
                               if task.review_entries else None)

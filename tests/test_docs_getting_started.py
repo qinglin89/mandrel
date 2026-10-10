@@ -247,8 +247,20 @@ def test_annotated_turn_selection_matches_the_runbook_order() -> None:
     )
     assert order, "the runbook has no Turn selection section"
     rules = re.findall(r"^(\d+)\. (.*)$", order.group(1), re.MULTILINE)
-    assert rules[0][1].startswith("`status: completed` → **close-out**")
-    assert rules[1][1].startswith("`status: blocked`")
+    prefixes = (
+        "`status: completed` without a Split transfer",
+        "`status: blocked`",
+        "A recorded `## Split`",
+        "A finished review boundary",
+        "Any dev session-log entry",
+        "`status: final_review`",
+        "Otherwise",
+    )
+    assert [number for number, _rule in rules] == [str(n) for n in range(1, 8)]
+    assert all(rule.startswith(prefix) for (_number, rule), prefix in zip(rules, prefixes)), (
+        "runbook turn selection changed; update the annotated routing table "
+        "alongside the authoritative order"
+    )
 
     rows = re.findall(
         r"^\| (.*?) \| (.*?) \|$",
@@ -258,8 +270,15 @@ def test_annotated_turn_selection_matches_the_runbook_order() -> None:
         re.MULTILINE,
     )
     conditions = [condition for condition, _action in rows if condition != "---"]
-    assert conditions[0] == "`status: completed`"
-    assert conditions[1] == "`status: blocked`"
+    assert conditions == [
+        "`status: completed` without a Split transfer",
+        "`status: blocked`",
+        "recorded `## Split` with `Phase: preparing` or `ready`",
+        "finished review boundary, current at least `session-limit`, work remains",
+        "a dev entry that no `review of <sid>` entry names, or an open remediation fix set",
+        "`status: final_review`, all reviewed, no verdict-driven handback",
+        "otherwise: `pending` / `in_progress`, or all reviewed with latest verdict `changes-requested`",
+    ]
 
     assert not rows[0][1].lstrip().lower().startswith("nothing"), (
         "`completed` is the close-out trigger, not a terminal state with no "
@@ -268,4 +287,12 @@ def test_annotated_turn_selection_matches_the_runbook_order() -> None:
     assert "closeout" in rows[0][1] and "ai-sync-v2" in rows[0][1], (
         "the walkthrough must route a task still sitting at `completed` into "
         "close-out; it is the close-out trigger, not a finished state"
+    )
+    assert all("/split-task <id>" in rows[index][1] for index in (2, 3)), (
+        "both interrupted transfer recovery and the completed-review budget "
+        "boundary must dispatch split before ordinary dev/review work"
+    )
+    assert "fix-set: open" in rows[4][1] and "/invoke dev <id>" in rows[4][1], (
+        "the review-boundary budget must preserve open-fix-set remediation "
+        "continuation instead of splitting or reviewing a partial fix set"
     )

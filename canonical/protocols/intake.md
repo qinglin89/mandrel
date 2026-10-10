@@ -26,6 +26,7 @@ file under `.ai-tasks/` and a row in `.ai-tasks/index.md`. Conduct rules
    | `id` | `<YYYY-MM-DD>-<short-kebab-slug>` (slug from purpose) |
    | `status` | `pending` — always; transitions happen later, at session entry |
    | `session-est` | `0/<total>` — estimate `<total>` by dividing expected work by one effective context window per session (est semantics per the taskfile schema) |
+   | `session-limit` | `<total> + 3` — positive integer, frozen at intake; later re-estimation never changes it |
    | `blockers` | from the request plus analysis of dependencies on existing active tasks; empty `[]` if none |
    | `prefetch` | 2–5 **lazy** content docs from `.ai/index.md` routing relevant to the task. Exclude eager docs (overview / architecture / design / conventions) — already in baseline context per the memory loading contract |
    | `claimed-by` | empty at intake; set at each session entry that picks up the task |
@@ -45,6 +46,17 @@ file under `.ai-tasks/` and a row in `.ai-tasks/index.md`. Conduct rules
    `.ai-tasks/index.md` active table (create the table header if the file
    currently has only the `(none)` placeholder).
 7. **Report**: `<id>` / title / file path.
+
+## Authorized split intake
+
+The `/split-task` skill may create a pending successor from an already
+authorized task's remaining scope and unresolved findings without another
+draft-confirmation round. It follows this schema and estimates the remainder
+afresh. Exclude the source task from the duplicate/overlap check; inspect
+other active tasks normally. The successor must stand alone, including all
+required evidence and acceptance criteria, without relying on the source's
+file or conversation. Durable target reservation and retry behavior are
+owned by `/split-task` and the taskfile's `## Split` section.
 
 ## Edge cases
 
