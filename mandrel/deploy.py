@@ -7,6 +7,7 @@ import re
 import stat
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -635,11 +636,55 @@ def deploy_canonical(
     return deployed_manifest
 
 
+# The scheduler needs Python 3.11+ (tomllib). Newest first, but no newer than
+# a release its requirements are known to install on.
+ORCHESTRATOR_PYTHON_CANDIDATES = ("python3.14", "python3.13", "python3.12", "python3.11")
+
+
+def default_orchestrator_python(
+    which: Callable[[str], str | None] | None = None,
+    runs: Callable[[str], bool] | None = None,
+) -> str:
+    """The interpreter `--bootstrap-orchestrator` uses when none is named.
+
+    The newest supported versioned interpreter on PATH that actually starts (a
+    pyenv/asdf shim can name a version that is installed but not active), else
+    the base interpreter of the one running mandrel, which bin/mandrel has
+    already proven is 3.11+. Never a hard-coded name a machine may not have:
+    that used to let deploy succeed while the scheduler venv silently failed to
+    appear. Never a virtualenv's own python either: a venv made from a venv is
+    bound to whatever patch-release path the outer one resolved to."""
+    which = which or shutil.which
+    runs = runs or _python_starts
+    for name in ORCHESTRATOR_PYTHON_CANDIDATES:
+        found = which(name)
+        if found and runs(found):
+            return name
+    if sys.prefix != sys.base_prefix:
+        return getattr(sys, "_base_executable", None) or sys.executable
+    return sys.executable
+
+
+def _python_starts(executable: str) -> bool:
+    try:
+        result = subprocess.run(
+            [executable, "-I", "-S", "-c", "import sys; sys.exit(sys.version_info < (3, 11))"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def bootstrap_orchestrator(
     target: str | Path,
     *,
-    python_executable: str = "python3.14",
+    python_executable: str | None = None,
 ) -> OrchestratorBootstrapResult:
+    if python_executable is None:
+        python_executable = default_orchestrator_python()
     target_root = Path(target).expanduser().resolve()
     if not target_root.is_dir():
         raise FileNotFoundError(f"target repo does not exist: {target_root}")

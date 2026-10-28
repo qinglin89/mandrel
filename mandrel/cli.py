@@ -82,8 +82,11 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     deploy_parser.add_argument(
         "--orchestrator-python",
-        default="python3.14",
-        help="python executable used with --bootstrap-orchestrator (default: python3.14)",
+        default=None,
+        help=(
+            "python executable used with --bootstrap-orchestrator (default: the newest of "
+            "python3.14..python3.11 on PATH, else the interpreter running mandrel)"
+        ),
     )
     deploy_parser.add_argument("target", help="target repo path")
 
@@ -1031,7 +1034,11 @@ def main(argv: list[str] | None = None) -> int:
                 preview = deploy.preview_deploy(args.target)
                 print(deploy.format_deploy_preview(preview))
                 if args.bootstrap_orchestrator:
-                    print("  orchestrator bootstrap: would create/update .mandrel/orchestrator/.venv and install requirements")
+                    python_executable = args.orchestrator_python or deploy.default_orchestrator_python()
+                    print(
+                        "  orchestrator bootstrap: would create/update .mandrel/orchestrator/.venv "
+                        f"with {python_executable} and install requirements"
+                    )
                 return 1 if any(change.action == "blocked" for change in preview.changes) else 0
             deployed_manifest = deploy.deploy_canonical(args.target)
             target_root = Path(args.target).expanduser().resolve()
@@ -1041,7 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
             print(_deployed_revision_line(target_root))
             if args.bootstrap_orchestrator:
                 result = deploy.bootstrap_orchestrator(args.target, python_executable=args.orchestrator_python)
-                print(f"orchestrator venv: {result.venv_path}")
+                print(f"orchestrator venv: {result.venv_path} (from {result.python_executable})")
                 print(f"orchestrator python: {result.python_path}")
                 print(f"orchestrator requirements: {result.requirements_path}")
                 if result.env_created:

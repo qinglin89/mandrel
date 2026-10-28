@@ -7,6 +7,51 @@ set -eu
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PROG_NAME=${0##*/}
 
+# Mandrel needs Python 3.11+ (tomllib). An unversioned `python` is not something
+# a stock Mac, a Homebrew-only Mac, or a launchd service's PATH provides, so the
+# interpreter is resolved rather than assumed:
+#   1. MANDREL_PYTHON, when set: an explicit choice that does not work is an
+#      error, never a reason to quietly run something else;
+#   2. this checkout's .venv, which pins an interpreter independent of PATH;
+#   3. versioned names, newest first;
+#   4. python3, then python.
+# Every candidate is probed (one short exec, only until the first success): a
+# version-manager shim (pyenv, asdf) can answer `command -v` for a version that
+# is installed but not active and then fail to run, and the stock macOS python3
+# is too old.
+python_is_new_enough() {
+  "$1" -I -S -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1
+}
+
+resolve_python() {
+  if [ -n "${MANDREL_PYTHON:-}" ]; then
+    if python_is_new_enough "$MANDREL_PYTHON"; then
+      printf '%s\n' "$MANDREL_PYTHON"
+      return 0
+    fi
+    printf '%s: MANDREL_PYTHON=%s is not a runnable Python 3.11 or newer\n' \
+      "$PROG_NAME" "$MANDREL_PYTHON" >&2
+    return 1
+  fi
+  if [ -x "$REPO_ROOT/.venv/bin/python" ] &&
+    python_is_new_enough "$REPO_ROOT/.venv/bin/python"; then
+    printf '%s\n' "$REPO_ROOT/.venv/bin/python"
+    return 0
+  fi
+  for candidate in python3.16 python3.15 python3.14 python3.13 python3.12 python3.11 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && python_is_new_enough "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s: needs Python 3.11 or newer and found none (tried MANDREL_PYTHON, %s, python3.16..python3.11, python3, python).\n' \
+    "$PROG_NAME" "$REPO_ROOT/.venv/bin/python" >&2
+  printf 'Install one (for example: brew install python@3.13), or set MANDREL_PYTHON to its path.\n' >&2
+  return 1
+}
+
+PYTHON=$(resolve_python) || exit 1
+
 if [ -n "${PYTHONPATH:-}" ]; then
   export PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
 else
@@ -14,4 +59,4 @@ else
 fi
 
 export MANDREL_PROG="${MANDREL_PROG:-$PROG_NAME}"
-exec python -m mandrel.cli "$@"
+exec "$PYTHON" -m mandrel.cli "$@"

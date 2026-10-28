@@ -66,11 +66,14 @@ a managed `.gitignore` block, and a local registry entry. `.ai/` and
 protocol later never touches either one. The split is the point: **the protocol
 is deployed, your knowledge is yours.**
 
+> **Prefer a dashboard?** [orch-hub](https://github.com/qinglin89/orch-hub)
+> installs Mandrel for you and runs the same loop from a browser tab.
+
 ## Quickstart
 
-Requires Python 3.11+ for the CLI, Git, `jq`, and Claude Code, Cursor, or Codex
-CLI as the agent. The unattended bootstrap uses `python3.14` by default; another
-executable can be selected with `--orchestrator-python`. Hooks shell out to
+Requires Python 3.11+, Git, `jq`, and Claude Code, Cursor, or Codex CLI as the
+agent. `bin/mandrel` needs no install step: it finds a Python 3.11+ itself (or
+honours `MANDREL_PYTHON`). Hooks shell out to
 `jq`; without it, Codex loses hook enforcement silently. See the
 [per-tool prerequisites](docs/operations.md#hook-prerequisites). Start from a
 clean working tree.
@@ -79,7 +82,6 @@ clean working tree.
 
 ```bash
 git clone https://github.com/qinglin89/mandrel && cd mandrel       # Clone Mandrel and enter its checkout.
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'         # Install Mandrel and its verification tools in a local virtualenv.
 ./bin/mandrel deploy --dry-run /path/to/your-repo                  # Preview target changes without writing anything.
 ./bin/mandrel deploy /path/to/your-repo                            # Deploy the protocol payload and receipts to the target.
 ```
@@ -159,7 +161,7 @@ when they are the same.
 scheduler runs agents with permission prompts disabled.
 
 For a visual control plane over the same scheduler, see
-[orch-hub](https://qinglin89.github.io/projects/orch-hub/). Mandrel remains
+[orch-hub](https://github.com/qinglin89/orch-hub). Mandrel remains
 complete without it.
 
 **Manual.** When you want to inspect or control each session boundary, invoke
