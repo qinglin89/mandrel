@@ -54,11 +54,13 @@ its local virtualenv during deploy:
 ./bin/mandrel deploy --bootstrap-orchestrator ../some-target-repo
 ```
 
-This creates or updates `.mandrel/orchestrator/.venv` with `python3.14 -m venv`,
-upgrades `pip`, installs `.mandrel/orchestrator/requirements.txt`, and creates
+This creates or updates `.mandrel/orchestrator/.venv` with the newest of
+`python3.14`..`python3.11` found on `PATH` (falling back to the interpreter
+running mandrel), upgrades `pip`, installs
+`.mandrel/orchestrator/requirements.txt`, and creates
 `.mandrel/orchestrator/.env` from `.env.example` only if `.env` does not already
-exist. Use `--orchestrator-python /path/to/python` if `python3.14` is not the
-right executable on the machine. Credentials and CLI logins are still local:
+exist. The dry run names the interpreter it would use; pass
+`--orchestrator-python /path/to/python` to choose another. Credentials and CLI logins are still local:
 log in to `claude` and `codex` for the default `cc-codex` backend, or set
 `CURSOR_API_KEY` when explicitly using `--backend cursor`.
 

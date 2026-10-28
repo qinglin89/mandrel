@@ -85,11 +85,11 @@ under all three.
 ```bash
 git clone https://github.com/qinglin89/mandrel ~/src/mandrel
 cd ~/src/mandrel
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ```
 
-**Result:** `./bin/mandrel` runs from `~/src/mandrel`. Every deploy command
-below is issued from that checkout, against your project's path.
+**Result:** `./bin/mandrel` runs from `~/src/mandrel` with no install step (it
+finds a Python 3.11+ itself). Every deploy command below is issued from that
+checkout, against your project's path.
 
 ## Step 2: Preview the deploy
 

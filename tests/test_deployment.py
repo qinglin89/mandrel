@@ -4,6 +4,7 @@ import hashlib
 import json
 import stat
 import subprocess
+import sys
 import unicodedata
 from dataclasses import replace
 from pathlib import Path
@@ -2019,6 +2020,8 @@ def test_bootstrap_orchestrator_creates_venv_installs_requirements_and_env(
             write(python_path, "#!/bin/sh\n")
 
     monkeypatch.setattr(deploy.subprocess, "run", fake_run)
+    monkeypatch.setattr(deploy.shutil, "which", lambda name: f"/opt/bin/{name}" if name == "python3.14" else None)
+    monkeypatch.setattr(deploy, "_python_starts", lambda executable: True)
 
     result = deploy.bootstrap_orchestrator(target)
 
@@ -2059,6 +2062,60 @@ def test_bootstrap_orchestrator_keeps_existing_env_and_accepts_custom_python(
     assert calls[0] == ["python3.13", "-m", "venv", str(target.resolve() / ".mandrel" / "orchestrator" / ".venv")]
 
 
+def test_default_orchestrator_python_prefers_the_newest_supported_name() -> None:
+    available = {"python3.12", "python3.13"}
+
+    chosen = deploy.default_orchestrator_python(
+        lambda name: f"/usr/local/bin/{name}" if name in available else None,
+        lambda executable: True,
+    )
+
+    assert chosen == "python3.13"
+
+
+def test_default_orchestrator_python_skips_a_name_that_does_not_start() -> None:
+    """A pyenv/asdf shim answers `which` for an inactive version, then fails."""
+    available = {"python3.12", "python3.14"}
+
+    chosen = deploy.default_orchestrator_python(
+        lambda name: f"/shims/{name}" if name in available else None,
+        lambda executable: not executable.endswith("python3.14"),
+    )
+
+    assert chosen == "python3.12"
+
+
+def test_default_orchestrator_python_falls_back_to_the_running_base_interpreter(monkeypatch) -> None:
+    monkeypatch.setattr(deploy.sys, "prefix", deploy.sys.base_prefix)
+    assert deploy.default_orchestrator_python(lambda name: None) == sys.executable
+
+    monkeypatch.setattr(deploy.sys, "prefix", "/some/venv")
+    monkeypatch.setattr(deploy.sys, "_base_executable", "/opt/homebrew/opt/python@3.14/bin/python3.14", raising=False)
+    assert deploy.default_orchestrator_python(lambda name: None) == "/opt/homebrew/opt/python@3.14/bin/python3.14"
+
+
+def test_bootstrap_orchestrator_without_python314_uses_what_the_machine_has(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _source, target, _deployed = deploy_to_tmp(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
+        calls.append(command)
+        if command[1:3] == ["-m", "venv"]:
+            write(target / ".mandrel" / "orchestrator" / ".venv" / "bin" / "python", "#!/bin/sh\n")
+
+    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
+    monkeypatch.setattr(deploy.shutil, "which", lambda name: f"/opt/bin/{name}" if name == "python3.11" else None)
+    monkeypatch.setattr(deploy, "_python_starts", lambda executable: True)
+
+    result = deploy.bootstrap_orchestrator(target)
+
+    assert result.python_executable == "python3.11"
+    assert calls[0][:3] == ["python3.11", "-m", "venv"]
+
+
 def test_deploy_cli_parser_has_orchestrator_bootstrap_flags() -> None:
     parser = cli.build_parser()
 
@@ -2076,6 +2133,7 @@ def test_deploy_cli_parser_has_orchestrator_bootstrap_flags() -> None:
     assert args.bootstrap_orchestrator is True
     assert args.orchestrator_python == "python3.13"
     assert args.target == "../target"
+    assert cli.build_parser().parse_args(["deploy", "../target"]).orchestrator_python is None
 
 
 # The machine surface. `status` used to speak prose and an exit code, so a
